@@ -1,0 +1,56 @@
+name: Foundry artifact scan (manual)
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Unpublished quarantine release tag
+        required: true
+        type: string
+      zip_sha256:
+        description: Expected SHA-256 of the original ZIP
+        required: true
+        type: string
+      installer_sha256:
+        description: Expected SHA-256 of its single installer
+        required: true
+        type: string
+permissions: {}
+jobs:
+  scan:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    permissions:
+      # Draft release assets require repository push access; no release is published.
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Download only the unpublished sample
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          QUARANTINE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $release = gh release view $env:QUARANTINE_TAG --json isDraft,assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $release.isDraft -or $release.assets.Count -ne 1) {
+            throw 'Expected a draft release with exactly one sample.'
+          }
+          New-Item -ItemType Directory "$env:RUNNER_TEMP/foundry-scan" | Out-Null
+          gh release download $env:QUARANTINE_TAG --pattern '*.zip' --output "$env:RUNNER_TEMP/foundry-scan/sample.zip"
+          if ($LASTEXITCODE -ne 0) { throw 'Quarantine download failed.' }
+      - name: Scan original bytes without executing the installer
+        shell: pwsh
+        env:
+          ZIP_SHA256: ${{ inputs.zip_sha256 }}
+          INSTALLER_SHA256: ${{ inputs.installer_sha256 }}
+        run: |
+          ./scripts/scan-foundry-windows.ps1 -Sample "$env:RUNNER_TEMP/foundry-scan/sample.zip" -ZipHash $env:ZIP_SHA256 -InstallerHash $env:INSTALLER_SHA256 -ReportDirectory "$env:RUNNER_TEMP/foundry-scan-report"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: foundry-defender-report-${{ github.run_id }}
+          path: ${{ runner.temp }}/foundry-scan-report/
+          if-no-files-found: warn
+          retention-days: 7

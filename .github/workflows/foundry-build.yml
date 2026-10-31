@@ -3,21 +3,40 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: Build one target
+        description: Build one target or scan a quarantined artifact
         type: choice
-        options: [linux, windows]
+        options: [linux, windows, scan]
         required: true
       publish_linux:
         description: Publish the Linux image to this fork's GHCR (no deployment)
         type: boolean
         default: false
+      release_tag:
+        description: Draft quarantine release tag (scan only)
+        type: string
+      zip_sha256:
+        description: Expected original ZIP SHA-256 (scan only)
+        type: string
+      installer_sha256:
+        description: Expected installer SHA-256 (scan only)
+        type: string
 permissions:
   contents: read
 concurrency:
   group: foundry-build-${{ inputs.target }}
   cancel-in-progress: true
 jobs:
+  scan:
+    if: inputs.target == 'scan'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/foundry-scan.yml
+    with:
+      release_tag: ${{ inputs.release_tag }}
+      zip_sha256: ${{ inputs.zip_sha256 }}
+      installer_sha256: ${{ inputs.installer_sha256 }}
   build:
+    if: inputs.target != 'scan'
     permissions:
       contents: read
       packages: write
