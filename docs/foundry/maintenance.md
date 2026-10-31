@@ -22,7 +22,7 @@ Resolve conflicts without rewriting published fork history. Inspect semantic cha
 
 ## CI and publishing
 
-Only the single-job Foundry PR check runs automatically. Foundry artifact builds are manual and do not publish. Inherited workflows have no automatic triggers; reusable upstream definitions retain their repository guards. Keep them disabled in Actions settings, and inspect newly introduced workflows during every upstream integration. See the deployment runbook for limits and artifact retention.
+Only the single-job Foundry PR check runs automatically. Foundry artifact builds are manual; Linux images can optionally be published to the fork's GHCR for a separately triggered VPS update. Inherited workflows have no automatic triggers; reusable upstream definitions retain their repository guards. Keep them disabled in Actions settings, and inspect newly introduced workflows during every upstream integration. See the deployment runbook for limits and artifact retention.
 
 ## Inputs before deployment
 

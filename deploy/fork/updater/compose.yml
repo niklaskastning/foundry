@@ -1,0 +1,40 @@
+name: foundry
+services:
+  main:
+    image: ${FOUNDRY_IMAGE:?Use the installed foundry-deploy helper}
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3783:3773"
+    volumes:
+      - foundry-state:/var/lib/foundry
+      - foundry-workspaces:/workspaces
+    networks: [foundry]
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3773/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      start_period: 60s
+      retries: 12
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+volumes:
+  foundry-state:
+    external: true
+    name: foundry_foundry-state
+  foundry-workspaces:
+    external: true
+    name: foundry_foundry-workspaces
+networks:
+  foundry:
+    external: true
+    name: foundry_default

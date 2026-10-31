@@ -25,3 +25,5 @@ jobs:
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha || 'origin/main' }}
         run: vp run check:changed "$BASE_REF" --concurrency 1
+      - name: Check restricted Foundry updater
+        run: python3 -B -m unittest discover -s deploy/fork/updater -p 'test_*.py'

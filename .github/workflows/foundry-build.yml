@@ -3,10 +3,14 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: Build one target; never publishes or deploys
+        description: Build one target
         type: choice
         options: [linux, windows]
         required: true
+      publish_linux:
+        description: Publish the Linux image to this fork's GHCR (no deployment)
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -14,6 +18,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
+    permissions:
+      contents: read
+      packages: write
     runs-on: ${{ inputs.target == 'windows' && 'windows-2025' || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
@@ -23,6 +30,25 @@ jobs:
         run: |
           docker build -f deploy/fork/Dockerfile --build-arg FOUNDRY_REVISION="${{ github.sha }}" -t foundry:${{ github.sha }} .
           docker save foundry:${{ github.sha }} | gzip > foundry-linux-image.tar.gz
+      - name: Publish Linux image for the VPS
+        if: inputs.target == 'linux' && inputs.publish_linux && github.repository == 'niklaskastning/foundry'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          REVISION: ${{ github.sha }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+          image="ghcr.io/niklaskastning/foundry:$REVISION"
+          docker tag "foundry:$REVISION" "$image"
+          docker push "$image"
+          digest=$(docker image inspect "$image" --format '{{index .RepoDigests 0}}')
+          {
+            echo "### Foundry VPS image"
+            echo "Commit: \`$REVISION\`"
+            echo "Image: \`$digest\`"
+            echo "Deploy on the VPS: \`sudo /usr/local/sbin/foundry-deploy deploy ${digest##*@}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          docker logout ghcr.io
       - uses: ./.github/actions/setup-ci-deps
         if: inputs.target == 'windows'
       - name: Build Windows x64 installer
