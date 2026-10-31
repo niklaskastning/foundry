@@ -54,6 +54,13 @@ jobs:
       - name: Build Windows x64 installer
         if: inputs.target == 'windows'
         run: vp run foundry:build windows
+      - name: Verify Windows installation isolation
+        if: inputs.target == 'windows'
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem release/Foundry-*-x64.exe)
+          if ($installers.Count -ne 1) { throw 'Expected exactly one Foundry installer.' }
+          ./scripts/verify-foundry-windows-install.ps1 -Installer $installers[0].FullName
       - uses: actions/upload-artifact@v7
         with:
           name: foundry-${{ inputs.target }}-${{ github.sha }}

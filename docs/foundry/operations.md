@@ -111,6 +111,21 @@ vp run foundry:build windows
 
 This creates an unsigned `Foundry-*.exe` installer under `release/`. The app ID is `com.heavenforge.foundry`, its URL scheme is `t3foundry`, and it uses separate `.t3-foundry` state and `t3foundry` browser storage. It neither imports the official app's old profile nor enables an official update feed. Signing and automatic updates are deferred.
 
+The Windows package name is `foundry`, so its default installation directory is
+`%LOCALAPPDATA%\Programs\foundry`. The installer refuses a saved installation
+location outside a directory named `foundry`, including a `/D` override. The withdrawn
+P04 preview used `Programs\t3code`; do not run its uninstaller, because that directory
+can contain the original T3 installation. Back up both apps' data, repair T3 with its
+matching official installer, and inspect the old Foundry registry entries before
+removing those entries separately. A new installation must not automatically migrate
+or uninstall that shared directory.
+
+The manual Windows build tests installation, reinstallation, rejection of the old
+colliding registration and uninstallation alongside a pinned official T3 installer
+on an ephemeral GitHub-hosted runner before uploading the artifact. It compares T3
+program-file hashes and profile fixtures; it does not establish recovery on an
+affected user machine or the interactive P04 login gate.
+
 The [deployment profile](../../deploy/fork/profile.json) supplies the hosted origin and repository. Foundry builds ignore checkout `.env` files. Leave the inherited `T3CODE_RELAY_URL` and Clerk build configuration unset: they belong to the separate Connect deployment that this fork no longer plans to operate. The baseline build keeps Connect disabled; these flags do not implement runtime instance discovery or the new gateway. Analytics and relay trace uploads are disabled for Foundry builds.
 
 ## Windows Access transport probe (P04, acceptance pending)

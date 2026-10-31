@@ -2940,7 +2940,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     buildConfig.npmRebuild = false;
     buildConfig.nsis = {
       differentialPackage: true,
-      ...(FOUNDRY_BUILD ? {} : { include: "apps/desktop/resources/installer.nsh" }),
+      include: FOUNDRY_BUILD
+        ? "apps/desktop/resources/foundry-installer.nsh"
+        : "apps/desktop/resources/installer.nsh",
     };
     const winConfig: Record<string, unknown> = {
       target: [target],
@@ -3857,7 +3859,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
       ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
       : undefined;
   const stagePackageJson: StagePackageJson = {
-    name: "t3code",
+    name: FOUNDRY_BUILD ? "foundry" : "t3code",
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
