@@ -1,3 +1,5 @@
+import { vi } from "vite-plus/test";
+import * as FoundryBuild from "@t3tools/shared/foundryBuild";
 import { assert, describe, it } from "@effect/vitest";
 import { DESKTOP_UPDATE_RESTART_MARKER_FILE } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -22,6 +24,18 @@ import * as DesktopUpdates from "./DesktopUpdates.ts";
 import { flushCallbacks, makeHarness } from "./updatesTestHarness.ts";
 
 describe("DesktopUpdates", () => {
+  it.effect("disables Foundry update checks even with an upstream feed configured", () =>
+    Effect.gen(function* () {
+      using _foundry = vi.spyOn(FoundryBuild, "isFoundryBuild").mockReturnValue(true);
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        const state = yield* updates.getState;
+        assert.equal(state.status, "disabled");
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
   it.effect("updates Linux .deb installs and leaves other non-AppImage installs off", () =>
     Effect.gen(function* () {
       const linuxState = (packageType: string | undefined) =>

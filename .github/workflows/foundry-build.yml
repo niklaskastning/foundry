@@ -1,0 +1,38 @@
+name: Foundry build (manual)
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Build one target; never publishes or deploys
+        type: choice
+        options: [linux, windows]
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: foundry-build-${{ inputs.target }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ${{ inputs.target == 'windows' && 'windows-2025' || 'ubuntu-24.04' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build Linux image
+        if: inputs.target == 'linux'
+        run: |
+          docker build -f deploy/fork/Dockerfile --build-arg FOUNDRY_REVISION="${{ github.sha }}" -t foundry:${{ github.sha }} .
+          docker save foundry:${{ github.sha }} | gzip > foundry-linux-image.tar.gz
+      - uses: ./.github/actions/setup-ci-deps
+        if: inputs.target == 'windows'
+      - name: Build Windows x64 installer
+        if: inputs.target == 'windows'
+        run: vp run foundry:build windows
+      - uses: actions/upload-artifact@v7
+        with:
+          name: foundry-${{ inputs.target }}-${{ github.sha }}
+          path: |
+            foundry-linux-image.tar.gz
+            release/Foundry-*.exe
+          if-no-files-found: error
+          retention-days: 3

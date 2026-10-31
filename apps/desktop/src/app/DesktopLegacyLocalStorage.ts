@@ -1,3 +1,4 @@
+import { isFoundryBuild } from "@t3tools/shared/foundryBuild";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -72,7 +73,7 @@ const make = Effect.gen(function* () {
   });
 
   const load = Effect.fn("desktop.legacyLocalStorage.load")(function* (userDataPath: string) {
-    if (environment.isDevelopment) return;
+    if (isFoundryBuild() || environment.isDevelopment) return;
     const marker = path.join(userDataPath, MARKER_FILE_NAME);
     if (yield* fs.exists(marker).pipe(Effect.orElseSucceed(() => true))) return;
     yield* Ref.set(markerPath, Option.some(marker));

@@ -1,3 +1,4 @@
+import * as FoundryBuild from "@t3tools/shared/foundryBuild";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -8,7 +9,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeOS from "node:os";
 import { assert, it, vi } from "vite-plus/test";
 
-import { fixPath, hydratePosixHome } from "./os-jank.ts";
+import { fixPath, hydratePosixHome, resolveBaseDir } from "./os-jank.ts";
 
 vi.mock("node:child_process", { spy: true });
 
@@ -150,4 +151,15 @@ effectIt.effect("replaces a Path-spelled Windows PATH instead of adding a second
 
     assert.deepEqual(env, { PATH: "C:\\Tools;C:\\Windows" });
   }),
+);
+
+effectIt.effect("isolates the Foundry home while honoring explicit data paths", () =>
+  Effect.gen(function* () {
+    using _foundry = vi.spyOn(FoundryBuild, "isFoundryBuild").mockReturnValue(true);
+    assert.equal(yield* resolveBaseDir(undefined), "/home/test/.t3-foundry");
+    assert.equal(yield* resolveBaseDir("/srv/isolated"), "/srv/isolated");
+  }).pipe(
+    Effect.provide(NodeServices.layer),
+    Effect.provideService(HostProcess.HomeDirectory, "/home/test"),
+  ),
 );

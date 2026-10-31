@@ -1,12 +1,6 @@
 name: Issue Labels
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/ISSUE_TEMPLATE/**
-      - .github/workflows/issue-labels.yml
   workflow_dispatch:
 
 permissions:
@@ -14,6 +8,7 @@ permissions:
 
 jobs:
   sync:
+    if: github.repository == 'pingdotgg/t3code'
     name: Sync issue labels
     runs-on: ubuntu-24.04
     steps:

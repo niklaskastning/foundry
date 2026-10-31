@@ -1,4 +1,19 @@
-# T3 Code
+# Foundry
+
+## Fork instructions
+
+This repository is `niklaskastning/foundry`, a permanent fork of `pingdotgg/t3code`. The instructions below retain upstream engineering guidance; this section takes precedence for fork work.
+
+- Every implementation task uses a separate branch, focused commits, and a PR against this fork’s `main`. The maintainer has authorized this workflow by default; do not ask again before committing, pushing, or opening the PR. Never push directly to `main`, open an upstream PR, or merge without an explicit request. Read-only investigations need no branch or PR.
+- `origin` is the fork and `upstream` is T3 Code. Integrate upstream on a dedicated branch with a merge, preserving shared history. Record the integrated upstream SHA in the PR.
+- Read [AUTOMATION_ARCHITECTURE.md](AUTOMATION_ARCHITECTURE.md) and [FORK_DEPLOYMENT.md](FORK_DEPLOYMENT.md) for the agreed direction. These two requested, versioned design documents are an explicit exception to the scratch-plan rule below; they describe planned functionality, not implemented capabilities.
+- Initial targets are Linux Main Node/workers, Web, and Windows desktop. Mobile source stays available for upstream merges, but mobile feature work, native builds, store releases, and acceptance are deferred. Shared contracts must remain compatible.
+- Central Automation and Connect data use PostgreSQL with separate migrations; existing local T3 SQLite state stays intact. Keep Automation logic and its T3 adapter separate; avoid broad renames and speculative infrastructure.
+- Publishing, deployment, and upstream moderation workflows stay upstream-only until replaced by deliberately configured fork workflows. Before distributing builds, separate product IDs, data paths, Connect credentials, telemetry, and update sources. Use `vp run foundry:build server|windows` for isolated Foundry artifacts; plain upstream build commands do not enable the Foundry profile.
+- Keep GitHub Actions inexpensive: one automatic PR check, no push duplicates, scheduled builds, platform matrices, or automatic releases. Build artifacts manually only when needed.
+- See [fork maintenance](docs/operations/fork-maintenance.md) for the current preparation boundary and integration procedure.
+
+## Upstream engineering guidance
 
 T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs and agents (Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity) and serves web, desktop, and mobile clients.
 
@@ -45,7 +60,7 @@ Of note: Most T3 Code contributions will come from T3 Code itself, often control
 We need to be on the same page with terminology. When communicating, use this language:
 
 - **you** means the agent reading this file and changing T3 Code.
-- **we, us, and maintainers** mean Theo, Julius and the people building T3 Code. These are who you are talking to now.
+- **we, us, and maintainers** mean the maintainers of this fork; references to Theo and Julius below describe upstream guidance.
 - **user** means the person using T3 Code to direct coding agents.
 - **agent** means the coding agent a user runs inside T3 Code. Depending on context, that may also include you.
 - **provider** means the agent runtime or harness T3 Code talks to, such as Codex, Claude, Cursor, or OpenCode.
@@ -147,7 +162,7 @@ For mobile verification, a missing or outdated native client is an install step,
 
 ## Pull requests
 
-- Never make a PR unless the developer explicitly asks you to do so.
+- For this fork, follow the standing branch → commit → PR authorization above.
 - If `origin` is git.cafe, follow [GitCafe mirror](docs/operations/development.md#gitcafe-mirror-optional): push to `origin`, open and track PRs with `cafe` and their git.cafe URLs, and keep `gh` for merging.
 - Conventional commit titles, plain language: `fix(web): new threads no longer spike CPU`.
 - Body: the problem in a sentence or two, then how you fixed it. End with the model and harness that did the work.

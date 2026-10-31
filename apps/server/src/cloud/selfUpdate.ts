@@ -1,3 +1,4 @@
+import { isFoundryBuild } from "@t3tools/shared/foundryBuild";
 import {
   ServerSelfUpdateError,
   type ServerSelfUpdateCapability,
@@ -151,6 +152,8 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
   const update: ServerSelfUpdate["Service"]["update"] = Effect.fn(
     "cloud.server_self_update.update",
   )(function* (input, reportProgress = () => Effect.void, onHandoffAccepted = () => Effect.void) {
+    if (isFoundryBuild())
+      return yield* failWith("Foundry updates are installed manually from this fork.");
     if (capability === "desktop-managed") {
       const unsafeCrossing = input.channel === undefined ? null : crossesTrackUnsafely(input);
       if (unsafeCrossing !== null) return yield* failWith(unsafeCrossing);

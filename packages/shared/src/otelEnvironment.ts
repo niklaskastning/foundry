@@ -1,3 +1,4 @@
+import { isFoundryBuild } from "./foundryBuild.ts";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Data from "effect/Data";
@@ -324,7 +325,8 @@ export const isRelayTracingEnabled = (env: Readonly<Record<string, string | unde
     telemetry: flag("T3CODE_TELEMETRY_ENABLED", T3CODE_TRUE, T3CODE_FALSE, String),
   }).pipe(
     Effect.map(
-      ({ telemetry, t3, spec }) => telemetry.value !== false && !(t3.value ?? spec.value ?? false),
+      ({ telemetry, t3, spec }) =>
+        !isFoundryBuild() && telemetry.value !== false && !(t3.value ?? spec.value ?? false),
     ),
     Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(env))),
     Effect.orDie,

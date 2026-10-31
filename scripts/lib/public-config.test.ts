@@ -26,6 +26,15 @@ describe("loadRepoEnv", () => {
       "T3CODE_CLERK_PUBLISHABLE_KEY=pk_local\nT3CODE_CLERK_JWT_TEMPLATE=template_local\nT3CODE_CLERK_CLI_OAUTH_CLIENT_ID=oauth_local\nT3CODE_RELAY_URL=https://local.example.test\n",
     );
 
+    expect(
+      loadRepoEnv({ baseEnv: { T3CODE_FOUNDRY_BUILD: "1" }, repoRoot }).T3CODE_RELAY_URL,
+    ).toBeUndefined();
+    expect(() =>
+      loadRepoEnv({
+        baseEnv: { T3CODE_FOUNDRY_BUILD: "1", VITE_T3CODE_RELAY_URL: "https://connect.t3.codes" },
+        repoRoot,
+      }),
+    ).toThrow("own HTTPS Connect origin");
     expect(loadRepoEnv({ baseEnv: {}, repoRoot }).T3CODE_RELAY_URL).toBe(
       "https://local.example.test",
     );
