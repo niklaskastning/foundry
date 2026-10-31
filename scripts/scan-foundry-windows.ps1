@@ -16,10 +16,14 @@ if ($ZipHash -notmatch '^[a-fA-F0-9]{64}$' -or $InstallerHash -notmatch '^[a-fA-
 New-Item -ItemType Directory -Path $ReportDirectory | Out-Null
 $report = [ordered]@{ zipHash = $ZipHash; installerHash = $InstallerHash; scans = @(); completed = $false }
 try {
+  $Sample = (Get-Item -LiteralPath $Sample).FullName
   if ((Get-FileHash -LiteralPath $Sample -Algorithm SHA256).Hash -ne $ZipHash) { throw 'ZIP hash mismatch.' }
   Start-Service WinDefend
   # Hosted images disable archive/script scanning; restore them for this disposable scan.
   Set-MpPreference -DisableArchiveScanning $false -DisableScriptScanning $false -PUAProtection Enabled -ScanAvgCPULoadFactor 50
+  $excludedPaths = @((Get-MpPreference).ExclusionPath)
+  $report.runnerPathExclusions = $excludedPaths
+  if ($excludedPaths.Count -gt 0) { Remove-MpPreference -ExclusionPath $excludedPaths }
   Update-MpSignature
   $status = Get-MpComputerStatus
   $report.engine = $status.AMEngineVersion
@@ -39,10 +43,11 @@ try {
 
   function Invoke-SampleScan([string]$Path, [string]$Name) {
     # Forensic custom scans preserve the sample and ignore configured scan exclusions.
-    & $command.FullName -Scan -ScanType 3 -File $Path -DisableRemediation 2>&1 |
-      Tee-Object -FilePath (Join-Path $ReportDirectory "$Name.log")
+    $output = @(& $command.FullName -Scan -ScanType 3 -File $Path -DisableRemediation 2>&1)
     $exit = $LASTEXITCODE
-    $report.scans += @{ file = $Name; exitCode = $exit }
+    $output | Tee-Object -FilePath (Join-Path $ReportDirectory "$Name.log")
+    $skipped = ($output -join "`n") -match '(?i)\bwas skipped\b'
+    $report.scans += @{ file = $Name; exitCode = $exit; skipped = $skipped }
     if ($exit -ne 0) { throw "Defender returned $exit for $Name; inspect the scan log and detections." }
   }
 
@@ -60,6 +65,9 @@ try {
   }
   $report.authenticode = (Get-AuthenticodeSignature -LiteralPath $installer).Status.ToString()
   Invoke-SampleScan $installer 'installer'
+  if (@($report.scans | Where-Object { $_.skipped }).Count -gt 0) {
+    throw 'Defender skipped a sample; exit code zero alone does not prove scan completion.'
+  }
   $report.completed = $true
 } catch {
   $report.error = $_.Exception.Message
