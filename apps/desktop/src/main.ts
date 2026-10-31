@@ -19,6 +19,7 @@ import * as Electron from "electron";
 
 import * as NetService from "@t3tools/shared/Net";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { isFoundryBuild } from "@t3tools/shared/foundryBuild";
 import type { RemoteT3RunnerOptions } from "@t3tools/ssh/tunnel";
 import serverPackageJson from "../../server/package.json" with { type: "json" };
 
@@ -76,6 +77,7 @@ import * as DesktopWindow from "./window/DesktopWindow.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
+import { runAccessProbe } from "./foundry/AccessProbe.ts";
 
 if (process.argv.includes("--version")) {
   try {
@@ -240,4 +242,18 @@ const layerDesktopRuntime = layerDesktopClerk.pipe(
   Layer.provideMerge(DesktopPreReadyPlatform.layer),
 );
 
-DesktopApp.program.pipe(Effect.provide(layerDesktopRuntime), NodeRuntime.runMain);
+const foundryProbeIndex = process.argv.indexOf("--foundry-access-probe");
+if (isFoundryBuild() && foundryProbeIndex !== -1) {
+  void runAccessProbe(
+    process.argv.slice(foundryProbeIndex + 1),
+    Effect.runSync(HostProcess.Platform),
+  ).catch(() => {
+    Electron.dialog.showErrorBox(
+      "Foundry access probe",
+      "Could not start the isolated auth probe. Check the HTTPS origin, issuer, instance ID and OS credential storage.",
+    );
+    Electron.app.exit(1);
+  });
+} else {
+  DesktopApp.program.pipe(Effect.provide(layerDesktopRuntime), NodeRuntime.runMain);
+}
