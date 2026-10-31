@@ -21,9 +21,6 @@ try {
   Start-Service WinDefend
   # Hosted images disable archive/script scanning; restore them for this disposable scan.
   Set-MpPreference -DisableArchiveScanning $false -DisableScriptScanning $false -PUAProtection Enabled -ScanAvgCPULoadFactor 50
-  $excludedPaths = @((Get-MpPreference).ExclusionPath)
-  $report.runnerPathExclusions = $excludedPaths
-  if ($excludedPaths.Count -gt 0) { Remove-MpPreference -ExclusionPath $excludedPaths }
   Update-MpSignature
   $status = Get-MpComputerStatus
   $report.engine = $status.AMEngineVersion
@@ -34,6 +31,7 @@ try {
     throw 'Defender is unavailable or signatures are stale.'
   }
   $report.archiveScanningDisabled = (Get-MpPreference).DisableArchiveScanning
+  $report.runnerPathExclusions = @((Get-MpPreference).ExclusionPath)
   $report.cloudReporting = (Get-MpPreference).MAPSReporting
   $report.sampleSubmission = (Get-MpPreference).SubmitSamplesConsent
   if ($report.archiveScanningDisabled) { throw 'Archive scanning is disabled by runner policy.' }
