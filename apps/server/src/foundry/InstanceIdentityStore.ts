@@ -13,7 +13,7 @@ export class InstanceIdentityError extends Schema.TaggedError<InstanceIdentityEr
   { cause: Schema.Defect() },
 ) {
   override get message(): string {
-    return "Foundry instance identity could not be loaded. Restore the identity store before retrying.";
+    return "Foundry instance identity could not be loaded. Check the configured identity store and readiness before retrying.";
   }
 }
 

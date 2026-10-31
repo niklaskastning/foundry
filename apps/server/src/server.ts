@@ -27,7 +27,7 @@ import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as FoundryHttp from "./foundry/http.ts";
 import * as InstanceDescriptor from "./foundry/InstanceDescriptor.ts";
-import * as InstanceIdentityStore from "./foundry/InstanceIdentityStore.ts";
+import * as InstancePersistence from "./foundry/InstancePersistence.ts";
 import * as EnvironmentAuthPolicy from "./auth/EnvironmentAuthPolicy.ts";
 import * as ServerConfig from "./config.ts";
 import { withUntracedRequests } from "./http.ts";
@@ -743,7 +743,7 @@ const layerMakeRoutes = Layer.mergeAll(
     FoundryHttp.layer.pipe(
       Layer.provide(
         InstanceDescriptor.layer.pipe(
-          Layer.provide(InstanceIdentityStore.layerFile),
+          Layer.provide(InstancePersistence.layer),
           Layer.provide(EnvironmentAuthPolicy.layer),
         ),
       ),

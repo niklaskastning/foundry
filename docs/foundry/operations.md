@@ -79,14 +79,80 @@ Fähigkeiten werden ignoriert, unbekannte Pflichtfähigkeiten ergeben HTTP 409
 Fähigkeiten; derzeit ausschließlich `foundry.instance-descriptor`. Antworten sind
 nicht cachebar. Bestehende T3-Endpunkte verlangen keine Foundry-Protokollversion.
 
-Die erste erfolgreiche Anfrage legt `userdata/foundry-instance-id` im konfigurierten
+Im standardmäßigen Dateimodus legt die erste erfolgreiche Anfrage
+`userdata/foundry-instance-id` im konfigurierten
 T3-Home an. Diese Datei zusammen mit der bestehenden Environment-Identität sichern.
 Eine beschädigte Instanz-ID wird nicht automatisch ersetzt (HTTP 503). Der Dateispeicher
 veröffentlicht eine vollständig geschriebene ID atomar per Hardlink; das State-Dateisystem
 muss Hardlinks unterstützen. Dies ist kein HA- oder Stromausfall-Durabilitätsnachweis.
 
-P02 muss die vorhandene ID unverändert und transaktional in die Instanzdatenbank
-übernehmen, abweichende vorhandene DB-Identitäten ablehnen und danach PostgreSQL als
-autoritativen Speicher hinter `InstanceIdentityStore` verwenden. Bei DB-Ausfall darf
-kein Rückfall auf eine neue lokale Identität erfolgen. Diese Migration ist noch nicht
-implementiert; lokale T3-SQLite-Daten bleiben unabhängig.
+## PostgreSQL für Instanzdaten
+
+Der Instanzspeicher ist ausdrücklich wählbar: `FOUNDRY_INSTANCE_STORE=file` (Default)
+oder `postgres`. Im PostgreSQL-Modus ist `FOUNDRY_INSTANCE_DATABASE_URL` erforderlich.
+Eine fehlende Konfiguration verhindert den Start. DB-Fehler führen nie zum Dateispeicher
+zurück. Die lokale T3-SQLite-Datenbank bleibt unabhängig.
+
+Vor der erstmaligen Aktivierung Main stoppen, Daten sichern und die Migration mit
+**demselben T3-Home** ausführen. Der separate Befehl übernimmt die vorhandene P01-ID
+und Main-Environment-ID. Auf einer Neuinstallation legt er zuerst diese lokalen IDs
+an. Eine vorhandene DB mit abweichenden IDs wird abgelehnt; ebenso unbekannte Schemas
+oder Objekte in `public`. Keine fremden Daten werden entfernt. Die Migration und ihr
+Versionsmarker werden unter einer PostgreSQL-Transaktionssperre gemeinsam committed.
+Ein erneuter Aufruf ist idempotent. Fehler bei der Migration vor Aktivierung beheben.
+
+Ein Administrator richtet zwei getrennte Rollen auf der dedizierten `fork_connect`
+Datenbank ein. Beispiel (nur für eine vorher geprüfte leere Datenbank; die bestehende
+NOLOGIN-Owner-Rolle bleibt unverändert):
+
+```sql
+CREATE ROLE foundry_instance_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+CREATE ROLE foundry_instance_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+REVOKE ALL ON DATABASE fork_connect FROM PUBLIC;
+GRANT CONNECT, CREATE ON DATABASE fork_connect TO foundry_instance_migrator;
+GRANT CONNECT ON DATABASE fork_connect TO foundry_instance_runtime;
+-- In fork_connect:
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+```
+
+Zugangsdaten über den geschützten Betriebsweg setzen, nicht in SQL-Dateien oder
+Shell-History ablegen. Die Runtime-Rolle darf weder CREATE-/TEMP-Rechte noch
+Mitgliedschaft in einer privilegierten oder Schema-Owner-Rolle besitzen. Die Migration
+vergibt gezielt Leserechte, Generation-Updates und Schreibrechte für die spätere
+Betreiberbindung; sie erstellt **keinen** angemeldeten Betreiber. P03 muss dessen
+Zuordnung und Zugangsgenerationen über dieselbe Transaktionsgrenze verwenden.
+
+Mit `FOUNDRY_INSTANCE_MIGRATION_URL` ausschließlich im Migrationsprozess:
+
+```sh
+node apps/server/src/bin.ts foundry migrate --base-dir /path/to/foundry-home --runtime-role foundry_instance_runtime
+```
+
+Im gebauten Server lautet derselbe Einstieg `node dist/bin.mjs foundry migrate ...`.
+Danach Main mit `FOUNDRY_INSTANCE_STORE=postgres` und der Runtime-URL starten; die
+Migrations-URL gehört nicht in seine Umgebung. Keine automatische Startup-Migration.
+Der Pool ist auf vier Verbindungen begrenzt, die Migration auf eine; Verbindungsaufbau
+und Statements haben begrenzte Wartezeiten.
+
+`GET /api/foundry/ready` liefert ohne Cache HTTP 200 mit `{"ready":true}` oder HTTP 503
+mit `{"ready":false}`. Im PostgreSQL-Modus prüft jede Anfrage Datenbank, Schema 1,
+Runtime-Rollenrechte und die Bindung zum Main-Environment. Eine noch vorhandene lokale
+P01-ID muss ebenfalls übereinstimmen; bei fehlender Datei wird keine neue ID erzeugt.
+Der Instanz-Descriptor verwendet dieselben Prüfungen. Der allgemeine T3-Betrieb und
+bestehende direkte Verbindungen werden dadurch nicht zu Foundry-Sessions.
+
+Für Restore PostgreSQL und Main-State zusammen sichern. PostgreSQL ist nach Aktivierung
+der autoritative Instanzspeicher. Nicht als Fehlerbehebung auf `file` umschalten:
+Das würde die zentralen Zugangs- und Betreiberbindungen umgehen. Schema-Upgrades
+benötigen weiterhin einen koordinierten Stop/Migration/Start; kein HA-Betrieb.
+
+Der isolierte Gate-Test benötigt PostgreSQL-17+-Binärdateien und einen unprivilegierten
+Linux-Benutzer. Er erzeugt ausschließlich einen temporären Cluster mit privatem
+Unix-Socket, testet Migration/Rechte/DB-Ausfall/Neustart und räumt ihn danach auf:
+
+```sh
+FOUNDRY_TEST_PG_BIN=/path/to/postgresql/bin vp run --filter t3 test:foundry-postgres
+```
+
+Dieser explizite Integrationstest ergänzt `check:changed`; er wird nicht automatisch
+in GitHub Actions gestartet. Er verwendet keine vorhandene Datenbank oder Credentials.
