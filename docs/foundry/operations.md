@@ -61,3 +61,32 @@ Only **Foundry checks** runs automatically, on PRs. It has one Ubuntu job, cance
 The named volumes are persistence, not an off-host backup. Before treating this deployment as production, choose an external backup destination and retention policy. Back up both PostgreSQL databases (for example, `pg_dump -Fc`), roles, and the private password file separately. Back up the T3 state and workspace volumes with the Main Node stopped so SQLite and its sidecars stay consistent. Preserve repository Git objects required by checkpoints.
 
 For a coordinated restore point, stop new work and the Main Node, take the database dumps and volume snapshots, then resume it. Store a manifest with the image digest/source revision and snapshot time. Restore into separate volumes first, verify the databases and T3 environment, and reconcile external actions before resuming automation. Never run `docker compose down --volumes` on the deployed project as part of an update.
+
+## Instanz-Descriptor (Protokoll 1)
+
+`GET /.well-known/foundry?protocolVersion=1` liefert Instanz-ID, Main-Environment-ID
+und die tatsächlich unterstützten T3-Bootstrap-/Session-Verfahren. Der Endpunkt ist
+wie die bestehenden Auth-Metadaten ohne T3-Session lesbar; ein vorgeschaltetes Access
+bleibt wirksam. Metadaten allein bestätigen weder eine Betreiberanmeldung noch
+Gateway-Zugriff. Es gibt noch keinen Foundry-Login oder Device-Katalog.
+
+`protocolVersion` muss genau einmal mit `1` vorkommen. Fehlende, leere oder doppelte
+Angaben ergeben HTTP 400 (`protocol_version_required`), andere Werte HTTP 409
+(`protocol_version_unsupported`). Wiederholbare `capability`-Parameter sind optional;
+`requiredCapability` bezeichnet zwingend benötigte Fähigkeiten. Unbekannte optionale
+Fähigkeiten werden ignoriert, unbekannte Pflichtfähigkeiten ergeben HTTP 409
+(`capability_unsupported`). Die Antwort nennt unterstützte und ausgehandelte
+Fähigkeiten; derzeit ausschließlich `foundry.instance-descriptor`. Antworten sind
+nicht cachebar. Bestehende T3-Endpunkte verlangen keine Foundry-Protokollversion.
+
+Die erste erfolgreiche Anfrage legt `userdata/foundry-instance-id` im konfigurierten
+T3-Home an. Diese Datei zusammen mit der bestehenden Environment-Identität sichern.
+Eine beschädigte Instanz-ID wird nicht automatisch ersetzt (HTTP 503). Der Dateispeicher
+veröffentlicht eine vollständig geschriebene ID atomar per Hardlink; das State-Dateisystem
+muss Hardlinks unterstützen. Dies ist kein HA- oder Stromausfall-Durabilitätsnachweis.
+
+P02 muss die vorhandene ID unverändert und transaktional in die Instanzdatenbank
+übernehmen, abweichende vorhandene DB-Identitäten ablehnen und danach PostgreSQL als
+autoritativen Speicher hinter `InstanceIdentityStore` verwenden. Bei DB-Ausfall darf
+kein Rückfall auf eine neue lokale Identität erfolgen. Diese Migration ist noch nicht
+implementiert; lokale T3-SQLite-Daten bleiben unabhängig.

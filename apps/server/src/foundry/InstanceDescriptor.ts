@@ -1,0 +1,65 @@
+import {
+  FOUNDRY_CAPABILITIES,
+  FOUNDRY_PROTOCOL_VERSION,
+  FoundryNegotiationError,
+  type FoundryDescriptor,
+} from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as EnvironmentAuthPolicy from "../auth/EnvironmentAuthPolicy.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as InstanceIdentityStore from "./InstanceIdentityStore.ts";
+
+export class InstanceDescriptor extends Context.Service<
+  InstanceDescriptor,
+  {
+    readonly negotiate: (input: {
+      readonly protocolVersion: string | undefined;
+      readonly capabilities: readonly string[];
+      readonly requiredCapabilities: readonly string[];
+    }) => Effect.Effect<
+      FoundryDescriptor,
+      FoundryNegotiationError | InstanceIdentityStore.InstanceIdentityError
+    >;
+  }
+>()("t3/foundry/InstanceDescriptor") {}
+
+const make = Effect.gen(function* () {
+  const identity = yield* InstanceIdentityStore.InstanceIdentityStore;
+  const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;
+  const policy = yield* EnvironmentAuthPolicy.EnvironmentAuthPolicy;
+  const negotiate: InstanceDescriptor["Service"]["negotiate"] = Effect.fn(
+    "InstanceDescriptor.negotiate",
+  )(function* (input) {
+    const supported = new Set<string>(FOUNDRY_CAPABILITIES);
+    const code = !input.protocolVersion
+      ? "protocol_version_required"
+      : input.protocolVersion !== FOUNDRY_PROTOCOL_VERSION
+        ? "protocol_version_unsupported"
+        : input.requiredCapabilities.some((capability) => !supported.has(capability))
+          ? "capability_unsupported"
+          : undefined;
+    if (code)
+      return yield* new FoundryNegotiationError({
+        code,
+        supportedProtocolVersions: [FOUNDRY_PROTOCOL_VERSION],
+        supportedCapabilities: FOUNDRY_CAPABILITIES,
+      });
+    const auth = yield* policy.getDescriptor();
+    return {
+      protocolVersion: FOUNDRY_PROTOCOL_VERSION,
+      instanceId: yield* identity.getOrCreate,
+      mainEnvironmentId: yield* environment.getEnvironmentId,
+      capabilities: FOUNDRY_CAPABILITIES,
+      negotiatedCapabilities: FOUNDRY_CAPABILITIES.filter(
+        (capability) =>
+          input.capabilities.includes(capability) ||
+          input.requiredCapabilities.includes(capability),
+      ),
+      auth: { bootstrapMethods: auth.bootstrapMethods, sessionMethods: auth.sessionMethods },
+    };
+  });
+  return InstanceDescriptor.of({ negotiate });
+});
+export const layer = Layer.effect(InstanceDescriptor, make);
