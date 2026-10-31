@@ -25,6 +25,10 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
+import * as FoundryHttp from "./foundry/http.ts";
+import * as InstanceDescriptor from "./foundry/InstanceDescriptor.ts";
+import * as InstanceIdentityStore from "./foundry/InstanceIdentityStore.ts";
+import * as EnvironmentAuthPolicy from "./auth/EnvironmentAuthPolicy.ts";
 import * as ServerConfig from "./config.ts";
 import { withUntracedRequests } from "./http.ts";
 import * as ServerHttp from "./http.ts";
@@ -736,6 +740,14 @@ const layerMakeRoutes = Layer.mergeAll(
     GuestHttp.layer,
     DeviceHubProxy.layer,
     ServerBrowserStream.routeLayer,
+    FoundryHttp.layer.pipe(
+      Layer.provide(
+        InstanceDescriptor.layer.pipe(
+          Layer.provide(InstanceIdentityStore.layerFile),
+          Layer.provide(EnvironmentAuthPolicy.layer),
+        ),
+      ),
+    ),
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
   ),
