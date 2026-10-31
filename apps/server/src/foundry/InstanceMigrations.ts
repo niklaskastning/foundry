@@ -61,6 +61,25 @@ const make = Effect.gen(function* () {
             yield* sql`INSERT INTO foundry_instance.instance (instance_id, main_environment_id) VALUES (${input.instanceId}, ${input.mainEnvironmentId})`;
             yield* sql`INSERT INTO foundry_instance.schema_version (version) VALUES (1)`;
           }
+          const versions = yield* sql<{
+            version: number;
+          }>`SELECT version FROM foundry_instance.schema_version`;
+          if (versions.length !== 1 || ![1, 2].includes(versions[0]?.version ?? 0)) {
+            return yield* new InstanceDatabase.InstanceDatabaseError({
+              reason: "schema_incompatible",
+            });
+          }
+          if (versions[0]?.version === 1) {
+            yield* sql`CREATE TABLE foundry_instance.sessions (
+              token_hash text PRIMARY KEY,
+              instance_id uuid NOT NULL REFERENCES foundry_instance.instance(instance_id),
+              operator_id uuid NOT NULL REFERENCES foundry_instance.operator_binding(operator_id),
+              instance_generation bigint NOT NULL CHECK (instance_generation >= 0),
+              operator_generation bigint NOT NULL CHECK (operator_generation >= 0),
+              audience text NOT NULL, expires_at bigint NOT NULL CHECK (expires_at > 0))`;
+            yield* sql`CREATE INDEX sessions_expiry ON foundry_instance.sessions(expires_at)`;
+            yield* sql`UPDATE foundry_instance.schema_version SET version = 2`;
+          }
           yield* InstanceDatabase.checkSchema();
           const identities = yield* sql<{
             instance_id: string;
@@ -78,6 +97,7 @@ const make = Effect.gen(function* () {
           yield* sql`GRANT USAGE ON SCHEMA foundry_instance TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT SELECT ON foundry_instance.schema_version, foundry_instance.instance, foundry_instance.operator_binding TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT UPDATE (access_generation) ON foundry_instance.instance TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT SELECT, INSERT, DELETE ON foundry_instance.sessions TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT INSERT, UPDATE ON foundry_instance.operator_binding TO ${sql(input.runtimeRole)}`;
         }),
       );

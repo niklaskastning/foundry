@@ -1,3 +1,6 @@
+import * as Schema from "effect/Schema";
+import * as ConfigProvider from "effect/ConfigProvider";
+import * as FoundryRuntime from "../src/foundry/Runtime.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- This standalone integration harness owns its temporary PostgreSQL child and filesystem.
 // @effect-diagnostics globalProcess:off -- The harness accepts a PostgreSQL binary directory, never connection credentials.
 import * as NodeAssert from "node:assert/strict";
@@ -9,6 +12,15 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentId, FoundryInstanceId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Console from "effect/Console";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
+import * as AccessConfig from "../src/foundry/AccessConfig.ts";
+import * as AccessVerifier from "../src/foundry/AccessVerifier.ts";
+import * as FoundrySessions from "../src/foundry/FoundrySessions.ts";
+import * as AuthHttp from "../src/foundry/authHttp.ts";
+import * as InstanceOperator from "../src/foundry/InstanceOperator.ts";
+import { FoundrySession, FoundryDescriptor } from "@t3tools/contracts";
 import * as Layer from "effect/Layer";
 import { HttpRouter } from "effect/http";
 import * as InstanceDatabase from "../src/foundry/InstanceDatabase.ts";
@@ -21,6 +33,8 @@ import * as ServerConfig from "../src/config.ts";
 import * as ServerEnvironment from "../src/environment/ServerEnvironment.ts";
 import * as EnvironmentAuthPolicy from "../src/auth/EnvironmentAuthPolicy.ts";
 
+const decodeDescriptor = Schema.decodeUnknownSync(FoundryDescriptor);
+const decodeSession = Schema.decodeUnknownSync(FoundrySession);
 const bin = process.env.FOUNDRY_TEST_PG_BIN;
 NodeAssert.ok(
   bin,
@@ -182,7 +196,7 @@ try {
     "CREATE TEMP TABLE forbidden (id int)",
     "ALTER TABLE foundry_instance.instance ADD COLUMN forbidden int",
     "DROP TABLE foundry_instance.instance",
-    "UPDATE foundry_instance.schema_version SET version=2",
+    "UPDATE foundry_instance.schema_version SET version=99",
     "UPDATE foundry_instance.instance SET instance_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'",
   ]) {
     const result = await query(statement, "foundry_runtime").then(
@@ -229,10 +243,10 @@ try {
   try {
     const ready = () => handler.handler(new Request("http://localhost/api/foundry/ready"));
     NodeAssert.equal((await ready()).status, 200);
-    await query("UPDATE foundry_instance.schema_version SET version=2", "foundry_migrate");
+    await query("UPDATE foundry_instance.schema_version SET version=99", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 503);
     await expectFailure(migrate());
-    await query("UPDATE foundry_instance.schema_version SET version=1", "foundry_migrate");
+    await query("UPDATE foundry_instance.schema_version SET version=2", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 200);
     await query("GRANT CREATE ON SCHEMA public TO foundry_runtime");
     NodeAssert.equal((await ready()).status, 503);
@@ -260,8 +274,284 @@ try {
   } finally {
     await handler.dispose();
   }
+  const accessConfig = {
+    issuer: "https://fixture.cloudflareaccess.com",
+    audience: "fixture-app",
+    origin: "https://foundry.example.test",
+  };
+  const bind = (subject = "operator-subject") =>
+    InstanceOperator.InstanceOperator.pipe(
+      Effect.flatMap((operator) => operator.bind(accessConfig.issuer, subject)),
+      Effect.provide(
+        InstanceOperator.layer.pipe(
+          Layer.provide(identityLayer),
+          Layer.provide(db("foundry_runtime")),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+    );
+  const keys = await generateKeyPair("RS256");
+  const jwk = await exportJWK(keys.publicKey);
+  let now = 1_800_000_000_000;
+  const clock = await run(Clock.Clock);
+  const testContext = Context.make(Clock.Clock, {
+    ...clock,
+    currentTimeMillis: Effect.sync(() => now),
+    currentTimeMillisUnsafe: () => now,
+    currentTimeNanos: Effect.sync(() => BigInt(now) * 1_000_000n),
+    currentTimeNanosUnsafe: () => BigInt(now) * 1_000_000n,
+  });
+  const sign = (subject = "operator-subject", seconds = 3600) =>
+    new SignJWT({ type: "app" })
+      .setProtectedHeader({ alg: "RS256", kid: "fixture" })
+      .setIssuer(accessConfig.issuer)
+      .setAudience(accessConfig.audience)
+      .setSubject(subject)
+      .setIssuedAt(now / 1000)
+      .setExpirationTime(now / 1000 + seconds)
+      .sign(keys.privateKey);
+  const authRoutes = AuthHttp.layer.pipe(
+    Layer.provide(FoundrySessions.layer),
+    Layer.provide(AccessVerifier.layer),
+    Layer.provide(
+      Layer.succeed(
+        AccessVerifier.AccessSigningKeys,
+        createLocalJWKSet({ keys: [{ ...jwk, kid: "fixture", alg: "RS256" }] }),
+      ),
+    ),
+    Layer.provide(Layer.succeed(AccessConfig.AccessConfig, accessConfig)),
+    Layer.provide(identityLayer),
+    Layer.provide(db("foundry_runtime")),
+    Layer.provide(NodeServices.layer),
+  );
+  let authHandler = HttpRouter.toWebHandler(authRoutes, { disableLogger: true });
+  const post = (operation: string, headers: Record<string, string> = {}) =>
+    authHandler.handler(
+      new Request(`${accessConfig.origin}/api/foundry/auth/${operation}`, {
+        method: "POST",
+        headers: { origin: accessConfig.origin, "content-type": "application/json", ...headers },
+      }),
+      testContext,
+    );
+  const issued = async (response: Response) => {
+    NodeAssert.equal(response.status, 200);
+    NodeAssert.equal(response.headers.get("cache-control"), "no-store");
+    const cookie = response.headers.get("set-cookie")!;
+    NodeAssert.match(cookie, /HttpOnly/);
+    NodeAssert.match(cookie, /Secure/);
+    NodeAssert.match(cookie, /SameSite=Strict/i);
+    NodeAssert.match(cookie, /Path=\//);
+    NodeAssert.doesNotMatch(cookie, /Domain=/i);
+    const credential = cookie.split(";", 1)[0]!;
+    const body = decodeSession(await response.json());
+    NodeAssert.equal(body.instanceId, instanceId);
+    NodeAssert.equal(JSON.stringify(body).includes(credential.split("=", 2)[1]!), false);
+    return { cookie: credential, csrf: body.csrfToken, expiresAt: body.expiresAt };
+  };
+  try {
+    const assertion = await sign();
+    const accessHeader = { "cf-access-jwt-assertion": assertion };
+    NodeAssert.equal((await post("login", accessHeader)).status, 403);
+    await run(bind());
+    await run(bind());
+    await expectFailure(bind("foreign-operator"));
+    const operatorBefore = await query("SELECT * FROM foundry_instance.operator_binding");
+    await query("DROP TABLE foundry_instance.sessions", "foundry_migrate");
+    await query("UPDATE foundry_instance.schema_version SET version=1", "foundry_migrate");
+    await expectFailure(readIdentity);
+    await expectFailure(
+      migrate({ instanceId: FoundryInstanceId.make("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa") }),
+    );
+    NodeAssert.equal(
+      (await query("SELECT version FROM foundry_instance.schema_version"))[0]?.version,
+      1,
+    );
+    NodeAssert.equal(
+      (await query("SELECT to_regclass('foundry_instance.sessions') AS table_name"))[0]?.table_name,
+      null,
+    );
+    await run(Effect.all([migrate(), migrate()], { concurrency: "unbounded" }));
+    NodeAssert.deepEqual(
+      await query("SELECT * FROM foundry_instance.operator_binding"),
+      operatorBefore,
+    );
+    NodeAssert.equal(await run(readIdentity), instanceId);
+    for (const headers of [
+      { origin: "https://evil.example.test" },
+      { origin: "null" },
+      { origin: "" },
+      { "content-type": "text/plain" },
+      {
+        origin: "https://evil.example.test",
+        "x-forwarded-host": "foundry.example.test",
+        "x-forwarded-proto": "https",
+      },
+    ])
+      NodeAssert.equal((await post("login", { ...accessHeader, ...headers })).status, 403);
+    NodeAssert.equal(
+      (
+        await post("login", {
+          "cf-access-authenticated-user-email": "owner@example.test",
+          "x-forwarded-user": "operator-subject",
+        })
+      ).status,
+      401,
+    );
+    NodeAssert.equal((await post("login", { "cf-access-jwt-assertion": "forged" })).status, 401);
+    NodeAssert.equal(
+      (await post("login", { "cf-access-jwt-assertion": await sign("foreign-operator") })).status,
+      403,
+    );
+    let session = await issued(await post("login", accessHeader));
+    NodeAssert.equal(session.expiresAt, now + 15 * 60 * 1000);
+    const persisted = JSON.stringify(
+      await query(
+        "SELECT token_hash, instance_id, operator_id, audience FROM foundry_instance.sessions",
+      ),
+    );
+    NodeAssert.equal(persisted.includes(assertion), false);
+    NodeAssert.equal(persisted.includes(session.cookie.split("=", 2)[1]!), false);
+    NodeAssert.equal((await post("session", { cookie: session.cookie })).status, 200);
+    NodeAssert.equal(
+      (await post("session", { cookie: `${FoundrySessions.FOUNDRY_SESSION_COOKIE}=${assertion}` }))
+        .status,
+      401,
+    );
+    NodeAssert.equal(
+      (await post("session", { cookie: session.cookie, origin: "https://evil.example.test" }))
+        .status,
+      403,
+    );
+    NodeAssert.equal(
+      (await post("refresh", { ...accessHeader, cookie: session.cookie })).status,
+      403,
+    );
+    NodeAssert.equal(
+      (await post("logout", { cookie: session.cookie, "x-foundry-csrf": "wrong" })).status,
+      403,
+    );
+    NodeAssert.equal(
+      (
+        await post("refresh", {
+          cookie: session.cookie,
+          "x-foundry-csrf": session.csrf,
+          "cf-access-jwt-assertion": "forged",
+        })
+      ).status,
+      401,
+    );
+    NodeAssert.equal((await post("session", { cookie: session.cookie })).status, 200);
+    const old = session;
+    const refreshed = await Promise.all([
+      post("refresh", { ...accessHeader, cookie: session.cookie, "x-foundry-csrf": session.csrf }),
+      post("refresh", { ...accessHeader, cookie: session.cookie, "x-foundry-csrf": session.csrf }),
+    ]);
+    NodeAssert.deepEqual(refreshed.map((response) => response.status).sort(), [200, 401]);
+    session = await issued(refreshed.find((response) => response.status === 200)!);
+    NodeAssert.equal((await post("session", { cookie: old.cookie })).status, 401);
+    await authHandler.dispose();
+    authHandler = HttpRouter.toWebHandler(authRoutes, { disableLogger: true });
+    NodeAssert.equal((await post("session", { cookie: session.cookie })).status, 200);
+    await stop();
+    NodeAssert.equal((await post("session", { cookie: session.cookie })).status, 503);
+    await start();
+    NodeAssert.equal((await post("session", { cookie: session.cookie })).status, 200);
+    const loggedOut = await post("logout", {
+      cookie: session.cookie,
+      "x-foundry-csrf": session.csrf,
+    });
+    NodeAssert.equal(loggedOut.status, 204);
+    NodeAssert.match(loggedOut.headers.get("set-cookie")!, /Max-Age=0|Expires=Thu, 01 Jan 1970/i);
+    await authHandler.dispose();
+    authHandler = HttpRouter.toWebHandler(authRoutes, { disableLogger: true });
+    NodeAssert.equal((await post("session", { cookie: session.cookie })).status, 401);
+    NodeAssert.equal(
+      (await post("logout", { cookie: session.cookie, "x-foundry-csrf": session.csrf })).status,
+      204,
+    );
+    session = await issued(await post("login", accessHeader));
+    now = session.expiresAt;
+    NodeAssert.equal((await post("session", { cookie: session.cookie })).status, 401);
+    NodeAssert.equal(
+      (
+        await post("refresh", {
+          ...accessHeader,
+          cookie: session.cookie,
+          "x-foundry-csrf": session.csrf,
+        })
+      ).status,
+      401,
+    );
+    session = await issued(
+      await post("login", { "cf-access-jwt-assertion": await sign("operator-subject", 60) }),
+    );
+    NodeAssert.equal(session.expiresAt, now + 60_000);
+    now += 60_000;
+    NodeAssert.equal((await post("session", { cookie: session.cookie })).status, 401);
+    session = await issued(await post("login", { "cf-access-jwt-assertion": await sign() }));
+    await query(
+      "UPDATE foundry_instance.instance SET access_generation=access_generation+1",
+      "foundry_runtime",
+    );
+    NodeAssert.equal((await post("session", { cookie: session.cookie })).status, 401);
+    session = await issued(await post("login", { "cf-access-jwt-assertion": await sign() }));
+    await query(
+      "UPDATE foundry_instance.operator_binding SET access_generation=access_generation+1",
+      "foundry_runtime",
+    );
+    NodeAssert.equal((await post("session", { cookie: session.cookie })).status, 401);
+    await report(
+      "PASS P03: v1 upgrade preserves identity/operator; signed login, origin/CSRF, header spoofing, atomic refresh, durable logout, expiry, generations and DB outage",
+    );
+  } finally {
+    await authHandler.dispose();
+  }
+  await NodeFSP.writeFile(NodePath.join(home, "userdata", "environment-id"), mainEnvironmentId);
+  for (const enabled of [false, true]) {
+    const runtimeRoutes = FoundryRuntime.layer.pipe(
+      Layer.provide(environment),
+      Layer.provide(ServerConfig.layerTest(root, home)),
+      Layer.provide(NodeServices.layer),
+      Layer.provide(
+        Layer.succeed(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown({
+            FOUNDRY_ACCESS_ENABLED: String(enabled),
+            FOUNDRY_INSTANCE_STORE: "postgres",
+            FOUNDRY_INSTANCE_DATABASE_URL: `postgresql://foundry_runtime@localhost/fork_connect?host=${encodeURIComponent(root)}`,
+            FOUNDRY_ACCESS_ISSUER: accessConfig.issuer,
+            FOUNDRY_ACCESS_AUDIENCE: accessConfig.audience,
+            FOUNDRY_PUBLIC_ORIGIN: accessConfig.origin,
+          }),
+        ),
+      ),
+    );
+    const runtimeHandler = HttpRouter.toWebHandler(runtimeRoutes, { disableLogger: true });
+    try {
+      const metadata = await runtimeHandler.handler(
+        new Request(`${accessConfig.origin}/.well-known/foundry?protocolVersion=1`),
+      );
+      NodeAssert.equal(metadata.status, 200);
+      NodeAssert.equal(
+        Object.hasOwn(decodeDescriptor(await metadata.json()), "instanceAuth"),
+        enabled,
+      );
+      const login = await runtimeHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/auth/login`, {
+          method: "POST",
+          headers: { origin: accessConfig.origin, "content-type": "application/json" },
+        }),
+      );
+      NodeAssert.equal(login.status, enabled ? 401 : 404);
+    } finally {
+      await runtimeHandler.dispose();
+    }
+  }
   await report(
-    "Gate P02 passed on isolated PostgreSQL:",
+    "PASS production runtime composition: opt-in auth routes and descriptor capability, no JWKS request without an assertion",
+  );
+  await report(
+    "Gates P02/P03 passed on isolated PostgreSQL:",
     NodeChildProcess.spawnSync(NodePath.join(bin, "postgres"), ["--version"], {
       encoding: "utf8",
     }).stdout.trim(),

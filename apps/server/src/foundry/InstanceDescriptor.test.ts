@@ -1,3 +1,4 @@
+import * as AccessConfig from "./AccessConfig.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { expect, it } from "@effect/vitest";
@@ -103,6 +104,24 @@ it.layer(NodeServices.layer)("Foundry descriptor", (it) => {
           requiredCapabilities: ["foundry.instance-descriptor"],
         });
         expect(required.negotiatedCapabilities).toEqual(["foundry.instance-descriptor"]);
+        expect(
+          yield* Effect.flip(
+            service.negotiate({ ...request, requiredCapabilities: ["foundry.access-sessions"] }),
+          ),
+        ).toMatchObject({ code: "capability_unsupported" });
+        const enabled = yield* readDescriptor.pipe(
+          Effect.provide(
+            Layer.fresh(descriptorLayer).pipe(
+              Layer.provide(Layer.succeed(AccessConfig.AccessEnabled, true)),
+              Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "foundry-enabled-" })),
+            ),
+          ),
+        );
+        expect(enabled.capabilities).toContain("foundry.access-sessions");
+        expect(enabled.instanceAuth).toEqual({
+          bootstrapMethods: ["cloudflare-access-jwt"],
+          sessionMethods: ["foundry-session-cookie"],
+        });
       }).pipe(
         Effect.provide(
           descriptorLayer.pipe(

@@ -1,3 +1,4 @@
+import * as AccessConfig from "./AccessConfig.ts";
 import {
   FOUNDRY_CAPABILITIES,
   FOUNDRY_PROTOCOL_VERSION,
@@ -26,13 +27,17 @@ export class InstanceDescriptor extends Context.Service<
 >()("t3/foundry/InstanceDescriptor") {}
 
 const make = Effect.gen(function* () {
+  const enabled = yield* AccessConfig.AccessEnabled;
+  const capabilities = FOUNDRY_CAPABILITIES.filter(
+    (capability) => enabled || capability !== "foundry.access-sessions",
+  );
   const identity = yield* InstanceIdentityStore.InstanceIdentityStore;
   const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;
   const policy = yield* EnvironmentAuthPolicy.EnvironmentAuthPolicy;
   const negotiate: InstanceDescriptor["Service"]["negotiate"] = Effect.fn(
     "InstanceDescriptor.negotiate",
   )(function* (input) {
-    const supported = new Set<string>(FOUNDRY_CAPABILITIES);
+    const supported = new Set<string>(capabilities);
     const code = !input.protocolVersion
       ? "protocol_version_required"
       : input.protocolVersion !== FOUNDRY_PROTOCOL_VERSION
@@ -44,19 +49,27 @@ const make = Effect.gen(function* () {
       return yield* new FoundryNegotiationError({
         code,
         supportedProtocolVersions: [FOUNDRY_PROTOCOL_VERSION],
-        supportedCapabilities: FOUNDRY_CAPABILITIES,
+        supportedCapabilities: capabilities,
       });
     const auth = yield* policy.getDescriptor();
     return {
       protocolVersion: FOUNDRY_PROTOCOL_VERSION,
       instanceId: yield* identity.getOrCreate,
       mainEnvironmentId: yield* environment.getEnvironmentId,
-      capabilities: FOUNDRY_CAPABILITIES,
-      negotiatedCapabilities: FOUNDRY_CAPABILITIES.filter(
+      capabilities,
+      negotiatedCapabilities: capabilities.filter(
         (capability) =>
           input.capabilities.includes(capability) ||
           input.requiredCapabilities.includes(capability),
       ),
+      ...(enabled
+        ? {
+            instanceAuth: {
+              bootstrapMethods: ["cloudflare-access-jwt"] as const,
+              sessionMethods: ["foundry-session-cookie"] as const,
+            },
+          }
+        : {}),
       auth: { bootstrapMethods: auth.bootstrapMethods, sessionMethods: auth.sessionMethods },
     };
   });
