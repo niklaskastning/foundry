@@ -1,60 +1,58 @@
-# T3 Code Automations – Architektur- und Umsetzungsentwurf
+# Foundry – Instanz-, Automation- und Ausführungsarchitektur
 
-Stand: 31. Oktober 2026 · untersuchter Repository-Stand: `d2d1e4f50e`
+Stand: 31. Oktober 2026 · geprüfter Fork-Stand: `2830704e1`
 
-Status: Diskussionsentwurf. Dieses Dokument beschreibt vorgeschlagene Erweiterungen, keine bereits implementierte Funktion. Auf ausdrücklichen Wunsch liegt der Plan im Repository; er wird nicht automatisch committed. „Foundry“ bezeichnet hier das beschriebene frühere Projekt, keine angenommene Microsoft-Produktintegration.
+Status: Finalisierter Zielplan für die nächste Umsetzung, keine Implementierungs- oder Produktionsfreigabe. Technische Nachweise sind als Abnahmegates ausgewiesen. Der vorhandene Stand ist ein isoliertes Main-Deployment mit Web, SQLite und separat vorbereitetem PostgreSQL; Instanz-Anmeldung, Gateway, Automation und Sandboxes sind noch zu implementieren. Die beiden versionierten Pläne sind ausdrücklich angeforderte Projektdokumente.
 
-## 1. Empfehlung
+## 1. Festgelegtes Ziel
 
-T3 Code sollte eine **dauerhafte Automation-Schicht oberhalb seiner bestehenden Thread- und Provider-Ausführung** erhalten. Sie verwaltet Workflow-Versionen, Trigger, Step-Abhängigkeiten, Parallelität, Ausführungsziele und Ergebnisse. Jeder Agent-Step führt zu einem normalen T3-Thread, dessen Gespräch, Werkzeuge, Änderungen und Prüfungen zugänglich bleiben.
+Foundry ist ein dauerhafter Fork von T3 Code. Eine **selbst gehostete Instanz mit einer Hauptdomain** bietet Web und Windows-Desktop Anmeldung, ein zentrales Device-Verzeichnis, Projekte, Automation und später manuell oder automatisch provisionierte Sandboxes. Der Benutzer trägt die Instanz-URL im Client ein; nach Anmeldung erscheinen die für ihn freigegebenen Environments ohne manuelles Pairing jedes Devices in jedem Client.
 
-**Festgelegte Produktrichtung: dauerhafter Fork von T3 Code mit regelmäßiger Übernahme von Upstream-Änderungen.** Die Automation-Erweiterung erhält eigene Module, Contracts und Persistenz. Wenige ausdrücklich benannte Integrationsstellen verbinden sie mit T3. Leicht integrierbare Upstream-Updates sind ein Architektur- und Abnahmekriterium jeder Etappe; eine spätere Aufnahme des Gesamtfeatures in Upstream ist keine Voraussetzung.
+Für den Start gelten **eine Instanz, ein Betreiber und ein Benutzer**. Teams, Gruppen, mehrere Mandanten in einem Prozess, Federation und Enterprise-RBAC sind spätere Produktarbeit. Stabile Instanz-/Benutzer-/Device-Identitäten und getrennte Berechtigungsprüfungen verhindern, dass wir später globale Admin-Tokens oder E-Mail-Adressen als Besitzmodell migrieren müssen; eine vorsorgliche Enterprise-Plattform bauen wir nicht.
 
-Die erste Version läuft als Erweiterung von `apps/server` auf der vorhandenen VPS hinter einer eigenen Cloudflare-Domain. Diese dauerhaft verfügbare T3-Umgebung übernimmt die zentrale Automation-Steuerung. Ein eigenes Connect-Deployment auf Basis von `infra/relay` übernimmt Anmeldung, Maschinenverzeichnis und Verbindungsaufbau für die Fork-Clients. Agenten laufen auf ausdrücklich ausgewählten Ausführungsmaschinen; die VPS dient standardmäßig der Steuerung. Echte kurzlebige Sandboxes folgen als zusätzlicher Ausführungstyp. Web und Windows-Desktop bekommen denselben Automation-Bereich. Mobile bleibt zunächst unverändert; eine spätere Integration kann dieselben Contracts verwenden.
+Die Main Node enthält Instanzverwaltung, Gateway und Automation im bestehenden Serverprozess. PostgreSQL speichert neue zentrale Daten; lokale T3-Threads und Sessions bleiben in den SQLite-Datenbanken ihrer Environments. Die Main Node verteilt Aufträge servicebasiert ohne einen künstlichen Eltern-Agenten und benötigt dafür keine Provider-CLI. Ein gesonderter Host-Worker auf derselben Linux-VPS führt zunächst Codex und Entwicklungswerkzeuge aus. Sandboxes werden später von ausdrücklich dafür freigegebenen Devices erzeugt.
 
-**PostgreSQL ist ab der ersten Version gesetzt:** für Automation und für das eigene Connect-Verzeichnis, mit getrennten logischen Datenbanken, Rollen und Migrationen. Die vorhandene lokale SQLite-Persistenz der T3-Environments bleibt für deren Threads und Sessions bestehen; der Fork portiert nicht nebenbei den gesamten Upstream-Server auf PostgreSQL. Ein externer Message Bus, Kubernetes und eine zweite Workflow-Engine sind keine Voraussetzung.
+**Verbindungsvorgabe:** Die Hauptdomain ist auch der Standardzugang für Device-Verkehr. Devices verbinden sich ausgehend mit der Main Node; weder separate öffentliche Device-Subdomains noch Portfreigaben oder ein VPN sind Voraussetzung. Damit wird die Main Node zusätzlich zum Steuerungsdienst ein Gateway für laufenden HTTP-/WebSocket-Verkehr. Das ist neue Transport- und Auth-Integration, kein unverändertes T3-Connect-Deployment.
 
-Der konkrete Betriebs- und Repository-Änderungsplan steht in [FORK_DEPLOYMENT.md](FORK_DEPLOYMENT.md). Er beschreibt die VPS, Cloudflare, das eigene Connect, PostgreSQL, Client-Konfiguration, Releases und die Reihenfolge der dafür notwendigen Änderungen. Dieses Dokument bleibt für die Workflow-Domäne und Ausführungssemantik maßgeblich.
+Das bisher geplante eigene Cloudflare-Worker-/Clerk-/Hyperdrive-Connect wird ersetzt. Seine Aufgaben werden in die Main Node integriert; geeignete Verträge und Sicherheitsprinzipien aus T3 werden wiederverwendet, Cloudflare-spezifische Runtime-/Provisionierungsdienste nicht in Node importiert. Cloudflare Tunnel und Access schützen zunächst den Instanzeingang. Clerk/OIDC bleibt ein späterer Auth-Adapter, keine Startvoraussetzung.
 
-**Erster sinnvoller Durchstich:** Ein freigegebenes GitHub-Issue startet Analyse → Implementierung → Prüfung in einem Worktree auf einer ausgewählten Maschine. Jeder Step ist einsehbar; nach Freigabe wird genau ein PR veröffentlicht. Neustarts und doppelte Webhooks erzeugen keine zusätzlichen Implementierungen oder PRs.
+Die Betriebs- und Verbindungsdetails einschließlich Auth-Vertrag und Abnahmegates stehen in [Deployment-Plan](deployment.md); dieses Dokument besitzt Workflow- und Ausführungssemantik. Widersprüche werden in beiden Dokumenten geändert, nicht durch angehängte konkurrierende Entwürfe aufgelöst.
 
-### Anfänglicher Plattform- und Betriebsumfang
+**Erster Durchstich:** Instanz-URL im Windows-Client eingeben → anmelden → registriertes Linux-Device automatisch sehen → normalen Thread darauf öffnen. Erst danach folgt GitHub-Issue → Analyse → Implementierung → Prüfung → freigegebener PR. Doppelzustellungen und Neustarts dürfen keine zusätzlichen Attempts oder Veröffentlichungen auslösen.
 
-Die Gesamtarchitektur einschließlich eigenem Connect, Maschinenverzeichnis, Workflows und späteren Swarms/Sandboxes bleibt erhalten. Der Aufwand wird zunächst über die unterstützten Plattformen und die Distribution begrenzt:
+### Plattformen und Grenzen
 
-- **Linux-VPS:** Erweiterter T3-Server samt Web-Build und PostgreSQL per Docker Compose. Connect bleibt ein eigener Cloudflare Worker auf Basis des vorhandenen Relay-Codes.
-- **Windows-Desktop:** Eigener Fork-Build mit derselben React-Oberfläche wie Web. Der vorhandene Modus ohne lokale Umgebung (`localEnvironmentEnabled=false`) erlaubt die Nutzung als Remote-Client; ein Windows-Port des neuen Automation-Backends ist dafür nicht erforderlich.
-- **Ausführung:** Zunächst ein Linux-Ausführungsziel. Es darf bei ausreichenden Ressourcen auf derselben VPS liegen, logisch getrennt und mit begrenzter Parallelität. Remote-Dispatch wird trotzdem geprüft; dafür genügt ein zweites isoliertes Linux-Environment auf dieser VPS, ein zusätzlicher Rechner ist keine Voraussetzung. Windows als Worker ist eine spätere, getrennte Entscheidung.
-- **Distribution:** Ein Linux-Image für die tatsächliche VPS-Architektur und ein interner Windows-Desktop-Build. Manuelle, reproduzierbare Updates genügen anfangs; keine macOS-/Linux-Desktop-Artefakte, eigene npm-Veröffentlichung oder vollständige Release-Matrix als Startbedingung.
-- **Mobile:** Keine neuen Ansichten, Login-Anpassungen, App-Builds, Store-Releases, Push-Integration oder Mobile-Abnahme in den ersten Etappen. Gemeinsame Contracts werden additiv erweitert, damit unveränderte Clients nicht unnötig brechen. Daraus folgt keine Zusage, dass offizielle mobile Apps den eigenen Connect bereits unterstützen.
-
-Eigene Datenverzeichnisse, App-Identität und Schutz vor versehentlichen Updates auf offizielle T3-Builds sind auch bei manueller Distribution erforderlich. Diese Eingrenzung ersetzt keine Architekturbausteine und verschiebt das zentrale Connect-Ziel nicht.
+- Linux Main Node als Container mit Web-Build, PostgreSQL separat. Anfangs genau eine aktive Main-Instanz; kein Kubernetes, externer Message Bus oder zusätzlicher Workflow-Dienst.
+- Ein Linux-Ausführungs-Environment direkt auf der VPS als separater Dienst, mit eigenem Foundry-Home und explizitem Betriebskonto. Es ist keine Sandbox und teilt CPU/RAM mit Main und Datenbank.
+- Web und eigener Windows-x64-Desktop, optional ohne lokales Desktop-Environment. Die Instanz-URL ist Laufzeitkonfiguration; ein universeller offizieller T3-Client ist dafür nicht zugesagt.
+- Mobile-Quellen und gemeinsame Contracts bleiben upstreamfähig; Mobile-Entwicklung, Builds und Abnahme sind verschoben. Windows als ausführendes Device folgt erst mit eigener Capability-Prüfung.
+- Eigene Produkt-/Datenidentität und manuelle Fork-Updates bleiben Pflicht. Ein automatischer PR-Check; manuelle Builds bei Bedarf, keine zusätzliche CI-Matrix oder planmäßigen Builds.
 
 ## 2. Was das Repository bereits mitbringt
 
 Die folgende Bestandsaufnahme basiert auf Code und Dokumentation dieses Checkouts. Die Dateilinks führen zum vorhandenen Code; spätere Abschnitte kennzeichnen neue Bausteine als Vorschlag.
 
-| Bereich                       | Vorhandene Grundlage                                                                                                                                                                                                                                                        | Für das Ziel noch erforderlich                                                                                      |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Zeitpläne und Webhooks        | [ScheduledTaskService](apps/server/src/scheduledTasks/ScheduledTaskService.ts), [Schemas](packages/contracts/src/scheduledTask.ts): Intervalle, feste Uhrzeiten/Wochentage, Webhooks, Filter, Deduplizierung, Coalescing, Zustellhistorie                                   | Trigger auf versionierte mehrstufige Workflows abbilden; eigene Run-Historie; explizite Zeitzonen und Nachholregeln |
-| Thread-Start und Workspace    | [ThreadLaunchService](apps/server/src/orchestration-v2/ThreadLaunchService.ts): Projektwurzel, vorhandener oder neuer Worktree, Provider-/Modellauswahl                                                                                                                     | Step-Zuordnung, mehrere Repositories pro Step, Sandbox-Lebenszyklus                                                 |
-| Dauerhafte Orchestrierung     | [Orchestrator](apps/server/src/orchestration-v2/Orchestrator.ts), [EventSink](apps/server/src/orchestration-v2/EventSink.ts), [EffectWorker](apps/server/src/orchestration-v2/EffectWorker.ts): Commands, Events, Projektionen, Receipts und Outbox                         | Workflow-Zustandsmaschine und Step-Versuche mit denselben Zuverlässigkeitsprinzipien                                |
-| Andere Maschinen              | [PeerLinks](apps/server/src/peer/PeerLinks.ts), [RemoteDelegation](apps/server/src/peer/RemoteDelegation.ts)                                                                                                                                                                | Workflow-eigene Dispatch-Aufträge, Kapazitäten, Leases, Worker-Auswahl, provisionierte Sandboxes                    |
-| Agenten-Workflows             | [OrchestrationV2SubagentWorkflow](packages/contracts/src/orchestrationV2.ts), [WorkflowOpeningBlock](apps/web/src/components/chat/WorkflowOpeningBlock.tsx)                                                                                                                 | Die vorhandenen Provider-Abläufe sind keine zentrale Bibliothek frei definierbarer Automationen                     |
-| Source Control                | [Registry](apps/server/src/sourceControl/SourceControlProviderRegistry.ts), `packages/source-control-*`, darunter GitHub und Azure DevOps                                                                                                                                   | Ereignisadapter, GitHub-App-Installation, begrenzte Step-Credentials und Automation-Publish-Aktionen                |
-| Credentials                   | [ProviderHost](packages/provider-core/src/server/ProviderHost.ts), [ServerSecretStore](apps/server/src/auth/ServerSecretStore.ts), [SecretResolver](apps/server/src/secrets/SecretResolver.ts)                                                                              | An Workflow/Step/Repository gebundene Credential-Ausgabe, Erneuerung und Widerruf                                   |
-| Skills und Provider-Instanzen | Provider-Driver und vorhandene Skill-Erkennung; beispielsweise [CodexManagedProvider](apps/server/src/provider/Drivers/CodexManagedProvider.ts)                                                                                                                             | Versionierte Agent-Vorlagen und zentral verwaltete, reproduzierbar auslieferbare Skill-Bundles                      |
-| Oberfläche                    | [ScheduledTasksSettings](apps/web/src/components/settings/ScheduledTasksSettings.tsx), [ThreadAutomationsPanel](apps/web/src/components/chat/ThreadAutomationsPanel.tsx), [Mobile Scheduled Tasks](apps/mobile/src/features/settings/SettingsScheduledTasksRouteScreen.tsx) | Automation-Übersicht, Workflow-Editor, Run-/Step-Ansicht und Maschinenstatus                                        |
+| Bereich                       | Vorhandene Grundlage                                                                                                                                                                                                                                                                          | Für das Ziel noch erforderlich                                                                                      |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Zeitpläne und Webhooks        | [ScheduledTaskService](../../apps/server/src/scheduledTasks/ScheduledTaskService.ts), [Schemas](../../packages/contracts/src/scheduledTask.ts): Intervalle, feste Uhrzeiten/Wochentage, Webhooks, Filter, Deduplizierung, Coalescing, Zustellhistorie                                         | Trigger auf versionierte mehrstufige Workflows abbilden; eigene Run-Historie; explizite Zeitzonen und Nachholregeln |
+| Thread-Start und Workspace    | [ThreadLaunchService](../../apps/server/src/orchestration-v2/ThreadLaunchService.ts): Projektwurzel, vorhandener oder neuer Worktree, Provider-/Modellauswahl                                                                                                                                 | Step-Zuordnung, mehrere Repositories pro Step, Sandbox-Lebenszyklus                                                 |
+| Dauerhafte Orchestrierung     | [Orchestrator](../../apps/server/src/orchestration-v2/Orchestrator.ts), [EventSink](../../apps/server/src/orchestration-v2/EventSink.ts), [EffectWorker](../../apps/server/src/orchestration-v2/EffectWorker.ts): Commands, Events, Projektionen, Receipts und Outbox                         | Workflow-Zustandsmaschine und Step-Versuche mit denselben Zuverlässigkeitsprinzipien                                |
+| Andere Maschinen              | [PeerLinks](../../apps/server/src/peer/PeerLinks.ts), [RemoteDelegation](../../apps/server/src/peer/RemoteDelegation.ts)                                                                                                                                                                      | Workflow-eigene Dispatch-Aufträge, Kapazitäten, Leases, Worker-Auswahl, provisionierte Sandboxes                    |
+| Agenten-Workflows             | [OrchestrationV2SubagentWorkflow](../../packages/contracts/src/orchestrationV2.ts), [WorkflowOpeningBlock](../../apps/web/src/components/chat/WorkflowOpeningBlock.tsx)                                                                                                                       | Die vorhandenen Provider-Abläufe sind keine zentrale Bibliothek frei definierbarer Automationen                     |
+| Source Control                | [Registry](../../apps/server/src/sourceControl/SourceControlProviderRegistry.ts), `packages/source-control-*`, darunter GitHub und Azure DevOps                                                                                                                                               | Ereignisadapter, GitHub-App-Installation, begrenzte Step-Credentials und Automation-Publish-Aktionen                |
+| Credentials                   | [ProviderHost](../../packages/provider-core/src/server/ProviderHost.ts), [ServerSecretStore](../../apps/server/src/auth/ServerSecretStore.ts), [SecretResolver](../../apps/server/src/secrets/SecretResolver.ts)                                                                              | An Workflow/Step/Repository gebundene Credential-Ausgabe, Erneuerung und Widerruf                                   |
+| Skills und Provider-Instanzen | Provider-Driver und vorhandene Skill-Erkennung; beispielsweise [CodexManagedProvider](../../apps/server/src/provider/Drivers/CodexManagedProvider.ts)                                                                                                                                         | Versionierte Agent-Vorlagen und zentral verwaltete, reproduzierbar auslieferbare Skill-Bundles                      |
+| Oberfläche                    | [ScheduledTasksSettings](../../apps/web/src/components/settings/ScheduledTasksSettings.tsx), [ThreadAutomationsPanel](../../apps/web/src/components/chat/ThreadAutomationsPanel.tsx), [Mobile Scheduled Tasks](../../apps/mobile/src/features/settings/SettingsScheduledTasksRouteScreen.tsx) | Automation-Übersicht, Workflow-Editor, Run-/Step-Ansicht und Maschinenstatus                                        |
 
 ### Drei wichtige Grenzen des Bestands
 
 1. `ScheduledTaskService` setzt den Status nach erfolgreichem `launch` beziehungsweise `sendToThread` auf `succeeded`. Das bestätigt die Übergabe des Auftrags, nicht den fachlichen Erfolg des Agenten. Ein Workflow darf diesen Status nicht als Step-Ergebnis verwenden.
-2. Ein Git-Worktree trennt Arbeitsverzeichnisse und Branches. Er isoliert weder Prozesse noch Credentials oder Netzwerke. Auch ein Peer-Link ist laut [Remote-Architektur](docs/internals/remote.md) Routing, keine Sandbox.
+2. Ein Git-Worktree trennt Arbeitsverzeichnisse und Branches. Er isoliert weder Prozesse noch Credentials oder Netzwerke. Auch ein Peer-Link ist laut [Remote-Architektur](../internals/remote.md) Routing, keine Sandbox.
 3. Das gehostete Web-Frontend ist ein Client. Es ist heute keine zentrale Steuerung für alle verbundenen Umgebungen. Eine dauerhafte Automation-Steuerung braucht einen ausdrücklich gewählten Backend-Owner; ein offener Browser darf nicht Voraussetzung für die Ausführung sein.
 
 ## 3. Umfang und Annahmen
 
-Festgelegt sind ein dauerhafter Fork, die vorhandene VPS als Main Node, eine eigene Cloudflare-Domain, PostgreSQL für die zentrale Plattform und ein gemeinsamer Connect-Einstieg für die Fork-Clients. Der Entwurf nimmt zunächst einen Betreiber oder ein vertrauenswürdiges Team an. Es gibt zunächst einen aktiven Workflow-Koordinator pro Automation-Datenbestand. Fremde, voneinander isolierte Mandanten auf gemeinsamem Hosting sind eine spätere Produktentscheidung.
+Festgelegt sind Foundry, diese VPS, `foundry.heavenforgeprod.com`, PostgreSQL, ein Benutzer und ein aktiver Koordinator. Das „Netzwerk“ ist eine autorisierte Instanzmitgliedschaft, kein allgemein zugängliches LAN. Nur ausdrücklich registrierte Devices erhalten Aufgaben. Ein kompromittiertes Device darf daraus keine administrativen Rechte auf andere Devices ableiten.
 
 Zum Zielumfang gehören:
 
@@ -68,9 +66,7 @@ Zum Zielumfang gehören:
 
 Ein öffentlicher Workflow-Marktplatz, beliebiger JavaScript-Code in der Steuerung, automatische Infrastrukturabrechnung, eine freie graphische Canvas und unbegrenzte autonome Swarms sind keine Voraussetzungen für die erste Version.
 
-### 3.1 Relevante Produktvision aus dem ursprünglichen Foundry
-
-Grundlage ist die gelesene [Foundry-Produktvision](../foundry-platform/docs/PRODUCT_VISION.md), eingeordnet anhand der vom Benutzer genannten Referenz <t3-thread://v2/0752022b-4709-4784-bdc5-55847feed7fa/593e557f-4791-4fde-a634-3ff160b33bf0>. Der Dateiverweis führt zum separaten lokalen Referenzprojekt und ist keine Build- oder Laufzeitabhängigkeit. Die folgenden Punkte beschreiben die für diesen Fork ausgewählte Vision, keine Zusage über bereits implementierte oder abgenommene Foundry-Funktionen.
+### 3.1 Produktanforderungen
 
 **Produktziel:** Aus einem Auftrag werden mit wenig manueller Koordination geprüfte, nachvollziehbare Änderungen über eines oder mehrere Repositories. T3 bleibt die Oberfläche, in der Menschen die beteiligten Agenten beobachten, steuern und deren Ergebnisse prüfen.
 
@@ -85,29 +81,19 @@ Grundlage ist die gelesene [Foundry-Produktvision](../foundry-platform/docs/PROD
 9. **Memory als belegbare Unterstützung.** Wiederkehrende Erkenntnisse und Entscheidungen können zukünftigen Runs helfen, behalten aber Herkunft und Gültigkeitsbereich. Aktueller Code, ausdrücklich erteilte Anweisungen und aktuelle Ticket-/CI-Ergebnisse haben Vorrang vor abgeleitetem Wissen. Memory ersetzt weder die Ausführungshistorie noch die Prüfung des aktuellen Repository-Stands.
 10. **Kontrollierte Übergabe statt unbegrenzter Autonomie.** Als anfänglicher Produktumfang endet der Ablauf bei geprüften Änderungen und einem oder mehreren zur menschlichen Entscheidung bereiten PRs. Automatisches Mergen oder Produktionsdeployment wird daraus nicht abgeleitet. Repository- und Tool-Zugriffe werden passend zur jeweiligen Rolle vergeben; eine Agent-Vorlage erweitert keine tatsächlichen Berechtigungen.
 
-Für den bestehenden Plan bedeutet das vor allem drei Ergänzungen: einen repositoryübergreifenden Auftragsbezug oberhalb einzelner Runs, gezieltes Weiterreichen neuer menschlicher Informationen an laufende Steps und kompakte Rückmeldungen zum ursprünglichen Ticket. Diese Funktionen werden in die vorhandenen Services und Etappen eingeordnet; sie verlangen keine zweite Agentenplattform neben T3.
-
-**Keine Übernahmevorgabe** sind Foundrys Python-/ACP-/OpenHands-Laufzeit, Kubernetes-/K3s-Aufteilung, eigene CLI, Authentifizierung, UI, Datenbankschemas oder Release-Prozesse. Auch ältere Audit-Ergebnisse und Testzahlen aus Foundry sind keine Abnahme unserer Umsetzung. VPS, PostgreSQL, eigenes Connect, T3-Provider-Adapter und die Fork-Update-Strategie bleiben wie hier geplant. Die Referenz dient der Produktausrichtung, nicht einer technischen Portierung oder einer Migration der laufenden Foundry-Installation.
+Ein repositoryübergreifender Auftragsbezug, gezieltes Weiterreichen menschlicher Informationen und Rückmeldungen zum ursprünglichen Ticket gehören zu diesen Anforderungen. Sie werden über die vorhandenen Services und die abgegrenzten Pakete im Umsetzungsplan integriert.
 
 ## 4. Zielarchitektur und Verantwortlichkeiten
 
-### 4.1 Main Node: eine T3-Umgebung als Automation-Owner
+### 4.1 Main Node: Instanz und Automation-Owner
 
-Die Main Node enthält logisch folgende Funktionen. Sie müssen zunächst keine separaten Prozesse sein:
+Die Main Node bündelt Instanz-Metadaten und Anmeldung, Registry/Enrollment/Widerruf, Gateway, Workflow-Service, Trigger-Inbox, Scheduler, Dispatch-Outbox, Agent-/Skill-Katalog und Artefaktverwaltung. Dies sind getrennte Services mit dünnen Transport-Handlern, zunächst in einem Prozess. Der Scheduler läuft unabhängig vom Browser. Ein später separat betriebener Automation-Prozess verwendet dieselben dauerhaften Receipts und Leases; er wird kein zweiter fachlicher Owner.
 
-- **AutomationService:** Entwürfe, veröffentlichte Versionen, Starts, Pausen, Abbrüche und Freigaben.
-- **Trigger-Ingress:** Webhook-Annahme, Zeitplan-Auslösung und gegebenenfalls Polling-Connectoren.
-- **Workflow-Steuerung:** Entscheidungen über ausführbare Steps, Parallelitätsgrenzen und nächste Zustände.
-- **Dispatch:** Dauerhafte Aufträge an lokale oder entfernte Ausführungsziele.
-- **Agent-/Skill-Katalog:** Versionen, Kompatibilität und Berechtigungen.
-- **Credential Broker:** Ausgabe nur der für einen Step erlaubten Zugriffe.
-- **Artefakt- und Memory-Verwaltung:** Persistente Ergebnisse außerhalb kurzlebiger Workspaces.
+Die Instanz hat eine persistente `instanceId`, die Main Node zusätzlich ihre T3-`environmentId`. Der Client lernt beides aus authentifizierten Instanz-Metadaten. Domainwechsel erzeugen keine neue Identität. Ein Device kann nur innerhalb seiner bestätigten Registrierung handeln. Sichtbarkeit im Katalog, interaktiver Zugriff, Automation-Ausführung und Sandbox-Provisionierung sind getrennte Grants, zunächst alle durch denselben Betreiber verwaltet.
 
-Die Main Node darf optional selbst ein Worker sein. Für den vorgesehenen VPS-Betrieb laufen Agenten standardmäßig auf registrierten Maschinen, damit Builds und Agent-Prozesse die Steuerung und Datenbank nicht verdrängen. Für den schlanken Start können Main Node und ein begrenzter Linux-Worker auf derselben VPS laufen; die verfügbare CPU-/RAM-Kapazität entscheidet über Parallelität und spätere Auslagerung.
+Die Main Node ist selbst als Steuerungs-Environment sichtbar, aber standardmäßig kein Ausführungsziel. Der Host-Worker besitzt eigene Identität, Daten und Provider-Anmeldung. Lokaler Betrieb ist kein Grund, Autorisierung, Receipts oder Kapazitätsprüfung zu überspringen. Die Main Node mountet weder dessen Benutzer-Home noch den Docker-Socket.
 
-Eine Automation hat genau einen Owner. Ein Client kann mehrere Owner sehen, aber kein Browser synchronisiert heimlich deren Definitionen. Export/Import und später explizite Replikation bleiben gesonderte Funktionen.
-
-Das eigene Connect führt das autorisierte Maschinenverzeichnis. Ein Client meldet sich dort einmal an und sieht seine registrierten Umgebungen einschließlich der Main Node. Die Main Node kennzeichnet daraus die ausdrücklich als Automation-Worker freigegebenen Ziele. Ein Peer-Link allein veröffentlicht keine Maschine an alle Clients. Maschinenregistrierung, Client-Zugriff und Automation-Dispatch bleiben getrennte, aufeinander bezogene Berechtigungen.
+Alle Client-Verbindungen verwenden im ersten Instanzmodus das Gateway. Ein direkter LAN-Pfad würde dessen Widerruf umgehen und ist daher keine automatische Optimierung. Unabhängig direkt gekoppelte T3-Environments bleiben getrennte Verbindungen außerhalb der Instanzgarantien. Einzelheiten zu Auth-Terminierung, Sessions und Routing stehen in Deployment-Abschnitt 4.
 
 ### 4.2 Worker: Ausführung mit klarer Maschinenzuordnung
 
@@ -121,11 +107,11 @@ Für Automation kommen hinzu:
 - Lebenszeichen, Lease-Erneuerung, Abbruch und Wiederanmeldung nach Verbindungsabbruch.
 - Rückgabe von Thread-Referenz, Fortschritt, Ergebnismanifest und Artefakten.
 
-`environmentId` ist eine konkrete Maschine/Umgebung; `poolId` bezeichnet eine erlaubte Menge geeigneter Ziele. Bei fester Zielwahl wartet der Run auf diese Maschine. Er wechselt nicht stillschweigend auf eine andere Maschine oder auf ein anderes Provider-Konto.
+`deviceId` bezeichnet eine dauerhafte Registrierung; `environmentId` eine konkrete T3-Umgebung (auch eine kurzlebige Sandbox). Ein Host kann mehrere Environments tragen. Zusammen mit `instanceId` sind diese Referenzen eindeutig; `poolId` bezeichnet eine erlaubte Menge geeigneter Ziele. Bei fester Zielwahl wartet der Run auf diese Maschine. Er wechselt nicht stillschweigend auf eine andere Maschine oder auf ein anderes Provider-Konto.
 
 Peer-Verbindungen und Authentifizierung sollen wiederverwendet werden. Die heutige `RemoteDelegation` setzt jedoch einen delegierenden Agent-Thread voraus. Eine Workflow-Engine sollte keinen künstlichen Eltern-Agenten starten müssen: Die benötigten Launch-/Follow-/Cancel-Funktionen werden über einen servicebasierten Dispatch-Pfad zugänglich gemacht.
 
-Bestehende Peer-Rechte erlauben nicht automatisch Projektanlage, Setup-Skripte oder Weiterdelegation. Automation-Worker benötigen ausdrücklich passende, begrenzte Fähigkeiten; bestehende Link-Grenzen werden nicht für alle Verbindungen gelockert.
+Ein unveränderter Upstream-Server ist noch kein Instanz-Worker: Enrollment, ausgehender Transport und Automation-Receipts benötigen Foundry-Capabilities. Bestehende Peer-Rechte erlauben nicht automatisch Projektanlage, Setup-Skripte oder Weiterdelegation. Automation-Worker benötigen ausdrücklich passende, begrenzte Fähigkeiten; bestehende Link-Grenzen werden nicht für alle Verbindungen gelockert.
 
 ### 4.3 Kurzlebige Sandboxes: zuerst vorhandene Laufzeit kapseln
 
@@ -137,13 +123,19 @@ Der Supervisor führt einen Provisioning-Auftrag mit stabiler Ressourcen-ID aus,
 
 Der erste Sandbox-Adapter sollte genau einen Betriebsweg implementieren, etwa OCI-Container auf einem dedizierten Linux-Worker. Für fremden Code mit höheren Isolationsanforderungen folgt ein VM-/MicroVM-Adapter. Container sind nicht automatisch eine ausreichende Mandantengrenze. Eine bestimmte Cloud ist für das Datenmodell nicht erforderlich.
 
+Benutzer können dieselbe Provisionierung ohne Workflow auslösen. Eine `SandboxAllocation` hat deshalb entweder einen Benutzerauftrag oder einen Run/Step als Owner, eine explizite TTL, Kapazitätsreservierung und Zugriffs-Grants. Sichtbarkeit im Client folgt erst nach erfolgreichem Setup und Enrollment; „Container läuft“ ist noch nicht `ready`. Ein versioniertes Profil pinnt Image-Digest, Architektur, Ressourcen, Tool-/Provider-Versionen, Repository-Revisionen, Setup-Befehle und notwendige Credential-Referenzen.
+
+Zustände unterscheiden `requested`, `provisioning`, `ready`, `draining`, `archiving`, `deleting`, `deleted` und Fehler. Löschung und Verlängerung sind explizite Aktionen. Abbruch während Setup und ein Neustart des Supervisors werden über dieselbe Allocation-ID abgeglichen; ein periodischer Reaper entfernt nur nachgewiesen eigene verwaiste Ressourcen. Bei unerreichbarer Main Node entstehen keine neuen Sandboxes, bestehende laufen nur bis zur lokal durchsetzbaren Frist. Archivfehler blockieren reguläres Cleanup; eine begrenzte Notfallfrist darf Ressourcen freigeben, markiert Daten aber als verloren.
+
+Setup aus einem Repository ist Codeausführung. Bootstrap- und Host-Admin-Credentials sind dabei bereits entfernt; anfänglicher Checkout und Setup erhalten nur die benötigten Zugriffe. Unvertrauenswürdige PRs laufen nicht auf dem dauerhaften Host-Worker. Der erste Container-Adapter ist für vertrauenswürdigen eigenen Code; fremde Mandanten und feindlichen Code unterstützt er nicht ohne gesondertes Isolationskonzept.
+
 Der Preis dieser Entscheidung ist zusätzlicher Startaufwand und ein neuer Archivierungsvertrag. Das ist für die erste Sandbox-Version überschaubarer als eine universelle Remote-Shell-Abstraktion für alle Provider. Erst nach Messung wäre eine schlankere Runner-Laufzeit sinnvoll.
 
 ### 4.4 Persistenz und Transport
 
 Die Main Node besitzt Definitionen, Trigger-Inbox, Run-/Step-Zustände, Dispatch-Outbox und Artefaktverweise. Dauerhafte Worker besitzen ihre Thread-Ereignisse. Bei kurzlebigen Umgebungen werden diese Ereignisse zusätzlich fortlaufend zur Main Node übertragen und dort als Archiv gespeichert.
 
-Zunächst läuft PostgreSQL auf der VPS mit persistentem Volume und zwei logischen Datenbanken: `fork_automation` und `fork_connect`. Die Automation-Steuerung greift über einen begrenzten lokalen Connection-Pool zu; das eigene Connect-Relay über den in [FORK_DEPLOYMENT.md](FORK_DEPLOYMENT.md) beschriebenen privaten Datenbankzugang. Ausführungsmaschinen verwenden authentifizierte APIs und erhalten keine zentrale Datenbankverbindung. Große Transkripte, Anhänge, Git-Bundles und Testergebnisse liegen in einem getrennten Blob-Speicher: anfangs ein dauerhaftes Verzeichnis, später bei Bedarf Object Storage.
+Zunächst läuft PostgreSQL auf der VPS mit persistentem Volume und zwei logischen Datenbanken: `fork_automation` und `fork_connect`. Letzterer bestehender Name wird für Instanzverwaltung beibehalten, ohne Upstreams Relay-Schema zu übernehmen. Die Automation-Steuerung greift über einen begrenzten lokalen Connection-Pool zu; der Instanz-Service über einen eigenen lokalen Pool. Ausführungsmaschinen verwenden authentifizierte APIs und erhalten keine zentrale Datenbankverbindung. Große Transkripte, Anhänge, Git-Bundles und Testergebnisse liegen in einem getrennten Blob-Speicher: anfangs ein dauerhaftes Verzeichnis, später bei Bedarf Object Storage.
 
 Innerhalb der Automation-Datenbank werden Run-Zustand und Dispatch-Outbox atomar gespeichert. Zwischen Automation und T3 gibt es bewusst keine gemeinsame Datenbanktransaktion: Eine Outbox liefert den Auftrag mit stabilem Command-Schlüssel an den T3-Adapter; dieser bestätigt beziehungsweise gleicht den vorhandenen Thread ab. Dieses Protokoll gilt lokal ebenso wie auf entfernten Workern. Es verhindert, dass der Fork direkt in Upstream-Projektionstabellen schreiben muss.
 
@@ -153,22 +145,25 @@ Ein externer Broker wird erst erforderlich, wenn Messungen oder Betriebsanforder
 
 ## 5. Domänenmodell
 
-„Provider“ bleibt in T3 der Agent-Runtime vorbehalten. Für GitHub-/Jira-Ereignisse verwendet die Automation-Schicht den Begriff **Connector**; für die Codeplattform **Source-Control-Host**.
+„Provider“ bleibt in T3 der Agent-Runtime vorbehalten. „Sandbox-Provider“ bezeichnet eine Infrastrukturrolle eines Devices, keine weitere LLM-Integration. Für GitHub-/Jira-Ereignisse verwendet die Automation-Schicht den Begriff **Connector**; für die Codeplattform **Source-Control-Host**.
 
-| Entität                                  | Bedeutung                                                                                                         |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `WorkflowDefinition` / `WorkflowVersion` | Bearbeitbarer Entwurf und unveränderliche veröffentlichte Version mit Step-Graph                                  |
-| `TriggerBinding`                         | Verbindet Zeitplan, manuelles Ereignis oder Connector-Ereignis mit einer Workflow-Version und einem Input-Mapping |
-| `TriggerEvent`                           | Persistierter Eingang mit Herkunft, Zustell-ID, Zeitpunkten und Payload-Referenz                                  |
-| `AgentDefinition` / `AgentVersion`       | Wiederverwendbare Vorlage: Provider-Wunsch, Modell, Instruktionen, Skills, Tool- und Ressourcenanforderungen      |
-| `ExecutionTarget`                        | Konkretes Environment oder Pool; zulässige Provider-Instanzen und Fähigkeiten                                     |
-| `WorkflowRun`                            | Ein Start mit festgehaltener Workflow-Version, Input, Repository-Auswahl und Konfigurations-Snapshot              |
-| `StepRun`                                | Konkreter Step, bei Fan-out zusätzlich mit stabilem Element-Schlüssel                                             |
-| `StepAttempt`                            | Ein Ausführungsversuch mit Lease, Thread-Referenz, Ergebnis und Fehlerursache                                     |
-| `WorkspaceAllocation`                    | Run-/Step-/Repository-bezogener Workspace mit Basis-Commit und Ausgabe-Revision                                   |
-| `Artifact`                               | Unveränderliches Ergebnis mit Typ, Hash, Herkunft, Speicherort und Zugriffsschutz                                 |
-| `MemoryEntry`                            | Versioniertes langfristiges Wissen mit Gültigkeitsbereich und Herkunft                                            |
-| `CredentialGrant`                        | Genehmigte Nutzung einer Credential-Referenz; keine Zugangsdaten im Workflow-Dokument                             |
+| Entität                                         | Bedeutung                                                                                                         |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `Instance` / `Principal` / `DeviceRegistration` | Instanz, authentifizierter Benutzer und registriertes Device mit verifizierter Identität                          |
+| `DeviceGrant` / `DeviceCapability`              | Erlaubte Nutzung getrennt von gemeldeten technischen Fähigkeiten                                                  |
+| `SandboxProfileVersion` / `SandboxAllocation`   | Gepinnte Provisionierungsvorgabe und konkrete Benutzer-/Workflow-Umgebung                                         |
+| `WorkflowDefinition` / `WorkflowVersion`        | Bearbeitbarer Entwurf und unveränderliche veröffentlichte Version mit Step-Graph                                  |
+| `TriggerBinding`                                | Verbindet Zeitplan, manuelles Ereignis oder Connector-Ereignis mit einer Workflow-Version und einem Input-Mapping |
+| `TriggerEvent`                                  | Persistierter Eingang mit Herkunft, Zustell-ID, Zeitpunkten und Payload-Referenz                                  |
+| `AgentDefinition` / `AgentVersion`              | Wiederverwendbare Vorlage: Provider-Wunsch, Modell, Instruktionen, Skills, Tool- und Ressourcenanforderungen      |
+| `ExecutionTarget`                               | Konkretes Environment oder Pool; zulässige Provider-Instanzen und Fähigkeiten                                     |
+| `WorkflowRun`                                   | Ein Start mit festgehaltener Workflow-Version, Input, Repository-Auswahl und Konfigurations-Snapshot              |
+| `StepRun`                                       | Konkreter Step, bei Fan-out zusätzlich mit stabilem Element-Schlüssel                                             |
+| `StepAttempt`                                   | Ein Ausführungsversuch mit Lease, Thread-Referenz, Ergebnis und Fehlerursache                                     |
+| `WorkspaceAllocation`                           | Run-/Step-/Repository-bezogener Workspace mit Basis-Commit und Ausgabe-Revision                                   |
+| `Artifact`                                      | Unveränderliches Ergebnis mit Typ, Hash, Herkunft, Speicherort und Zugriffsschutz                                 |
+| `MemoryEntry`                                   | Versioniertes langfristiges Wissen mit Gültigkeitsbereich und Herkunft                                            |
+| `CredentialGrant`                               | Genehmigte Nutzung einer Credential-Referenz; keine Zugangsdaten im Workflow-Dokument                             |
 
 Eine Thread-Referenz enthält mindestens `environmentId` und `threadId`, zusätzlich die zugehörigen T3-Run-/Turn-IDs. IDs werden nicht zwischen Maschinen als global gleichbedeutend behandelt.
 
@@ -246,7 +241,7 @@ Trigger können mehrere Workflows ansprechen. Der Deduplizierungsschlüssel muss
 
 Webhooks lösen das schnelle Erkennen aus. Regelmäßiger Abgleich behebt Lücken. Worker-Lebenszeichen und Queue-Abgleich lösen nochmals ein anderes Problem. Ein Message Bus ersetzt keine dieser drei Aufgaben.
 
-Für öffentliche SaaS-Webhooks erhält die VPS einen HTTPS-Eingang unter der eigenen Domain; angenommene Automation-Ereignisse werden direkt in PostgreSQL gespeichert. Das eigene Connect muss diese Payloads nicht zwischenspeichern. T3 Connect kann bereits die bestehenden Webhooks puffern; die [bestehenden Grenzen](docs/user/project-settings.md#webhook-automations) bleiben relevant. Dessen optionale Durable-Object-Inbox wird für den ersten Fork-Betrieb nicht aktiviert und nicht als automatische Erweiterung für neue Automation-Routen vorausgesetzt.
+Zunächst werden manuelle Starts und GitHub-Polling umgesetzt. Für direkte SaaS-Webhooks braucht die Hauptdomain später eine eng begrenzte maschinengeeignete Route mit Connector-Authentifizierung statt interaktivem Access-Login; Details stehen im Deployment-Plan. Angenommene Ereignisse landen direkt in PostgreSQL. Es gibt keinen zusätzlichen Relay-Puffer und keine Zusage, dass GitHub jede fehlgeschlagene Zustellung automatisch erneut sendet. Zustandsabgleich und gezielte Wiederzustellung bleiben erforderlich.
 
 Eigene Bot-Kommentare und PR-Updates müssen über Herkunfts-/Korrelationsdaten oder bewusst konfigurierte Filter von erneuten Triggern ausgeschlossen werden. Sonst baut die Automation eine Rückkopplungsschleife.
 
@@ -264,7 +259,7 @@ Eigene Bot-Kommentare und PR-Updates müssen über Herkunfts-/Korrelationsdaten 
 
 Eine Run-Sandbox kann mehrere sequenzielle Steps aufnehmen. Eine Step-Sandbox wird nach Ergebnissicherung beendet. Mehrere Steps können auf derselben Maschine trotzdem in voneinander getrennten Sandboxes laufen.
 
-Gemeinsam genutzte Checkouts haben höchstens einen schreibenden Step gleichzeitig. Parallel arbeitende Implementer bekommen eigene Checkouts/Branches. Gemeinsame Caches dürfen keine gemeinsam beschreibbaren Arbeitsverzeichnisse oder Credentials werden.
+Ein gemeinsamer Projektkatalog ist kein verteiltes Dateisystem: ein Projekt bindet Repository-Identität an konkrete Environment-Checkouts. Pfade werden nicht zwischen Geräten gleichgesetzt; Dateien werden über Git/Artefaktübergaben übertragen. Gemeinsam genutzte Checkouts haben höchstens einen schreibenden Step gleichzeitig. Manuelle Threads und Automation teilen dieselbe Workspace-Belegung; bei konkurrierenden Schreibzugriffen wird gewartet oder ein eigener Worktree angelegt. Unabhängige Host-Prozesse sind damit nicht gesperrt, weshalb nur verwaltete Checkouts diese Garantie erhalten. Parallel arbeitende Implementer bekommen eigene Checkouts/Branches. Gemeinsame Caches dürfen keine gemeinsam beschreibbaren Arbeitsverzeichnisse oder Credentials werden.
 
 ### 8.2 Zehn Repositories
 
@@ -358,7 +353,7 @@ steps:
 
 ### 9.1 Vier Identitäten getrennt behandeln
 
-1. **T3-Identität:** Wer darf den Workflow anlegen, starten, ändern, freigeben oder stoppen?
+1. **Instanz-/Benutzeridentität:** Wer darf den Workflow anlegen, starten, ändern, freigeben oder stoppen?
 2. **Worker-Identität:** Welche Maschine darf welchen Dispatch entgegennehmen und welche Artefakte schreiben?
 3. **Agent-Provider-Konto:** Welches Codex-/Claude-/andere Konto stellt Modelle und Nutzungskontingent bereit?
 4. **Source-Control-/Ticket-Konto:** Welche Repositories, PRs und Tickets darf der Step lesen oder verändern?
@@ -385,13 +380,13 @@ Jira erhält eine separate Verbindung mit passenden Projekt-/Ticket-Rechten und 
 
 ### 9.4 Codex, Claude und Subscription-Nutzung
 
-Für die erste Version bleiben Agent-Provider-Konten auf dem ausgewählten dauerhaften T3-Environment. Dadurch funktionieren die bestehenden Anmelde- und Nutzungsanzeigen weiter. Ein Agent-Profil referenziert eine logische Kontobindung; der Worker löst sie in eine dort autorisierte Provider-Instanz auf.
+Foundry-Anmeldung, Cloudflare-Zugang und Provider-Anmeldung sind verschiedene Vorgänge. Ein Device kann online sein, obwohl Codex fehlt oder sein Konto abgelaufen ist; `online`, `providerReady` und `capacityAvailable` werden separat angezeigt. Für die erste Version bleiben Agent-Provider-Konten auf dem ausgewählten dauerhaften T3-Environment. Dadurch funktionieren die bestehenden Anmelde- und Nutzungsanzeigen weiter. Ein Agent-Profil referenziert eine logische Kontobindung; der Worker löst sie in eine dort autorisierte Provider-Instanz auf.
 
 Codex dokumentiert ChatGPT-Anmeldung für Subscription-Zugriff sowie separate API-Key-Anmeldung. Headless-Anmeldung ist vorgesehen. Das belegt aber keine unbegrenzte Parallelität oder beliebige Weitergabe eines persönlichen Kontos an Sandbox-Pools. Auth-Verfahren, Kontingente und tatsächliche Berechtigungen müssen für das verwendete Konto geprüft werden. [OpenAI: Codex-Authentifizierung](https://learn.chatgpt.com/docs/auth)
 
 OpenAI beschreibt außerdem einen app-server-Pfad mit für ChatGPT-Plan-Nutzung autorisiertem OAuth-Token und explizitem Token-Renewal. Ob dieser Pfad für die gewünschte Integration und Konten verfügbar ist, ist ein eigener Integrationscheck; er ersetzt nicht automatisch T3s vorhandene Anmeldung. [OpenAI: Codex app-server mit ChatGPT-Plan-Nutzung](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server)
 
-Für kurzlebige Sandboxes wird pro Provider ein unterstützter Credential-Bootstrap benötigt: Auswahl des Kontos, minimale Credential-Auslieferung, Refresh-Owner, Ablauf, Widerruf und erneute Anmeldung. Mehrere Kopien eines erneuerbaren Login-Caches dürfen nicht unkoordiniert Credentials überschreiben. Ein vollständiges Benutzer-Home wird nicht als Sandbox-Image verteilt.
+Der vorhandene [Managed-Codex-Runtime](../../apps/server/src/provider/CodexManagedRuntime.ts) nutzt einen privaten Token-Broker im lokalen Environment. Das belegt keinen zentralen Broker über mehrere Hosts; eine entsprechende Erweiterung benötigt eigene Auth-/Refresh-/Isolationstests. Für kurzlebige Sandboxes wird pro Provider ein unterstützter Credential-Bootstrap benötigt: Auswahl des Kontos, minimale Credential-Auslieferung, Refresh-Owner, Ablauf, Widerruf und erneute Anmeldung. Pro Konto wird ein Refresh-Owner festgelegt. Mehrere Kopien eines erneuerbaren Login-Caches dürfen nicht unkoordiniert Credentials überschreiben. Unterstützt ein Provider keinen sicheren Bootstrap, ist er in dieser Sandbox nicht auswählbar; ein Wechsel zur API-Abrechnung wird nicht automatisch vorgenommen. Ein vollständiges Benutzer-Home wird nicht als Sandbox-Image verteilt.
 
 Für Claude, Cursor, Grok, OpenCode und Antigravity ist Headless-/Sandbox-Unterstützung jeweils zu verifizieren. Der Workflow-Editor zeigt Fähigkeiten und fehlende Voraussetzungen, statt gleiche Unterstützung zu behaupten. Provider-/Modellwechsel oder Wechsel auf kostenpflichtige API-Nutzung erfolgt nur nach konfigurierter Erlaubnis.
 
@@ -418,7 +413,7 @@ Eine kurzlebige Sandbox benötigt nicht zwingend langfristiges „Agent Memory�
 | Langfristiges Wissen | Architekturentscheidungen, bekannte Fehlerbilder, Repository-Konventionen | Versioniert, mit Scope, Herkunft und Gültigkeit   |
 | Cache                | Abhängigkeiten, Build-Cache, Suchindex                                    | Wegwerfbar; keine Quelle verbindlicher Ergebnisse |
 
-MVP-Memory besteht aus Repository-/Workflow-bezogenen Markdown- oder JSON-Einträgen und einfacher Suche. Eine Vektordatenbank ist dafür nicht erforderlich. Ein Memory-Eintrag enthält Quelle, Autor/Run, Revision, Gültigkeitsbereich und gegebenenfalls Ablaufdatum.
+Die erste, nach dem Workflow-MVP geplante Memory-Version besteht aus Repository-/Workflow-bezogenen Markdown- oder JSON-Einträgen und einfacher Suche. Eine Vektordatenbank ist dafür nicht erforderlich. Ein Memory-Eintrag enthält Quelle, Autor/Run, Revision, Gültigkeitsbereich und gegebenenfalls Ablaufdatum.
 
 Agenten schlagen neue Einträge vor. Veröffentlichung kann je Workflow automatisch oder nach Prüfung erfolgen; Änderungen werden nicht als unkontrolliertes Überschreiben einer globalen `memory.md` umgesetzt. Gleichzeitige Updates nutzen Versionsprüfung. Private Ticket-Inhalte werden nicht automatisch organisationsweites Wissen.
 
@@ -436,13 +431,13 @@ Die Zeitleiste kann aufgezeichnete Nachrichten, Tools, Änderungen und Entscheid
 
 ## 12. Oberfläche und alle Zugangswege
 
-Der neue Bereich heißt zunächst **Automations** und ist sichtbar an die ausgewählte Owner-Umgebung gebunden. Er bietet Workflows, Runs, Agenten/Skills, Verbindungen und Ausführungsziele. Ein Formular mit geordneter Step-Liste und deklarativem Import/Export reicht für die erste Version.
+Der Client erhält einen Instanzeinstieg mit URL, Anmeldung und Devices sowie den Bereich **Automations**, sichtbar an die Main Node dieser Instanz gebunden. Ein Device kann getrennt als interaktives Ziel, Automation-Ziel und Sandbox-Provider freigegeben werden. Neue Sandboxes sind auch aus der normalen Device-Auswahl anforderbar; Workflow-Nutzung ist keine Voraussetzung. Er bietet Workflows, Runs, Agenten/Skills, Verbindungen und Ausführungsziele. Ein Formular mit geordneter Step-Liste und deklarativem Import/Export reicht für die erste Version.
 
 Ein Run zeigt Trigger-Herkunft, Workflow-Version, Repository-Menge, Step-Zustände, Versuche, Maschinen, Wartegründe und Ergebnisse. Von jedem Agent-Step führt ein Link in den vorhandenen Thread oder dessen Archiv. Ausgabe-Revision und zugehörige Freigabe bleiben sichtbar.
 
 Die Übersicht lädt nur Zusammenfassungen. Transkripte, Diffs und Tool-Ausgaben werden beim Öffnen eines Steps paginiert geladen. Live-Updates sind auf sichtbare Runs begrenzt; ein Run mit hundert Agenten darf keine hundert vollständigen Chatverläufe an jeden Client senden.
 
-- **Web lokal/gehostet:** Das eigene Web-Deployment spricht die Main Node an; das eigene Connect liefert die übrigen autorisierten Umgebungen. Keine eingebauten localhost-Origins. Die offizielle gehostete T3-App wird für Fork-Funktionen nicht vorausgesetzt.
+- **Web lokal/gehostet:** Das eigene Web-Deployment spricht die Main Node an; der Instanz-Service liefert die übrigen autorisierten Umgebungen über das Gateway. Keine eingebauten localhost-Origins. Die offizielle gehostete T3-App wird für Fork-Funktionen nicht vorausgesetzt.
 - **Desktop:** Zunächst Windows mit derselben React-Oberfläche; bevorzugt als Remote-Client zur Linux-Main-Node. Die vorhandene lokale Desktop-Umgebung bleibt optional. Die Automation läuft weiter, wenn das Fenster geschlossen wird und der Owner-Server weiterläuft.
 - **Mobile:** In den ersten Etappen keine Änderungen und keine eigene Distribution. Später können Run-Ansicht, Thread-Zugriff und Kontrollaktionen über dieselben Services ergänzt werden; dies ist eine gesonderte Etappe nach Bedarf.
 - **Settings, Projekt und Command Palette:** Bestehende Aufgaben bleiben erreichbar. Aktionen verwenden dieselben Services, Rechteprüfungen und Owner-Zuordnungen.
@@ -456,24 +451,24 @@ Neue Client-Mutationen verwenden `createEnvironmentRpcCommand`; geschützte Meth
 
 Die folgenden Pfade sind Vorschläge, keine schon vorhandenen Dateien. Der erste Aufbau bleibt im vorhandenen Monorepo und Serverprozess; eine allgemeine Plugin-Plattform oder ein zusätzlicher Backend-Dienst ist dafür nicht erforderlich.
 
-| Ort                                                             | Geplante Änderung                                                                                                                          |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `packages/contracts/src/automation/`                            | Eigene versionierte Workflow-/Run-/Step-/Artefakt-Schemas, RPC-Gruppe und Capability-Beschreibung                                          |
-| `packages/contracts/src/rpc.ts` und Berechtigungsregistrierung  | Kleine Kompositionsänderung zur Einbindung der Automation-RPC-Gruppe und ihrer Rechte                                                      |
-| `apps/server/src/automation/`                                   | Definitionen, reine Zustandsentscheidungen, persistenter Store und Ausführungs-Worker                                                      |
-| `apps/server/src/automation/t3/`                                | Einziger Adapterbereich zu T3-Launch, Abschluss, Stop, Peer-Verbindungen, Trigger-Helfern, Source Control und Secret-Speicher              |
-| Server-Bootstrap, HTTP-/RPC-/MCP-Registrierung                  | Automation-Layer und dünne Handler registrieren; eigene fachliche Logik bleibt im Feature-Modul                                            |
-| `apps/server/src/orchestration-v2/`, `peer/`, `scheduledTasks/` | Nur erforderliche kleine Service-/Abschluss-Hooks; keine dort verteilte Workflow-Zustandsmaschine                                          |
-| `apps/server/src/automation/sourceControl/`                     | Eigene kontrollierte Publish-Aktionen und Grants; bestehende Source-Control-Driver über Adapter weiterverwenden                            |
-| `apps/server/src/automation/connectors/`                        | Ereignis-Normalisierung für GitHub, Azure DevOps und Jira; erst bei echtem Wiederverwendungsbedarf eigene Pakete                           |
-| `apps/server/src/automation/credentials/`                       | Zeitlich und fachlich begrenzte Credential-Grants; bestehende Secret-Speicher über Adapter nutzen                                          |
-| `apps/server/src/automation/sandboxes/`                         | Provisioning-Schnittstelle, erster Adapter, Supervisor und Cleanup                                                                         |
-| `infra/relay/` und eigene Deployment-Komposition                | Eigene Connect-Instanz mit PostgreSQL auf der VPS, eigenen Domains, Auth- und Tunnel-Ressourcen; bestehende Relay-Services wiederverwenden |
-| `packages/client-runtime/src/automation/`                       | Gemeinsame Commands, Berechtigungen, Run-State und inkrementelle Subscriptions                                                             |
-| `apps/web/src/features/automation/`                             | Eigener Editor und Run-/Step-Ansichten; schmale Route und Navigationseinbindung                                                            |
-| `apps/mobile/src/features/automation/` – nur spätere Option     | Keine Änderung im ersten Umfang; spätere Mobile-Ansichten können denselben Contract verwenden                                              |
-| `apps/server/src/automation/persistence/`                       | Eigene PostgreSQL-Layer, Migrationshistorie und Tabellen für Automation; keine Automation-Migrationen in Upstreams Nummernfolge            |
-| `evals/automation/`                                             | Eigene Fälle für neue Modellinstruktionen, Skill-Auflösung und Automation-MCP-Tools                                                        |
+| Ort                                                                           | Geplante Änderung                                                                                                                                      |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `packages/contracts/src/automation/`                                          | Eigene versionierte Workflow-/Run-/Step-/Artefakt-Schemas, RPC-Gruppe und Capability-Beschreibung                                                      |
+| `packages/contracts/src/rpc.ts` und Berechtigungsregistrierung                | Kleine Kompositionsänderung zur Einbindung der Automation-RPC-Gruppe und ihrer Rechte                                                                  |
+| `apps/server/src/automation/`                                                 | Definitionen, reine Zustandsentscheidungen, persistenter Store und Ausführungs-Worker                                                                  |
+| `apps/server/src/automation/t3/`                                              | Einziger Adapterbereich zu T3-Launch, Abschluss, Stop, Peer-Verbindungen, Trigger-Helfern, Source Control und Secret-Speicher                          |
+| Server-Bootstrap, HTTP-/RPC-/MCP-Registrierung                                | Automation-Layer und dünne Handler registrieren; eigene fachliche Logik bleibt im Feature-Modul                                                        |
+| `apps/server/src/orchestration-v2/`, `peer/`, `scheduledTasks/`               | Nur erforderliche kleine Service-/Abschluss-Hooks; keine dort verteilte Workflow-Zustandsmaschine                                                      |
+| `apps/server/src/automation/sourceControl/`                                   | Eigene kontrollierte Publish-Aktionen und Grants; bestehende Source-Control-Driver über Adapter weiterverwenden                                        |
+| `apps/server/src/automation/connectors/`                                      | Ereignis-Normalisierung für GitHub, Azure DevOps und Jira; erst bei echtem Wiederverwendungsbedarf eigene Pakete                                       |
+| `apps/server/src/automation/credentials/`                                     | Zeitlich und fachlich begrenzte Credential-Grants; bestehende Secret-Speicher über Adapter nutzen                                                      |
+| `apps/server/src/automation/sandboxes/`                                       | Provisioning-Schnittstelle, erster Adapter, Supervisor und Cleanup                                                                                     |
+| `apps/server/src/instance/` und `packages/client-runtime/src/instance/` – neu | Instanzidentität, Enrollment, Grants, Gateway und Client-Discovery; wiederverwendbare Relay-Verträge über Adapter, keine Cloudflare-Runtime-Portierung |
+| `packages/client-runtime/src/automation/`                                     | Gemeinsame Commands, Berechtigungen, Run-State und inkrementelle Subscriptions                                                                         |
+| `apps/web/src/features/automation/`                                           | Eigener Editor und Run-/Step-Ansichten; schmale Route und Navigationseinbindung                                                                        |
+| `apps/mobile/src/features/automation/` – nur spätere Option                   | Keine Änderung im ersten Umfang; spätere Mobile-Ansichten können denselben Contract verwenden                                                          |
+| `apps/server/src/automation/persistence/`                                     | Eigene PostgreSQL-Layer, Migrationshistorie und Tabellen für Automation; keine Automation-Migrationen in Upstreams Nummernfolge                        |
+| `evals/automation/`                                                           | Eigene Fälle für neue Modellinstruktionen, Skill-Auflösung und Automation-MCP-Tools                                                                    |
 
 Die Workflow-Zustandsmaschine bleibt fachlich von der Turn-Zustandsmaschine getrennt. Sie übernimmt deren Prinzip „erst Intent committen, dann Effekt ausführen“. Es gibt keinen zweiten Codepfad, der Provider direkt neben `ThreadLaunchService` startet, und keine Agentensteuerung in HTTP-/WebSocket-Handlern.
 
@@ -491,9 +486,9 @@ RPC-Tags, Capability-Namen und lokale Speicherbezeichner erhalten einen eindeuti
 
 ### 13.3 Eigene Migrationen und Datenlebensdauer
 
-Upstream registriert seine Migrationen zentral in [Migrations.ts](apps/server/src/persistence/Migrations.ts); [databaseMigrationHead.ts](apps/server/src/persistence/databaseMigrationHead.ts) verwendet diese Historie auch zur Versionsprüfung. Eigene Migrationen einfach an die nächste freie Nummer anzuhängen oder sehr hohe Nummern zu reservieren, würde bei späteren Übernahmen Konflikte beziehungsweise falsche Versionsannahmen erzeugen.
+Upstream registriert seine Migrationen zentral in [Migrations.ts](../../apps/server/src/persistence/Migrations.ts); [databaseMigrationHead.ts](../../apps/server/src/persistence/databaseMigrationHead.ts) verwendet diese Historie auch zur Versionsprüfung. Eigene Migrationen einfach an die nächste freie Nummer anzuhängen oder sehr hohe Nummern zu reservieren, würde bei späteren Übernahmen Konflikte beziehungsweise falsche Versionsannahmen erzeugen.
 
-Daher erhält `fork_automation` eine eigene PostgreSQL-Migrationsliste und Versionsprüfung. Die Implementierung nutzt eine eigene Effect-Pg-Layer; `@effect/sql-pg` ist im Relay bereits vorhanden. Das Relay behält für `fork_connect` seine eigene PostgreSQL-Migrationshistorie. T3s lokale `statev2.sqlite` und ihre Migrationen bleiben separat. Startup und Update-Preflight prüfen die jeweils benötigten Schema-Versionen getrennt. Bereits veröffentlichte Migrationen werden nicht nachträglich umnummeriert oder verändert.
+Daher erhält `fork_automation` eine eigene PostgreSQL-Migrationsliste und Versionsprüfung. Die Implementierung nutzt eine eigene Effect-Pg-Layer; `@effect/sql-pg` ist im Relay bereits vorhanden. Der neue Instanz-Service erhält für `fork_connect` eine eigene Migrationshistorie; die vorbereitete Datenbank enthält noch kein Relay-Schema. Bestehende fremde Daten dürfen nicht automatisch als leer behandelt werden. Ein späterer Import von Relay-Daten wäre eine explizite Migration. T3s lokale `statev2.sqlite` und ihre Migrationen bleiben separat. Startup und Update-Preflight prüfen die jeweils benötigten Schema-Versionen getrennt. Bereits veröffentlichte Migrationen werden nicht nachträglich umnummeriert oder verändert.
 
 Automation schreibt nicht direkt in T3-Tabellen und legt keine Cross-Database-Fremdschlüssel oder Trigger an. Thread-Löschung, Archivierung und Projektänderungen werden über Services/Ereignisse beziehungsweise Abgleich berücksichtigt. Ein gelöschter Thread erzeugt einen sichtbaren fehlenden Bezug; er darf nicht heimlich einen neuen Step starten.
 
@@ -501,7 +496,7 @@ Backups und Restore brauchen trotzdem einen abgestimmten Konsistenzpunkt: Postgr
 
 ### 13.4 Geplantes Vorgehen für Upstream-Updates
 
-`origin` soll langfristig auf den Fork zeigen, `upstream` auf das originale T3-Repository. Dies ist eine geplante Arbeitsweise; die aktuelle Git-Konfiguration wird durch diesen Entwurf nicht geändert. Der veröffentlichte Fork behält eine kontinuierliche Historie. Regelmäßige Integrationsmerges übernehmen einen ausgewählten Upstream-Commit oder Release-Tag; die gemeinsam verwendete Fork-Historie wird nicht bei jedem Update umgeschrieben.
+`origin` zeigt auf `niklaskastning/foundry`, `upstream` auf `pingdotgg/t3code`. Der veröffentlichte Fork behält eine kontinuierliche Historie. Regelmäßige Integrationsmerges übernehmen einen ausgewählten Upstream-Commit oder Release-Tag; die gemeinsam verwendete Fork-Historie wird nicht bei jedem Update umgeschrieben.
 
 Eigene Features, notwendige T3-Integrationsänderungen und Branding/Release-Konfiguration bleiben in getrennten, verständlichen Commits. Keine großflächigen Umbenennungen, Formatierungen oder Dependency-Upgrades neben einem Feature. Kleine upstreamgeeignete Hooks können bei Bedarf unabhängig vorgeschlagen werden; das Produkt darf nicht von deren Annahme abhängen.
 
@@ -513,7 +508,7 @@ Ein Update folgt diesem Ablauf:
 4. Einen integrierten Replay-Durchlauf von Trigger bis Ergebnis sowie die berührten Web-/Windows-Desktop-Pfade prüfen. Eine Mobile-Abnahme folgt erst mit einer eigenen Mobile-Etappe. Direkte und entfernte Verbindungen nach betroffenen Änderungen einbeziehen.
 5. Einen eigenen Vorab-Build bereitstellen; erst nach Prüfung den Fork-Release freigeben. Ausstehende Upstream-Sicherheitskorrekturen können gezielt vorgezogen werden und werden beim nächsten Merge abgeglichen.
 
-Tests laufen gemäß Repository-Regeln gezielt; umfangreichere Release-Matrizen gehören in CI. Anfangs reichen gezielte Checks für Linux-Server, gemeinsamen Web-Code, Windows-Desktop und einen Client/Server ohne Automation-Capability. Eine Prüfung älterer Worker-Protokollstände kommt hinzu, sobald tatsächlich mehrere Versionen unterstützt werden. Ein gewöhnlicher Upstream-Server bleibt für normale T3-Funktionen nutzbar; als Automation-Worker gilt er nur bei tatsächlich vorhandenen und geprüften Fähigkeiten.
+Tests laufen gemäß Repository-Regeln gezielt; breitere Release-Prüfungen erfolgen nur gezielt bei einem Release, manuell angestoßen; keine dauerhafte zusätzliche CI-Matrix. Anfangs reichen gezielte Checks für Linux-Server, gemeinsamen Web-Code, Windows-Desktop und einen Client/Server ohne Automation-Capability. Eine Prüfung älterer Worker-Protokollstände kommt hinzu, sobald tatsächlich mehrere Versionen unterstützt werden. Ein gewöhnlicher Upstream-Server bleibt für normale T3-Funktionen nutzbar; als Automation-Worker gilt er nur bei tatsächlich vorhandenen und geprüften Fähigkeiten.
 
 Bei größeren Upstream-Änderungen wird zuerst der Adapter angepasst. Ein neues eigenes Package oder ein separater Dienst wird erst eingeführt, wenn eine konkrete gemeinsame Nutzung oder unabhängige Deployment-Anforderung das rechtfertigt. Die Strategie reduziert Konflikte, verspricht aber keine wartungsfreien Updates.
 
@@ -521,61 +516,21 @@ Bei größeren Upstream-Änderungen wird zuerst der Adapter angepasst. Ein neues
 
 Der erste Fork-Betrieb benötigt eigene Produktwerte für Linux-Container, Windows-Desktop-App-ID, Deep Links und Datenverzeichnisse. Eigene CLI-Paketveröffentlichung, Mobile-Bundle-IDs, weitere Desktop-Plattformen und deren Release-Kanäle folgen erst bei tatsächlichem Bedarf. Die Quellstruktur wird dafür nicht pauschal umbenannt; forkbezogene Build-/Release-Werte werden soweit möglich an wenigen Stellen konfiguriert. Die normale T3-Installation und der Fork sollen parallel betreibbar bleiben.
 
-Desktop-Updater, CLI-/Server-Self-Update und Remote-Update werden für eigene Builds zunächst deaktiviert beziehungsweise auf manuelle Fork-Updates begrenzt. Automatische Updates werden erst mit einem eigenen geprüften Release-Kanal aktiviert. Ein Fork-Client darf weder sich selbst noch einen Fork-Worker versehentlich durch ein offizielles T3-Artefakt ersetzen. Release-Metadaten enthalten Fork-Version, Upstream-Basis-SHA, Automation-/Connect-Protokollversionen und die Schema-Versionen für Automation, Relay und T3-Zustand. Rollback ist nur auf mit dem Datenbestand kompatible Builds oder über einen koordinierten Restore zulässig.
+Desktop-Updater, CLI-/Server-Self-Update und Remote-Update werden für eigene Builds zunächst deaktiviert beziehungsweise auf manuelle Fork-Updates begrenzt. Automatische Updates werden erst mit einem eigenen geprüften Release-Kanal aktiviert. Ein Fork-Client darf weder sich selbst noch einen Fork-Worker versehentlich durch ein offizielles T3-Artefakt ersetzen. Release-Metadaten enthalten Fork-Version, Upstream-Basis-SHA, Instanz-/Gateway-/Automation-Protokollversionen und die Schema-Versionen für Automation, Instanz und T3-Zustand. Rollback ist nur auf mit dem Datenbestand kompatible Builds oder über einen koordinierten Restore zulässig.
 
-Web-Frontend und Backend des Forks werden über eigene Deployments bereitgestellt; `app.t3.codes` enthält die zusätzlichen Ansichten nicht. Ebenso enthalten die offiziellen mobilen Apps nicht automatisch die Automation-Oberfläche. Für neue mobile Funktionen wären eigene Builds und deren Distribution erforderlich; beides gehört ausdrücklich nicht zum anfänglichen Umfang. Die eigene Connect-Instanz verwendet eigene Clerk-, Cloudflare- und PostgreSQL-Ressourcen. Der offizielle T3-Connect-Dienst ist keine Betriebsabhängigkeit; die Wiederverwendung seines Codes und die verbleibenden Anbieterabhängigkeiten sind im Deployment-Plan ausgewiesen.
+Web-Frontend und Backend des Forks werden über eigene Deployments bereitgestellt; `app.t3.codes` enthält die zusätzlichen Ansichten nicht. Ebenso enthalten die offiziellen mobilen Apps nicht automatisch die Automation-Oberfläche. Für neue mobile Funktionen wären eigene Builds und deren Distribution erforderlich; beides gehört ausdrücklich nicht zum anfänglichen Umfang. Die Instanz verwendet den betreibereigenen Cloudflare-Zugang und PostgreSQL; Clerk ist optional für eine spätere Etappe. Der offizielle T3-Connect-Dienst ist keine Betriebsabhängigkeit. Runtime-Instanzauswahl und neue Transportfähigkeiten benötigen eigene Foundry-Clients.
 
 ### 13.6 Zusätzliche Abnahmekriterien für jede Etappe
 
-- Neue fachliche Logik liegt im Automation-Bereich; Änderungen außerhalb davon sind einzeln begründet.
+- Neue fachliche Logik liegt im Instanz- beziehungsweise Automation-Bereich; Änderungen außerhalb davon sind einzeln begründet.
 - Persistenz, RPCs und Feature-Aktivierung bleiben voneinander unterscheidbar. Deaktivierte Automation startet keine Trigger oder Worker und belastet den normalen Chatpfad nicht mit zusätzlichen Subscriptions.
 - Die Adaptergrenze hat Verhaltenstests für die tatsächlich verwendeten T3-Operationen; ein internes Refactoring darf nicht unbemerkt andere Abschluss- oder Abbruchsemantik erzeugen.
 - Ein neuer Upstream-Stand wird in einem isolierten Checkout probeweise integriert, sobald ein geeigneter neuer Stand vorliegt; Konflikte und nötige Anpassungen werden am Integrations-PR festgehalten.
 - Bestehende T3-Funktionen und historische Daten bleiben über ihren bisherigen Pfad verfügbar. Eine spätere inhaltliche Überschneidung mit Upstream wird bewusst migriert, nicht durch automatische Zusammenlegung gleichnamiger Features behandelt.
 
-## 14. Umsetzung in überprüfbaren Etappen
+## 14. Umsetzungsreihenfolge und Abnahmen
 
-### Etappe 0 – Grenzen bestätigen und technische Risiken prüfen
-
-Festgelegt sind dauerhafter Fork, VPS-Main-Node, Cloudflare-Domain und PostgreSQL. Vor der Workflow-Implementierung wird der vertikale Infrastruktur-Durchstich aus [FORK_DEPLOYMENT.md](FORK_DEPLOYMENT.md) umgesetzt: eigenes Web/Connect, Main Node und ein registriertes Linux-Ausführungsziel erscheinen nach Anmeldung in Web und Windows-Desktop. Main Node und Ausführungsziel dürfen zunächst auf derselben VPS betrieben werden. Zu entscheiden bleiben erster produktiver Workflow, erster Provider/Connector, Vertrauensmodell und Publish-Freigabe. Kleine technische Prüfungen klären Run-Abschluss plus Checkpoint, Remote-Launch ohne Eltern-Agenten und unterstützte Provider-Anmeldung im vorgesehenen Ausführungsmodus.
-
-**Abnahme:** Für einen Step sind Zustellung, Agentenabschluss und gesichertes Ergebnis getrennt nachweisbar. Authentifizierung wird auf dem vorgesehenen Host tatsächlich unterstützt. Kein Infrastrukturkauf oder größerer Umbau vor dieser Klärung.
-
-### Etappe 1 – Vertikaler MVP auf einer dauerhaften Maschine
-
-Versionierte Definitionen, Inline-Agent-Konfiguration, manuelle Starts, eigener Automation-Trigger-Eingang mit wiederverwendeter Schedule-/Webhook-Logik, sequenzielle Agent-/Test-/Freigabe-Steps und ein Worktree auf einem festen Ausführungsziel. Dazu eigene PostgreSQL-Automation-Persistenz, T3-Adapter, Restart-Recovery, idempotenter Start, Abbruch und einfache Run-Ansicht mit Thread-Links. GitHub-Publishing läuft kontrolliert mit begrenztem Zugriff; Agenten erhalten zunächst keine allgemeinen Publish-Credentials.
-
-Web und Windows-Desktop erhalten den einfachen Editor und die Run-Steuerung. Mobile bleibt unverändert. Ein Repository pro Run und ein Linux-Ausführungsziel; noch kein Sandbox-Pool oder Windows-Worker-Port.
-
-**Abnahme:** Ein ausgewähltes GitHub-Issue läuft bis zum geprüften PR. Doppelzustellung und Main-Node-Neustart erzeugen keine zusätzlichen Threads für denselben Attempt und keinen doppelten PR. Fehlgeschlagene Tests blockieren Publishing. Eigene Migrationshistorie, Adapter-Contract-Tests und Fork-Release-Konfiguration sind bereits Bestandteil dieses MVP.
-
-### Etappe 2 – Wiederverwendung und mehrere Repositories
-
-Agent-Katalog, gepinnte Skills, strukturierte Output-Übergaben, Fan-out/Join, fixe Grenzen und Repository-bezogene Workspace-Zuordnung. Zunächst ein Agent pro Repository; mehrere Repositories in einem Agent-Step folgen nach Erweiterung von Workspace-Bundle, Diff und Checkpoint. Begrenzte Reparaturschleifen werden explizit modelliert.
-
-**Abnahme:** Zehn Repository-Analysen werden mit konfigurierter Parallelität verarbeitet; nur betroffene Repositories gehen in Implementierung. Teilfehler und Join-Regeln sind sichtbar und reproduzierbar. Keine zwei Writer teilen unbeabsichtigt einen Checkout.
-
-### Etappe 3 – Mehrere dauerhafte Worker und gezielte Verteilung
-
-Der feste Remote-Worker einschließlich idempotentem Dispatch, Leases, Resume und Cancel gehört durch den VPS-Betrieb bereits zum Infrastruktur-Durchstich und MVP. Diese Etappe erweitert ihn um mehrere Ziele, Kapazitätsverwaltung und ausdrücklich definierte Verteilungsregeln. Provider-Konten verbleiben pro Worker. Feste Maschinenwahl bleibt verfügbar; ein Ausfall erlaubt keinen unkonfigurierten Wechsel auf eine andere Maschine.
-
-**Abnahme:** Ein Run kann freigegebene Steps auf mehrere geeignete Maschinen verteilen und deren Kapazitätsgrenzen einhalten. Browser-Schließen, Verbindungsabbruch und Neustart des Koordinators verlieren den Run nicht. Ein unklarer Remote-Status löst keine konkurrierende Implementierung aus.
-
-### Etappe 4 – Echte kurzlebige Sandboxes
-
-Ein Sandbox-Backend, reproduzierbare Images, Credential-Bootstrap, Skill-Materialisierung, kontinuierliches Archiv, Artefakttransfer, TTL und Garbage Collection. Run- und Step-Lebensdauer werden getrennt unterstützt. Cleanup läuft unabhängig von einem noch verbundenen Client.
-
-**Abnahme:** Nach Sandbox-Löschung sind Step-Historie, geprüfte Änderungen und benötigte Git-Objekte abrufbar. Eine neue Sandbox kann daraus weiterarbeiten. Erzwungener Verlust wird als unvollständig ausgewiesen. Alte Leases oder Credentials erlauben keine neue kontrollierte Veröffentlichung.
-
-### Etappe 5 – Weitere Connectoren und dauerhaftes Wissen
-
-Azure-DevOps- und Jira-/JSM-Connectoren, Polling-Reconciliation, Memory-Katalog mit Herkunft und Aufbewahrung, differenziertere Rollen. Mobile ist eine unabhängige spätere Option und keine Voraussetzung für diese Etappe. Reihenfolge nach tatsächlichem Bedarf; wenn Azure DevOps zuerst benötigt wird, ersetzt es GitHub im MVP statt einen zweiten MVP zu erzeugen.
-
-**Abnahme:** Externe Tickets können zuverlässig auf dieselben Workflows abgebildet werden. Doppelte/verspätete Events, abgelaufene Anmeldungen und Memory-Konflikte bleiben kontrollierbar.
-
-### Etappe 6 – Nur bei belegtem Bedarf skalieren
-
-Worker-Pools, zusätzliche Sandbox-Backends, größere Artefaktspeicher und gegebenenfalls hochverfügbare Steuerung. Vor Erweiterungen der PostgreSQL-Topologie oder einem Broker-/Workflow-Engine-Wechsel werden Queue-Latenzen, Ereignisrate, Speicherwachstum und Betriebsaufwand gemessen. Eine alternative Workflow-Engine übernimmt dann bewusst die Workflow-Ausführung; sie läuft nicht zusätzlich als konkurrierende Wahrheit daneben.
+Die PR-großen Arbeitspakete, ihre Abhängigkeiten und verbindlichen Prüfgates stehen ausschließlich im [Umsetzungsplan](implementation-plan.md). Die fachlichen Verträge dieses Dokuments bleiben dabei maßgeblich. Prüfungen an Feature-Grenzen und Betriebsvoraussetzungen dürfen nicht mit dem Merge eines Einzel-PRs als erledigt gelten.
 
 ## 15. Tests und Betrieb
 
@@ -595,29 +550,51 @@ Die wichtigsten Tests prüfen Ausfallgrenzen, nicht gerenderte Texte:
 
 Tests erweitern möglichst die vorhandenen Service-Tests auf der niedrigsten passenden Ebene. Effect-Tests verwenden `TestClock`, `Deferred`, Queues oder drainbare Worker; keine Sleeps als Erfolgsbedingung. Provider-/Worker-/Connector-Fakes erlauben deterministische Fehlerfälle. Für den integrierten UI-Durchlauf wird der Replay-Provider verwendet; echte kostenpflichtige Turns nur bei providerabhängigen Fragestellungen.
 
-Vor Änderungen an modellseitigen Instruktionen oder MCP-Beschreibungen gilt `evals/README.md`. Gezielte Checks begleiten die Etappen; vor einem späteren Push `vp run check:changed`, keine ungefragten repo-weiten Testläufe.
+Vor Änderungen an modellseitigen Instruktionen oder MCP-Beschreibungen gelten die [Eval-Regeln](../../evals/README.md). Gezielte Checks begleiten die Etappen; vor einem späteren Push `vp run check:changed`, keine ungefragten repo-weiten Testläufe.
 
 Betrieblich braucht es Metriken für wartende Runs, Queue-Alter, laufende Steps, verlorene Worker, Retry-Ursachen, Auth-Probleme, Archiv-Rückstand und Sandbox-Ressourcen. Provider-Nutzung wird nach Konto und Run aggregiert; fehlende Preis-/Tokeninformationen werden als unbekannt statt als null angezeigt. Laufzeit-, Parallelitäts- und Iterationsgrenzen sind früh umsetzbar; präzise Kostenlimits hängen von der verfügbaren Provider-Telemetrie ab.
 
-Backups umfassen PostgreSQL mit Automation- und Connect-Datenbanken, erforderliche lokale T3-Datenbanken, Blob-Speicher und gesondert gesicherte Secret-Schlüssel; der Konsistenzpunkt folgt Abschnitt 13.3 und dem Deployment-Plan. Restore wird mit pausierten Triggern und gesperrtem Publishing gestartet, bis externe Aktionen abgeglichen sind. Aufbewahrung und Löschung erfassen auch Anhänge, Memory, Sandbox-Snapshots und Archive. Ein Garbage Collector entfernt verwaiste Ressourcen anhand des gespeicherten Besitzers und Zustands.
+Backups umfassen PostgreSQL mit Automation- und Instanz-Datenbanken, erforderliche lokale T3-Datenbanken, Blob-Speicher und gesondert gesicherte Secret-Schlüssel; der Konsistenzpunkt folgt Abschnitt 13.3 und dem Deployment-Plan. Restore wird mit pausierten Triggern und gesperrtem Publishing gestartet, bis externe Aktionen abgeglichen sind. Aufbewahrung und Löschung erfassen auch Anhänge, Memory, Sandbox-Snapshots und Archive. Ein Garbage Collector entfernt verwaiste Ressourcen anhand des gespeicherten Besitzers und Zustands.
 
-## 16. Entscheidungen für die nächste Iteration
+## 16. Voreinstellungen und verbleibende Betriebsentscheidungen
 
-Festgelegt sind der dauerhafte Fork mit regelmäßiger Upstream-Integration, die VPS als Main Node, die eigene Cloudflare-Domain, PostgreSQL ab Version eins und der zentrale Connect-Einstieg. Für den Start werden die Betriebsdetails unter Punkt 2 sowie die fachlichen Entscheidungen unter 1, 3, 4 und 5 benötigt; weitere Punkte folgen vor der jeweiligen Etappe.
+Die Architektur ist für die Umsetzung festgelegt: Foundry, diese Linux-VPS, `foundry.heavenforgeprod.com`, ein Benutzer, Cloudflare Access zuerst, Main-Gateway, Host-Worker, PostgreSQL und eigene Web-/Windows-Clients. Kein separates Connect-Deployment, kein verpflichtendes Clerk, keine Main-Node-Provider-CLI und kein automatisches Enterprise-RBAC.
 
-1. **Erster konkreter Ablauf:** GitHub-Issue → PR, Azure-Work-Item → PR oder JSM-Ticket → Analyse? Empfehlung: genau ein Ablauf durchgehend.
-2. **Betriebsdetails:** Tatsächliche Domain, Linux-Distribution/CPU-Architektur/Ressourcen der VPS, verfügbares Cloudflare-Konto, eigene Clerk-Instanz und Backup-Ziel. Linux als Serverplattform und Windows als erster Desktop-Client sind festgelegt. VPS, PostgreSQL und zentraler Client-Einstieg sind bereits festgelegt; die vorgeschlagenen Hostnamen im Deployment-Plan sind Platzhalter.
-3. **Erster Agent-Provider und Konto:** Welche vorhandene Subscription soll eingesetzt werden? Darf bei Bedarf ausdrücklich auf API-Abrechnung gewechselt werden? Standard: kein automatischer Wechsel.
-4. **Vertrauensmodell:** Nur eigene Repositories und Team-Inputs oder auch öffentliche/fremde Beiträge? Empfehlung: MVP auf vertrauenswürdigem Worker mit explizitem Trigger-Opt-in; fremde Codeausführung erst mit passender Isolation.
-5. **Veröffentlichung:** Nur lokale Änderungen, Draft-PR automatisch oder Freigabe vor Push/PR? Empfehlung: kontrollierter Publish-Step mit Freigabe im ersten Durchstich.
-6. **Workspace-Standard:** Gemeinsamer Run-Workspace, pro Step oder pro Repository? Empfehlung: pro Repository im Run, Schreibzugriffe sequenziell.
-7. **Sandbox-Infrastruktur:** Welcher erste Container-/VM-Host ist tatsächlich vorhanden? Das entscheidet den ersten Adapter.
-8. **Parallelität und Fehlerpolitik:** Wie viele gleichzeitige Agenten pro Maschine und Konto; müssen alle Repositories erfolgreich sein?
-9. **Memory:** Welches Wissen soll wirklich wiederverwendet werden, in welchem Scope und mit welcher Freigabe?
-10. **Aufbewahrung:** Wie lange bleiben vollständige Transkripte, Ticket-Payloads, Git-Artefakte und Sandbox-Snapshots gespeichert?
-11. **Team-Berechtigungen:** Wer darf Definitionen veröffentlichen, produktive Credentials zuordnen und konkrete Änderungen freigeben?
-12. **Authoring:** Formular plus YAML/JSON ausreichend oder später graphischer Editor? Empfehlung: mit Formular und versionierbarem Export beginnen.
-13. **Verfügbarkeit:** Reicht Neustart-Recovery auf einer Main Node oder wird echte Hochverfügbarkeit benötigt?
-14. **Fork-Release-Strategie:** Wie soll das Produkt heißen, wo werden eigene Builds veröffentlicht und in welchem Rhythmus werden Upstream-Stände integriert? Empfehlung: regelmäßige kleine Integrationsmerges und dokumentierter Upstream-SHA pro Build; zunächst manuell bereitgestelltes Linux-Image und Windows-Build, später eigene automatische Release-Kanäle.
+Für die erste Implementierung gelten folgende bewusst begrenzte Defaults; echte Zugänge werden erst vor dem jeweiligen Betrieb über den Secret-Kanal aufgenommen:
 
-Der nächste Umsetzungsschritt wäre Etappe 0 mit einem ausgewählten End-to-End-Ablauf. Die hier beschriebenen Entities und Grenzen können dabei stabil bleiben, während Details wie erster Connector, Sandbox-Host und Memory-Form anhand deines tatsächlichen Betriebsmodells geschärft werden.
+| Thema                  | Startentscheidung / offene Voraussetzung                                                                                                                              |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Erster Ausführungspfad | Replay für Technikabnahme, danach Codex auf dem dauerhaften Linux-Worker; unterstützte Anmeldung separat nachweisen                                                   |
+| Erster Workflow        | Ein ausdrücklich freigegebenes GitHub-Issue, ein Repository, sequenzielle Analyse/Implementierung/Test/Freigabe/PR; Repository und Label vor Aktivierung wählen       |
+| Trigger                | Manuell zuerst, GitHub-Polling als erster externer Eingang; signierte Webhooks nach geprüfter Access-Routentrennung                                                   |
+| Publishing             | Freigabe gebunden an konkrete Revision; kein automatisches Merge/Deployment. Die bestehende Maintainer-Freigabe für Agentenarbeit an diesem Fork ist davon unabhängig |
+| Ausführung             | Ein aktiver Agent pro initialem Worker; keine automatische Verlagerung oder Änderung von Provider/Konto/Abrechnungsart                                                |
+| Workspace              | Ein verwalteter Worktree pro Repository/Run, sequenzielle Writer; keine automatische Dateisynchronisation zwischen Devices                                            |
+| Sandbox                | Erst nach dauerhaftem Worker, ein Linux-OCI-Adapter für vertrauenswürdigen Code; keine Multi-Tenant-Isolationszusage                                                  |
+| Betrieb                | Backup-Ziel, RPO/RTO, Aufbewahrung, Ressourcenlimits und Dienstbenutzer vor dauerhafter Nutzung festlegen; keine erfundenen Konten/Quoten                             |
+| Enterprise             | Erst später Mitgliedschaften, Device-Gruppen, Rollen und Audit-Export mit eigenen Migrations-/Rechteprüfungen                                                         |
+
+## 17. Vorhersehbare Probleme und verbindliche Behandlung
+
+| Risiko                                                            | Behandlung / Nachweis vor Freigabe                                                                                                                                                                                         |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Eine URL suggeriert fertige Connect-Kompatibilität                | Neues Instanzprotokoll und Gateway explizit; unveränderte T3-Clients/-Worker nicht als kompatibel ausgeben. Transport-Gate G2 im Umsetzungsplan prüft alle benötigten Pfade                                                |
+| Gateway wird Engpass und gemeinsamer Ausfallpunkt                 | Bounded Buffers, Backpressure, getrennte Steuer-/Datenkanäle und Ressourcenlimits. Main-Ausfall trennt Instanzzugriff; Worker protokollieren lokal und gleichen Receipts ab                                                |
+| Access-Login funktioniert nur im Browser                          | Windows-Login, Cookie-/Transportkontext, Ablauf und Reconnect vor weiteren Features real prüfen. Details und zulässiger Alternativweg in Deployment-Abschnitt 3                                                            |
+| Widerruf erreicht einen offline arbeitenden Agenten nicht         | Neue Zugriffe/Dispatches sofort sperren, aktive Gateway-Sessions schließen. Lokale Lease-Regel stoppt verwaltete Arbeit; bereits verteilte externe Tokens benötigen Ablauf/Widerruf. Kein behaupteter sofortiger Fern-Kill |
+| Restore setzt widerrufene Credentials wieder gültig               | Recovery startet gesperrt; Zugangsgenerationen/Schlüssel rotieren und Devices abgleichen. Kein automatisches Dispatch-/Publish-Replay aus altem Backup                                                                     |
+| Mehrere Main-Replikate bei späterem Cloud-Hosting                 | Zunächst genau ein aktiver Owner. Horizontale Skalierung braucht Socket-Routing, Lease-Fencing, gemeinsame Sessions/Artefakte und Postgres-taugliche Koordination; Container-Replikazahl allein genügt nicht               |
+| Worker behauptet freie Kapazität oder verliert Verbindung         | Reservation atomar bestätigen, Heartbeat-Ablauf, draining und genaue Attempt-Zuordnung. Kapazität ist Admission Control, keine bloße UI-Anzeige                                                                            |
+| Prozess stoppt zwischen Launch und Receipt                        | Worker-Receipt und T3-Command-ID stabil koppeln; beim Recovery existierenden Thread finden statt zweiten starten; Fehler-Injektion an dieser Grenze                                                                        |
+| Erfolgreicher Turn ohne nutzbaren Code                            | Checkpoint, Exitcodes, Output-Schema und Artefaktmanifest gehören zum Step-Abschluss. Menschliche Nachfragen sind Wartezustände, kein Erfolg                                                                               |
+| Manuelle Threads kollidieren mit Automation                       | Gemeinsame Workspace-Belegung oder getrennte Worktrees; ungeprüfte externe Host-Writer liegen außerhalb der Garantie                                                                                                       |
+| Provider-Refresh und Limits in Sandbox-Pools                      | Ein Refresh-Owner, kontoweite Parallelitätsgrenzen, Capability-Matrix und kein Home-/Token-Cache-Klonen als universelles Verfahren                                                                                         |
+| Repository-Setup entwendet Bootstrap-/Host-Zugänge                | Enrollment vor Setup abschließen, Bootstrap entfernen, getrennte begrenzte Credentials, kein Docker-Socket/Host-Home in der Sandbox                                                                                        |
+| Webhook und Polling erzeugen denselben Auftrag                    | Delivery-Deduplizierung plus fachlicher Schlüssel aus Connector/Objekt/Aktion/Revision/Binding; Polling kann nicht jede kurzlebige Ereignisfolge rekonstruieren                                                            |
+| Öffentliche Issues oder Bot-Rückmeldungen starten Endlosschleifen | Opt-in, Actor-/Repo-Prüfung, Herkunftsmarker, begrenzte Runs/Iterationen und keine geheimnistragende Ausführung fremden Codes                                                                                              |
+| Sandbox verschwindet vor Archivierung                             | Sequenzbestätigte Übertragung und finales Manifest; verlorene Daten sichtbar, kein erfolgreicher Abschluss ohne nötiges Ergebnis                                                                                           |
+| Große Dateien oder schnelle Terminals überlasten Main             | Größen-/Streamlimits, Chunk-Transfers mit Resume; langsame Clients verlieren Verbindung statt unendlich RAM zu belegen. Terminaleingaben nicht blind wiederholen                                                           |
+| Upstream verändert Auth, Launch oder Checkpoint                   | Schmale Adapter plus Verhaltenstests, explizite Protokollversionen und semantische Prüfung je Merge; kein wartungsfreies Fork-Versprechen                                                                                  |
+| Spätere Teamfreigabe überschätzt heutige Isolation                | Benutzer-/Device-Grants und Origin/Session-Grenzen vorbereiten; Mehrbenutzerbetrieb erst nach eigener Sicherheits- und Datenzugriffsabnahme                                                                                |
+
+Die technische Bewertung ist: durchführbar als gezielte Erweiterung des Forks, aber Instanz-Gateway und native Access-Anmeldung sind eigenständige Entwicklungsschritte mit hohem Integrationsrisiko. Die Workflow-Domäne kann weitgehend auf den vorhandenen Ausführungsdiensten aufbauen. Ein erfolgreicher Architekturreview ersetzt keinen der beschriebenen Laufzeitnachweise.
