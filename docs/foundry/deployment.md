@@ -2,7 +2,7 @@
 
 Stand: 31. Oktober 2026 · geprüfter Fork-Stand: `2830704e1`
 
-Status: Finalisierter Zielplan mit technischen Abnahmegates. Ergänzt [AUTOMATION_ARCHITECTURE.md](AUTOMATION_ARCHITECTURE.md), der die Workflow-/Ausführungssemantik besitzt. Neue Pfade, Protokolle und Services in diesem Dokument sind Entwürfe, keine bereits verfügbaren APIs. Der tatsächliche Grundbetrieb steht im [Deployment-Runbook](deploy/fork/README.md).
+Status: Finalisierter Zielplan mit technischen Abnahmegates. Ergänzt [Architekturplan](architecture.md), der die Workflow-/Ausführungssemantik besitzt. Neue Pfade, Protokolle und Services in diesem Dokument sind Entwürfe, keine bereits verfügbaren APIs. Der tatsächliche Grundbetrieb steht im [Deployment-Runbook](operations.md).
 
 ## 1. Festgelegtes Produkt und aktueller Stand
 
@@ -23,16 +23,16 @@ Der frühere Plan „eigener Cloudflare Worker + Clerk + Hyperdrive + Tunnel pro
 
 ## 2. Bewertung der vorhandenen T3-Bausteine
 
-| Vorhandene Grundlage                                                                                                                                   | Wiederverwendung und Grenze                                                                                                                                                       |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [Connect](docs/internals/t3-connect.md), [Discovery](packages/client-runtime/src/relay/discovery.ts)                                                   | Identitäts-/Bootstrap-Prinzipien und Client-Zustandsmodell nutzen. Heute Clerk-gebundener Broker mit direkten Environment-Endpunkten, kein zentraler Datenproxy                   |
-| [Connection Runtime](docs/internals/connection-runtime.md)                                                                                             | Bestehenden Supervisor und Fehlerzustände erweitern; keinen unabhängigen Reconnect-Loop pro UI-Funktion bauen                                                                     |
-| [EnvironmentAuth](apps/server/src/auth/EnvironmentAuth.ts), [DPoP](apps/server/src/auth/dpop.ts), [SessionStore](apps/server/src/auth/SessionStore.ts) | Schlüsselbindung, Session-Scopes, Socket-Tickets und Widerruf erhalten. DPoP bindet die konkrete Request-URL; ein transparentes Path-Rewrite ist keine fertige Gateway-Lösung     |
-| [PeerLinks](apps/server/src/peer/PeerLinks.ts), [RemoteDelegation](apps/server/src/peer/RemoteDelegation.ts)                                           | Remote-Identität und Weiterleitung als Grundlage. Delegation hängt heute an einem Eltern-Thread; Automation braucht servicebasiertes Launch/Follow/Cancel ohne Agenten-Elternteil |
-| [ThreadLaunchService](apps/server/src/orchestration-v2/ThreadLaunchService.ts), [EffectWorker](apps/server/src/orchestration-v2/EffectWorker.ts)       | Threads und Checkpoints aus vorhandenen Services. Worker-Receipts und fachlicher Step-Abschluss sind zusätzliche Verträge                                                         |
-| [Relay-Datenbank](infra/relay/src/db.ts)                                                                                                               | PostgreSQL-/Effect-Erfahrung vorhanden; Alchemy, PlanetScale, Hyperdrive und Worker-Bindungen werden nicht in die Main-Runtime importiert                                         |
-| [Desktop](docs/internals/remote.md#desktop-without-a-local-environment)                                                                                | Windows kann ohne lokales Environment arbeiten; der gebündelte Client braucht trotzdem eigene Instanz-/Auth-/Transport-Anpassungen                                                |
-| [Managed Codex](apps/server/src/provider/CodexManagedRuntime.ts)                                                                                       | Lokale Provider-Anmeldung und Token-Broker sind Grundlage, keine fertige hostübergreifende Sandbox-Credential-Verteilung                                                          |
+| Vorhandene Grundlage                                                                                                                                                     | Wiederverwendung und Grenze                                                                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Connect](../internals/t3-connect.md), [Discovery](../../packages/client-runtime/src/relay/discovery.ts)                                                                 | Identitäts-/Bootstrap-Prinzipien und Client-Zustandsmodell nutzen. Heute Clerk-gebundener Broker mit direkten Environment-Endpunkten, kein zentraler Datenproxy                   |
+| [Connection Runtime](../internals/connection-runtime.md)                                                                                                                 | Bestehenden Supervisor und Fehlerzustände erweitern; keinen unabhängigen Reconnect-Loop pro UI-Funktion bauen                                                                     |
+| [EnvironmentAuth](../../apps/server/src/auth/EnvironmentAuth.ts), [DPoP](../../apps/server/src/auth/dpop.ts), [SessionStore](../../apps/server/src/auth/SessionStore.ts) | Schlüsselbindung, Session-Scopes, Socket-Tickets und Widerruf erhalten. DPoP bindet die konkrete Request-URL; ein transparentes Path-Rewrite ist keine fertige Gateway-Lösung     |
+| [PeerLinks](../../apps/server/src/peer/PeerLinks.ts), [RemoteDelegation](../../apps/server/src/peer/RemoteDelegation.ts)                                                 | Remote-Identität und Weiterleitung als Grundlage. Delegation hängt heute an einem Eltern-Thread; Automation braucht servicebasiertes Launch/Follow/Cancel ohne Agenten-Elternteil |
+| [ThreadLaunchService](../../apps/server/src/orchestration-v2/ThreadLaunchService.ts), [EffectWorker](../../apps/server/src/orchestration-v2/EffectWorker.ts)             | Threads und Checkpoints aus vorhandenen Services. Worker-Receipts und fachlicher Step-Abschluss sind zusätzliche Verträge                                                         |
+| [Relay-Datenbank](../../infra/relay/src/db.ts)                                                                                                                           | PostgreSQL-/Effect-Erfahrung vorhanden; Alchemy, PlanetScale, Hyperdrive und Worker-Bindungen werden nicht in die Main-Runtime importiert                                         |
+| [Desktop](../internals/remote.md#desktop-without-a-local-environment)                                                                                                    | Windows kann ohne lokales Environment arbeiten; der gebündelte Client braucht trotzdem eigene Instanz-/Auth-/Transport-Anpassungen                                                |
+| [Managed Codex](../../apps/server/src/provider/CodexManagedRuntime.ts)                                                                                                   | Lokale Provider-Anmeldung und Token-Broker sind Grundlage, keine fertige hostübergreifende Sandbox-Credential-Verteilung                                                          |
 
 **Machbarkeit:** Der Aufbau ist mit dem bestehenden Thread-/Provider-Modell vereinbar. Die größten neuen Teile sind Instanzauthentifizierung, das zentrale Gateway und die zuverlässige Automation-Dispatch-Grenze. Unveränderte offizielle Clients oder Server werden nicht automatisch Instanzteilnehmer. Kompatibilität wird über explizite Foundry-Protokollversionen und Capabilities ausgehandelt.
 
@@ -50,7 +50,7 @@ Web nutzt den bestehenden interaktiven Access-Login. Main validiert den signiert
 
 Für Windows ist der erste zu prüfende Weg ein dediziertes Electron-Anmeldefenster mit isolierter, instanzgebundener Session-Partition. HTTP und WebSocket des Instanztransports müssen denselben autorisierten Access-Kontext nutzen. Remote-Login-Inhalte erhalten weder Node-Zugriff noch allgemeines Electron-IPC; Callback und erlaubte Navigation werden begrenzt. Ein Systembrowser-Cookie steht dem gepackten Desktop-Renderer nicht automatisch zur Verfügung. Fremde Device-Antworten dürfen keine Access-Cookies oder privilegierten Renderer-Inhalte setzen.
 
-**Gate D0:** Reale Anmeldung mit dem verwendeten IdP, API-Aufruf, WebSocket, Ablauf/Erneuerung, Logout und Neustart in einem Windows-Build. Einige IdPs erlauben eingebettete Anmeldung nicht. Dann wird vor weiterer Implementierung ein Systembrowser-/PKCE-Weg mit Cloudflare Managed OAuth geprüft, einschließlich Verfügbarkeit im Account und Auth-Header-Konflikten. Keine pauschale Deaktivierung von Access und kein gemeinsamer Service-Token im Desktop-Bundle als Ersatz. [Cloudflare: Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/)
+**Früher Auth-Nachweis (G1 im Umsetzungsplan):** Reale Anmeldung mit dem verwendeten IdP, API-Aufruf, WebSocket, Ablauf/Erneuerung, Logout und Neustart in einem Windows-Build. Einige IdPs erlauben eingebettete Anmeldung nicht. Dann wird vor weiterer Implementierung ein Systembrowser-/PKCE-Weg mit Cloudflare Managed OAuth geprüft, einschließlich Verfügbarkeit im Account und Auth-Header-Konflikten. Keine pauschale Deaktivierung von Access und kein gemeinsamer Service-Token im Desktop-Bundle als Ersatz. [Cloudflare: Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/)
 
 Die konkrete Login-Transportvariante ist eine begrenzte technische Gate-Entscheidung, kein offenes Produktmodell. Ohne bestandenen Native-Login ist der Desktop-Einstieg nicht abgenommen. Späteres Clerk/OIDC ersetzt den Identitätsadapter; es migriert die externe Subject-Bindung zur bestehenden internen Benutzer-ID und erfindet nicht nebenbei Teams/Rollen.
 
@@ -80,7 +80,7 @@ Main vermittelt begrenzte HTTP-Anfragen und gestreamte Antworten sowie langlebig
 
 Die Main Node terminiert die Client-Instanzauthentifizierung und prüft pro Route/Operation den Grant. Für das Ziel-Environment nutzt sie eine davon getrennte, begrenzte Environment-Session. Client-DPoP wird gegen die tatsächlich angefragte öffentliche URL geprüft; es wird nicht unverändert nach einem Pfad-/Host-Rewrite weitergereicht. Device-seitige Requests erhalten einen eigenen korrekten Nachweis. Das Gateway ist damit ein vertrauenswürdiger Sicherheitsbaustein und kann Daten lesen; Ende-zu-Ende-Verschlüsselung gegenüber Main wird nicht behauptet.
 
-Die ausgehende Session darf höchstens die Schnittmenge von Benutzer-/Automation-Grant und Device-Freigabe besitzen. Kein generisches Admin-Token für alle Clients. Ein versionierter Auth-Adapter erhält Akteur, Scopes und Herkunft für Device-seitige Autorisierung/Audit, ohne beliebigen Client-Headern zu vertrauen. Bestehende T3-Scope- und Session-Prüfungen werden nicht deaktiviert. Ob vorhandene Sessions bereits die benötigte Delegationsbindung abbilden, wird in D1 geprüft und nötigenfalls additiv erweitert.
+Die ausgehende Session darf höchstens die Schnittmenge von Benutzer-/Automation-Grant und Device-Freigabe besitzen. Kein generisches Admin-Token für alle Clients. Ein versionierter Auth-Adapter erhält Akteur, Scopes und Herkunft für Device-seitige Autorisierung/Audit, ohne beliebigen Client-Headern zu vertrauen. Bestehende T3-Scope- und Session-Prüfungen werden nicht deaktiviert. Ob vorhandene Sessions bereits die benötigte Delegationsbindung abbilden, wird in G2 geprüft und nötigenfalls additiv erweitert.
 
 Device-Cookies, interne Redirects und beliebige URLs werden nicht blind an den Browser weitergereicht. Keine Device-HTML-Seite mit aktiven Inhalten unter der privilegierten Instanz-Origin; die lokale Foundry-UI rendert typisierte Daten, Downloads sind sicher ausgeliefert. Projekt-Previews benötigen später eine eigene isolierte Origin oder gleichwertige nachgewiesene Isolation. Same-Origin-Pfadpräfixe allein isolieren keine Cookies, Skripte oder Service Worker.
 
@@ -137,45 +137,9 @@ Das Main-Image soll ohne eingebettete Hostpfade oder Cloudflare-Verwaltungsabhä
 
 Zunächst genau eine aktive Main-Replik und kein Scale-to-zero. T3-SQLite darf nicht gleichzeitig von mehreren Main-Containern auf einem gemeinsam gemounteten Dateisystem betrieben werden. Rollouts verwenden kontrolliertes Stop/Start; Gateway-Reconnect gehört dazu. Spätere horizontale Skalierung benötigt getrennte Zuständigkeit für Sessions/Socket-Routing, Lease-Owner und Artefakte sowie geeignete T3-Persistenzgrenzen. PostgreSQL allein macht die Anwendung nicht hochverfügbar.
 
-## 6. Umsetzung in Gates mit Abbruchkriterien
+## 6. Umsetzungsreihenfolge und Abnahmegates
 
-Diese Gates sind Abnahmekriterien, keine zweite laufend gepflegte Aufgabenliste. Konkrete Arbeit wird in Issues/PRs verfolgt. Jede Implementierung: Branch → fokussierte Commits → PR gegen den Fork; kein direktes Main-Push oder unaufgefordertes Merge. Nur der vorhandene automatische PR-Check; Artefakt-Builds manuell.
-
-### D0 – Auth- und Transportnachweis vor Produktausbau
-
-Mit isoliertem State einen eigenen Windows-Build und Web gegen Access prüfen. Dedizierte Electron-Session bzw. geprüfte Alternative aus Abschnitt 3, korrekte Main-Identität, Ablauf und Logout. Machine-Eingang mit getrenntem Access-Service-Zugang erreichen. Keine produktiven Credentials in Testfixtures.
-
-**Gate:** API und WebSocket funktionieren in beiden Clients auch nach Erneuerung; falsche Audience, Benutzerbindung und nicht autorisierte Device-Verbindung werden abgewiesen. Bei Fehlschlag Auth-Transportentscheidung korrigieren, bevor Registry/UI/Automation ausgebaut werden.
-
-### D1 – Gateway als minimaler vertikaler Durchstich
-
-Ein explizit registriertes Linux-Testenvironment baut die ausgehende Verbindung auf. URL-/DPoP-/Scope-Adapter und Connection-Supervisor integrieren. Replay-Thread, Streaming, Terminal, Datei-/Diff-/Attachment-Zugriff über Main; keine Verbindung des Clients zum Device nötig.
-
-**Gate:** Geprüfte Akteur-/Scope-Zuordnung, falsche Zielidentität abgewiesen, keine freie Proxy-URL, keine Device-Cookies/aktiven Inhalte unter der Main-Origin. Disconnect, langsamer Client, Main-Neustart und Widerruf verlieren keine bestätigten Mutationen und wiederholen keine Terminaleingaben. Dies ist der größte frühe Integrationsnachweis.
-
-### D2 – Dauerhafte Instanzverwaltung und Client-Onboarding
-
-Metadaten, Registry und Enrollment transaktional in PostgreSQL, Device-Grants, eigene Benutzer-/Client-Sessions, Runtime-URL-Auswahl und Device-Liste. Operator kann registrieren, widerrufen und Credentials rotieren. Offline, nicht angemeldeter Provider, fehlende Capability und belegte Kapazität getrennt anzeigen.
-
-**Gate:** Zwei Clients desselben Benutzers sehen dieselben Devices ohne Pairing pro Device/Client. Wiederholtes Enrollment erzeugt keine Dubletten; Instanzwechsel vermischt keine Tokens. Widerruf sperrt aktive und neue Instanzzugriffe. Eine volle Trennung ist nach Neustart weiterhin wirksam.
-
-### D3 – Host-Worker und servicebasierter Dispatch
-
-Eigenen Linux-Dienst auf dieser VPS einrichten, Provider-Installation und Anmeldung dort nachweisen; keine Änderungen an persönlichem T3. Stabile Receipts, Launch/Follow/Cancel/Export ohne Eltern-Agenten, Workspace-Belegung und lokale Lease-Stop-Regel ergänzen.
-
-**Gate:** Main startet Replay auf dem Worker, Client öffnet den Thread. Verlorene Launch-Antwort und Restart ergeben dieselbe Thread-Referenz. Agentenabschluss, Checkpoint und gesichertes Ergebnis sind unterscheidbar. Erst danach ein ausdrücklich autorisierter echter Codex-Turn zur Provider-Abnahme; keine automatischen kostenpflichtigen Testläufe.
-
-### D4 – Workflow-MVP
-
-Architektur-Etappe 1: manueller Start und GitHub-Polling, ein freigegebenes Repository, sequenzielle Steps, Freigabe und kontrollierter PR. Signierte Webhooks nach eng begrenzter Ingress-Einrichtung ergänzen. Eigene Inbox/Outbox, Cancel/Recovery und einfache Run-Ansicht.
-
-**Gate:** Browser kann geschlossen werden. Doppelzustellung, verlorene Antworten und Neustarts erzeugen keine doppelten Attempts/PRs. Fehlgeschlagene Tests blockieren Publishing; geänderte Revision erfordert neue Freigabe. Ein Restore wurde vor dauerhaftem Betrieb geprobt.
-
-### D5 – Erweiterungen nach dem MVP
-
-Gemäß Architektur-Etappen 2–6: mehrere Repositories und Worker, danach ein Sandbox-Adapter mit interaktivem und Workflow-Einstieg, Setup-Profilen, Provider-Bootstrap und Archivierung. Weitere Connectoren, Memory und optional Clerk/Teams folgen nach Bedarf. Mehrere Repositories in einem Thread benötigen neue Checkpoint-/Diff-Verträge; ein normaler Projektpfad löst das nicht.
-
-**Gate Sandbox:** Anfrage → Reservierung → Provisionierung → Enrollment → Setup → Benutzung → Archiv → Cleanup aus beiden Einstiegen. Abbruch/Restart in jeder Phase, fehlende Tools/Credentials und volles Kontingent sind sichtbar. Kein Docker-Socket oder Host-Admin-Token in der Sandbox, keine Erfolgsanzeige bei unvollständigem Ergebnisarchiv.
+Der [Umsetzungsplan](implementation-plan.md) besitzt die PR-großen Arbeitspakete und alle Gate-Definitionen. G1 prüft den Instanzeinstieg, G2 Gateway und Zugriffsentzug, G3 den dauerhaften Worker, G4 den ersten Workflow und G5 den Wiederherstellungsbetrieb. Die spätere Sandbox-Abnahme G8 umfasst sowohl interaktive als auch Workflow-Nutzung. Die Reihenfolge und Abhängigkeiten werden dort gepflegt, nicht parallel in diesem Dokument.
 
 ## 7. Integrationsstellen und Kompatibilitätsvertrag
 

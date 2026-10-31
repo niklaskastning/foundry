@@ -1,5 +1,7 @@
 # T3 Code docs
 
+For this fork, start with [Foundry development](foundry/README.md): architecture, deployment, implementation gates, and operations. The guides below describe inherited T3 behavior.
+
 ## Using T3 Code
 
 - [Install T3 Code](./user/install.md)

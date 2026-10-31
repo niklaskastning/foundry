@@ -16,7 +16,7 @@ Die Main Node enthält Instanzverwaltung, Gateway und Automation im bestehenden 
 
 Das bisher geplante eigene Cloudflare-Worker-/Clerk-/Hyperdrive-Connect wird ersetzt. Seine Aufgaben werden in die Main Node integriert; geeignete Verträge und Sicherheitsprinzipien aus T3 werden wiederverwendet, Cloudflare-spezifische Runtime-/Provisionierungsdienste nicht in Node importiert. Cloudflare Tunnel und Access schützen zunächst den Instanzeingang. Clerk/OIDC bleibt ein späterer Auth-Adapter, keine Startvoraussetzung.
 
-Die Betriebs- und Verbindungsdetails einschließlich Auth-Vertrag und Abnahmegates stehen in [FORK_DEPLOYMENT.md](FORK_DEPLOYMENT.md); dieses Dokument besitzt Workflow- und Ausführungssemantik. Widersprüche werden in beiden Dokumenten geändert, nicht durch angehängte konkurrierende Entwürfe aufgelöst.
+Die Betriebs- und Verbindungsdetails einschließlich Auth-Vertrag und Abnahmegates stehen in [Deployment-Plan](deployment.md); dieses Dokument besitzt Workflow- und Ausführungssemantik. Widersprüche werden in beiden Dokumenten geändert, nicht durch angehängte konkurrierende Entwürfe aufgelöst.
 
 **Erster Durchstich:** Instanz-URL im Windows-Client eingeben → anmelden → registriertes Linux-Device automatisch sehen → normalen Thread darauf öffnen. Erst danach folgt GitHub-Issue → Analyse → Implementierung → Prüfung → freigegebener PR. Doppelzustellungen und Neustarts dürfen keine zusätzlichen Attempts oder Veröffentlichungen auslösen.
 
@@ -32,22 +32,22 @@ Die Betriebs- und Verbindungsdetails einschließlich Auth-Vertrag und Abnahmegat
 
 Die folgende Bestandsaufnahme basiert auf Code und Dokumentation dieses Checkouts. Die Dateilinks führen zum vorhandenen Code; spätere Abschnitte kennzeichnen neue Bausteine als Vorschlag.
 
-| Bereich                       | Vorhandene Grundlage                                                                                                                                                                                                                                                        | Für das Ziel noch erforderlich                                                                                      |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Zeitpläne und Webhooks        | [ScheduledTaskService](apps/server/src/scheduledTasks/ScheduledTaskService.ts), [Schemas](packages/contracts/src/scheduledTask.ts): Intervalle, feste Uhrzeiten/Wochentage, Webhooks, Filter, Deduplizierung, Coalescing, Zustellhistorie                                   | Trigger auf versionierte mehrstufige Workflows abbilden; eigene Run-Historie; explizite Zeitzonen und Nachholregeln |
-| Thread-Start und Workspace    | [ThreadLaunchService](apps/server/src/orchestration-v2/ThreadLaunchService.ts): Projektwurzel, vorhandener oder neuer Worktree, Provider-/Modellauswahl                                                                                                                     | Step-Zuordnung, mehrere Repositories pro Step, Sandbox-Lebenszyklus                                                 |
-| Dauerhafte Orchestrierung     | [Orchestrator](apps/server/src/orchestration-v2/Orchestrator.ts), [EventSink](apps/server/src/orchestration-v2/EventSink.ts), [EffectWorker](apps/server/src/orchestration-v2/EffectWorker.ts): Commands, Events, Projektionen, Receipts und Outbox                         | Workflow-Zustandsmaschine und Step-Versuche mit denselben Zuverlässigkeitsprinzipien                                |
-| Andere Maschinen              | [PeerLinks](apps/server/src/peer/PeerLinks.ts), [RemoteDelegation](apps/server/src/peer/RemoteDelegation.ts)                                                                                                                                                                | Workflow-eigene Dispatch-Aufträge, Kapazitäten, Leases, Worker-Auswahl, provisionierte Sandboxes                    |
-| Agenten-Workflows             | [OrchestrationV2SubagentWorkflow](packages/contracts/src/orchestrationV2.ts), [WorkflowOpeningBlock](apps/web/src/components/chat/WorkflowOpeningBlock.tsx)                                                                                                                 | Die vorhandenen Provider-Abläufe sind keine zentrale Bibliothek frei definierbarer Automationen                     |
-| Source Control                | [Registry](apps/server/src/sourceControl/SourceControlProviderRegistry.ts), `packages/source-control-*`, darunter GitHub und Azure DevOps                                                                                                                                   | Ereignisadapter, GitHub-App-Installation, begrenzte Step-Credentials und Automation-Publish-Aktionen                |
-| Credentials                   | [ProviderHost](packages/provider-core/src/server/ProviderHost.ts), [ServerSecretStore](apps/server/src/auth/ServerSecretStore.ts), [SecretResolver](apps/server/src/secrets/SecretResolver.ts)                                                                              | An Workflow/Step/Repository gebundene Credential-Ausgabe, Erneuerung und Widerruf                                   |
-| Skills und Provider-Instanzen | Provider-Driver und vorhandene Skill-Erkennung; beispielsweise [CodexManagedProvider](apps/server/src/provider/Drivers/CodexManagedProvider.ts)                                                                                                                             | Versionierte Agent-Vorlagen und zentral verwaltete, reproduzierbar auslieferbare Skill-Bundles                      |
-| Oberfläche                    | [ScheduledTasksSettings](apps/web/src/components/settings/ScheduledTasksSettings.tsx), [ThreadAutomationsPanel](apps/web/src/components/chat/ThreadAutomationsPanel.tsx), [Mobile Scheduled Tasks](apps/mobile/src/features/settings/SettingsScheduledTasksRouteScreen.tsx) | Automation-Übersicht, Workflow-Editor, Run-/Step-Ansicht und Maschinenstatus                                        |
+| Bereich                       | Vorhandene Grundlage                                                                                                                                                                                                                                                                          | Für das Ziel noch erforderlich                                                                                      |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Zeitpläne und Webhooks        | [ScheduledTaskService](../../apps/server/src/scheduledTasks/ScheduledTaskService.ts), [Schemas](../../packages/contracts/src/scheduledTask.ts): Intervalle, feste Uhrzeiten/Wochentage, Webhooks, Filter, Deduplizierung, Coalescing, Zustellhistorie                                         | Trigger auf versionierte mehrstufige Workflows abbilden; eigene Run-Historie; explizite Zeitzonen und Nachholregeln |
+| Thread-Start und Workspace    | [ThreadLaunchService](../../apps/server/src/orchestration-v2/ThreadLaunchService.ts): Projektwurzel, vorhandener oder neuer Worktree, Provider-/Modellauswahl                                                                                                                                 | Step-Zuordnung, mehrere Repositories pro Step, Sandbox-Lebenszyklus                                                 |
+| Dauerhafte Orchestrierung     | [Orchestrator](../../apps/server/src/orchestration-v2/Orchestrator.ts), [EventSink](../../apps/server/src/orchestration-v2/EventSink.ts), [EffectWorker](../../apps/server/src/orchestration-v2/EffectWorker.ts): Commands, Events, Projektionen, Receipts und Outbox                         | Workflow-Zustandsmaschine und Step-Versuche mit denselben Zuverlässigkeitsprinzipien                                |
+| Andere Maschinen              | [PeerLinks](../../apps/server/src/peer/PeerLinks.ts), [RemoteDelegation](../../apps/server/src/peer/RemoteDelegation.ts)                                                                                                                                                                      | Workflow-eigene Dispatch-Aufträge, Kapazitäten, Leases, Worker-Auswahl, provisionierte Sandboxes                    |
+| Agenten-Workflows             | [OrchestrationV2SubagentWorkflow](../../packages/contracts/src/orchestrationV2.ts), [WorkflowOpeningBlock](../../apps/web/src/components/chat/WorkflowOpeningBlock.tsx)                                                                                                                       | Die vorhandenen Provider-Abläufe sind keine zentrale Bibliothek frei definierbarer Automationen                     |
+| Source Control                | [Registry](../../apps/server/src/sourceControl/SourceControlProviderRegistry.ts), `packages/source-control-*`, darunter GitHub und Azure DevOps                                                                                                                                               | Ereignisadapter, GitHub-App-Installation, begrenzte Step-Credentials und Automation-Publish-Aktionen                |
+| Credentials                   | [ProviderHost](../../packages/provider-core/src/server/ProviderHost.ts), [ServerSecretStore](../../apps/server/src/auth/ServerSecretStore.ts), [SecretResolver](../../apps/server/src/secrets/SecretResolver.ts)                                                                              | An Workflow/Step/Repository gebundene Credential-Ausgabe, Erneuerung und Widerruf                                   |
+| Skills und Provider-Instanzen | Provider-Driver und vorhandene Skill-Erkennung; beispielsweise [CodexManagedProvider](../../apps/server/src/provider/Drivers/CodexManagedProvider.ts)                                                                                                                                         | Versionierte Agent-Vorlagen und zentral verwaltete, reproduzierbar auslieferbare Skill-Bundles                      |
+| Oberfläche                    | [ScheduledTasksSettings](../../apps/web/src/components/settings/ScheduledTasksSettings.tsx), [ThreadAutomationsPanel](../../apps/web/src/components/chat/ThreadAutomationsPanel.tsx), [Mobile Scheduled Tasks](../../apps/mobile/src/features/settings/SettingsScheduledTasksRouteScreen.tsx) | Automation-Übersicht, Workflow-Editor, Run-/Step-Ansicht und Maschinenstatus                                        |
 
 ### Drei wichtige Grenzen des Bestands
 
 1. `ScheduledTaskService` setzt den Status nach erfolgreichem `launch` beziehungsweise `sendToThread` auf `succeeded`. Das bestätigt die Übergabe des Auftrags, nicht den fachlichen Erfolg des Agenten. Ein Workflow darf diesen Status nicht als Step-Ergebnis verwenden.
-2. Ein Git-Worktree trennt Arbeitsverzeichnisse und Branches. Er isoliert weder Prozesse noch Credentials oder Netzwerke. Auch ein Peer-Link ist laut [Remote-Architektur](docs/internals/remote.md) Routing, keine Sandbox.
+2. Ein Git-Worktree trennt Arbeitsverzeichnisse und Branches. Er isoliert weder Prozesse noch Credentials oder Netzwerke. Auch ein Peer-Link ist laut [Remote-Architektur](../internals/remote.md) Routing, keine Sandbox.
 3. Das gehostete Web-Frontend ist ein Client. Es ist heute keine zentrale Steuerung für alle verbundenen Umgebungen. Eine dauerhafte Automation-Steuerung braucht einen ausdrücklich gewählten Backend-Owner; ein offener Browser darf nicht Voraussetzung für die Ausführung sein.
 
 ## 3. Umfang und Annahmen
@@ -66,9 +66,7 @@ Zum Zielumfang gehören:
 
 Ein öffentlicher Workflow-Marktplatz, beliebiger JavaScript-Code in der Steuerung, automatische Infrastrukturabrechnung, eine freie graphische Canvas und unbegrenzte autonome Swarms sind keine Voraussetzungen für die erste Version.
 
-### 3.1 Übernommene Produktvision aus dem früheren Referenzprojekt
-
-Die folgenden Anforderungen wurden aus dem früheren separaten Foundry-Referenzprojekt übernommen. Dieses Projekt ist weder Build-Abhängigkeit noch Implementierungsnachweis für den jetzigen T3-Fork. Die hier festgehaltenen Anforderungen sind eigenständig lesbar.
+### 3.1 Produktanforderungen
 
 **Produktziel:** Aus einem Auftrag werden mit wenig manueller Koordination geprüfte, nachvollziehbare Änderungen über eines oder mehrere Repositories. T3 bleibt die Oberfläche, in der Menschen die beteiligten Agenten beobachten, steuern und deren Ergebnisse prüfen.
 
@@ -83,9 +81,7 @@ Die folgenden Anforderungen wurden aus dem früheren separaten Foundry-Referenzp
 9. **Memory als belegbare Unterstützung.** Wiederkehrende Erkenntnisse und Entscheidungen können zukünftigen Runs helfen, behalten aber Herkunft und Gültigkeitsbereich. Aktueller Code, ausdrücklich erteilte Anweisungen und aktuelle Ticket-/CI-Ergebnisse haben Vorrang vor abgeleitetem Wissen. Memory ersetzt weder die Ausführungshistorie noch die Prüfung des aktuellen Repository-Stands.
 10. **Kontrollierte Übergabe statt unbegrenzter Autonomie.** Als anfänglicher Produktumfang endet der Ablauf bei geprüften Änderungen und einem oder mehreren zur menschlichen Entscheidung bereiten PRs. Automatisches Mergen oder Produktionsdeployment wird daraus nicht abgeleitet. Repository- und Tool-Zugriffe werden passend zur jeweiligen Rolle vergeben; eine Agent-Vorlage erweitert keine tatsächlichen Berechtigungen.
 
-Für den bestehenden Plan bedeutet das vor allem drei Ergänzungen: einen repositoryübergreifenden Auftragsbezug oberhalb einzelner Runs, gezieltes Weiterreichen neuer menschlicher Informationen an laufende Steps und kompakte Rückmeldungen zum ursprünglichen Ticket. Diese Funktionen werden in die vorhandenen Services und Etappen eingeordnet; sie verlangen keine zweite Agentenplattform neben T3.
-
-**Keine Übernahmevorgabe** sind Foundrys Python-/ACP-/OpenHands-Laufzeit, Kubernetes-/K3s-Aufteilung, eigene CLI, Authentifizierung, UI, Datenbankschemas oder Release-Prozesse. Auch ältere Audit-Ergebnisse und Testzahlen aus Foundry sind keine Abnahme unserer Umsetzung. VPS, PostgreSQL, integrierte Instanzverwaltung, T3-Provider-Adapter und die Fork-Update-Strategie bleiben wie hier geplant. Die Referenz dient der Produktausrichtung, nicht einer technischen Portierung oder einer Migration der laufenden Foundry-Installation.
+Ein repositoryübergreifender Auftragsbezug, gezieltes Weiterreichen menschlicher Informationen und Rückmeldungen zum ursprünglichen Ticket gehören zu diesen Anforderungen. Sie werden über die vorhandenen Services und die abgegrenzten Pakete im Umsetzungsplan integriert.
 
 ## 4. Zielarchitektur und Verantwortlichkeiten
 
@@ -390,7 +386,7 @@ Codex dokumentiert ChatGPT-Anmeldung für Subscription-Zugriff sowie separate AP
 
 OpenAI beschreibt außerdem einen app-server-Pfad mit für ChatGPT-Plan-Nutzung autorisiertem OAuth-Token und explizitem Token-Renewal. Ob dieser Pfad für die gewünschte Integration und Konten verfügbar ist, ist ein eigener Integrationscheck; er ersetzt nicht automatisch T3s vorhandene Anmeldung. [OpenAI: Codex app-server mit ChatGPT-Plan-Nutzung](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server)
 
-Der vorhandene [Managed-Codex-Runtime](apps/server/src/provider/CodexManagedRuntime.ts) nutzt einen privaten Token-Broker im lokalen Environment. Das belegt keinen zentralen Broker über mehrere Hosts; eine entsprechende Erweiterung benötigt eigene Auth-/Refresh-/Isolationstests. Für kurzlebige Sandboxes wird pro Provider ein unterstützter Credential-Bootstrap benötigt: Auswahl des Kontos, minimale Credential-Auslieferung, Refresh-Owner, Ablauf, Widerruf und erneute Anmeldung. Pro Konto wird ein Refresh-Owner festgelegt. Mehrere Kopien eines erneuerbaren Login-Caches dürfen nicht unkoordiniert Credentials überschreiben. Unterstützt ein Provider keinen sicheren Bootstrap, ist er in dieser Sandbox nicht auswählbar; ein Wechsel zur API-Abrechnung wird nicht automatisch vorgenommen. Ein vollständiges Benutzer-Home wird nicht als Sandbox-Image verteilt.
+Der vorhandene [Managed-Codex-Runtime](../../apps/server/src/provider/CodexManagedRuntime.ts) nutzt einen privaten Token-Broker im lokalen Environment. Das belegt keinen zentralen Broker über mehrere Hosts; eine entsprechende Erweiterung benötigt eigene Auth-/Refresh-/Isolationstests. Für kurzlebige Sandboxes wird pro Provider ein unterstützter Credential-Bootstrap benötigt: Auswahl des Kontos, minimale Credential-Auslieferung, Refresh-Owner, Ablauf, Widerruf und erneute Anmeldung. Pro Konto wird ein Refresh-Owner festgelegt. Mehrere Kopien eines erneuerbaren Login-Caches dürfen nicht unkoordiniert Credentials überschreiben. Unterstützt ein Provider keinen sicheren Bootstrap, ist er in dieser Sandbox nicht auswählbar; ein Wechsel zur API-Abrechnung wird nicht automatisch vorgenommen. Ein vollständiges Benutzer-Home wird nicht als Sandbox-Image verteilt.
 
 Für Claude, Cursor, Grok, OpenCode und Antigravity ist Headless-/Sandbox-Unterstützung jeweils zu verifizieren. Der Workflow-Editor zeigt Fähigkeiten und fehlende Voraussetzungen, statt gleiche Unterstützung zu behaupten. Provider-/Modellwechsel oder Wechsel auf kostenpflichtige API-Nutzung erfolgt nur nach konfigurierter Erlaubnis.
 
@@ -417,7 +413,7 @@ Eine kurzlebige Sandbox benötigt nicht zwingend langfristiges „Agent Memory�
 | Langfristiges Wissen | Architekturentscheidungen, bekannte Fehlerbilder, Repository-Konventionen | Versioniert, mit Scope, Herkunft und Gültigkeit   |
 | Cache                | Abhängigkeiten, Build-Cache, Suchindex                                    | Wegwerfbar; keine Quelle verbindlicher Ergebnisse |
 
-MVP-Memory besteht aus Repository-/Workflow-bezogenen Markdown- oder JSON-Einträgen und einfacher Suche. Eine Vektordatenbank ist dafür nicht erforderlich. Ein Memory-Eintrag enthält Quelle, Autor/Run, Revision, Gültigkeitsbereich und gegebenenfalls Ablaufdatum.
+Die erste, nach dem Workflow-MVP geplante Memory-Version besteht aus Repository-/Workflow-bezogenen Markdown- oder JSON-Einträgen und einfacher Suche. Eine Vektordatenbank ist dafür nicht erforderlich. Ein Memory-Eintrag enthält Quelle, Autor/Run, Revision, Gültigkeitsbereich und gegebenenfalls Ablaufdatum.
 
 Agenten schlagen neue Einträge vor. Veröffentlichung kann je Workflow automatisch oder nach Prüfung erfolgen; Änderungen werden nicht als unkontrolliertes Überschreiben einer globalen `memory.md` umgesetzt. Gleichzeitige Updates nutzen Versionsprüfung. Private Ticket-Inhalte werden nicht automatisch organisationsweites Wissen.
 
@@ -490,7 +486,7 @@ RPC-Tags, Capability-Namen und lokale Speicherbezeichner erhalten einen eindeuti
 
 ### 13.3 Eigene Migrationen und Datenlebensdauer
 
-Upstream registriert seine Migrationen zentral in [Migrations.ts](apps/server/src/persistence/Migrations.ts); [databaseMigrationHead.ts](apps/server/src/persistence/databaseMigrationHead.ts) verwendet diese Historie auch zur Versionsprüfung. Eigene Migrationen einfach an die nächste freie Nummer anzuhängen oder sehr hohe Nummern zu reservieren, würde bei späteren Übernahmen Konflikte beziehungsweise falsche Versionsannahmen erzeugen.
+Upstream registriert seine Migrationen zentral in [Migrations.ts](../../apps/server/src/persistence/Migrations.ts); [databaseMigrationHead.ts](../../apps/server/src/persistence/databaseMigrationHead.ts) verwendet diese Historie auch zur Versionsprüfung. Eigene Migrationen einfach an die nächste freie Nummer anzuhängen oder sehr hohe Nummern zu reservieren, würde bei späteren Übernahmen Konflikte beziehungsweise falsche Versionsannahmen erzeugen.
 
 Daher erhält `fork_automation` eine eigene PostgreSQL-Migrationsliste und Versionsprüfung. Die Implementierung nutzt eine eigene Effect-Pg-Layer; `@effect/sql-pg` ist im Relay bereits vorhanden. Der neue Instanz-Service erhält für `fork_connect` eine eigene Migrationshistorie; die vorbereitete Datenbank enthält noch kein Relay-Schema. Bestehende fremde Daten dürfen nicht automatisch als leer behandelt werden. Ein späterer Import von Relay-Daten wäre eine explizite Migration. T3s lokale `statev2.sqlite` und ihre Migrationen bleiben separat. Startup und Update-Preflight prüfen die jeweils benötigten Schema-Versionen getrennt. Bereits veröffentlichte Migrationen werden nicht nachträglich umnummeriert oder verändert.
 
@@ -532,49 +528,9 @@ Web-Frontend und Backend des Forks werden über eigene Deployments bereitgestell
 - Ein neuer Upstream-Stand wird in einem isolierten Checkout probeweise integriert, sobald ein geeigneter neuer Stand vorliegt; Konflikte und nötige Anpassungen werden am Integrations-PR festgehalten.
 - Bestehende T3-Funktionen und historische Daten bleiben über ihren bisherigen Pfad verfügbar. Eine spätere inhaltliche Überschneidung mit Upstream wird bewusst migriert, nicht durch automatische Zusammenlegung gleichnamiger Features behandelt.
 
-## 14. Umsetzung in überprüfbaren Etappen
+## 14. Umsetzungsreihenfolge und Abnahmen
 
-### Etappe 0 – Instanzeinstieg und kritische Nachweise
-
-Die Gates D0–D3 des [Deployment-Plans](FORK_DEPLOYMENT.md) kommen vor der Workflow-Implementierung: Windows-/Web-Anmeldung hinter Access, URL-basierte Instanzwahl, Registry, ausgehende Device-Verbindung, Gateway-Transport und Widerruf. Main und ein Host-Worker dürfen auf derselben VPS laufen; der Transporttest muss trotzdem NAT-/Firewall-Verhältnisse abdecken. Replay prüft normalen Thread-Start, Streaming, Terminal, Dateien und Reconnect. Zusätzlich werden Remote-Launch ohne Eltern-Agenten und Abschluss einschließlich Checkpoint anhand bestehender Services geprüft.
-
-**Abnahme:** Zwei Clients desselben Benutzers sehen dasselbe Device ohne zusätzliches Pairing. Ein Thread läuft darauf; Logout, Ablauf und Device-Widerruf schließen die betroffenen Zugänge. Protokoll-/Pfad-/DPoP-Probleme werden nicht durch Abschalten der Sicherheitsprüfungen behoben. Ein nicht bestandenes Gate stoppt den darauf angewiesenen Ausbau.
-
-### Etappe 1 – Vertikaler MVP auf einer dauerhaften Maschine
-
-Versionierte Definitionen, Inline-Agent-Konfiguration, manuelle Starts, GitHub-Polling und eigener Automation-Trigger-Eingang mit wiederverwendbarer Schedule-/Webhook-Logik nach Ingress-Abnahme, sequenzielle Agent-/Test-/Freigabe-Steps und ein Worktree auf einem festen Ausführungsziel. Dazu eigene PostgreSQL-Automation-Persistenz, T3-Adapter, Restart-Recovery, idempotenter Start, Abbruch und einfache Run-Ansicht mit Thread-Links. GitHub-Publishing läuft kontrolliert mit begrenztem Zugriff; Agenten erhalten zunächst keine allgemeinen Publish-Credentials.
-
-Web und Windows-Desktop erhalten den einfachen Editor und die Run-Steuerung. Mobile bleibt unverändert. Ein Repository pro Run und ein Linux-Ausführungsziel; noch kein Sandbox-Pool oder Windows-Worker-Port.
-
-**Abnahme:** Ein ausgewähltes GitHub-Issue läuft bis zum geprüften PR. Doppelzustellung und Main-Node-Neustart erzeugen keine zusätzlichen Threads für denselben Attempt und keinen doppelten PR. Fehlgeschlagene Tests blockieren Publishing. Eigene Migrationshistorie, Adapter-Contract-Tests und Fork-Release-Konfiguration sind bereits Bestandteil dieses MVP.
-
-### Etappe 2 – Wiederverwendung und mehrere Repositories
-
-Agent-Katalog, gepinnte Skills, strukturierte Output-Übergaben, Fan-out/Join, fixe Grenzen und Repository-bezogene Workspace-Zuordnung. Zunächst ein Agent pro Repository; mehrere Repositories in einem Agent-Step folgen nach Erweiterung von Workspace-Bundle, Diff und Checkpoint. Begrenzte Reparaturschleifen werden explizit modelliert.
-
-**Abnahme:** Zehn Repository-Analysen werden mit konfigurierter Parallelität verarbeitet; nur betroffene Repositories gehen in Implementierung. Teilfehler und Join-Regeln sind sichtbar und reproduzierbar. Keine zwei Writer teilen unbeabsichtigt einen Checkout.
-
-### Etappe 3 – Mehrere dauerhafte Worker und gezielte Verteilung
-
-Der feste Remote-Worker einschließlich idempotentem Dispatch, Leases, Resume und Cancel gehört durch den VPS-Betrieb bereits zum Infrastruktur-Durchstich und MVP. Diese Etappe erweitert ihn um mehrere Ziele, Kapazitätsverwaltung und ausdrücklich definierte Verteilungsregeln. Provider-Konten verbleiben pro Worker. Feste Maschinenwahl bleibt verfügbar; ein Ausfall erlaubt keinen unkonfigurierten Wechsel auf eine andere Maschine.
-
-**Abnahme:** Ein Run kann freigegebene Steps auf mehrere geeignete Maschinen verteilen und deren Kapazitätsgrenzen einhalten. Browser-Schließen, Verbindungsabbruch und Neustart des Koordinators verlieren den Run nicht. Ein unklarer Remote-Status löst keine konkurrierende Implementierung aus.
-
-### Etappe 4 – Manuelle und automatisierte Sandboxes
-
-Ein Sandbox-Backend, reproduzierbare Images, Credential-Bootstrap, Skill-Materialisierung, kontinuierliches Archiv, Artefakttransfer, TTL und Garbage Collection. Benutzer-, Run- und Step-Lebensdauer werden getrennt unterstützt. Ein interaktiver Client und ein Workflow nutzen denselben Provisionierungsdienst und dieselben Quoten. Cleanup läuft unabhängig von einem noch verbundenen Client.
-
-**Abnahme:** Nach Sandbox-Löschung sind Step-Historie, geprüfte Änderungen und benötigte Git-Objekte abrufbar. Eine neue Sandbox kann daraus weiterarbeiten. Erzwungener Verlust wird als unvollständig ausgewiesen. Alte Leases oder Credentials erlauben keine neue kontrollierte Veröffentlichung.
-
-### Etappe 5 – Weitere Connectoren und dauerhaftes Wissen
-
-Azure-DevOps- und Jira-/JSM-Connectoren, Polling-Reconciliation, Memory-Katalog mit Herkunft und Aufbewahrung, optional Clerk/OIDC und differenziertere Rollen; Teams und Gruppen erfordern eine eigene Autorisierungsabnahme und sind kein automatischer Effekt der IdP-Integration. Mobile ist eine unabhängige spätere Option und keine Voraussetzung für diese Etappe. Reihenfolge nach tatsächlichem Bedarf; wenn Azure DevOps zuerst benötigt wird, ersetzt es GitHub im MVP statt einen zweiten MVP zu erzeugen.
-
-**Abnahme:** Externe Tickets können zuverlässig auf dieselben Workflows abgebildet werden. Doppelte/verspätete Events, abgelaufene Anmeldungen und Memory-Konflikte bleiben kontrollierbar.
-
-### Etappe 6 – Nur bei belegtem Bedarf skalieren
-
-Worker-Pools, zusätzliche Sandbox-Backends, größere Artefaktspeicher und gegebenenfalls hochverfügbare Steuerung. Vor Erweiterungen der PostgreSQL-Topologie oder einem Broker-/Workflow-Engine-Wechsel werden Queue-Latenzen, Ereignisrate, Speicherwachstum und Betriebsaufwand gemessen. Eine alternative Workflow-Engine übernimmt dann bewusst die Workflow-Ausführung; sie läuft nicht zusätzlich als konkurrierende Wahrheit daneben.
+Die PR-großen Arbeitspakete, ihre Abhängigkeiten und verbindlichen Prüfgates stehen ausschließlich im [Umsetzungsplan](implementation-plan.md). Die fachlichen Verträge dieses Dokuments bleiben dabei maßgeblich. Prüfungen an Feature-Grenzen und Betriebsvoraussetzungen dürfen nicht mit dem Merge eines Einzel-PRs als erledigt gelten.
 
 ## 15. Tests und Betrieb
 
@@ -594,7 +550,7 @@ Die wichtigsten Tests prüfen Ausfallgrenzen, nicht gerenderte Texte:
 
 Tests erweitern möglichst die vorhandenen Service-Tests auf der niedrigsten passenden Ebene. Effect-Tests verwenden `TestClock`, `Deferred`, Queues oder drainbare Worker; keine Sleeps als Erfolgsbedingung. Provider-/Worker-/Connector-Fakes erlauben deterministische Fehlerfälle. Für den integrierten UI-Durchlauf wird der Replay-Provider verwendet; echte kostenpflichtige Turns nur bei providerabhängigen Fragestellungen.
 
-Vor Änderungen an modellseitigen Instruktionen oder MCP-Beschreibungen gilt `evals/README.md`. Gezielte Checks begleiten die Etappen; vor einem späteren Push `vp run check:changed`, keine ungefragten repo-weiten Testläufe.
+Vor Änderungen an modellseitigen Instruktionen oder MCP-Beschreibungen gelten die [Eval-Regeln](../../evals/README.md). Gezielte Checks begleiten die Etappen; vor einem späteren Push `vp run check:changed`, keine ungefragten repo-weiten Testläufe.
 
 Betrieblich braucht es Metriken für wartende Runs, Queue-Alter, laufende Steps, verlorene Worker, Retry-Ursachen, Auth-Probleme, Archiv-Rückstand und Sandbox-Ressourcen. Provider-Nutzung wird nach Konto und Run aggregiert; fehlende Preis-/Tokeninformationen werden als unbekannt statt als null angezeigt. Laufzeit-, Parallelitäts- und Iterationsgrenzen sind früh umsetzbar; präzise Kostenlimits hängen von der verfügbaren Provider-Telemetrie ab.
 
@@ -622,7 +578,7 @@ Für die erste Implementierung gelten folgende bewusst begrenzte Defaults; echte
 
 | Risiko                                                            | Behandlung / Nachweis vor Freigabe                                                                                                                                                                                         |
 | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Eine URL suggeriert fertige Connect-Kompatibilität                | Neues Instanzprotokoll und Gateway explizit; unveränderte T3-Clients/-Worker nicht als kompatibel ausgeben. Transport-Gate D1 prüft alle benötigten Pfade                                                                  |
+| Eine URL suggeriert fertige Connect-Kompatibilität                | Neues Instanzprotokoll und Gateway explizit; unveränderte T3-Clients/-Worker nicht als kompatibel ausgeben. Transport-Gate G2 im Umsetzungsplan prüft alle benötigten Pfade                                                |
 | Gateway wird Engpass und gemeinsamer Ausfallpunkt                 | Bounded Buffers, Backpressure, getrennte Steuer-/Datenkanäle und Ressourcenlimits. Main-Ausfall trennt Instanzzugriff; Worker protokollieren lokal und gleichen Receipts ab                                                |
 | Access-Login funktioniert nur im Browser                          | Windows-Login, Cookie-/Transportkontext, Ablauf und Reconnect vor weiteren Features real prüfen. Details und zulässiger Alternativweg in Deployment-Abschnitt 3                                                            |
 | Widerruf erreicht einen offline arbeitenden Agenten nicht         | Neue Zugriffe/Dispatches sofort sperren, aktive Gateway-Sessions schließen. Lokale Lease-Regel stoppt verwaltete Arbeit; bereits verteilte externe Tokens benötigen Ablauf/Widerruf. Kein behaupteter sofortiger Fern-Kill |

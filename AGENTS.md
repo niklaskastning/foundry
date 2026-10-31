@@ -6,12 +6,12 @@ This repository is `niklaskastning/foundry`, a permanent fork of `pingdotgg/t3co
 
 - Every implementation task uses a separate branch, focused commits, and a PR against this fork’s `main`. The maintainer has authorized this workflow by default; do not ask again before committing, pushing, or opening the PR. Never push directly to `main`, open an upstream PR, or merge without an explicit request. Read-only investigations need no branch or PR.
 - `origin` is the fork and `upstream` is T3 Code. Integrate upstream on a dedicated branch with a merge, preserving shared history. Record the integrated upstream SHA in the PR.
-- Read [AUTOMATION_ARCHITECTURE.md](AUTOMATION_ARCHITECTURE.md) and [FORK_DEPLOYMENT.md](FORK_DEPLOYMENT.md) for the agreed direction. These two requested, versioned design documents are an explicit exception to the scratch-plan rule below; they describe planned functionality, not implemented capabilities.
+- Start with [Foundry development](docs/foundry/README.md), then read its architecture, deployment, and implementation plan. These three requested, versioned design documents are an explicit exception to the scratch-plan rule below; they describe planned functionality, not implemented capabilities.
 - Initial targets are Linux Main Node/workers, Web, and Windows desktop. Mobile source stays available for upstream merges, but mobile feature work, native builds, store releases, and acceptance are deferred. Shared contracts must remain compatible.
-- Central Automation and Connect data use PostgreSQL with separate migrations; existing local T3 SQLite state stays intact. Keep Automation logic and its T3 adapter separate; avoid broad renames and speculative infrastructure.
+- Central Automation and instance-registry data use PostgreSQL with separate migrations; existing local T3 SQLite state stays intact. Keep Automation logic and its T3 adapter separate; avoid broad renames and speculative infrastructure.
 - Publishing, deployment, and upstream moderation workflows stay upstream-only until replaced by deliberately configured fork workflows. Before distributing builds, separate product IDs, data paths, Connect credentials, telemetry, and update sources. Use `vp run foundry:build server|windows` for isolated Foundry artifacts; plain upstream build commands do not enable the Foundry profile.
 - Keep GitHub Actions inexpensive: one automatic PR check, no push duplicates, scheduled builds, platform matrices, or automatic releases. Build artifacts manually only when needed.
-- See [fork maintenance](docs/operations/fork-maintenance.md) for the current preparation boundary and integration procedure.
+- See [fork maintenance](docs/foundry/maintenance.md) for the current preparation boundary and integration procedure.
 
 ## Upstream engineering guidance
 
