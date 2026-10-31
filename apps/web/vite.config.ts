@@ -298,6 +298,8 @@ export default defineConfig(() => {
       ],
     },
     define: {
+      __T3CODE_FOUNDRY_BUILD__: JSON.stringify(process.env.T3CODE_FOUNDRY_BUILD === "1"),
+      __T3CODE_FOUNDRY_HOSTED_APP_URL__: JSON.stringify(process.env.T3CODE_HOSTED_APP_URL ?? ""),
       "import.meta.env.VITE_WS_URL": JSON.stringify(configuredWsUrl ?? ""),
       // Override .env URLs with empty values in single-origin dev so clients use window.location.origin.
       "import.meta.env.VITE_HTTP_URL": JSON.stringify(configuredHttpUrl ?? ""),

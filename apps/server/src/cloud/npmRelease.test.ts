@@ -1,3 +1,5 @@
+import { vi } from "vite-plus/test";
+import * as FoundryBuild from "@t3tools/shared/foundryBuild";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ServerNpmReleaseError } from "@t3tools/contracts";
@@ -195,4 +197,12 @@ it.effect.each(["--registry=https://example.com", "../other", "other-package@lat
       const service = yield* makeService(() => Effect.die("invalid specs must not spawn npm"));
       expect(Result.isFailure(yield* service.get({ spec }).pipe(Effect.result))).toBe(true);
     }),
+);
+
+it.effect("does not query an upstream release for a Foundry build", () =>
+  Effect.gen(function* () {
+    using _factory = vi.spyOn(FoundryBuild, "isFoundryBuild").mockReturnValue(true);
+    const service = yield* makeService(() => Effect.die("must not invoke npm"));
+    expect(yield* service.get({ spec: "latest" })).toBeNull();
+  }).pipe(Effect.scoped),
 );

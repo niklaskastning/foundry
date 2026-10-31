@@ -9,9 +9,7 @@ name: Mobile Fingerprint Label
 # untrusted data: it is validated, and at worst a PR mislabels itself.
 
 on:
-  workflow_run:
-    workflows: [Mobile Fingerprint Check]
-    types: [completed]
+  workflow_dispatch:
 
 permissions:
   contents: read

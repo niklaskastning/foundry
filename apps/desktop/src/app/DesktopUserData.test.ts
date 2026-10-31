@@ -1,3 +1,5 @@
+import { vi } from "vite-plus/test";
+import * as FoundryBuild from "@t3tools/shared/foundryBuild";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -28,6 +30,16 @@ it.effect.each(["t3code", "T3 Code (Alpha)"])(
       assert.equal(yield* fs.readFileString(path.join(destination, "Local State")), state);
       assert.equal(yield* fs.readFileString(path.join(source, "Local State")), state);
       assert.isFalse(yield* fs.exists(path.join(destination, "IndexedDB")));
+      {
+        using _factory = vi.spyOn(FoundryBuild, "isFoundryBuild").mockReturnValue(true);
+        const factoryPath = yield* resolveUserDataPath({
+          appDataDirectory: directory,
+          isDevelopment: false,
+          platform: "win32",
+        });
+        assert.equal(factoryPath, path.join(directory, "t3foundry"));
+        assert.isFalse(yield* fs.exists(factoryPath));
+      }
       yield* fs.writeFileString(path.join(destination, "Local State"), "existing V2 state");
       yield* resolveUserDataPath({
         appDataDirectory: directory,

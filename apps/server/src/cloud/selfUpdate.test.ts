@@ -1,3 +1,5 @@
+import { vi } from "vite-plus/test";
+import * as FoundryBuild from "@t3tools/shared/foundryBuild";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -139,6 +141,13 @@ it.layer(NodeServices.layer)("server self update", (it) => {
       expect(
         (yield* desktop.selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip)).reason,
       ).toContain("desktop app");
+      using _factory = vi.spyOn(FoundryBuild, "isFoundryBuild").mockReturnValue(true);
+      expect(
+        (yield* web.selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip)).reason,
+      ).toContain("Foundry updates");
+      expect(
+        (yield* desktop.selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip)).reason,
+      ).toContain("Foundry updates");
       expect([...web.order, ...desktop.order]).toEqual([]);
     }),
   );
