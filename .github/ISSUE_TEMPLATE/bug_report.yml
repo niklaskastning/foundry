@@ -9,7 +9,7 @@ body:
     attributes:
       value: |
         Use this form for broken behavior, regressions, crashes, or reliability problems.
-        For Factory feature requests, open a blank issue in this repository.
+        For Foundry feature requests, open a blank issue in this repository.
         Search existing issues first and keep the report focused on one problem.
 
   - type: checkboxes

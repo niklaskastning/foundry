@@ -1,0 +1,15 @@
+.git
+.repos
+**/node_modules
+**/dist
+**/dist-electron
+**/.vite-plus
+**/*.tsbuildinfo
+**/target
+**/.env*
+**/.t3
+**/.secrets
+**/*.log
+release
+.plans
+artifacts

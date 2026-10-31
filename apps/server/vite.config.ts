@@ -111,6 +111,8 @@ export default mergeConfig(
         js: "#!/usr/bin/env node\n",
       },
       define: {
+        __T3CODE_FOUNDRY_BUILD__: JSON.stringify(process.env.T3CODE_FOUNDRY_BUILD === "1"),
+        __T3CODE_FOUNDRY_HOSTED_APP_URL__: JSON.stringify(process.env.T3CODE_HOSTED_APP_URL ?? ""),
         __T3CODE_BUILD_CHANNEL__: JSON.stringify(cliBuildChannel),
         __T3CODE_TELEMETRY_CHANNEL__: JSON.stringify(telemetryChannel),
         __T3CODE_BUILD_RELAY_URL__: JSON.stringify(repoEnv.T3CODE_RELAY_URL?.trim() ?? ""),

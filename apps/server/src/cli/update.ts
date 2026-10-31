@@ -1,3 +1,4 @@
+import { isFoundryBuild } from "@t3tools/shared/foundryBuild";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   CLI_RELEASE_BASE_URL_ENV,
@@ -293,6 +294,10 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   readonly allowDowngrade: boolean;
   readonly assumeYes: boolean;
 }) {
+  if (isFoundryBuild())
+    return yield* new CliUpdateError({
+      reason: "Foundry updates are installed manually from this fork.",
+    });
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const runner = yield* ProcessRunner.ProcessRunner;

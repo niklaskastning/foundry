@@ -1,8 +1,10 @@
-# T3 Code Factory
+# Foundry
 
 A permanent fork of [T3 Code](https://github.com/pingdotgg/t3code), preparing a platform for automated software development. T3 supplies the agent runtime and shared Web/desktop interface; the planned Automation layer coordinates workflows, repositories, and execution machines.
 
-**Status: repository preparation.** Automation, the VPS deployment, and an independent Connect service are not implemented yet. Official T3 installers, releases, and `npx t3` install upstream, not this fork. Current source builds still carry upstream runtime identities and update defaults; do not distribute them as isolated Factory builds yet.
+**Status: isolated base deployment.** Foundry has Linux container/Compose and Windows x64 build entry points, separate product/data identities, and manual updates. The Automation engine and an independent Connect service remain planned. Official T3 installers and `npx t3` install upstream, not Foundry.
+
+The Linux VPS origin is `http://127.0.0.1:3783`; the operator routes `foundry.heavenforgeprod.com` through Cloudflare Tunnel and Access. See the [deployment runbook](deploy/fork/README.md) for setup, pairing, limits, and recovery.
 
 ## Direction
 
@@ -31,6 +33,6 @@ Each implementation task goes through **branch → commits → PR to this fork**
 
 [Architecture](docs/internals/overview.md) and [user guides](docs/README.md) document inherited T3 behavior. Their official service and installer references describe upstream unless explicitly marked as fork-specific.
 
-Upstream code, supported providers, and mobile sources remain in place to keep integration manageable. Linux CI and manual Windows tests use GitHub-hosted runners in the fork. Upstream publishing, deployment, previews, mobile workflows, and community moderation are gated to the upstream repository.
+Upstream code, supported providers, and mobile sources remain in place to keep integration manageable. A single PR check runs automatically. Linux/Windows artifact builds are manual; inherited workflows have no automatic triggers. See the deployment runbook for the Actions budget.
 
-This project is independent of T3 Tools. Existing [license](LICENSE) and third-party notices remain applicable. Report fork issues in [this repository](https://github.com/niklaskastning/t3code-factory/issues).
+This project is independent of T3 Tools. Existing [license](LICENSE) and third-party notices remain applicable. Report fork issues in [this repository](https://github.com/niklaskastning/foundry/issues).

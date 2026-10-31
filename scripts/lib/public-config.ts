@@ -28,9 +28,20 @@ export function loadRepoEnv({
   readonly baseEnv?: Environment;
   readonly repoRoot?: string;
 } = {}): Record<string, string | undefined> {
-  const rootEnv = readEnvFile(NodePath.join(repoRoot, ".env"));
-  const localEnv = readEnvFile(NodePath.join(repoRoot, ".env.local"));
+  const foundry = baseEnv.T3CODE_FOUNDRY_BUILD === "1";
+  const rootEnv = foundry ? {} : readEnvFile(NodePath.join(repoRoot, ".env"));
+  const localEnv = foundry ? {} : readEnvFile(NodePath.join(repoRoot, ".env.local"));
   const config = resolvePublicConfig(baseEnv, localEnv, rootEnv);
+  if (foundry && config.relayUrl) {
+    const url = new URL(config.relayUrl);
+    if (
+      url.protocol !== "https:" ||
+      url.hostname === "t3.codes" ||
+      url.hostname.endsWith(".t3.codes")
+    ) {
+      throw new Error("Foundry builds require their own HTTPS Connect origin.");
+    }
+  }
 
   return {
     ...rootEnv,

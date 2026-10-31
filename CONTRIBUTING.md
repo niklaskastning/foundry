@@ -1,6 +1,6 @@
-# Contributing to T3 Code Factory
+# Contributing to Foundry
 
-Fork work follows [AGENTS.md](AGENTS.md): use a separate branch, commit the changes, run focused verification, and open a PR against `niklaskastning/t3code-factory:main`. This is the default authorized workflow. Merging remains a separate maintainer decision. Report fork bugs and proposals in this repository.
+Fork work follows [AGENTS.md](AGENTS.md): use a separate branch, commit the changes, run focused verification, and open a PR against `niklaskastning/foundry:main`. This is the default authorized workflow. Merging remains a separate maintainer decision. Report fork bugs and proposals in this repository.
 
 The upstream policy retained below applies when contributing to `pingdotgg/t3code`; its prior-approval and vouch requirements do not govern maintainer-directed work in this fork.
 

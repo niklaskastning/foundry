@@ -1,0 +1,64 @@
+name: foundry
+services:
+  main:
+    image: ${FOUNDRY_IMAGE:-foundry:local}
+    build:
+      context: ../..
+      dockerfile: deploy/fork/Dockerfile
+      args:
+        FOUNDRY_REVISION: ${FOUNDRY_REVISION:-unknown}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${FOUNDRY_PORT:-3783}:3773"
+    volumes:
+      - foundry-state:/var/lib/foundry
+      - foundry-workspaces:/workspaces
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3773/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: foundry_admin
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - foundry-postgres:/var/lib/postgresql/data
+      - ./init-databases.sql:/docker-entrypoint-initdb.d/10-foundry.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U foundry_admin -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+secrets:
+  postgres_password:
+    file: ${FOUNDRY_POSTGRES_PASSWORD_FILE:?Set an absolute path to the PostgreSQL password file}
+volumes:
+  foundry-state:
+  foundry-workspaces:
+  foundry-postgres:
