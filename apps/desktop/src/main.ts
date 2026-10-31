@@ -77,6 +77,7 @@ import * as DesktopWindow from "./window/DesktopWindow.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
+import { runAccessProbe } from "./foundry/AccessProbe.ts";
 
 if (process.argv.includes("--version")) {
   try {
@@ -243,20 +244,16 @@ const layerDesktopRuntime = layerDesktopClerk.pipe(
 
 const foundryProbeIndex = process.argv.indexOf("--foundry-access-probe");
 if (isFoundryBuild() && foundryProbeIndex !== -1) {
-  void import("./foundry/AccessProbe.ts")
-    .then(({ runAccessProbe }) =>
-      runAccessProbe(
-        process.argv.slice(foundryProbeIndex + 1),
-        Effect.runSync(HostProcess.Platform),
-      ),
-    )
-    .catch(() => {
-      Electron.dialog.showErrorBox(
-        "Foundry access probe",
-        "Could not start the isolated auth probe. Check the HTTPS origin, issuer, instance ID and OS credential storage.",
-      );
-      Electron.app.exit(1);
-    });
+  void runAccessProbe(
+    process.argv.slice(foundryProbeIndex + 1),
+    Effect.runSync(HostProcess.Platform),
+  ).catch(() => {
+    Electron.dialog.showErrorBox(
+      "Foundry access probe",
+      "Could not start the isolated auth probe. Check the HTTPS origin, issuer, instance ID and OS credential storage.",
+    );
+    Electron.app.exit(1);
+  });
 } else {
   DesktopApp.program.pipe(Effect.provide(layerDesktopRuntime), NodeRuntime.runMain);
 }

@@ -43,6 +43,7 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
   const root = NodePath.join(Electron.app.getPath("appData"), "Foundry-Auth-Probe");
   NodeFS.mkdirSync(root, { recursive: true, mode: 0o700 });
   Electron.app.setPath("userData", root);
+  Electron.app.setPath("sessionData", root);
   if (!Electron.app.requestSingleInstanceLock())
     throw new AccessOAuthError("Another auth probe is already running.");
   await Electron.app.whenReady();
