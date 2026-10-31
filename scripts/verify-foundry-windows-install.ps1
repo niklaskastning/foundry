@@ -64,6 +64,33 @@ Invoke-Installer $Installer
 Assert-T3Unchanged
 Write-Output 'PASS: reinstall preserves T3.'
 
+$probeProfile = Join-Path $env:APPDATA 'Foundry-Auth-Probe'
+if (Test-Path -LiteralPath $probeProfile) { throw 'Probe profile must not exist before the launch test.' }
+$watcher = [IO.FileSystemWatcher]::new($env:APPDATA, 'Foundry-Auth-Probe')
+$subscription = Register-ObjectEvent $watcher Created -SourceIdentifier 'FoundryProbeProfile'
+$watcher.EnableRaisingEvents = $true
+$probe = $null
+try {
+  $probe = Start-Process -FilePath "$foundryRoot\Foundry.exe" -ArgumentList @(
+    '--foundry-access-probe', 'https://example.com', 'https://example.cloudflareaccess.com',
+    'defd6cac-b437-407a-8a68-069161c9c1e4'
+  ) -PassThru
+  $created = Wait-Event -SourceIdentifier 'FoundryProbeProfile' -Timeout 60
+  if ($null -eq $created -or -not (Test-Path -LiteralPath $probeProfile)) {
+    throw 'The installed executable did not enter the isolated access probe.'
+  }
+  Write-Output 'PASS: installed executable enters the probe and creates its isolated profile (no login attempted).'
+} finally {
+  if ($null -ne $probe -and -not $probe.HasExited) {
+    $probe.Kill($true)
+    $probe.WaitForExit()
+  }
+  Unregister-Event -SourceIdentifier 'FoundryProbeProfile'
+  Remove-Event -SourceIdentifier 'FoundryProbeProfile' -ErrorAction SilentlyContinue
+  $watcher.Dispose()
+}
+Assert-T3Unchanged
+
 $registration = @(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' |
   Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -like 'Foundry *' })
 if ($registration.Count -ne 1) { throw 'Expected exactly one Foundry uninstall registration.' }
