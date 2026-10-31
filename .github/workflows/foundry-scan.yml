@@ -23,11 +23,10 @@ jobs:
       # Draft release assets require repository push access; no release is published.
       contents: write
     steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          sparse-checkout: scripts/scan-foundry-windows.ps1
-          sparse-checkout-cone-mode: false
+      - name: Fetch the scan script at this exact commit
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/$env:GITHUB_SHA/scripts/scan-foundry-windows.ps1" -OutFile "$env:RUNNER_TEMP/scan-foundry-windows.ps1"
       - name: Download only the unpublished sample
         shell: pwsh
         env:
@@ -48,7 +47,7 @@ jobs:
           ZIP_SHA256: ${{ inputs.zip_sha256 }}
           INSTALLER_SHA256: ${{ inputs.installer_sha256 }}
         run: |
-          ./scripts/scan-foundry-windows.ps1 -Sample "$env:RUNNER_TEMP/foundry-scan/sample.zip" -ZipHash $env:ZIP_SHA256 -InstallerHash $env:INSTALLER_SHA256 -ReportDirectory "$env:RUNNER_TEMP/foundry-scan-report"
+          & "$env:RUNNER_TEMP/scan-foundry-windows.ps1" -Sample "$env:RUNNER_TEMP/foundry-scan/sample.zip" -ZipHash $env:ZIP_SHA256 -InstallerHash $env:INSTALLER_SHA256 -ReportDirectory "$env:RUNNER_TEMP/foundry-scan-report"
       - uses: actions/upload-artifact@v7
         if: always()
         with:

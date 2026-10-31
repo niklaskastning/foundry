@@ -18,6 +18,8 @@ $report = [ordered]@{ zipHash = $ZipHash; installerHash = $InstallerHash; scans 
 try {
   if ((Get-FileHash -LiteralPath $Sample -Algorithm SHA256).Hash -ne $ZipHash) { throw 'ZIP hash mismatch.' }
   Start-Service WinDefend
+  # Hosted images disable archive/script scanning; restore them for this disposable scan.
+  Set-MpPreference -DisableArchiveScanning $false -DisableScriptScanning $false -PUAProtection Enabled -ScanAvgCPULoadFactor 50
   Update-MpSignature
   $status = Get-MpComputerStatus
   $report.engine = $status.AMEngineVersion
@@ -28,6 +30,8 @@ try {
     throw 'Defender is unavailable or signatures are stale.'
   }
   $report.archiveScanningDisabled = (Get-MpPreference).DisableArchiveScanning
+  $report.cloudReporting = (Get-MpPreference).MAPSReporting
+  $report.sampleSubmission = (Get-MpPreference).SubmitSamplesConsent
   if ($report.archiveScanningDisabled) { throw 'Archive scanning is disabled by runner policy.' }
   $command = Get-ChildItem "$env:ProgramData/Microsoft/Windows Defender/Platform/*/MpCmdRun.exe" |
     Sort-Object FullName -Descending | Select-Object -First 1
