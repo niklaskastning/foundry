@@ -26,6 +26,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          sparse-checkout: scripts/scan-foundry-windows.ps1
+          sparse-checkout-cone-mode: false
       - name: Download only the unpublished sample
         shell: pwsh
         env:
