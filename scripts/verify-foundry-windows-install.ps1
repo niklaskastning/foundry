@@ -71,7 +71,7 @@ $probe = $null
 $probeErrorLog = Join-Path $env:RUNNER_TEMP 'foundry-probe-stderr.log'
 try {
   $probe = Start-Process -FilePath "$foundryRoot\Foundry.exe" -ArgumentList @(
-    '--foundry-access-probe', 'https://example.com', 'https://example.cloudflareaccess.com',
+    '--', '--foundry-access-probe', 'https://example.com', 'https://example.cloudflareaccess.com',
     'defd6cac-b437-407a-8a68-069161c9c1e4'
   ) -PassThru -RedirectStandardError $probeErrorLog
   $created = Wait-Event -SourceIdentifier 'FoundryProbeProfile' -Timeout 60

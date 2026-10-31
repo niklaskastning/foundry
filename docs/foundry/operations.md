@@ -136,8 +136,12 @@ Use a build from the reviewed P04 branch and launch its installed executable in
 PowerShell with three public values:
 
 ```powershell
-& 'C:\Path\Foundry.exe' --foundry-access-probe 'https://your-foundry.example' 'https://your-team.cloudflareaccess.com' '<expected-instance-uuid>'
+& 'C:\Path\Foundry.exe' -- --foundry-access-probe 'https://your-foundry.example' 'https://your-team.cloudflareaccess.com' '<expected-instance-uuid>'
 ```
+
+The first `--` is required on Windows: Electron rejects additional arguments after
+a URL unless application arguments follow that separator, exiting before Foundry
+can show an error.
 
 Obtain the expected instance ID through a trusted operator connection to the
 descriptor, not from an unverified redirect. The probe uses its own
