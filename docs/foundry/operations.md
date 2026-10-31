@@ -21,6 +21,69 @@ Use `sudo` if required by the host's Docker policy. The Compose project is named
 
 Set `FOUNDRY_REVISION` to the source commit and use an immutable `FOUNDRY_IMAGE` tag for releases. Pin the PostgreSQL image digest before a production rollout. Update the container through Compose, not `t3 update`; Foundry rejects the inherited self-update and remote-update paths and does not query official npm releases.
 
+## Manual Actions build and restricted VPS update
+
+For the existing Docker development instance, select **Foundry build (manual)** in
+Actions, choose a reviewed branch and `linux`, and enable `publish_linux`. The run
+publishes `ghcr.io/niklaskastning/foundry:<commit>` and reports its immutable digest
+and deploy command in the job summary. No push or PR automatically deploys anything.
+Unmerged branches are supported for deliberate development testing; selecting a
+branch does not merge its PR. Review the exact build commit before deployment.
+
+After the first publication, the repository owner must make the **foundry** container
+package public in its GitHub package settings. Packages start private even for public
+repositories. The VPS then pulls anonymously; no GitHub, SSH or Cloudflare credential
+is installed on it for this update path. See [GitHub's container registry guidance](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
+
+The owner installs the reviewed helper once from the checkout:
+
+```sh
+sudo sh deploy/fork/updater/install.sh niklas
+sudo -n /usr/local/sbin/foundry-deploy status
+```
+
+Installation copies the helper and fixed configuration to root-owned paths and adds
+only that helper to `/etc/sudoers.d/foundry-deploy`. It does not restart containers.
+Never grant sudo to the checkout script itself: the checkout is writable by the agent.
+Unrestricted Docker access, including docker-group membership, effectively grants
+[root privileges](https://docs.docker.com/engine/install/linux-postinstall/).
+
+Deploy the digest printed by the successful build:
+
+```sh
+sudo -n /usr/local/sbin/foundry-deploy deploy sha256:<digest-from-build-summary>
+```
+
+The helper only addresses the local Docker socket, project `foundry`, service `main`,
+the existing `foundry_foundry-state`/`foundry_foundry-workspaces` volumes and
+`foundry_default` network. Main runs as UID/GID 1000 with dropped capabilities and
+no-new-privileges. Its only published port is `127.0.0.1:3783`. Caller-supplied Docker
+contexts, Compose files, environment variables, image registries and host mounts are
+not accepted. Kubernetes, PostgreSQL, Cloudflare and other containers are not updated.
+
+Finish any work in Foundry before updating: Main is briefly stopped. The helper
+checks the existing deployment, pulls and validates the image, saves stopped T3 state
+under `/var/lib/foundry-deploy/update-*/state.tar`, and replaces only Main. It checks
+health, readiness and unchanged environment/instance identities. The manifest records
+the previous image ID and candidate revision. Backups contain private state and are
+root-readable only; retention is manual. They do not include PostgreSQL or workspaces
+and are not a replacement for the complete backups described below.
+
+If backup creation fails, the old container restarts. If candidate startup or identity
+verification fails, Main stays stopped and the helper reports the backup directory.
+The operator must restore the saved state into the stopped Foundry state volume and
+restart the previous image from the manifest after checking migration compatibility.
+An image-only automatic rollback could run an older binary against migrated SQLite.
+Do not extract the archive into the host root filesystem.
+
+After installing this update path, use the helper for Main updates; running the old
+checkout's `compose up` can select its old `FOUNDRY_IMAGE` again. The installed Compose
+configuration is intentionally independent of the checkout. This helper supports the
+baseline file-backed instance store only and refuses custom `FOUNDRY_*` settings.
+Activating PostgreSQL instance storage or Access sessions requires a separately reviewed
+configuration/migration step. Reinstalling reviewed helper changes is also an owner action.
+To revoke the passwordless command, remove `/etc/sudoers.d/foundry-deploy` with sudo.
+
 ## Cloudflare Access and initial pairing
 
 DNS, the existing tunnel route, and the Access application are operator-managed. They are not created by Compose. Use the same hostname for the Web UI and API/WebSocket requests. Cloudflare Access authenticates the outer HTTP connection; T3's pairing and permission checks remain enabled inside it.
@@ -54,7 +117,7 @@ The [deployment profile](../../deploy/fork/profile.json) supplies the hosted ori
 
 Only **Foundry checks** runs automatically, on PRs. It has one Ubuntu job, cancels superseded runs, and runs `check:changed` with concurrency one. There is no duplicate push build, schedule, platform matrix, mobile lane, or automatic publication. Workflow/manifest changes can make `check:changed` typecheck all packages; this remains a single bounded job.
 
-**Foundry build (manual)** builds one selected target and keeps its artifact for three days. Linux produces an image archive; Windows produces an installer. Neither publishes nor deploys. The inherited workflows have no automatic triggers; reusable upstream build definitions retain `workflow_call` for compatibility. Keep inherited workflows disabled in repository Actions settings. After an upstream merge, audit any newly introduced triggers before enabling them.
+**Foundry build (manual)** builds one selected target and keeps its artifact for three days. Linux produces an image archive and optionally publishes it to this fork's GHCR when `publish_linux` is selected; Windows produces an installer. Neither deploys. Registry images have separate retention and must be cleaned up deliberately, preserving deployed and recovery digests. The inherited workflows have no automatic triggers; reusable upstream build definitions retain `workflow_call` for compatibility. Keep inherited workflows disabled in repository Actions settings. After an upstream merge, audit any newly introduced triggers before enabling them.
 
 ## Backup and recovery
 
