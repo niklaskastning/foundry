@@ -2,7 +2,7 @@
 
 Foundry serves the shared Web client and T3 backend at `http://127.0.0.1:3783`. The existing host `cloudflared` service should route `foundry.heavenforgeprod.com` to that origin. Keep Cloudflare Access enabled for this hostname, including HTTP and WebSocket paths. Do not expose port 3783 or PostgreSQL publicly.
 
-This is the isolated base deployment, not the Automation engine or an independent Connect deployment. The backend still uses its own local SQLite state. PostgreSQL has empty `fork_automation` and `fork_connect` databases reserved for their separate future migrations. No application receives the database administrator credential. Owner roles cannot log in; runtime and migration logins are provisioned with the services that need them.
+This is the isolated base deployment, not the planned instance gateway, Automation engine, or host worker. The backend still uses its own local SQLite state. PostgreSQL has empty `fork_automation` and `fork_connect` databases reserved for their separate future migrations. No application receives the database administrator credential. Owner roles cannot log in; runtime and migration logins are provisioned with the services that need them.
 
 ## Build and start
 
@@ -33,7 +33,7 @@ docker compose --env-file deploy/fork/.env -f deploy/fork/compose.yml exec main 
 
 For browser access through the tunnel, replace the local origin in the generated HTTP pairing URL with `https://foundry.heavenforgeprod.com`, preserving its path, query, and fragment. Do not post the token in issues, commits, or logs. If it expires or was consumed, generate another.
 
-Native clients and automated callers cannot assume an interactive Access session. Do not put shared Access service-token secrets in a Web or desktop bundle. Before enabling automated calls, configure an appropriate separate machine endpoint or implement a supported service-auth transport. The own Connect broker and its Clerk resources are a separate deployment stage; no official T3 Connect credentials are bundled here. The Windows package's connection through Access has not been validated on a Windows client.
+Native clients and automated callers cannot assume an interactive Access session. Do not put shared Access service-token secrets in a Web or desktop bundle. Before enabling automated calls, configure an appropriate separate machine endpoint or implement a supported service-auth transport. The revised plan integrates instance login, device discovery, and routing into Main; it does not deploy a separate Connect broker or require Clerk. These capabilities are not implemented yet; current browser pairing reaches only the Main environment. The Windows package's connection through Access has not been validated on a Windows client.
 
 For Cloudflare's machine authentication model, see [service tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/). Access rules must not turn future webhook paths into unauthenticated bypasses; retain connector authentication when those endpoints are implemented.
 
@@ -48,7 +48,7 @@ vp run foundry:build windows
 
 This creates an unsigned `Foundry-*.exe` installer under `release/`. The app ID is `com.heavenforge.foundry`, its URL scheme is `t3foundry`, and it uses separate `.t3-foundry` state and `t3foundry` browser storage. It neither imports the official app's old profile nor enables an official update feed. Signing and automatic updates are deferred.
 
-`profile.json` supplies the hosted origin and repository. Foundry builds ignore checkout `.env` files; only explicit build environment values configure an optional own Connect broker (`T3CODE_RELAY_URL`, `T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID`, and optionally `T3CODE_CLERK_JWT_TEMPLATE`). Official relay origins are rejected. The baseline Docker/manual Actions build intentionally has Connect disabled. Analytics and relay trace uploads are disabled for Foundry builds.
+`profile.json` supplies the hosted origin and repository. Foundry builds ignore checkout `.env` files; only explicit build environment values configure an optional own Connect broker (`T3CODE_RELAY_URL`, `T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID`, and optionally `T3CODE_CLERK_JWT_TEMPLATE`). Official relay origins are rejected. These inherited optional flags do not implement the planned runtime instance URL or gateway. Keep them unset for the revised deployment; the baseline Docker/manual Actions build intentionally has Connect disabled. Analytics and relay trace uploads are disabled for Foundry builds.
 
 ## Actions budget
 

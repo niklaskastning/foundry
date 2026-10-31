@@ -1,304 +1,199 @@
-# Dauerhafter T3-Fork – Deployment, PostgreSQL und eigener Connect-Einstieg
+# Foundry – Instanzeinstieg, Deployment und Verbindungsmodell
 
-Stand: 31. Oktober 2026 · Grundlage: Repository `d2d1e4f50e`
+Stand: 31. Oktober 2026 · geprüfter Fork-Stand: `2830704e1`
 
-Status: Umsetzungsplan, noch keine bereitgestellte Infrastruktur. Ergänzt [AUTOMATION_ARCHITECTURE.md](AUTOMATION_ARCHITECTURE.md). Alle Domains und neuen Konfigurationsnamen in diesem Dokument sind Beispiele beziehungsweise Vorschläge. Es wurden weder VPS noch Cloudflare, Git-Remotes, Konten oder Deployments verändert.
+Status: Finalisierter Zielplan mit technischen Abnahmegates. Ergänzt [AUTOMATION_ARCHITECTURE.md](AUTOMATION_ARCHITECTURE.md), der die Workflow-/Ausführungssemantik besitzt. Neue Pfade, Protokolle und Services in diesem Dokument sind Entwürfe, keine bereits verfügbaren APIs. Der tatsächliche Grundbetrieb steht im [Deployment-Runbook](deploy/fork/README.md).
 
-## 1. Festgelegtes Ziel und Empfehlung
+## 1. Festgelegtes Produkt und aktueller Stand
 
-Der Fork bleibt dauerhaft eigenständig und übernimmt regelmäßig Änderungen aus T3 upstream. Die vorhandene VPS wird Main Node; Clients erreichen die eigene Plattform unter einer Cloudflare-Domain. PostgreSQL wird von Beginn an für die zentralen Plattformdaten verwendet. Nach einmaliger Anmeldung an der eigenen Connect-Instanz sollen Web und Windows-Desktop die freigegebenen Maschinen automatisch anzeigen. Mobile bleibt zunächst unverändert und kann später hinzukommen.
+Ein Foundry-Client verbindet sich durch Eingabe der Hauptdomain mit einer selbst gehosteten Instanz. Nach Anmeldung erhält er Devices, Projekte, Automation und später Sandboxes. Die erste Version ist Single-Tenant/Single-User. Die Main Node besitzt Registry, Anmeldung, Gateway und Automation; ein separates Connect-Produkt oder eine eigene Clerk-Instanz sind keine Voraussetzung.
 
-**Empfohlener Aufbau:** Main Node und PostgreSQL laufen auf der VPS. Der vorhandene Connect-Code aus `infra/relay` läuft als eigene Cloudflare-Worker-Instanz unter einer eigenen Subdomain. Die Clients verwenden die bereits vorhandene Connect-Anmeldung, Discovery und direkte Environment-Verbindungen. Das ergibt einen gemeinsamen Produkteinstieg mit zwei technischen Backend-Rollen.
+| Bereits vorhanden                                                                            | Noch umzusetzen                                                             |
+| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Fork `niklaskastning/foundry`, eigene Build-Identität und manuelle Updates                   | Instanz-URL als Runtime-Einstieg im Client; zentraler Login und Discovery   |
+| Main-Container mit Web und eigener lokaler SQLite-Persistenz                                 | Instanz-Registry, Device-Enrollment und ausgehender Gateway-Transport       |
+| PostgreSQL 17 mit vorbereiteten `fork_automation`/`fork_connect`-Datenbanken                 | Anwendungsschemas, Runtime-/Migrationsrollen und DB-Anbindung der Main Node |
+| `foundry.heavenforgeprod.com` über betreiberverwalteten Tunnel und Access → `127.0.0.1:3783` | Getestete Desktop-Anmeldung sowie Machine-Auth für Device-Verbindungen      |
+| Browser-Pairing zum Main-Environment                                                         | Eigenständiger Host-Worker; Provider-Verfügbarkeit und Anmeldung dort       |
+| Linux-/Windows-Build-Einstieg, ein automatischer PR-Check                                    | Windows-Laufzeitabnahme, Automation und Sandbox-Provisionierung             |
 
-Diese Aufteilung hält die Änderungen am Upstream klein: Connect ist schon für Cloudflare Workers gebaut und verwendet bereits PostgreSQL. Es wird nicht parallel ein zweites Maschinenverzeichnis implementiert. Die VPS steuert Workflows; sie muss nicht sämtliche Terminal-, Chat- und Dateiströme der verbundenen Maschinen weiterleiten.
+Das Main-Environment hat derzeit keine Codex-CLI. Sie wird für seine künftige Steuerungsrolle nicht benötigt. Echte Agenten starten auf einem registrierten Ausführungs-Device. Bestehendes persönliches T3 und dessen `~/.t3/userdata` werden weder migriert noch als Foundry-Worker vereinnahmt.
 
-Die eigene Domain allein ersetzt weder Connect noch eine Anmeldung. Für die erste Version werden eine eigene Clerk-Instanz, ein eigenes Cloudflare-Deployment, ein Linux-Container-Image und ein eigener Windows-Desktop-Build benötigt. Manuelle Builds und Updates genügen anfangs; breite Release-Automatisierung und weitere Betriebssysteme sind keine Voraussetzung. „Eigener Betrieb“ bedeutet hier Unabhängigkeit vom offiziellen T3-Dienst, nicht Unabhängigkeit von Cloudflare und Clerk. Ein vollständig auf der VPS betriebenes Connect mit anderem Identity Provider wäre eine zusätzliche Portierung; sie ist zunächst nicht eingeplant.
+Der frühere Plan „eigener Cloudflare Worker + Clerk + Hyperdrive + Tunnel pro Environment“ entfällt. Keine Provisionierung dieser Ressourcen für den neuen Einstieg. Upstreams `infra/relay` bleibt für Integrationsmerges erhalten, wird aber nicht als Foundry-Dienst deployed.
 
-### Anfänglich unterstützte Plattformen
+## 2. Bewertung der vorhandenen T3-Bausteine
 
-| Komponente                                  | Erster Betriebsumfang                                          |
-| ------------------------------------------- | -------------------------------------------------------------- |
-| Main Node und Automation-Backend            | Linux auf der vorhandenen VPS, Docker Compose                  |
-| PostgreSQL                                  | Persistenter Container auf derselben VPS                       |
-| Connect-Broker                              | Eigener Cloudflare Worker aus dem vorhandenen Relay-Code       |
-| Web-Client                                  | Gemeinsamer Web-Build, von der Main Node ausgeliefert          |
-| Desktop-Client                              | Eigener Windows-Build, bevorzugt als Remote-Client             |
-| Automation-Worker                           | Zunächst Linux; darf auf derselben VPS laufen                  |
-| Mobile                                      | Keine Entwicklung, Builds, Distribution oder Abnahme zu Beginn |
-| Weitere Desktop-Systeme / CPU-Architekturen | Keine eigenen Pakete oder Releases zu Beginn                   |
+| Vorhandene Grundlage                                                                                                                                   | Wiederverwendung und Grenze                                                                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Connect](docs/internals/t3-connect.md), [Discovery](packages/client-runtime/src/relay/discovery.ts)                                                   | Identitäts-/Bootstrap-Prinzipien und Client-Zustandsmodell nutzen. Heute Clerk-gebundener Broker mit direkten Environment-Endpunkten, kein zentraler Datenproxy                   |
+| [Connection Runtime](docs/internals/connection-runtime.md)                                                                                             | Bestehenden Supervisor und Fehlerzustände erweitern; keinen unabhängigen Reconnect-Loop pro UI-Funktion bauen                                                                     |
+| [EnvironmentAuth](apps/server/src/auth/EnvironmentAuth.ts), [DPoP](apps/server/src/auth/dpop.ts), [SessionStore](apps/server/src/auth/SessionStore.ts) | Schlüsselbindung, Session-Scopes, Socket-Tickets und Widerruf erhalten. DPoP bindet die konkrete Request-URL; ein transparentes Path-Rewrite ist keine fertige Gateway-Lösung     |
+| [PeerLinks](apps/server/src/peer/PeerLinks.ts), [RemoteDelegation](apps/server/src/peer/RemoteDelegation.ts)                                           | Remote-Identität und Weiterleitung als Grundlage. Delegation hängt heute an einem Eltern-Thread; Automation braucht servicebasiertes Launch/Follow/Cancel ohne Agenten-Elternteil |
+| [ThreadLaunchService](apps/server/src/orchestration-v2/ThreadLaunchService.ts), [EffectWorker](apps/server/src/orchestration-v2/EffectWorker.ts)       | Threads und Checkpoints aus vorhandenen Services. Worker-Receipts und fachlicher Step-Abschluss sind zusätzliche Verträge                                                         |
+| [Relay-Datenbank](infra/relay/src/db.ts)                                                                                                               | PostgreSQL-/Effect-Erfahrung vorhanden; Alchemy, PlanetScale, Hyperdrive und Worker-Bindungen werden nicht in die Main-Runtime importiert                                         |
+| [Desktop](docs/internals/remote.md#desktop-without-a-local-environment)                                                                                | Windows kann ohne lokales Environment arbeiten; der gebündelte Client braucht trotzdem eigene Instanz-/Auth-/Transport-Anpassungen                                                |
+| [Managed Codex](apps/server/src/provider/CodexManagedRuntime.ts)                                                                                       | Lokale Provider-Anmeldung und Token-Broker sind Grundlage, keine fertige hostübergreifende Sandbox-Credential-Verteilung                                                          |
 
-Connect und das zentrale Maschinenverzeichnis bleiben Bestandteil des ursprünglichen Plans. Die Eingrenzung betrifft Plattformen und Betriebsaufwand, nicht das Funktionsziel. Ein zusätzlicher physischer Worker ist für den Durchstich nicht erforderlich: Ein getrenntes Linux-Environment auf derselben VPS kann Enrollment und Dispatch abdecken, solange Ressourcen und Datenverzeichnisse sauber getrennt sind.
+**Machbarkeit:** Der Aufbau ist mit dem bestehenden Thread-/Provider-Modell vereinbar. Die größten neuen Teile sind Instanzauthentifizierung, das zentrale Gateway und die zuverlässige Automation-Dispatch-Grenze. Unveränderte offizielle Clients oder Server werden nicht automatisch Instanzteilnehmer. Kompatibilität wird über explizite Foundry-Protokollversionen und Capabilities ausgehandelt.
 
-## 2. Was bereits existiert und was angepasst werden muss
+## 3. Eine Domain, mehrere Authentifizierungsarten
 
-Die vorhandene [Connect-Architektur](docs/internals/t3-connect.md) trennt drei Aufgaben:
+### 3.1 Instanzidentität und Client-Start
 
-1. Ein Cloud-Konto verknüpft Environments und liefert dem Client deren Liste.
-2. Der Relay-Dienst vermittelt eine kurzlebige, an den Client-Schlüssel gebundene Bootstrap-Berechtigung.
-3. Der Client erhält seine eigene Session direkt vom Ziel-Environment und kommuniziert mit dessen HTTP-/WebSocket-Endpunkt.
+Vorgeschlagen ist ein kleiner Metadaten-Endpunkt `/.well-known/foundry` mit Protokollversion, `instanceId`, Main-`environmentId`, öffentlicher Basis-URL und Auth-Verfahren. Er enthält keine Device-Liste oder Secrets. Hinter Access muss der Client zuerst eine Anmeldeumleitung erkennen können, statt HTML als JSON zu parsen. Nur HTTPS wird für entfernte Instanzen akzeptiert; private Entwicklungsinstanzen erfordern eine ausdrückliche lokale Konfiguration.
 
-Das Relay ist dabei normalerweise kein Proxy für den laufenden Chat. Die vorhandene [Discovery](packages/client-runtime/src/relay/discovery.ts) und der [Connection-Runtime](docs/internals/connection-runtime.md) passen bereits zu dem gewünschten Verhalten.
+Der Client speichert die bestätigte Instanzidentität und bindet Accounts, Sessions, Geräte-Caches und Schlüssel daran. Ein unerwarteter Wechsel von Instanz-ID/Issuer ist keine automatische Neuanmeldung. Metadaten dürfen Tokens nicht auf beliebige Fremd-Origins umlenken; Auth-Ziele werden durch den bestätigten Betreiber-Auth-Vertrag begrenzt. Zunächst eine aktive Instanz pro Client, mit sauberem Wechsel/Logout; parallele Instanzen folgen bei Bedarf.
 
-Im [Relay-Datenbankmodul](infra/relay/src/db.ts) existieren PostgreSQL, Drizzle, Effect-Pg und Hyperdrive bereits. Die Deployment-Komposition provisioniert allerdings heute PlanetScale-Ressourcen und Stage-Branches. Für diesen Fork muss sie zusätzlich eine betreibereigene PostgreSQL-Instanz akzeptieren. Das ist mehr als das Ändern einer Domain oder `DATABASE_URL`.
+### 3.2 Benutzer: Cloudflare Access zuerst
 
-Die bestehende [Connect-Konfiguration](docs/operations/connect-setup.md) unterstützt eigene Relay-/Clerk-Werte. Clients betten diese Werte teilweise beim Build ein. Ein normaler, unveränderter T3-Client kann deshalb nicht automatisch als beliebiger eigener Connect-Client vorausgesetzt werden.
+Web nutzt den bestehenden interaktiven Access-Login. Main validiert den signierten Access-Nachweis gegen konfigurierten Issuer, Audience und Ablauf und ordnet den bestätigten Subject genau dem vorkonfigurierten Betreiber zu. Keine ungeprüften E-Mail-/Forwarding-Header und kein öffentliches „erster Besucher wird Admin“. Danach gilt eine eigene widerrufbare Foundry-Session; der Access-Nachweis wird nicht zum universellen Device-Token. [Cloudflare: JWT-Prüfung](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/)
 
-## 3. Deployment auf VPS und Cloudflare
+Für Windows ist der erste zu prüfende Weg ein dediziertes Electron-Anmeldefenster mit isolierter, instanzgebundener Session-Partition. HTTP und WebSocket des Instanztransports müssen denselben autorisierten Access-Kontext nutzen. Remote-Login-Inhalte erhalten weder Node-Zugriff noch allgemeines Electron-IPC; Callback und erlaubte Navigation werden begrenzt. Ein Systembrowser-Cookie steht dem gepackten Desktop-Renderer nicht automatisch zur Verfügung. Fremde Device-Antworten dürfen keine Access-Cookies oder privilegierten Renderer-Inhalte setzen.
 
-### 3.1 Vorgeschlagene Adressen
+**Gate D0:** Reale Anmeldung mit dem verwendeten IdP, API-Aufruf, WebSocket, Ablauf/Erneuerung, Logout und Neustart in einem Windows-Build. Einige IdPs erlauben eingebettete Anmeldung nicht. Dann wird vor weiterer Implementierung ein Systembrowser-/PKCE-Weg mit Cloudflare Managed OAuth geprüft, einschließlich Verfügbarkeit im Account und Auth-Header-Konflikten. Keine pauschale Deaktivierung von Access und kein gemeinsamer Service-Token im Desktop-Bundle als Ersatz. [Cloudflare: Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/)
 
-| Adresse                                             | Aufgabe                                                                    | Ausführung                                                       |
-| --------------------------------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `https://code.example.com`                          | Web-App, Anmeldungseinstieg und öffentlicher Main-Node-/Automation-Zugang  | Auf der VPS gebautes Fork-Deployment, über Cloudflare erreichbar |
-| `https://connect.example.com`                       | Eigener Connect-Broker: Konto, Maschinenliste, Bootstrap, Tunnelverwaltung | Eigene Instanz von `infra/relay` als Cloudflare Worker           |
-| Zugewiesene Hosts unter einer eigenen Tunnel-Domain | HTTP/WebSocket eines registrierten Environments                            | Cloudflare Tunnel zur jeweiligen Maschine                        |
-| Private PostgreSQL-Adresse                          | Automation- und Connect-Datenbank                                          | VPS, ohne öffentlich freigegebenen PostgreSQL-Port               |
+Die konkrete Login-Transportvariante ist eine begrenzte technische Gate-Entscheidung, kein offenes Produktmodell. Ohne bestandenen Native-Login ist der Desktop-Einstieg nicht abgenommen. Späteres Clerk/OIDC ersetzt den Identitätsadapter; es migriert die externe Subject-Bindung zur bestehenden internen Benutzer-ID und erfindet nicht nebenbei Teams/Rollen.
 
-Die tatsächlichen Tunnel-Hostnamen folgen dem bestehenden Allocator. Domains werden einmal zentral als Deployment-Konfiguration festgelegt. DNS-Zone und TLS-Zertifikate müssen die gewählte Hostnamen-Tiefe unterstützen; eine Cloudflare-verwaltete Domain allein garantiert noch keine passende Wildcard-Abdeckung.
+### 3.3 Devices: unbeaufsichtigte Verbindung
 
-Die Main Node wird ebenfalls als Environment im eigenen Connect registriert. Der Client kennt ihre stabile Environment-ID als Plattform-Metadatum und kann sie als Automation-Owner bevorzugt anzeigen. Ihre autoritativen Verbindungs-URLs kommen aus dem Registry-Eintrag. Der Web-Hostname wird nicht ungeprüft als Alias eines verwalteten Endpunkts ausgegeben; bestehende Endpoint-/DPoP-Prüfungen bleiben erhalten.
+Ein Betreiber erzeugt eine kurzlebige, einmalige Enrollment-Freigabe für ein Device. Das Device erzeugt einen eigenen Schlüssel und bindet den Enrollment-Nachweis an diesen Schlüssel sowie Instanz-/Environment-Identität. Registrierung, Ausgabe einer Geräteberechtigung und Verbrauch des Einmalnachweises sind wiederholbar und transaktional. Ein gestohlener Anzeigename oder wiederverwendetes Bootstrap-Token reicht nicht zur Übernahme.
 
-### 3.2 Prozesse und persistente Daten
+Für den Access-geschützten Machine-Eingang verwendet das Device zusätzlich einen getrennten, auf diesen Pfad begrenzten Access-Service-Zugang. Diese äußere Berechtigung wird über geschützte Provisionierung übergeben; sie ersetzt weder den Device-Schlüssel noch Grants. Initial manuelle operatorseitige Einrichtung ist akzeptabel; die Main Node benötigt dafür keine Cloudflare-Account-Adminrechte. Nach Enrollment wird der Einmalnachweis gelöscht. [Cloudflare: Service Tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/)
 
-Für die Linux-VPS wird ein eigenes Docker-Compose-Deployment geplant. Die dafür genannten Dateien sind neu zu erstellen; dieses Dokument ist noch kein startbares Deployment:
+Device-Zugang, interaktiver Benutzerzugang, Automation-Ausführung und Sandbox-Provisionierung haben getrennte Grants. In der ersten Version verwaltet ein Benutzer alle vier, ohne Gruppenmodell. Vollständiges Trennen widerruft alle zugehörigen Foundry-Zugänge; Cloudflare-Service-Zugänge müssen ebenfalls rotiert/entzogen werden. Keys und Grants können rotiert werden, ohne die Environment-ID zu ändern.
 
-- **Main Node:** Ein Produktionsbuild von `apps/server` mit eigener Automation-Layer und dem dazugehörigen Web-Build. Kein Vite-Dev-Server und keine Build-Arbeit beim Containerstart.
-- **PostgreSQL:** Eine fest gepinnte, unterstützte stabile Major-Version mit persistentem Volume. Version und Ressourcenlimits werden vor dem ersten Build festgelegt; keine Release Candidates und kein bewegliches `latest`-Tag.
-- **Öffentlicher Ingress:** Ein eigener `cloudflared`-Connector mit festem Hostnamen zum Main-Service. Die VPS muss dafür keinen öffentlichen App-Port anbieten. Ein vorhandener Reverse Proxy kann alternativ verwendet werden, ohne die Anwendungsschnittstellen zu ändern.
-- **Privater DB-Zugang:** Separater Tunnel-/VPC-Zugang für den Connect-Worker zu PostgreSQL. Dieser Zugang besitzt andere Rechte und Routing-Regeln als der öffentliche Web-Eingang.
-- **Migrationen:** Ein einmaliger Release-Job mit eigener Datenbankrolle. Der laufende API-Prozess besitzt keine allgemeinen Schemaänderungsrechte.
-- **Backups:** Geplanter Job für PostgreSQL-Backups/WAL und Artefakte mit einem Speicherziel außerhalb der VPS.
+### 3.4 GitHub und andere externe Trigger
 
-Persistente Volumes enthalten PostgreSQL, das eigene T3-Home der Main Node, Artefakte und nötige Connector-Konfiguration. Credentials werden zur Laufzeit über geschützte Secret-Dateien beziehungsweise Deployment-Secrets bereitgestellt, nicht in Images oder öffentliche Client-Konfiguration eingebaut.
+Normale UI-/API-Pfade behalten Access-Schutz. Für einen GitHub-Webhook ist später eine eng abgegrenzte Route wie `/hooks/github/<binding>` vorgesehen, die ohne interaktiven Access-Login erreichbar ist und ausschließlich signierte Connector-Ereignisse annimmt. Main prüft unveränderte Body-Bytes, HMAC, zugelassene Installation/Repository/Event-Typ, Größenlimit und Deduplizierung vor Verarbeitung. Erfolg erst nach Inbox-Commit. Keine solche Ausnahme für `/api`, Gateway oder Enrollment. [GitHub: Webhook-Signaturprüfung](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
 
-Der verwaltete Environment-Connector muss den validierten Loopback-Ursprung seiner T3-Umgebung erreichen. Bei Containerbetrieb läuft er deshalb im passenden Netzwerk-Namespace beziehungsweise innerhalb der vom T3-Server verwalteten Laufzeit. Der Fork lockert die vorhandene Loopback-Prüfung nicht zu beliebigen Docker-/LAN-Zielen.
+**Default zunächst: manuell und GitHub-Polling**, solange der Betreiber diese differenzierte Access-Regel nicht eingerichtet hat. Polling benötigt keinen öffentlichen Eingang, aber API-Zugriff, persistente Cursor, Backoff, Rate-Limit-Budget und fachliche Deduplizierung mit Webhooks. Es erkennt zustandsbasierte Änderungen, garantiert nicht die Rekonstruktion jeder zwischen zwei Abrufen verschwundenen Ereignisfolge. Eine vollständig interaktiv geschützte Domain und direkte beliebige SaaS-Webhooks sind keine gleichzeitig erfüllbare Vorgabe.
 
-Für den Start bleiben Main Node und Koordinator ein Prozess. Später kann der Queue-Worker getrennt skaliert werden. PostgreSQL auf derselben VPS spart Infrastruktur, erzeugt aber einen gemeinsamen Ausfallpunkt. Separate Datenbank-Hosts oder Replikation sind eine spätere Betriebsoption; ein externes Backup gehört bereits zur ersten Version.
+## 4. Gateway und Vertrauensgrenzen
 
-### Konkreter Container- und Desktop-Zuschnitt
+### 4.1 Verbindungsweg
 
-`deploy/fork/` soll einen Dockerfile für den Produktionsbuild, eine Compose-Datei, eine Konfigurationsvorlage und kurze Betriebsbefehle erhalten. Das Main-Image enthält Server und Web-Assets aus demselben Fork-Stand. Automation wird zunächst im Serverprozess aktiviert; kein zusätzlicher allgemeiner API-Server und kein separater Message Bus sind erforderlich. PostgreSQL und gegebenenfalls `cloudflared` sind eigene Compose-Services. Der Connect-Worker wird separat in Cloudflare deployed, nicht als weiterer Compose-Container.
+Der Client spricht nur mit der Hauptdomain. Main routet zu registrierten Environment-IDs. Jedes Device hält einen ausgehenden authentifizierten TLS/WebSocket-Kanal zur Main Node; es benötigt weder eingehenden öffentlichen Port noch einen eigenen Cloudflare-Tunnel. Der Connector spricht nur sein lokales registriertes Environment, keine vom Client angegebene URL. Enrollment-Rechte erlauben kein allgemeines Forwarding ins LAN oder zur Cloud-Metadatenadresse.
 
-Ein Linux-Worker kann als zusätzlicher Service auf derselben VPS laufen, mit eigenem T3-Home, Workspace-Volume und Provider-Anmeldung. Das ist eine dauerhafte Ausführungsumgebung; der Docker-Container für den Backend-Betrieb stellt noch keine pro Step erzeugte Sandbox bereit. Echte Step-Sandboxes und deren Supervisor folgen in der vorgesehenen Sandbox-Etappe. Der Main-Prozess bekommt dafür nicht vorsorglich Zugriff auf den Host-Docker-Socket.
+Main vermittelt begrenzte HTTP-Anfragen und gestreamte Antworten sowie langlebige WebSocket-/Terminalkanäle. Der Connector authentifiziert sich unabhängig vom einzelnen Stream; jeder Stream bindet Device, Environment, Akteur, Grant und Generation. `deviceId` und `environmentId` sind verschieden: ein Sandbox-Host kann mehrere kurzlebige Environments verwalten.
 
-Der anfängliche manuelle Ablauf ist: passendes Linux-Image bauen und zur VPS übertragen oder aus einer eigenen Registry laden, Konfiguration und Volumes bereitstellen, PostgreSQL starten, Migrationen ausführen, Main/Ingress starten und Readiness prüfen. Aktualisierungen verwenden denselben Ablauf mit festem Image-Stand und vorherigem Backup; bei unverändertem Schema entfällt die Migration. Eine Registry und automatisierte Deployment-Pipeline sind bequem, aber keine Voraussetzung für den ersten eigenen Betrieb.
+### 4.2 Gewähltes Auth-Modell: vertrauenswürdiges Gateway
 
-Der Windows-Desktop braucht einen eigenen Build, weil Electron die Web-Oberfläche aus seinem Bundle lädt. Ein neues VPS-Backend allein ergänzt keine Tabs im offiziellen Desktop-Client. Beide Fork-Oberflächen werden aus `apps/web` gebaut; eine zweite UI-Implementierung ist nicht geplant. Der bestehende [Desktop-Modus ohne lokales Environment](docs/internals/remote.md#desktop-without-a-local-environment) erlaubt `localEnvironmentEnabled=false`. Damit verbindet sich Windows mit Linux, ohne dass dort die neuen Automation-Services oder PostgreSQL laufen müssen. Zunächst genügt ein intern verteilter Build mit manuellen Updates; öffentliche Installer-Distribution, Signierung und Auto-Update folgen bei Bedarf.
+Die Main Node terminiert die Client-Instanzauthentifizierung und prüft pro Route/Operation den Grant. Für das Ziel-Environment nutzt sie eine davon getrennte, begrenzte Environment-Session. Client-DPoP wird gegen die tatsächlich angefragte öffentliche URL geprüft; es wird nicht unverändert nach einem Pfad-/Host-Rewrite weitergereicht. Device-seitige Requests erhalten einen eigenen korrekten Nachweis. Das Gateway ist damit ein vertrauenswürdiger Sicherheitsbaustein und kann Daten lesen; Ende-zu-Ende-Verschlüsselung gegenüber Main wird nicht behauptet.
 
-### 3.3 Privates PostgreSQL für den Connect-Worker
+Die ausgehende Session darf höchstens die Schnittmenge von Benutzer-/Automation-Grant und Device-Freigabe besitzen. Kein generisches Admin-Token für alle Clients. Ein versionierter Auth-Adapter erhält Akteur, Scopes und Herkunft für Device-seitige Autorisierung/Audit, ohne beliebigen Client-Headern zu vertrauen. Bestehende T3-Scope- und Session-Prüfungen werden nicht deaktiviert. Ob vorhandene Sessions bereits die benötigte Delegationsbindung abbilden, wird in D1 geprüft und nötigenfalls additiv erweitert.
 
-Der Main-Prozess nutzt einen normalen lokalen PostgreSQL-Pool. Der Cloudflare-Worker verwendet Hyperdrive mit deaktiviertem Query-Cache für Verbindungen, Rechte und Zustellzustände. Das entspricht der vorhandenen Absicht im Relay, muss aber auf das eigene Connection-Limit angepasst werden.
+Device-Cookies, interne Redirects und beliebige URLs werden nicht blind an den Browser weitergereicht. Keine Device-HTML-Seite mit aktiven Inhalten unter der privilegierten Instanz-Origin; die lokale Foundry-UI rendert typisierte Daten, Downloads sind sicher ausgeliefert. Projekt-Previews benötigen später eine eigene isolierte Origin oder gleichwertige nachgewiesene Isolation. Same-Origin-Pfadpräfixe allein isolieren keine Cookies, Skripte oder Service Worker.
 
-Als bevorzugter Weg wird **Hyperdrive → Workers VPC Service → Cloudflare Tunnel → PostgreSQL auf der VPS** geprüft. Cloudflare dokumentiert diesen privaten Zugang einschließlich TLS-Anforderungen. Verfügbarkeit und Beta-Status werden im eigenen Account vor dem Deployment geprüft. Als dokumentierte Alternative existiert Tunnel plus Access-Service-Authentifizierung. Die Produktionsverbindung muss das DB-Zertifikat geeignet prüfen; ein öffentlich erreichbarer Port 5432 ist nicht die geplante Lösung. [Cloudflare: Hyperdrive über Workers VPC](https://developers.cloudflare.com/hyperdrive/configuration/connect-to-private-database-vpc/), [Alternative mit Tunnel und Access](https://developers.cloudflare.com/hyperdrive/configuration/connect-to-private-database/)
+### 4.3 Rückstau, Reconnect und Widerruf
 
-Das vorhandene Alchemy-Paket muss die gewählte Bindung unterstützen; andernfalls wird eine vorab provisionierte Hyperdrive-/VPC-Ressource durch eine kleine Deployment-Erweiterung referenziert. Diese Integrationsprüfung findet vor dem Ausbau der Automations statt. Der Worker erhält ausschließlich Zugang zur Connect-Datenbank.
+- Kontrollnachrichten haben eine eigene begrenzte Queue gegenüber großen Datenströmen. Pro Device/Client gelten Stream-, Byte- und Parallelitätslimits; langsame Empfänger erzeugen Backpressure oder einen sichtbaren Abbruch statt unbeschränkten Speicherverbrauch.
+- Ereignis-/Dateitransfers verwenden Cursor, Sequenznummern und bestätigte Chunks. Mutationen werden nur mit stabilen Command-IDs wiederholt. Unbestätigte Terminaleingaben werden nicht automatisch erneut gesendet; unterbrochene Terminals sind als solche sichtbar.
+- Main-Neustart schließt Verbindungen. Connector und Client verbinden mit Backoff erneut, bestätigen Identität/Generation und laden fehlende dauerhafte Daten. Ein offener Socket ist keine Queue oder Zustellgarantie.
+- Neue Streams und neue Mutationen prüfen aktuelle Grants; Widerruf schließt betroffene aktive Streams und Environment-Sessions. Lange Verbindungen haben begrenzte Auth-Gültigkeit und benötigen Erneuerung. Eine Edge-Prüfung beim Handshake allein setzt spätere Rechteänderungen nicht durch.
+- Ein Gateway-Ausfall trennt den gesamten Instanzzugriff. Laufende Device-Prozesse können weiterlaufen; bei Automation greift die lokale Lease-/Stop-Regel. Nach Reconnect werden Receipts abgeglichen, nicht Aufträge blind neu gestartet.
+- Logout eines Clients, Widerruf eines Device und Stop eines Agenten sind getrennte Aktionen. Der Widerruf einer Verbindung garantiert keinen sofortigen Stop eines offline laufenden Prozesses oder externer API-Tokens.
 
-### 3.4 Cloudflare und App-Transport
+Cloudflare unterstützt WebSockets, kann Verbindungen aber bei Infrastrukturänderungen beenden; WAF-Prüfung erfolgt am Upgrade und nicht fortlaufend auf Nachrichten. Reconnect und App-seitige Grenzen bleiben Pflicht. API/Auth-/Gateway-Pfade werden nicht gecacht. [Cloudflare: WebSockets](https://developers.cloudflare.com/network/websockets/)
 
-Cloudflare unterstützt WebSockets; bestehende Verbindungen können trotzdem durch Netzwerk-/Edge-Neustarts beendet werden. Deshalb werden Reconnect und Wiederaufnahme mit dem vorhandenen Connection-Supervisor getestet. Lange Agentenläufe dürfen keine minutenlang offene HTTP-Request-Antwort als Ausführungszustand benötigen. [Cloudflare: WebSockets](https://developers.cloudflare.com/network/websockets/)
+Direkte LAN-/Tailscale-Verbindungen bleiben als unabhängiger T3-Modus bestehen. Für instanzverwaltete Sessions gibt es zunächst keinen automatischen Direktpfad, der zentrale Freigaben umgeht. Ein späterer Direktmodus braucht kurzlebige endpointgebundene Sessions und eigenen Widerrufsvertrag.
 
-Für das Deployment sind folgende Punkte konkret zu prüfen:
+## 5. Deployment und Persistenz
 
-- API-, OAuth-, Bootstrap-, Webhook- und WebSocket-Routen werden nicht gecacht; Hash-Assets dürfen gecacht werden, die HTML-Einstiegsdatei darf keine veralteten Build-Verweise dauerhaft ausliefern.
-- WAF-/Bot-Regeln dürfen native Clients, CLI-OAuth und signierte SaaS-Webhooks nicht in eine Browser-Challenge schicken. Ausnahmen werden auf die jeweiligen Routen und Auth-Verfahren begrenzt.
-- Kein zusätzlicher interaktiver Cloudflare-Access-Login vor sämtlichen App-Routen: Das würde den vorhandenen Mobile-/CLI-/Webhook-Fluss verändern. App-Zugriff bleibt durch T3-/Connect-Authentifizierung geschützt. Der private DB-Tunnel ist eine separate Zugriffsklasse.
-- Origin-, CORS- und Redirect-Prüfungen erlauben die eigenen Web-/Windows-Desktop-Ursprünge explizit; keine pauschale Freigabe beliebiger Origins.
-- Upload-/Proxy-Limits werden gegen Anhänge und Artefakte geprüft. Große Archive erhalten einen passenden Transferpfad oder Object Storage, statt sie ungeprüft durch den WebSocket zu senden.
-- Proxys entfernen eingehende, vom Client kontrollierbare Forwarding-Header und setzen nur die tatsächlich benötigten Werte. Bestehende Link-Proofs und externe URL-Bindungen werden nicht durch spontane Host-Rewrites umgangen.
+### 5.1 Prozesse auf der ersten VPS
 
-Die bereits vorhandene Cloudflare-Domain wird bei Umsetzung auf ihren tatsächlichen Betriebsmodus geprüft: DNS-Verwaltung, HTTP-Proxy und Tunnel sind unterschiedliche Dinge. Konkrete Hostnamen und Zone-IDs werden erst aus der Betreiber-Konfiguration übernommen.
+| Prozess                              | Rolle und Grenze                                                                                                |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Foundry Main im Container            | Web, Instanz, Gateway und Automation; ein aktiver Prozess, keine Agenten-Builds oder Provider-CLI für Steuerung |
+| PostgreSQL im Container              | Zentrale Instanz- und Automation-Daten, keine öffentliche Portfreigabe                                          |
+| Vorhandenes hostseitiges cloudflared | Hauptdomain → `127.0.0.1:3783`; Tunnel/DNS/Access bleiben operatorverwaltet                                     |
+| Foundry Host-Worker als Dienst       | Eigenes Home, Projekte, Provider-CLI und Anmeldung; anfangs ein aktiver Agent, keine Sandbox-Garantie           |
+| Später Sandbox-Supervisor            | Explizit berechtigter lokaler Dienst auf einem Sandbox-Provider; allein er erhält Infrastrukturrechte           |
 
-## 4. Einmal verbinden, Maschinen in allen Clients sehen
+Das Host-Betriebskonto und erlaubte Workspace-Wurzeln werden vor Einrichtung festgelegt. Ein separater Linux-Benutzer begrenzt Zugriffe besser; Nutzung des bestehenden Benutzers vereinfacht Werkzeuge, übernimmt aber dessen Dateirechte. Kein stilles Kopieren persönlicher Provider-Secrets. Main, PostgreSQL und Host-Agenten benötigen getrennte Ressourcenbudgets, damit ein Build nicht Datenbank und Gateway verdrängt.
 
-### 4.1 Benutzerfluss
+Das Main-Image enthält Server und Web desselben Builds. Windows enthält dieselbe React-Oberfläche, mit eigenem Branding, Datenpfad und deaktiviertem offiziellem Updater. Instanz-URL wird zur Laufzeit eingegeben; Cloudflare- oder Provider-Secrets gehören nie ins Bundle. Im ersten Deploy bleiben die vorhandenen Connect-Build-Flags deaktiviert; sie implementieren den neuen Instanzmodus nicht.
 
-1. Der Benutzer öffnet die eigene Web-App oder den Windows-Fork-Desktop-Client und meldet sich am eigenen Connect an.
-2. Der Client lädt das für dieses Konto autorisierte Maschinenverzeichnis. Main Node und registrierte Maschinen erscheinen als getrennte Environments mit Online-/Offline-Zustand.
-3. Beim Öffnen einer Maschine fordert der Client über den Broker eine Bootstrap-Berechtigung an, tauscht sie beim Environment gegen seine eigene Session und nutzt danach dessen bestehende APIs.
-4. Ein zweiter Client mit demselben Konto sieht dieselben freigegebenen Maschinen, ohne erneut jede Maschine manuell zu pairen. Er erstellt trotzdem eigene kryptographische Schlüssel und Sessions.
-5. Die Automation-Ansicht wird von der Main Node geladen. Der Chat eines Worker-Threads bleibt bei seinem Environment; ein Sandbox-Archiv kommt nach deren Löschung aus dem zentralen Artefaktspeicher.
+### 5.2 Datenverantwortung und Migration
 
-Für die erste Version zeigen eigene Builds fest auf dieses Deployment. So ist die zentrale Anlaufstelle ohne einen neuen universellen Login-Mechanismus erreichbar. Optional folgt später „Eigenen Hub hinzufügen“ mit URL-basierter Metadatenauflösung und Runtime-Auswahl. Dazu müssten Clerk-Instanz, Issuer, Relay-Origin und alle lokalen Account-/Credential-Caches gemeinsam umgeschaltet und isoliert werden; nur eine URL im Formular zu ändern reicht nicht. Mehrere parallele Hubs sind kein MVP-Erfordernis.
+| Bestand                                                                                                       | Speicher / Owner                                                                                          |
+| ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Instanzidentität, Benutzerbindung, Device-Registry, Grants, Zugangsgenerationen                               | `fork_connect`, neuer Instanz-Service der Main Node; Name bleibt aus bestehendem Grunddeployment erhalten |
+| Definitionen, Trigger-Inbox, Runs, Attempts, Dispatch-Outbox, Sandbox-Allocations, Artefakt-/Memory-Metadaten | `fork_automation`, Automation-/Provisionierungsservice                                                    |
+| Lokale Projekte, Threads, Provider-Sessions                                                                   | Bestehende lokale SQLite-Persistenz des jeweiligen Environments                                           |
+| Archive, Git-Objekte, große Anhänge                                                                           | Persistentes Artefaktverzeichnis, später Object Storage; keine großen Blobs in Queue-Zeilen               |
+| Private Schlüssel und Provider-/Connector-Zugänge                                                             | Geschützter Secret-Speicher, verschlüsselte Sicherung mit getrenntem Schlüsselmaterial                    |
 
-### 4.2 Maschinen hinzufügen und Rechte vergeben
+`fork_connect` erhält neue Foundry-Migrationen, nicht unverändert Upstreams Relay-Migrationen. Vor Migration muss nachgewiesen sein, ob die vorbereitete DB wirklich leer ist; unbekannte Daten blockieren statt gelöscht zu werden. Beide DBs haben eigene Runtime-/Migrationsrollen und Versionsprüfungen. Die bestehenden NOLOGIN-Owner und leeren DBs allein sind noch keine Anwendungseinrichtung. Upstreams SQLite-Migrationsnummern bleiben unangetastet.
 
-Ein Fork-Server wird mit seinem lokalen Provider-Konto auf der Zielmaschine eingerichtet und am eigenen Connect angemeldet. Der bestehende Cloud-Link-Prozess bestätigt die Verbindung und richtet einen verwalteten Tunnel ein. Die Maschine ist dadurch für ihr autorisiertes Konto discoverable.
+Automation und Instanz-Service sprechen über begrenzte interne APIs. Es gibt keine globale Transaktion zwischen beiden Datenbanken: Ein gespeicherter Run-Grantsnapshot ist keine dauerhafte Zugriffserlaubnis. Grant und Zugangsgeneration werden vor Dispatch, Credential-Ausgabe und Publishing aktuell geprüft; Widerruf invalidiert auch aktive Sessions. Laufende entfernte Prozesse brauchen zusätzlich Fencing/Stop gemäß Architekturplan.
 
-In einem zweiten, im UI zusammengefassten Schritt wird sie als Automation-Ziel registriert: Provider-Fähigkeiten, erlaubte Projekte, Parallelität und Dispatch-Rechte werden festgelegt. Die Main Node erhält eine eigene begrenzte Environment-Berechtigung beziehungsweise einen passenden Peer-Link. Sie übernimmt keine Browser-Session des Benutzers. Ein headless Enrollment ohne verfügbaren Device-Login bekommt einen ausdrücklichen Pairing-Weg; es wird kein dauerhaftes Benutzer-Token aus einem Client kopiert.
+Queue-Claims nutzen kurze Transaktionen, persistente Leases und `FOR UPDATE SKIP LOCKED`; Netzwerk/Agenten laufen außerhalb der Transaktion. Unique Constraints sichern Command-/Dispatch-/Delivery-IDs. `LISTEN/NOTIFY` weckt nur auf; nach Neustart wird die dauerhafte Queue gescannt. Eigene Effect-Pg-Layer, keine neue ORM-Plattform. [PostgreSQL: SELECT](https://www.postgresql.org/docs/17/sql-select.html), [NOTIFY](https://www.postgresql.org/docs/17/sql-notify.html)
 
-Die erste Version verwendet das bestehende kontobezogene Link-Modell. „Alle verbundenen Maschinen“ bedeutet alle für dieses Konto freigegebenen Maschinen. Ein teamweites Verzeichnis braucht zusätzlich Mitgliedschaften und Maschinen-Grants; es wird nicht dadurch erzeugt, dass ein Administrator die Maschine einmal verwendet hat.
+DB-Pools teilen ein gemessenes Budget mit Backups/Migration/Administration. Keine DB-Verbindungen für Devices und kein Hyperdrive-/Cloudflare-VPC-Zugang. Migrationen laufen einmal mit Sperre und eigener Rolle; danach prüft Runtime kompatible Schemas. DB-Ausfall sperrt neue Sessions, Grants und Auftragsannahme; keine lokale Ersatzdatenbank und kein erfolgreicher Webhook ohne Commit. Bereits aktive Zugriffe dürfen nicht unbefristet mit veraltetem Grant fortlaufen.
 
-Es gibt zwei getrennte Freigaben: `clientAccess` für Benutzer und `automationExecution` für die Main Node. Bezeichnungen sind vorgeschlagene fachliche Rechte, noch keine vorhandenen RPC-Scopes. Widerruf der einen Freigabe widerruft nicht automatisch die andere. Eine gemeinsame „Maschine vollständig trennen“-Aktion führt beide Schritte nachvollziehbar aus und regelt laufende Runs.
+### 5.3 Portabilität und Verfügbarkeit
 
-Kein transitives Vertrauen: Wenn Main Node A einen Peer-Link zu B hat und B einen Link zu C, erscheint C nicht automatisch bei A oder in allen Clients. Auch ein Maschinenname oder eine erfolgreiche TLS-Verbindung ersetzt keine verifizierte Environment-Identität.
+Das Main-Image soll ohne eingebettete Hostpfade oder Cloudflare-Verwaltungsabhängigkeit auch auf einem anderen Container-Host laufen. Dafür bleiben öffentliche Basis-URL, Datenbank, persistenter Speicher, Secrets und Ingress konfigurierbar. Ein Umzug in eine Azure-Containerplattform ist dennoch eine eigene Betriebsabnahme: WebSocket-/Idle-Limits, ausgehende Verbindungen, Secret-Zugriff, Shutdown-Frist, CPU/RAM und persistente Volumes müssen passen. Keine Zusage für ein unbenanntes Azure-Produkt.
 
-### 4.3 Verhalten bei Änderungen und Ausfällen
+Zunächst genau eine aktive Main-Replik und kein Scale-to-zero. T3-SQLite darf nicht gleichzeitig von mehreren Main-Containern auf einem gemeinsam gemounteten Dateisystem betrieben werden. Rollouts verwenden kontrolliertes Stop/Start; Gateway-Reconnect gehört dazu. Spätere horizontale Skalierung benötigt getrennte Zuständigkeit für Sessions/Socket-Routing, Lease-Owner und Artefakte sowie geeignete T3-Persistenzgrenzen. PostgreSQL allein macht die Anwendung nicht hochverfügbar.
 
-- Neue Maschinen erscheinen nach Registry-Refresh. Die vorhandene Discovery wird verwendet; kein zweiter Reconnect-Loop in der Automation-UI.
-- Offline-Maschinen bleiben in der Liste sichtbar. Bereits geladene Daten sind als gecacht erkennbar; Automation wartet auf das gewählte Ziel oder verwendet nur einen ausdrücklich erlaubten Pool.
-- Konto-Logout entfernt die zu diesem Hub gehörenden Sessions und Caches, nicht unabhängig direkt gekoppelte Environments.
-- Widerruf verhindert neue Bootstrap-Sessions. Bereits aktive Environment-Sessions müssen zusätzlich widerrufen und gegebenenfalls offene Sockets geschlossen werden; der bestehende Ablauf wird darauf getestet und bei Bedarf ergänzt.
-- Ein Connect-Ausfall blockiert Discovery und neue Cloud-Bootstraps. Bereits bestehende direkte Environment-Verbindungen müssen nicht sofort abbrechen; eine spätere Session-Erneuerung kann dennoch auf Connect angewiesen sein.
-- Ein VPS-Ausfall stoppt zentrale Workflow-Entscheidungen und, bei lokaler Connect-Datenbank, auch die Registry. Worker behandeln abgelaufene Leases gemäß dem Architekturplan. Ein Cloudflare-Worker macht die gemeinsam ausgefallene Datenbank nicht hochverfügbar.
+## 6. Umsetzung in Gates mit Abbruchkriterien
 
-Kurzlebige Sandboxes werden standardmäßig unter ihrem Workflow/Worker angezeigt, statt den normalen Maschinenkatalog mit jedem Step zu füllen. Live-Zugriff wird ausdrücklich autorisiert und Archive bleiben nach Cleanup erhalten.
+Diese Gates sind Abnahmekriterien, keine zweite laufend gepflegte Aufgabenliste. Konkrete Arbeit wird in Issues/PRs verfolgt. Jede Implementierung: Branch → fokussierte Commits → PR gegen den Fork; kein direktes Main-Push oder unaufgefordertes Merge. Nur der vorhandene automatische PR-Check; Artefakt-Builds manuell.
 
-## 5. PostgreSQL von Beginn an
+### D0 – Auth- und Transportnachweis vor Produktausbau
 
-### 5.1 Datenverantwortung
+Mit isoliertem State einen eigenen Windows-Build und Web gegen Access prüfen. Dedizierte Electron-Session bzw. geprüfte Alternative aus Abschnitt 3, korrekte Main-Identität, Ablauf und Logout. Machine-Eingang mit getrenntem Access-Service-Zugang erreichen. Keine produktiven Credentials in Testfixtures.
 
-| Bestand                                                                                    | Speicher                                                            | Eigentümer                     |
-| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- | ------------------------------ |
-| Workflows, Agent-/Skill-Versionen, Trigger-Inbox, Runs, Attempts, Outbox, Memory-Metadaten | PostgreSQL-Datenbank `fork_automation`                              | Main Node / Automation-Service |
-| Konto-Environment-Links, Endpoint-Zuordnung, Bootstrap-/Relay-Zustand                      | PostgreSQL-Datenbank `fork_connect`                                 | Eigener Connect-Broker         |
-| T3-Threads, Provider-Sessions und lokale Projektionen einer Maschine                       | Bestehende lokale `statev2.sqlite` der jeweiligen Fork-Installation | Das betreffende T3-Environment |
-| Große Archive, Git-Bundles und Anhänge                                                     | Persistenter Artefaktspeicher, später bei Bedarf Object Storage     | Automation-Artefaktservice     |
+**Gate:** API und WebSocket funktionieren in beiden Clients auch nach Erneuerung; falsche Audience, Benutzerbindung und nicht autorisierte Device-Verbindung werden abgewiesen. Bei Fehlschlag Auth-Transportentscheidung korrigieren, bevor Registry/UI/Automation ausgebaut werden.
 
-Es gibt keine neue Automation-SQLite-Datenbank und keinen geplanten späteren Umzug von Automation zu PostgreSQL. Die lokale T3-Persistenz bleibt wegen der gewünschten Upstream-Nähe erhalten. Soll auch diese vollständig auf PostgreSQL wechseln, wäre das ein gesonderter Umbau von EventStore, Projektionen, Migrationen und lokalen/offlinefähigen Installationen.
+### D1 – Gateway als minimaler vertikaler Durchstich
 
-Connect und Automation erhalten jeweils eine eigene Runtime-Rolle, Migrationsrolle und Migrationshistorie. Rollen haben nur Rechte auf ihre Datenbank. Die Main Node fragt Connect fachlich über Services/API ab und greift nicht als zweiter Writer auf dessen Tabellen zu. PostgreSQL als gemeinsamer Server bedeutet keine gemeinsame Anwendungstransaktion über beide Datenbanken.
+Ein explizit registriertes Linux-Testenvironment baut die ausgehende Verbindung auf. URL-/DPoP-/Scope-Adapter und Connection-Supervisor integrieren. Replay-Thread, Streaming, Terminal, Datei-/Diff-/Attachment-Zugriff über Main; keine Verbindung des Clients zum Device nötig.
 
-### 5.2 Schema und Queue
+**Gate:** Geprüfte Akteur-/Scope-Zuordnung, falsche Zielidentität abgewiesen, keine freie Proxy-URL, keine Device-Cookies/aktiven Inhalte unter der Main-Origin. Disconnect, langsamer Client, Main-Neustart und Widerruf verlieren keine bestätigten Mutationen und wiederholen keine Terminaleingaben. Dies ist der größte frühe Integrationsnachweis.
 
-Automation nutzt typisierte Spalten für IDs, Zustände, Versionen, UTC-Zeitpunkte, Leases und häufige Filter. `jsonb` eignet sich für versionierte Definitionen und Payloads; der gesamte Zustand wird nicht als ein großes überschreibbares JSON-Dokument gespeichert. Artefakte bleiben außerhalb der Queue-Zeilen.
+### D2 – Dauerhafte Instanzverwaltung und Client-Onboarding
 
-Geplant sind Unique Constraints für Command-IDs, externe Zustellungen pro Connector/Binding und StepAttempt-Dispatch-Schlüssel. Indizes folgen den tatsächlichen Zugriffen: fällige Queue-Arbeit, aktive Leases, Runs nach Owner/Status/Zeit sowie geordnete Events pro Run. Partielle Indizes begrenzen den aktiven Queue-Index; historische Runs werden paginiert abgefragt.
+Metadaten, Registry und Enrollment transaktional in PostgreSQL, Device-Grants, eigene Benutzer-/Client-Sessions, Runtime-URL-Auswahl und Device-Liste. Operator kann registrieren, widerrufen und Credentials rotieren. Offline, nicht angemeldeter Provider, fehlende Capability und belegte Kapazität getrennt anzeigen.
 
-Queue-Claims erfolgen in kurzen Transaktionen mit `FOR UPDATE SKIP LOCKED`, persistierter Lease und Generation. Danach wird committed; Agentenstart und Netzwerkzugriffe passieren außerhalb der Transaktion. Zustandswechsel desselben Runs werden zusätzlich über Revision beziehungsweise Zeilensperre serialisiert. Queue-Locking ersetzt weder Idempotenz noch das Fencing externer Seiteneffekte. [PostgreSQL: SELECT und SKIP LOCKED](https://www.postgresql.org/docs/current/sql-select.html)
+**Gate:** Zwei Clients desselben Benutzers sehen dieselben Devices ohne Pairing pro Device/Client. Wiederholtes Enrollment erzeugt keine Dubletten; Instanzwechsel vermischt keine Tokens. Widerruf sperrt aktive und neue Instanzzugriffe. Eine volle Trennung ist nach Neustart weiterhin wirksam.
 
-`LISTEN/NOTIFY` kann wartende lokale Worker zusätzlich wecken. Es transportiert nur kleine Hinweise; die persistente Outbox bleibt die Wahrheit. Nach Reconnect und regelmäßigem Abgleich werden fällige Zeilen erneut gelesen. Ein dedizierter Listener benutzt eine passende langlebige Verbindung, nicht eine beliebig wechselnde Transaktions-Pool-Session. [PostgreSQL: NOTIFY](https://www.postgresql.org/docs/current/sql-notify.html)
+### D3 – Host-Worker und servicebasierter Dispatch
 
-Automation verwendet direkt `@effect/sql-pg` im bestehenden Effect-Stil. Der Relay-Bestand behält sein vorhandenes Drizzle-/Effect-Pg-Modell. Ein zusätzlicher ORM-Wechsel bringt für dieses Feature keinen Nutzen. Tests für Sperren, Constraints, Migrationen und konkurrierende Claims laufen gegen echtes PostgreSQL; reine Zustandsentscheidungen bleiben ohne Datenbank testbar.
+Eigenen Linux-Dienst auf dieser VPS einrichten, Provider-Installation und Anmeldung dort nachweisen; keine Änderungen an persönlichem T3. Stabile Receipts, Launch/Follow/Cancel/Export ohne Eltern-Agenten, Workspace-Belegung und lokale Lease-Stop-Regel ergänzen.
 
-### 5.3 Verbindungen und Migrationsbetrieb
+**Gate:** Main startet Replay auf dem Worker, Client öffnet den Thread. Verlorene Launch-Antwort und Restart ergeben dieselbe Thread-Referenz. Agentenabschluss, Checkpoint und gesichertes Ergebnis sind unterscheidbar. Erst danach ein ausdrücklich autorisierter echter Codex-Turn zur Provider-Abnahme; keine automatischen kostenpflichtigen Testläufe.
 
-Der lokale Pool und Hyperdrives Origin-Limit bekommen ein gemeinsames Verbindungsbudget, das Platz für Migrationen, Backups und Administration lässt. Die derzeit im Relay gesetzten Werte werden nicht ungeprüft für eine kleinere VPS übernommen. Kein Remote-Agent bekommt für jeden Step eine PostgreSQL-Verbindung.
+### D4 – Workflow-MVP
 
-Migrationen laufen einmal pro Release mit Sperre gegen parallele Ausführung und einer direkten geeigneten Verbindung. Runtime-Prozesse prüfen danach die kompatible Schema-Version. Additive Änderungen kommen vor Code, der sie voraussetzt; destruktive Bereinigung folgt erst, wenn ältere unterstützte Clients/Worker sie nicht mehr benötigen. PostgreSQL-Major-Upgrades sind eigene Betriebsänderungen.
+Architektur-Etappe 1: manueller Start und GitHub-Polling, ein freigegebenes Repository, sequenzielle Steps, Freigabe und kontrollierter PR. Signierte Webhooks nach eng begrenzter Ingress-Einrichtung ergänzen. Eigene Inbox/Outbox, Cancel/Recovery und einfache Run-Ansicht.
 
-Die Datenbanken liegen ausschließlich im privaten Netzwerk. Ein DB-Ausfall führt zu einem sichtbaren nicht bereiten Dienst; der Server darf nicht still eine leere lokale Ersatzdatenbank anlegen oder einen Webhook erfolgreich bestätigen, dessen Inbox-Commit fehlgeschlagen ist.
+**Gate:** Browser kann geschlossen werden. Doppelzustellung, verlorene Antworten und Neustarts erzeugen keine doppelten Attempts/PRs. Fehlgeschlagene Tests blockieren Publishing; geänderte Revision erfordert neue Freigabe. Ein Restore wurde vor dauerhaftem Betrieb geprobt.
 
-## 6. Konkrete Änderungen im Repository
+### D5 – Erweiterungen nach dem MVP
 
-Die Tabelle benennt vorhandene Anknüpfungspunkte. Neue Pfade werden ausdrücklich als Vorschlag markiert. Kein globales Umbenennen aller `t3`-Bezeichner; Produkt- und Deployment-Werte werden an wenigen Stellen gekapselt.
+Gemäß Architektur-Etappen 2–6: mehrere Repositories und Worker, danach ein Sandbox-Adapter mit interaktivem und Workflow-Einstieg, Setup-Profilen, Provider-Bootstrap und Archivierung. Weitere Connectoren, Memory und optional Clerk/Teams folgen nach Bedarf. Mehrere Repositories in einem Thread benötigen neue Checkpoint-/Diff-Verträge; ein normaler Projektpfad löst das nicht.
 
-| Bereich / vorhandener Code                                                                                                                                                                                                | Geplante Änderung                                                                                                                                                                                                         | Abnahme                                                                                                                |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| [Public Build Config](scripts/lib/public-config.ts), [Server Public Config](apps/server/src/cloud/publicConfig.ts)                                                                                                        | Gemeinsames Fork-Deployment-Profil: Produktkennung, eigenes Web/Relay, Clerk, Main-Environment-ID und Release-Kanal. Bestehende `T3CODE_*`-Variablen wiederverwenden; neue nur für fehlende Werte                         | Alle selbst gebauten Clients und Server verwenden dieselbe eigene Instanz; keine Secrets im Bundle                     |
-| [Relay DB](infra/relay/src/db.ts), [DB-Modus](infra/relay/src/dbConfig.ts), [Alchemy Stack](infra/relay/alchemy.run.ts)                                                                                                   | Providerneutrale DB-Bindung und eigener Deployment-Modus für vorhandenes PostgreSQL/Hyperdrive; PlanetScale-Provisioning bleibt ein getrennter bestehender Pfad                                                           | Eigenes Deployment erstellt keine unbeabsichtigte PlanetScale-Datenbank; Connect-Migrationen laufen auf `fork_connect` |
-| [Relay Worker](infra/relay/src/worker.ts), [Relay Config](infra/relay/src/Config.ts)                                                                                                                                      | Eigene Issuer-/Domain-/Clerk-Werte und Region passend zum VPS-Standort; optionales Monitoring, Push und Limits vom Upstream-Produkt entkoppeln                                                                            | Keine feste Bindung an T3 Chat, fremde Telemetrie oder die bisherige Datenbankregion                                   |
-| [Environment Links](infra/relay/src/environments/EnvironmentLinks.ts), [Environment Credentials](infra/relay/src/environments/EnvironmentCredentials.ts)                                                                  | Bestehende Konto-/Maschinen- und Bootstrap-Logik nutzen; ergänzende Hub-/Main-Node-Metadaten additiv und namespaced einführen                                                                                             | Main Node und registrierte Maschine werden nach Anmeldung in zwei Clients gelistet                                     |
-| [Endpoint Provider](infra/relay/src/environments/ManagedEndpointProvider.ts), [Allocations](infra/relay/src/environments/ManagedEndpointAllocations.ts)                                                                   | Eigene DNS-Zone und Tunnel-Ressourcen, überprüfte Kontingente, idempotentes Provisioning/Cleanup beibehalten                                                                                                              | Maschine hinter NAT ist über ihren verwalteten Endpunkt erreichbar; Neustart erhält die Zuordnung                      |
-| [CloudLink](apps/server/src/cloud/CloudLink.ts), [Cloud Config](apps/server/src/cloud/config.ts)                                                                                                                          | Anmeldung am eigenen Broker, Trust-Bindung und Widerruf prüfen; keine automatische Übernahme offizieller gespeicherter Links                                                                                              | Ein offizieller und ein Fork-Account/Environment können sich nicht gegenseitig überschreiben                           |
-| [Managed Relay Client](packages/client-runtime/src/relay/managedRelay.ts), [Discovery](packages/client-runtime/src/relay/discovery.ts), [Cloud Account Service](packages/client-runtime/src/relay/cloudAccountService.ts) | Bestehende Discovery verwenden; Main-Node-Auswahl und Automation-Capabilities ergänzen; bei Runtime-Hub-Auswahl Registry-/Cache-Schlüssel um den Hub-Issuer erweitern                                                     | Wechsel/Logout vermischt keine Accounts oder Sessions; keine zweite Transportsteuerung                                 |
-| [Web Relay Layer](apps/web/src/cloud/managedRelayLayer.ts), bestehende Connect-UI                                                                                                                                         | Eigenes Branding und Login-Ziel; Main Node und Maschinen auffindbar machen; Windows-Desktop-OAuth an die eigene App-ID anpassen; Mobile unverändert lassen                                                                | Web und Windows-Desktop verbinden sich mit demselben eigenen Katalog                                                   |
-| `apps/server/src/automation/persistence/` – neu                                                                                                                                                                           | PostgreSQL-Services, Tabellen, Migrationen, Inbox/Outbox und eigene Schema-Version                                                                                                                                        | Restart und konkurrierende Zustellung werden gegen echtes PostgreSQL geprüft                                           |
-| `apps/server/src/automation/t3/` und `automation/workers/` – neu                                                                                                                                                          | Registry-Eintrag einer Maschine mit ihrer ausdrücklich erteilten Dispatch-Berechtigung verbinden; Enrollment und Widerruf servicebasiert anbieten                                                                         | Sichtbarkeit gewährt allein noch keine Ausführungsrechte; umgekehrt veröffentlicht ein Peer-Link keine Maschine        |
-| [Desktop Build](scripts/build-desktop-artifact.ts), [Electron Updater](apps/desktop/src/electron/ElectronUpdater.ts), [Desktop Update Flow](apps/desktop/src/updates/DesktopUpdates.ts)                                   | Eigene Windows-App-ID, Protokolle und Datenpfade anbinden; automatischen Updater zunächst deaktivieren, Signierung und eigene Feeds später                                                                                | Offizielles T3 und Fork sind parallel nutzbar; manuelle Updates bleiben beim Fork                                      |
-| [CLI Update](apps/server/src/cli/update.ts), [Self Update](apps/server/src/cloud/selfUpdate.ts), [npm Release Lookup](apps/server/src/cloud/npmRelease.ts), `packages/shared/src/cliRelease.ts`                           | Offizielle Update-/Installationspfade für Fork-Instanzen sperren oder durch manuelle Fork-Hinweise ersetzen; eigenes CLI-Paket erst bei Bedarf; Containerupdates über Deployment                                          | Remote-Update installiert kein offizielles `t3` über einen Fork-Worker; Main-Container wird per Deployment ersetzt     |
-| [Release CI](.github/workflows/release.yml), [Relay CI](.github/workflows/deploy-relay.yml)                                                                                                                               | Zunächst nur benötigte Linux-/Windows-Builds und Relay-Deployment konfigurieren; manuelle Ausführung genügt. Unbenutzte Upstream-Publish-/Mobile-Jobs im Fork deaktiviert lassen; keine eigene Mobile-Pipeline entwickeln | Ein Fork-Push publiziert weder unter Upstream-Namen noch mit Upstream-Zielen                                           |
-| `deploy/fork/` – neu                                                                                                                                                                                                      | Compose-Datei, Main-Image, Env-Beispiel, Migration-/Health-/Backup-Konfiguration und explizite Stage-Werte                                                                                                                | Reproduzierbares Staging und Produktion mit getrennten Daten und Schlüsseln                                            |
-| `infra/fork-connect/` – neu, nur Deployment-Komposition                                                                                                                                                                   | Eigenen Cloudflare-Stack aus wiederverwendeten Relay-Layern zusammensetzen; keine Kopie der fachlichen Relay-Services                                                                                                     | Änderungen am Relay können weiterhin aus Upstream übernommen werden                                                    |
-| `docs/operations/fork-deployment.md` – bei Implementierung                                                                                                                                                                | Dauerhafter Betriebsleitfaden aus dem tatsächlich implementierten Aufbau                                                                                                                                                  | Neuinstallation, Upgrade, Restore und Maschinen-Anbindung nachvollziehbar                                              |
+**Gate Sandbox:** Anfrage → Reservierung → Provisionierung → Enrollment → Setup → Benutzung → Archiv → Cleanup aus beiden Einstiegen. Abbruch/Restart in jeder Phase, fehlende Tools/Credentials und volles Kontingent sind sichtbar. Kein Docker-Socket oder Host-Admin-Token in der Sandbox, keine Erfolgsanzeige bei unvollständigem Ergebnisarchiv.
 
-Die Build-Konfiguration ist keine frei eingebbare Sammlung beliebiger Update-URLs für Agenten. Produktionswerte kommen aus dem Betreiber-Deployment. Vorhandene offizielle Installationshinweise in Fehlern, Pairing-Links und Update-Dialogen werden ebenfalls auf ihre Fork-Ziele geprüft; nur das App-Icon auszutauschen reicht nicht.
+## 7. Integrationsstellen und Kompatibilitätsvertrag
 
-Die aktuelle Relay-Komposition bindet Ressourcen teilweise direkt in Worker-/DB-Modulen. Für eine eigene Komposition sind daher kleine Dependency-Injection-Änderungen erforderlich: Runtime bekommt eine DB-/Hyperdrive-Bindung, Deployment provisioniert sie. Diese Trennung wird als begrenzter Integrationspatch gepflegt, nicht als Kopie von `infra/relay` mit auseinanderlaufender Logik.
+Geplante neue Bereiche sind `apps/server/src/instance/`, `packages/contracts/src/instance/` und `packages/client-runtime/src/instance/`. Sie besitzen Instanzauth, Registry, Gateway und Client-State; die Workflow-Domäne bleibt in `automation/` mit ihrem T3-Adapter. Provisionierung ist auch ohne Workflow erreichbar und darf nicht nur an einen Run-Handler gebunden sein. Upstream-nahe Änderungen an Serverkomposition, Auth und Transport bleiben kleine benannte Integrationspatches.
 
-## 7. Anmeldung, öffentliche Konfiguration und optionale Dienste
+Client, Main, Worker und Sandbox-Image melden Protokollversion und Fähigkeiten. Zu Beginn werden Builds derselben freigegebenen Version unterstützt; ein älterer Teilnehmer bekommt eine klare Inkompatibilitätsmeldung statt teilweiser stiller Funktion. Spätere Versionstoleranz wird nur für getestete Bereiche zugesagt. Keine gleichnamigen neuen RPCs ohne Fork-Namespace, keine Migration in T3s Nummernfolge.
 
-### 7.1 Erste Version mit eigener Clerk-Instanz
+Ein Upstream-Update prüft insbesondere Auth-URL-Bindung, Socket-Tickets, Connection-Supervisor, Launch/Stop, Checkpoints, Provider-Auth und Projekt-Setup. Fork-Profil und deaktivierte offiziellen Update-/Telemetry-Wege bleiben bestehen. Wiederverwendung von Relay-Code erfolgt nur über tatsächlich portable Verträge/Services; kein zweites kopiertes `infra/relay` mit eigener divergierender Runtime.
 
-Die bestehenden Web-/Windows-Electron- und benötigten Linux-CLI-Anmeldewege werden mit eigenen Clerk-Schlüsseln, Audience und OAuth-Client konfiguriert. Callback-URIs, Desktop-Deep-Link-Schemes und erlaubte Origins müssen zur eigenen Distribution passen. Mobile-Anmeldewege und Android-/iOS-Kennungen werden zunächst nicht angepasst. Der vorhandene [Setup-Runbook](docs/operations/connect-setup.md) ist dabei die Codebasis; Verfügbarkeit headlessfähiger Login-Verfahren wird im eigenen Account geprüft.
+## 8. Betrieb, Recovery und spätere Stolperstellen
 
-Die öffentlichen Werte umfassen bereits `T3CODE_RELAY_URL`, `T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_JWT_TEMPLATE` und `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID`. `T3CODE_HOSTED_APP_URL` existiert serverseitig; konsistente Verwendung für alle Fork-Link-Erzeuger wird ergänzt. Neue vorgeschlagene Werte für Produkt-/Main-Node-Metadaten bekommen einen eigenen Fork-Präfix.
+- **Readiness:** Für Instanzbetrieb müssen die benötigten DB-Schemas und Services bereit sein. Der heutige reine HTTP-Healthcheck bestätigt nur Grundbetrieb. Provider-Ausfall ist ein Device-/Capability-Fehler, kein pauschaler Main-Ausfall.
+- **Backups:** PostgreSQL, Main-/Worker-State soweit nötig, Artefakte und Schlüssel koordiniert sichern. Externes Ziel, RPO/RTO und Aufbewahrung vor Dauerbetrieb festlegen. Restore isoliert testen; ein Docker-Volume auf der VPS ist kein Backup.
+- **Restore:** Trigger, Enrollment und Publishing zunächst sperren. Device-Receipts, externe PRs, Sandbox-Besitz und Archiv-Cursor abgleichen. Zugangsgenerationen/Schlüssel rotieren, damit ein altes Backup widerrufene Credentials nicht reaktiviert. Keine blinde Löschung von Devices oder Cloudressourcen anhand veralteter Daten.
+- **Upgrade:** Vor Migration neue Aufträge stoppen, laufende Arbeit drainen oder kontrolliert unterbrechen. Gesperrte Migration → Main-Rollout → Readiness → Wiederaufnahme. Image-Rollback nur mit kompatiblem Schema, sonst koordinierter Restore. Artefakte mit Fork-SHA, Upstream-SHA und Schema-/Protokollversionen kennzeichnen.
+- **Kontingente:** Gateway-Streams, Sandbox-Zahl, Disk/Artefaktvolumen und kontoweite Provider-Parallelität begrenzen. Ein Instanzbenutzer bedeutet nicht unbegrenzte Provider-Nutzung. Kein automatischer Wechsel von Subscription zu API-Abrechnung.
+- **Audit:** Akteur, Device, Scope, Allocation/Attempt und Grant-Generation für kritische Aktionen nachvollziehbar speichern. Keine Auth-Header, Refresh-Tokens, Pairing-Links oder vollständigen sensiblen Payloads in allgemeinen Logs.
+- **Beobachtbarkeit:** Gateway-Reconnects, Queue-Alter, unklare Attempts, DB-/Disk-Auslastung, Backup-Alter, Provider-Auth-Fehler und Archiv-Rückstand erfassen. Limits anhand der ersten Laufzeittests festlegen; keine erfundenen Durchsatz-/Kostenversprechen.
+- **Enterprise später:** Single-Tenant ist eine Deployment-Grenze, keine Mehrmandanten-Isolationszusage. Teams erfordern objektbezogene Rechte auf Devices, Projekte, Archive, Secrets und Sandbox-Profile, nicht nur gefilterte UI-Listen. Clerk allein implementiert diese Rechte nicht.
 
-Clerk-Secret, Relay-Signaturschlüssel, Cloudflare-Verwaltungsrechte, Datenbankzugänge und Provider-/Source-Control-Secrets sind private Konfiguration. Cloudflare-Verwaltungstokens bleiben beim Provisioning beziehungsweise dem kontrollierten Relay-Backend; eine verbundene Maschine erhält nur ihren benötigten Tunnel-/Environment-Zugang.
-
-Ein eigener OIDC-Provider anstelle von Clerk bleibt möglich, benötigt aber ein Auth-Adapterprojekt über alle vier Clients hinweg. Er wird nicht als einfache Konfigurationsoption zugesagt.
-
-### 7.2 Bewusst begrenzter erster Betriebsumfang
-
-T3-Chat-Planverknüpfung und deren Tunnelkontingente werden für den eigenen Betreiber durch eigene konfigurierbare Limits ersetzt. APNs, FCM und Live Activities bleiben für das eigene Deployment deaktiviert. Mobile-Anbindung, Push-Credentials und Store-Distribution werden erst in einer ausdrücklich gewählten späteren Mobile-Etappe bearbeitet; sie sind keine Abnahmebedingung für den Start.
-
-Das optionale Puffern herkömmlicher Webhooks in Relay-Durable-Objects wird nicht benötigt: Automation-Webhooks gehen direkt an die Main Node und landen in PostgreSQL. Vor einem späteren Aktivieren wird entschieden, ob die vorhandene separate Inbox akzeptiert oder ein PostgreSQL-basierter Weg gebraucht wird. Die vorhandenen Cloudflare-Queues für optionale Push-Zustellung sind kein Message Bus der Workflow-Engine.
-
-Externe Telemetrie, Fehlerberichte und Source-Map-Uploads erhalten eigene Ziele oder sind deaktiviert. Die Deployments dürfen nicht automatisch in den offiziellen T3-Account senden. Debug-Logs enthalten weder Bootstrap-Credentials noch vollständige Ticket-Payloads mit Secrets.
-
-## 8. Konkrete Reihenfolge der Umsetzung
-
-### D0 – Deployment-Werte und vorhandene Ressourcen erfassen
-
-Fork-Name, Repository-/Package-Namespace, tatsächliche Domain, Linux-Distribution/CPU-Architektur/RAM/Speicher der VPS, Cloudflare-Zone und eigene Auth-Instanz festlegen. Cloudflare-Worker-/Tunnel-/Hyperdrive-Verfügbarkeit prüfen. Public Config und Secret-Konfiguration getrennt erfassen. Ein bisher produktiv verwendetes T3-Home wird weder umgehängt noch vom Fork beschrieben.
-
-**Ergebnis:** Ein überprüfbares Deployment-Profil und ein klarer Ressourcenplan. Zugangsdaten werden bei der späteren Umsetzung über den vorgesehenen Secret-Kanal aufgenommen, nicht in diese Datei geschrieben.
-
-### D1 – Eigene Builds und VPS-Grundbetrieb
-
-Produktkonfiguration, manuelle Build-Ziele für Linux/Windows und Datenverzeichnisse zuerst trennen. Eine vollständige automatische Release-Pipeline ist dafür nicht erforderlich. Main-Image, PostgreSQL, persistente Volumes, öffentliche Domain und Readiness auf der VPS bereitstellen. `fork_automation` und `fork_connect` mit getrennten Rollen/Migrationen anlegen. Staging benutzt eigene Datenbanken, Domains, Schlüssel und T3-Homes; keine Verbindung mit produktiven Worker-Credentials.
-
-**Abnahme:** Eigener Web-Build lädt von der Domain; Main Node startet nach VPS-/Container-Neustart mit erhaltenem Zustand. PostgreSQL ist vom Dienst erreichbar, aber nicht öffentlich als Port freigegeben. Ein fehlerhafter DB-Start führt nicht zu einem scheinbar gesunden Backend.
-
-### D2 – Eigenes Connect mit PostgreSQL auf der VPS
-
-PlanetScale-Provisioning vom Relay-Runtime lösen, eigene Hyperdrive-Bindung herstellen, Connect-Migrationen anwenden und eigenen Cloudflare-Worker mit eigenem Clerk deployen. Main Node und ein dauerhaftes Linux-Testenvironment an genau dieser Instanz registrieren; beide dürfen auf derselben VPS mit getrenntem Zustand laufen. Die eigenen Clients werden mit dieser öffentlichen Konfiguration gebaut.
-
-**Abnahme:** Anmeldung in Web und Windows-Desktop zeigt Main Node und Testenvironment. Beide Maschinen sind öffnungsfähig; es ist kein manuelles Pairing je Maschine und je Client nötig. Eine Maschine hinter NAT braucht keine Portfreigabe. Offizielle T3-Connect-Ressourcen werden nicht verwendet.
-
-### D3 – Maschinenkatalog mit Automation-Zielen verbinden
-
-Main-Node-Metadatum, Worker-Enrollment, Projekt-/Provider-Fähigkeiten und getrennte Zugriffserteilung einführen. Ein minimaler Replay-Auftrag wird von der Main Node an die Testmaschine dispatcht; der resultierende Thread lässt sich vom Client öffnen.
-
-**Abnahme:** Maschinenaufnahme, Offline/Online-Wechsel, Entzug von Client-Zugriff und Entzug von Automation-Rechten sind getrennt nachvollziehbar. Ein Registry-Eintrag ohne Dispatch-Recht reicht nicht zum Start eines Agenten.
-
-### D4 – Workflow-MVP auf der Infrastruktur
-
-Die Etappen 1 und 2 des Architekturplans setzen auf diesem PostgreSQL-/Connect-Aufbau auf. Allgemeine Pool-Verteilung, echte Sandboxes und Multi-Repo-Workspaces folgen nach dem ersten Ablauf. Die grundlegende Remote-Verbindung wird für dieses gewünschte Betriebsmodell früher umgesetzt als komplexe Swarm-Steuerung.
-
-**Abnahme:** Ein Trigger an der Cloudflare-Domain erzeugt genau einen Run auf der Main Node; ein Step läuft auf der registrierten Maschine und ist aus beiden Clients einsehbar. Ausfälle zwischen Inbox, Dispatch und Abschluss sind nachvollziehbar und wiederaufnehmbar.
-
-### D5 – Eigenständiger Release- und Wiederherstellungsbetrieb
-
-Reproduzierbare Builds erzeugen Linux- und Windows-Artefakte mit Fork-Version und Upstream-SHA; relevante Tests laufen gegen PostgreSQL. Anfangs sind manuelle Veröffentlichung und Updates ausreichend. Automatisierte Kanäle werden erst bei regelmäßigem Distributionsbedarf ergänzt. Ein Staging-Update mit inkompatiblem Worker, ein Datenbankupgrade und ein Restore werden vor dem ersten regulären Produktionsrelease geprobt. Mobile, weitere Desktop-Builds und Push bleiben außerhalb dieser Etappe.
-
-**Abnahme:** Client-/Worker-Update bleibt beim Fork, ein inkompatibles Protokoll wird verständlich abgefangen und ein Restore startet keine bereits veröffentlichten Aktionen blind erneut.
-
-## 9. Release, Backup und Ausfälle
-
-Die Main Node erhält feste Container-Image-Digests; sie aktualisiert sich nicht über den interaktiven CLI-Updater im laufenden Container. Ein Release enthält Web und Server zusammen sowie deren kompatible Automation-/Relay-/Schema-Versionen. Das Cloudflare-Relay kann unabhängig deployed werden, muss aber die unterstützten Client-/Environment-Versionen weiter bedienen.
-
-Vor Migrationen werden Trigger und neue Dispatches pausiert; aktive Runs werden anhand der Änderung entweder fertiggestellt oder kontrolliert unterbrochen. Migration-Job, Main-Rollout und Readiness folgen nacheinander. Rollback auf ein altes Image ist nur bei kompatiblem Schema erlaubt. Destruktive Schemaänderungen benötigen einen geprüften Restore-Pfad.
-
-PostgreSQL erhält regelmäßig vollständige Backups und, für das festgelegte Wiederherstellungsziel, WAL-Archivierung auf einen externen Speicher. Artefakte und erforderliche lokale T3-Snapshots werden mit Version/Manifest zugeordnet. Ein `docker volume` auf derselben VPS ist kein Ausfallbackup. RPO, RTO, Aufbewahrung und tatsächlich verfügbare VPS-Ressourcen werden vor Produktion festgelegt.
-
-Restore beginnt mit deaktivierten Triggern und Publishing. Registry-Einträge und Schlüssel werden mit real noch vorhandenen Tunneln/Environments abgeglichen. Cloudflare-Ressourcen dürfen nicht allein aufgrund eines älteren Datenbankstands automatisch gelöscht werden. Automation gleicht Dispatch-Receipts, Worker-Leases, archivierte Ergebnisse und externe PRs ab, bevor neue Arbeit startet.
-
-Überwacht werden mindestens API-/Connect-Verfügbarkeit, PostgreSQL-Speicher und Connections, Backup-Alter, Tunnelzustand, Registry-Fehler, Queue-Alter und Archiv-Rückstand. Die ersten Betriebsalarme brauchen keine große zusätzliche Monitoring-Plattform, müssen aber den Betreiber bei einem stehengebliebenen Dienst erreichen können.
-
-## 10. Erforderliche Prüfungen für dieses Deployment
-
-- Neuinstallation und Upgrade auf isoliertem PostgreSQL mit beiden logischen Datenbanken; keine Automation-Tabellen in Upstreams SQLite-Migrationsliste.
-- Zwei Clients desselben Kontos entdecken dieselben Maschinen, verwenden aber eigene Schlüssel und Environment-Sessions.
-- Ein anderes Konto sieht keine Maschinen ohne Grant; Peer-Verknüpfungen erzeugen keine transitiven Freigaben.
-- Eigene URLs/Issuer/Audiences werden über Web, Windows-Desktop und die benötigte Linux-headless-Anmeldung konsistent verwendet.
-- WebSocket-Reconnect, abgelaufene Bootstrap-Berechtigung, Cloudflare-Unterbrechung und DB-/VPS-Ausfall verlieren keine bestätigten Workflow-Aufträge.
-- Direkte LAN-Verbindungen können neben Hub-Verbindungen bestehen; gleiche Environment-IDs werden im Client korrekt zusammengeführt, unterschiedliche Hubs vermischen keine Credentials.
-- Ein widerrufener Zugang kann weder neu bootstrappen noch über eine alte aktive Session unbemerkt weiterarbeiten.
-- Staging-Tunnel, Konten und Datenbanken bleiben von Produktion getrennt; Cleanup löscht keine produktiven Ressourcen.
-- Automatische offizielle Update-Feeds und npm-Lookups sind für Fork-Builds deaktiviert oder passend ersetzt; Windows-Deep-Links und manuelle Installationshinweise verweisen auf den Fork. Keine Mobile-Abnahme.
-- Öffentliches Webhook-Posting funktioniert ohne interaktiven Browser-Login, aber nur mit der vorgesehenen Connector-Authentifizierung; fehlgeschlagene Inbox-Commits ergeben keinen Erfolg.
-- Backup und Restore werden tatsächlich auf einem isolierten Ziel durchgeführt; keine Prüfung gegen die laufende persönliche T3-Datenbank.
-
-## 11. Noch benötigte Entscheidungen
-
-Die Grundentscheidungen VPS, eigene Cloudflare-Domain, PostgreSQL und zentraler Maschinenzugang sind getroffen. Für die Umsetzung fehlen noch:
-
-1. Produkt-/Fork-Name und tatsächliche Domain/Subdomains.
-2. Linux-Distribution, CPU-Architektur, RAM, verfügbarer Speicher und vorhandener Container-/Proxy-Betrieb der VPS.
-3. Eigene Clerk-Instanz als erster Auth-Weg oder ausdrücklich gewünschte zusätzliche OIDC-Portierung.
-4. Verfügbarkeit von Workers, privaten DB-Verbindungen und verwalteten Tunneln im Cloudflare-Konto.
-5. Zunächst Einzelkonto oder bereits mehrere Benutzer mit gemeinsamen Maschinen-Grants.
-6. Windows-Architektur und gewünschter interner Build-/Verteilungsweg. Web und Windows sind als erste Oberflächen gesetzt; Mobile bleibt außen vor.
-7. Externer Backup-Speicher, Aufbewahrung und gewünschte Wiederherstellungszeiten.
-
-Diese Punkte blockieren die Planung nicht. Vor tatsächlichem Provisioning werden sie in das Deployment-Profil übernommen; dieses Dokument erteilt keinen Auftrag, vorhandene produktive Infrastruktur ungeprüft zu ändern.
+Noch operatorseitig vor den jeweiligen Gates festzulegen: Dienstbenutzer/Workspace-Wurzeln, Access-Machine-Policy und mögliche Webhook-Ausnahme, erster Provider-Zugang und GitHub-Repository/Label, Backup-Ziel sowie Ressourcen-/Aufbewahrungsgrenzen. Diese Punkte blockieren die Finalisierung des Plans nicht; sie werden vor Aktivierung der abhängigen Funktion konkret entschieden.

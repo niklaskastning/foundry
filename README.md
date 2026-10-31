@@ -2,14 +2,15 @@
 
 A permanent fork of [T3 Code](https://github.com/pingdotgg/t3code), preparing a platform for automated software development. T3 supplies the agent runtime and shared Web/desktop interface; the planned Automation layer coordinates workflows, repositories, and execution machines.
 
-**Status: isolated base deployment.** Foundry has Linux container/Compose and Windows x64 build entry points, separate product/data identities, and manual updates. The Automation engine and an independent Connect service remain planned. Official T3 installers and `npx t3` install upstream, not Foundry.
+**Status: isolated base deployment.** Foundry has Linux container/Compose and Windows x64 build entry points, separate product/data identities, and manual updates. The integrated instance gateway, device registry, Automation engine, and sandbox provisioning remain planned. Official T3 installers and `npx t3` install upstream, not Foundry.
 
 The Linux VPS origin is `http://127.0.0.1:3783`; the operator routes `foundry.heavenforgeprod.com` through Cloudflare Tunnel and Access. See the [deployment runbook](deploy/fork/README.md) for setup, pairing, limits, and recovery.
 
 ## Direction
 
 - Linux Main Node and PostgreSQL on a VPS, deployed with Docker Compose.
-- Own Connect service based on the existing Cloudflare Worker and Clerk integration.
+- One instance URL for login, devices, and Automation; an integrated Main Node gateway instead of a separate Connect deployment.
+- Single user first, with Cloudflare Access; a dedicated Linux host worker executes agents. Clerk and team access are later options.
 - Web and Windows desktop first; no initial mobile development or distribution.
 - Inspectable workflow steps backed by ordinary T3 threads, starting with one reliable issue-to-PR flow.
 - Later: reusable agents and skills, multiple repositories/workers, ephemeral sandboxes, and persistent memory.
