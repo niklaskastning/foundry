@@ -1,3 +1,5 @@
+import * as InstanceOperator from "../foundry/InstanceOperator.ts";
+import * as InstancePostgres from "../foundry/InstancePostgres.ts";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
@@ -42,9 +44,39 @@ const migrate = Command.make("migrate", {
           ).pipe(Layer.provide(ServerConfig.layer(config))),
         ),
       );
-      yield* Console.log("Foundry instance schema 1 ready; existing instance identity preserved.");
+      yield* Console.log("Foundry instance schema 2 ready; existing instance identity preserved.");
     }),
   ),
 );
 
-export const foundryCommand = Command.make("foundry").pipe(Command.withSubcommands([migrate]));
+const bindOperator = Command.make("bind-operator", {
+  ...authLocationFlags,
+  issuer: Flag.String("issuer"),
+  subject: Flag.String("subject"),
+}).pipe(
+  Command.withDescription(
+    "Bind the single Foundry operator locally; conflicting bindings are rejected.",
+  ),
+  Command.withHandler(
+    Effect.fn("foundry.bindOperator")(function* (flags) {
+      const config = yield* resolveCliAuthConfig(flags, yield* GlobalFlag.LogLevel);
+      const url = yield* Config.Redacted("FOUNDRY_INSTANCE_DATABASE_URL");
+      yield* InstanceOperator.InstanceOperator.pipe(
+        Effect.flatMap((operator) => operator.bind(flags.issuer, flags.subject)),
+        Effect.provide(
+          InstanceOperator.layer.pipe(
+            Layer.provide(InstancePostgres.layer),
+            Layer.provide(InstanceDatabase.layer({ url })),
+            Layer.provide(ServerEnvironment.layerIdentity),
+            Layer.provide(ServerConfig.layer(config)),
+          ),
+        ),
+      );
+      yield* Console.log("Foundry operator binding confirmed.");
+    }),
+  ),
+);
+
+export const foundryCommand = Command.make("foundry").pipe(
+  Command.withSubcommands([migrate, bindOperator]),
+);

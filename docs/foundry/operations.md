@@ -131,7 +131,8 @@ For a coordinated restore point, stop new work and the Main Node, take the datab
 und die tatsächlich unterstützten T3-Bootstrap-/Session-Verfahren. Der Endpunkt ist
 wie die bestehenden Auth-Metadaten ohne T3-Session lesbar; ein vorgeschaltetes Access
 bleibt wirksam. Metadaten allein bestätigen weder eine Betreiberanmeldung noch
-Gateway-Zugriff. Es gibt noch keinen Foundry-Login oder Device-Katalog.
+Gateway-Zugriff. Die optional aktivierbare Foundry-Anmeldung ist unten beschrieben;
+Device-Katalog und Gateway folgen separat.
 
 `protocolVersion` muss genau einmal mit `1` vorkommen. Fehlende, leere oder doppelte
 Angaben ergeben HTTP 400 (`protocol_version_required`), andere Werte HTTP 409
@@ -139,7 +140,8 @@ Angaben ergeben HTTP 400 (`protocol_version_required`), andere Werte HTTP 409
 `requiredCapability` bezeichnet zwingend benötigte Fähigkeiten. Unbekannte optionale
 Fähigkeiten werden ignoriert, unbekannte Pflichtfähigkeiten ergeben HTTP 409
 (`capability_unsupported`). Die Antwort nennt unterstützte und ausgehandelte
-Fähigkeiten; derzeit ausschließlich `foundry.instance-descriptor`. Antworten sind
+Fähigkeiten; standardmäßig `foundry.instance-descriptor`, bei aktivierter
+Access-Anmeldung zusätzlich `foundry.access-sessions`. Antworten sind
 nicht cachebar. Bestehende T3-Endpunkte verlangen keine Foundry-Protokollversion.
 
 Im standardmäßigen Dateimodus legt die erste erfolgreiche Anfrage
@@ -182,8 +184,8 @@ Zugangsdaten über den geschützten Betriebsweg setzen, nicht in SQL-Dateien ode
 Shell-History ablegen. Die Runtime-Rolle darf weder CREATE-/TEMP-Rechte noch
 Mitgliedschaft in einer privilegierten oder Schema-Owner-Rolle besitzen. Die Migration
 vergibt gezielt Leserechte, Generation-Updates und Schreibrechte für die spätere
-Betreiberbindung; sie erstellt **keinen** angemeldeten Betreiber. P03 muss dessen
-Zuordnung und Zugangsgenerationen über dieselbe Transaktionsgrenze verwenden.
+Betreiberbindung; sie erstellt **keinen** angemeldeten Betreiber. Die lokale Bindung
+und die Session-Verwaltung verwenden dieselbe PostgreSQL-Transaktionsgrenze.
 
 Mit `FOUNDRY_INSTANCE_MIGRATION_URL` ausschließlich im Migrationsprozess:
 
@@ -198,7 +200,7 @@ Der Pool ist auf vier Verbindungen begrenzt, die Migration auf eine; Verbindungs
 und Statements haben begrenzte Wartezeiten.
 
 `GET /api/foundry/ready` liefert ohne Cache HTTP 200 mit `{"ready":true}` oder HTTP 503
-mit `{"ready":false}`. Im PostgreSQL-Modus prüft jede Anfrage Datenbank, Schema 1,
+mit `{"ready":false}`. Im PostgreSQL-Modus prüft jede Anfrage Datenbank, Schema 2,
 Runtime-Rollenrechte und die Bindung zum Main-Environment. Eine noch vorhandene lokale
 P01-ID muss ebenfalls übereinstimmen; bei fehlender Datei wird keine neue ID erzeugt.
 Der Instanz-Descriptor verwendet dieselben Prüfungen. Der allgemeine T3-Betrieb und
@@ -219,3 +221,75 @@ FOUNDRY_TEST_PG_BIN=/path/to/postgresql/bin vp run --filter t3 test:foundry-post
 
 Dieser explizite Integrationstest ergänzt `check:changed`; er wird nicht automatisch
 in GitHub Actions gestartet. Er verwendet keine vorhandene Datenbank oder Credentials.
+
+## Cloudflare-Access-Nachweis und Foundry-Sessions
+
+Diese Backend-Anmeldung wird mit `FOUNDRY_ACCESS_ENABLED=true` aktiviert. Sie erfordert
+`FOUNDRY_INSTANCE_STORE=postgres`, die Runtime-Datenbank-URL und:
+
+- `FOUNDRY_ACCESS_ISSUER`: exakt `https://<team>.cloudflareaccess.com`, ohne abschließenden Slash.
+- `FOUNDRY_ACCESS_AUDIENCE`: der AUD-Tag der vorgesehenen Access-Anwendung.
+- `FOUNDRY_PUBLIC_ORIGIN`: die kanonische HTTPS-Origin der Instanz, ohne Pfad oder Slash.
+
+Main vor dem Upgrade stoppen, sichern und `foundry migrate` wie oben ausführen.
+Die Migration von Schema 1 auf 2 ergänzt persistente Sessions; Instanz-ID,
+Betreiberbindung und Zugangsgenerationen bleiben erhalten. Die neue Runtime verlangt
+Schema 2 auch dann, wenn die Access-Anmeldung deaktiviert bleibt. Ein Downgrade auf
+den P02-Build ist mit Schema 2 nicht unterstützt.
+
+Vor dem ersten Login den Betreiber einmal lokal mit der Runtime-Datenbank-URL und
+dem passenden Home binden:
+
+```sh
+node apps/server/src/bin.ts foundry bind-operator --base-dir /path/to/foundry-home --issuer https://example.cloudflareaccess.com --subject <confirmed-subject>
+```
+
+Der Subject muss aus einer vertrauenswürdigen Access-/IdP-Zuordnung stammen; eine
+E-Mail-Adresse oder ein Anzeigename ersetzt ihn nicht. Wiederholung mit denselben
+Werten erhält die interne Betreiber-ID. Eine abweichende Bindung wird abgelehnt;
+Account-Wechsel und Wiederherstellung sind kein Selbstregistrierungsweg. Der
+Readiness-Endpunkt prüft weiterhin die Datenbank-/Identitätsgrundlage; ein noch
+ungebundener Betreiber wird beim Login ausdrücklich abgewiesen.
+
+Bei aktivierter Konfiguration nennt der Descriptor zusätzlich `instanceAuth` und
+`foundry.access-sessions`. Die folgenden Endpunkte verwenden alle POST, exakt die
+konfigurierte `Origin` und `Content-Type: application/json`; sie benötigen keinen
+Request-Body:
+
+| Endpunkt                    | Zweck und zusätzliche Nachweise                                                                 |
+| --------------------------- | ----------------------------------------------------------------------------------------------- |
+| `/api/foundry/auth/login`   | Signierten `Cf-Access-Jwt-Assertion` prüfen und Session ausgeben                                |
+| `/api/foundry/auth/session` | Aktuelle Session und CSRF-Token für den Client lesen                                            |
+| `/api/foundry/auth/refresh` | Gültige Session, CSRF-Token und erneut gültigen Access-Nachweis prüfen; Session atomar ersetzen |
+| `/api/foundry/auth/logout`  | Session mit CSRF-Nachweis dauerhaft entwerten und Cookie löschen                                |
+
+Session, Instanz-/Betreiber-ID, Ablaufzeit in Unix-Millisekunden und CSRF-Token werden
+als JSON zurückgegeben; der Session-Schlüssel ausschließlich als Cookie
+`__Host-foundry_session` mit Secure, HttpOnly, SameSite=Strict und Path=/.
+Erneuerung und Logout senden den CSRF-Token im Header `X-Foundry-CSRF`.
+Nach einem Reload kann der Client ihn über den Session-Endpunkt erneut lesen.
+Antworten werden nicht gecacht. Fehler sind strukturierte Codes: HTTP 401 für
+ungültige Nachweise/Sessions, 403 für Origin-/CSRF-/Betreiberfehler und 503 bei
+fehlender Datenbank- oder Schlüsselverfügbarkeit.
+
+Eine Session gilt höchstens 15 Minuten und niemals über den Ablauf des geprüften
+Access-Nachweises hinaus. Erneuerung macht den vorherigen Schlüssel ungültig; bei
+parallelen Erneuerungen gewinnt genau eine Anfrage. Clients müssen diese Operation
+serialisieren und bei verlorener Antwort gegebenenfalls neu anmelden. Logout bleibt
+nach Neustarts wirksam. Cloudflare-SSO und direkte T3-Sessions haben eigene Logout-Wege;
+ein weiterhin gültiger Access-Nachweis kann einen neuen Foundry-Login ermöglichen.
+
+Der Server prüft RS256-Signatur, Issuer, Audience, Subject, Application-Typ und
+Zeitgrenzen. Signaturschlüssel kommen ausschließlich vom konfigurierten Team-Endpunkt
+`/cdn-cgi/access/certs`, mit begrenztem Cache und ohne Redirect-Verfolgung.
+Ungeprüfte E-Mail-/Forwarding-Header schaffen keinen Zugang. PostgreSQL speichert nur
+Hashes der Session-Schlüssel und bindet Sessions an Instanz, Betreiber, Audience und
+Zugangsgenerationen. Jede Prüfung liest den aktuellen DB-Zustand; DB-Ausfall sperrt
+Zugriffe. Ein Access-Widerruf wird ohne zusätzliche Introspektion spätestens mit dem
+begrenzten Session-Ablauf wirksam; lokale Generationserhöhungen wirken sofort auf
+nachfolgende Prüfungen.
+
+Die Sessions berechtigen bisher die Foundry-Auth-Endpunkte. Windows-Anmeldefenster,
+Client-Onboarding und Gateway-Zugriff folgen in eigenen Paketen. Diese Implementierung
+ändert weder Cloudflare-Regeln noch bestehende T3-Authentifizierung. Vor produktiver
+Freigabe bleibt die echte Access-/Windows-Abnahme aus G1 erforderlich.

@@ -1,3 +1,4 @@
+import * as FoundryRuntime from "./foundry/Runtime.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as Random from "effect/Random";
@@ -25,10 +26,6 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
-import * as FoundryHttp from "./foundry/http.ts";
-import * as InstanceDescriptor from "./foundry/InstanceDescriptor.ts";
-import * as InstancePersistence from "./foundry/InstancePersistence.ts";
-import * as EnvironmentAuthPolicy from "./auth/EnvironmentAuthPolicy.ts";
 import * as ServerConfig from "./config.ts";
 import { withUntracedRequests } from "./http.ts";
 import * as ServerHttp from "./http.ts";
@@ -740,14 +737,7 @@ const layerMakeRoutes = Layer.mergeAll(
     GuestHttp.layer,
     DeviceHubProxy.layer,
     ServerBrowserStream.routeLayer,
-    FoundryHttp.layer.pipe(
-      Layer.provide(
-        InstanceDescriptor.layer.pipe(
-          Layer.provide(InstancePersistence.layer),
-          Layer.provide(EnvironmentAuthPolicy.layer),
-        ),
-      ),
-    ),
+    FoundryRuntime.layer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
   ),
