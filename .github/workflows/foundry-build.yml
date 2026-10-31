@@ -53,6 +53,7 @@ jobs:
         if: inputs.target == 'windows'
       - name: Build Windows x64 installer
         if: inputs.target == 'windows'
+        shell: bash
         run: vp run foundry:build windows
       - name: Verify Windows installation isolation
         if: inputs.target == 'windows'

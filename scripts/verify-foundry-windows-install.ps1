@@ -25,11 +25,9 @@ function Invoke-Installer([string]$File, [string]$Arguments = '/S', [int]$Expect
 }
 
 function Get-T3Snapshot {
-  Get-ChildItem -LiteralPath $t3Root -File -Recurse | Sort-Object FullName | ForEach-Object {
+  Get-ChildItem -LiteralPath @($t3Root, "$env:USERPROFILE\.t3", "$env:APPDATA\t3code-v2") -File -Recurse |
+    Sort-Object FullName | ForEach-Object {
     "$($_.FullName):$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
-  }
-  foreach ($file in $sentinels) {
-    "${file}:$((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash)"
   }
 }
 
@@ -70,14 +68,16 @@ $watcher = [IO.FileSystemWatcher]::new($env:APPDATA, 'Foundry-Auth-Probe')
 $subscription = Register-ObjectEvent $watcher Created -SourceIdentifier 'FoundryProbeProfile'
 $watcher.EnableRaisingEvents = $true
 $probe = $null
+$probeErrorLog = Join-Path $env:RUNNER_TEMP 'foundry-probe-stderr.log'
 try {
   $probe = Start-Process -FilePath "$foundryRoot\Foundry.exe" -ArgumentList @(
     '--foundry-access-probe', 'https://example.com', 'https://example.cloudflareaccess.com',
     'defd6cac-b437-407a-8a68-069161c9c1e4'
-  ) -PassThru
+  ) -PassThru -RedirectStandardError $probeErrorLog
   $created = Wait-Event -SourceIdentifier 'FoundryProbeProfile' -Timeout 60
   if ($null -eq $created -or -not (Test-Path -LiteralPath $probeProfile)) {
-    throw 'The installed executable did not enter the isolated access probe.'
+    $details = Get-Content -LiteralPath $probeErrorLog -Raw -ErrorAction SilentlyContinue
+    throw "The installed executable did not enter the isolated access probe. $details"
   }
   Write-Output 'PASS: installed executable enters the probe and creates its isolated profile (no login attempted).'
 } finally {
