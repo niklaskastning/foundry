@@ -113,6 +113,53 @@ This creates an unsigned `Foundry-*.exe` installer under `release/`. The app ID 
 
 The [deployment profile](../../deploy/fork/profile.json) supplies the hosted origin and repository. Foundry builds ignore checkout `.env` files. Leave the inherited `T3CODE_RELAY_URL` and Clerk build configuration unset: they belong to the separate Connect deployment that this fork no longer plans to operate. The baseline build keeps Connect disabled; these flags do not implement runtime instance discovery or the new gateway. Analytics and relay trace uploads are disabled for Foundry builds.
 
+## Windows Access transport probe (P04, acceptance pending)
+
+Foundry desktop builds can start an isolated acceptance harness instead of the normal
+app. This is not the P05 onboarding flow and does not start a local T3 backend.
+Use a build from the reviewed P04 branch and launch its installed executable in
+PowerShell with three public values:
+
+```powershell
+& 'C:\Path\Foundry.exe' --foundry-access-probe 'https://your-foundry.example' 'https://your-team.cloudflareaccess.com' '<expected-instance-uuid>'
+```
+
+Obtain the expected instance ID through a trusted operator connection to the
+descriptor, not from an unverified redirect. The probe uses its own
+`Foundry-Auth-Probe` Electron profile and a partition bound to origin, issuer and
+instance ID. OAuth tokens are encrypted using OS-backed safe storage; plaintext
+fallback is refused. Never send OAuth URLs, callback query strings, tokens or the
+profile contents as evidence. The normal Foundry/T3 profiles are not imported.
+
+Prerequisites are app-specific Managed OAuth with public-client registration and
+loopback callbacks enabled, reachable OAuth/resource endpoints without a browser
+challenge for native requests, and P03 configured on Main with its migrated
+PostgreSQL store and confirmed operator binding. Discovery must advertise S256,
+public clients and registration/token/revocation endpoints on the confirmed issuer.
+The probe accepts access-token lifetimes up to 24 hours. It does not disable Access,
+alter a WAF policy, copy system-browser cookies or embed a service token.
+
+Use **Sign in** to open the system browser. The callback is bound to an ephemeral
+`127.0.0.1` port, state and PKCE; the token is scoped to the instance resource.
+The probe checks the pinned descriptor and creates a P03 session. If it reports that
+the correct instance was reached but Access sessions are not enabled on Main, only
+the outer OAuth/HTTP step succeeded; Foundry authentication and P04 remain unverified.
+
+For full acceptance, **Open instance** uses that same isolated Electron session for
+HTTP and WebSocket; existing T3 pairing is still required for the T3 client. The
+remote page gets no preload, Node access or desktop bridge. Close that window to
+return to the action dialog. Verify session inspection, explicit refresh and reconnect,
+expiry, closing/relaunching the probe, and logout. Restoring the encrypted grant first
+refreshes it remotely; **Check session** then verifies the persisted Foundry cookie.
+Logout clears this partition and its local grant even if remote revocation fails,
+but reports that failure rather than claiming complete logout. Test a second instance
+and unexpected identity/issuer changes separately. Access headers never replace a
+T3 bearer or DPoP header; such a conflicting request is refused.
+
+Focused tests cover the OAuth protocol and request boundary. They do not establish
+Google/Cloudflare/Windows compatibility, OS-backed persistence, real WebSocket
+behavior or completion of P04. Record those results with the tested build in its PR.
+
 ## Actions budget
 
 Only **Foundry checks** runs automatically, on PRs. It has one Ubuntu job, cancels superseded runs, and runs `check:changed` with concurrency one. There is no duplicate push build, schedule, platform matrix, mobile lane, or automatic publication. Workflow/manifest changes can make `check:changed` typecheck all packages; this remains a single bounded job.
