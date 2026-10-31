@@ -46,3 +46,6 @@ export class FoundryNegotiationError extends Schema.TaggedError<FoundryNegotiati
     }
   }
 }
+
+export const FoundryReadiness = Schema.Struct({ ready: Schema.Boolean });
+export type FoundryReadiness = typeof FoundryReadiness.Type;
