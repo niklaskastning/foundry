@@ -28,6 +28,7 @@ export function FoundryPage() {
     });
     if (AsyncResult.isSuccess(result)) {
       setState(result.value);
+      setOrigin(result.value.binding?.origin ?? window.location.origin);
       setMessage(result.value.message);
     } else {
       setState({ ...initialState(), session: null });
