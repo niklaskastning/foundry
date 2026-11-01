@@ -4,6 +4,75 @@ Foundry serves the shared Web client and T3 backend at `http://127.0.0.1:3783`. 
 
 This is the isolated base deployment, not the planned instance gateway, Automation engine, or host worker. The backend still uses its own local SQLite state. PostgreSQL has empty `fork_automation` and `fork_connect` databases reserved for their separate future migrations. No application receives the database administrator credential. Owner roles cannot log in; runtime and migration logins are provisioned with the services that need them.
 
+## Experimental device enrollment (P06)
+
+This opt-in backend registers a device key and its first local environment. It does
+not connect that environment, provide gateway access or install an agent. The
+outstanding release gates and follow-up work are tracked in
+[issue #13](https://github.com/niklaskastning/foundry/issues/13). Do not activate it
+on the existing production deployment as part of development testing.
+
+Use an isolated Main with PostgreSQL instance schema **3**, the existing operator
+binding, and the configured `FOUNDRY_PUBLIC_ORIGIN`. Run the existing
+`foundry migrate` command with the migration role before starting this source
+version; it upgrades schemas 1/2 while preserving instance identity, operator and
+sessions. Older schema-2 binaries reject schema 3: an image-only downgrade is not
+a recovery procedure. The runtime role cannot change device keys or enrollment
+expiry. Set `FOUNDRY_DEVICE_ENROLLMENT_ENABLED=true` explicitly alongside
+`FOUNDRY_ACCESS_ENABLED=true` to expose `/api/foundry/devices/enroll` and advertise
+`foundry.device-enrollment`; the route and capability are absent by default.
+This mode does not implement native authentication.
+
+From the source checkout, create a private key file on the execution machine:
+
+```sh
+umask 077
+node apps/server/src/bin.ts foundry device-keygen --output /private/device-key.json
+```
+
+Keep that file on the device. Send only its `publicKey` field and the confirmed
+local T3 environment ID to the operator through a trusted channel. On Main, using
+its explicit isolated home and runtime database configuration:
+
+```sh
+node apps/server/src/bin.ts foundry approve-device --base-dir /isolated/main \
+  --public-key <confirmed-public-key> --environment-id <device-environment-id> \
+  --output /private/invitation.json
+```
+
+The confidential invitation expires after ten minutes. Confirm its instance ID,
+origin and environment with the operator, transfer it to that device, then sign it:
+
+```sh
+node apps/server/src/bin.ts foundry sign-enrollment \
+  --invitation /private/invitation.json --key-file /private/device-key.json \
+  --output /private/enrollment-request.json
+```
+
+POST that JSON file to the invitation's exact HTTPS origin at
+`/api/foundry/devices/enroll`, using the separately provisioned Access machine
+credential if Access protects the route. Do not put credentials in command-line
+arguments or follow redirects. No Cloudflare policy or service token is created
+by these commands. The response contains the public registration, device ID and
+generation; it is not a bearer credential. A lost response can be retried with the
+same signed request within its expiry and returns the same registration. Another
+key/environment or a second registration for that key/environment is rejected.
+Delete the invitation/request after success; retain the device's private key and
+public registration securely. Output files are created exclusively with mode 0600
+and existing files are never overwritten.
+
+Revoke locally on Main with its explicit home and runtime database configuration:
+
+```sh
+node apps/server/src/bin.ts foundry revoke-device --base-dir /isolated/main \
+  --device-id <registered-device-id>
+```
+
+Revocation is durable and idempotent. Replaying the original enrollment cannot
+reactivate the device. Replacing a revoked key/environment is not supported yet;
+there is no implicit reset or deletion command. Main's own environment cannot be
+registered as an execution device.
+
 ## Build and start
 
 From the repository root, install Vite+ and run `vp i`. `vp run foundry:build server` creates the server and Web bundle locally. The container builds these itself and ships only the server package and production dependencies; it runs as the unprivileged `node` user.

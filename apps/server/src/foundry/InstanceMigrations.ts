@@ -64,7 +64,7 @@ const make = Effect.gen(function* () {
           const versions = yield* sql<{
             version: number;
           }>`SELECT version FROM foundry_instance.schema_version`;
-          if (versions.length !== 1 || ![1, 2].includes(versions[0]?.version ?? 0)) {
+          if (versions.length !== 1 || ![1, 2, 3].includes(versions[0]?.version ?? 0)) {
             return yield* new InstanceDatabase.InstanceDatabaseError({
               reason: "schema_incompatible",
             });
@@ -79,6 +79,27 @@ const make = Effect.gen(function* () {
               audience text NOT NULL, expires_at bigint NOT NULL CHECK (expires_at > 0))`;
             yield* sql`CREATE INDEX sessions_expiry ON foundry_instance.sessions(expires_at)`;
             yield* sql`UPDATE foundry_instance.schema_version SET version = 2`;
+          }
+          if ((versions[0]?.version ?? 0) < 3) {
+            yield* sql`CREATE TABLE foundry_instance.devices (
+              device_id uuid PRIMARY KEY,
+              instance_id uuid NOT NULL REFERENCES foundry_instance.instance(instance_id),
+              operator_id uuid NOT NULL REFERENCES foundry_instance.operator_binding(operator_id),
+              environment_id text NOT NULL UNIQUE CHECK (length(environment_id) > 0),
+              public_key text NOT NULL UNIQUE CHECK (length(public_key) = 43),
+              generation integer NOT NULL DEFAULT 1 CHECK (generation > 0),
+              revoked boolean NOT NULL DEFAULT false)`;
+            yield* sql`CREATE TABLE foundry_instance.device_enrollments (
+              token_hash text PRIMARY KEY,
+              device_id uuid NOT NULL UNIQUE,
+              instance_id uuid NOT NULL REFERENCES foundry_instance.instance(instance_id),
+              operator_id uuid NOT NULL REFERENCES foundry_instance.operator_binding(operator_id),
+              origin text NOT NULL,
+              environment_id text NOT NULL CHECK (length(environment_id) > 0),
+              public_key text NOT NULL CHECK (length(public_key) = 43),
+              expires_at bigint NOT NULL CHECK (expires_at > 0),
+              consumed boolean NOT NULL DEFAULT false)`;
+            yield* sql`UPDATE foundry_instance.schema_version SET version = 3`;
           }
           yield* InstanceDatabase.checkSchema();
           const identities = yield* sql<{
@@ -99,6 +120,9 @@ const make = Effect.gen(function* () {
           yield* sql`GRANT UPDATE (access_generation) ON foundry_instance.instance TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT SELECT, INSERT, DELETE ON foundry_instance.sessions TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT INSERT, UPDATE ON foundry_instance.operator_binding TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT SELECT, INSERT ON foundry_instance.devices, foundry_instance.device_enrollments TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT UPDATE (generation, revoked) ON foundry_instance.devices TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT UPDATE (consumed) ON foundry_instance.device_enrollments TO ${sql(input.runtimeRole)}`;
         }),
       );
     },

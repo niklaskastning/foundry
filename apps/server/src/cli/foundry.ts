@@ -12,6 +12,7 @@ import * as InstanceDatabase from "../foundry/InstanceDatabase.ts";
 import * as InstanceMigrations from "../foundry/InstanceMigrations.ts";
 import * as InstanceIdentityStore from "../foundry/InstanceIdentityStore.ts";
 import { authLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import { deviceCommands } from "./foundryDevices.ts";
 
 const migrate = Command.make("migrate", {
   ...authLocationFlags,
@@ -44,7 +45,7 @@ const migrate = Command.make("migrate", {
           ).pipe(Layer.provide(ServerConfig.layer(config))),
         ),
       );
-      yield* Console.log("Foundry instance schema 2 ready; existing instance identity preserved.");
+      yield* Console.log("Foundry instance schema 3 ready; existing instance identity preserved.");
     }),
   ),
 );
@@ -78,5 +79,5 @@ const bindOperator = Command.make("bind-operator", {
 );
 
 export const foundryCommand = Command.make("foundry").pipe(
-  Command.withSubcommands([migrate, bindOperator]),
+  Command.withSubcommands([migrate, bindOperator, ...deviceCommands]),
 );
