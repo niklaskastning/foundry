@@ -81,7 +81,9 @@ checkout's `compose up` can select its old `FOUNDRY_IMAGE` again. The installed 
 configuration is intentionally independent of the checkout. This helper supports the
 baseline file-backed instance store only and refuses custom `FOUNDRY_*` settings.
 Activating PostgreSQL instance storage or Access sessions requires a separately reviewed
-configuration/migration step. Reinstalling reviewed helper changes is also an owner action.
+configuration/migration step: see [one-time Access activation](access-activation.md)
+for the administrator-run transition, recovery procedure and Windows acceptance.
+Reinstalling reviewed helper changes is also an owner action.
 To revoke the passwordless command, remove `/etc/sudoers.d/foundry-deploy` with sudo.
 
 ## Cloudflare Access and initial pairing
