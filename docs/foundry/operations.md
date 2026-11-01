@@ -116,6 +116,36 @@ Control frames are limited to 4 KiB and outgoing socket buffering is bounded.
 There is no command replay or data forwarding in P07. Real machine/Access and
 Windows integration remain tracked separately in issue #13.
 
+## Experimental gateway grants (P08a)
+
+This is only the Main authorization boundary; it does not forward HTTP requests
+or advertise a gateway capability. P08b and the integration gates tracked in
+[issue #13](https://github.com/niklaskastning/foundry/issues/13) remain required.
+Do not enable it on the production deployment for testing.
+
+On an isolated Main with P03 and P06/P07 enabled,
+`FOUNDRY_GATEWAY_GRANTS_ENABLED=true` enables POST endpoints under
+`/api/foundry/gateway/grants/`: `create`, `inspect`, and `remove`.
+Each request needs the valid Foundry cookie, `x-foundry-csrf`, exact public
+`Origin`, JSON content type, and a separately authenticated T3 session.
+DPoP-bound T3 credentials require a fresh proof for the actual public request
+URL and method; a Foundry session alone grants no device access.
+
+`create` accepts `{deviceId, environmentId, scopes: ["orchestration:read"]}`.
+Only explicitly held read permission can be delegated, and the registered device
+must have a current authenticated P07 connection. `inspect` and `remove` accept
+`{grantId, deviceId, environmentId}`. Handles are bound to the exact Foundry and
+T3 sessions, actor, device identity and channel generation; they are not bearer
+credentials. Every inspection reauthenticates and checks the current device
+lease. Reconnect invalidates old handles. Removal affects only the specified
+grant, including when its device is offline.
+
+Grants expire within 60 seconds (earlier when either parent session expires),
+are limited to 128 in-memory entries per Main, and disappear on Main restart.
+Logout or session renewal requires a new grant; read-only grants cannot request
+mutation scopes. There is no persistent grant migration or device-side session
+in this part, and no claim of completed P08/G2 acceptance.
+
 ## Build and start
 
 From the repository root, install Vite+ and run `vp i`. `vp run foundry:build server` creates the server and Web bundle locally. The container builds these itself and ships only the server package and production dependencies; it runs as the unprivileged `node` user.
