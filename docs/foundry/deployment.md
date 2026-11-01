@@ -1,23 +1,25 @@
 # Foundry – Instanzeinstieg, Deployment und Verbindungsmodell
 
-Stand: 31. Oktober 2026 · geprüfter Fork-Stand: `2830704e1`
+Stand: 1. November 2026 · Planabgleich mit Fork-Stand `ba1ed2f4e`
 
 Status: Finalisierter Zielplan mit technischen Abnahmegates. Ergänzt [Architekturplan](architecture.md), der die Workflow-/Ausführungssemantik besitzt. Neue Pfade, Protokolle und Services in diesem Dokument sind Entwürfe, keine bereits verfügbaren APIs. Der tatsächliche Grundbetrieb steht im [Deployment-Runbook](operations.md).
 
 ## 1. Festgelegtes Produkt und aktueller Stand
 
-Ein Foundry-Client verbindet sich durch Eingabe der Hauptdomain mit einer selbst gehosteten Instanz. Nach Anmeldung erhält er Devices, Projekte, Automation und später Sandboxes. Die erste Version ist Single-Tenant/Single-User. Die Main Node besitzt Registry, Anmeldung, Gateway und Automation; ein separates Connect-Produkt oder eine eigene Clerk-Instanz sind keine Voraussetzung.
+Ein Foundry-Client verbindet sich durch Eingabe der Hauptdomain mit einer selbst gehosteten Instanz. Nach Anmeldung erhält er Devices, Projekte, Automation und später Sandboxes. Die erste Version ist Single-Tenant/Single-User. Mehrere produktbezogene Factories teilen diese Instanz; sie benötigen keine eigenen Main-Prozesse, Domains oder Datenbanken. Factory-Konfiguration, Inbox und Auswertung erweitern die Automation-Domäne, nicht die Deployment-Topologie. Die Main Node besitzt Registry, Anmeldung, Gateway und Automation; ein separates Connect-Produkt oder eine eigene Clerk-Instanz sind keine Voraussetzung.
 
-| Bereits vorhanden                                                                            | Noch umzusetzen                                                             |
-| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Fork `niklaskastning/foundry`, eigene Build-Identität und manuelle Updates                   | Instanz-URL als Runtime-Einstieg im Client; zentraler Login und Discovery   |
-| Main-Container mit Web und eigener lokaler SQLite-Persistenz                                 | Instanz-Registry, Device-Enrollment und ausgehender Gateway-Transport       |
-| PostgreSQL 17 mit vorbereiteten `fork_automation`/`fork_connect`-Datenbanken                 | Anwendungsschemas, Runtime-/Migrationsrollen und DB-Anbindung der Main Node |
-| `foundry.heavenforgeprod.com` über betreiberverwalteten Tunnel und Access → `127.0.0.1:3783` | Getestete Desktop-Anmeldung sowie Machine-Auth für Device-Verbindungen      |
-| Browser-Pairing zum Main-Environment                                                         | Eigenständiger Host-Worker; Provider-Verfügbarkeit und Anmeldung dort       |
-| Linux-/Windows-Build-Einstieg, ein automatischer PR-Check                                    | Windows-Laufzeitabnahme, Automation und Sandbox-Provisionierung             |
+| Bereits vorhanden                                                                            | Noch umzusetzen                                                           |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Fork `niklaskastning/foundry`, eigene Build-Identität und manuelle Updates                   | Vollständiger Instanzeinstieg, zentrale Discovery und integrierte Abnahme |
+| Main-Container mit Web und eigener lokaler SQLite-Persistenz                                 | Instanz-Registry, Device-Enrollment und ausgehender Gateway-Transport     |
+| PostgreSQL 17, eigene Instanz-Migrationen und Access-Session-Bausteine im Code               | Automation-Schemas und abgenommene Aktivierung des Instanzbetriebs        |
+| `foundry.heavenforgeprod.com` über betreiberverwalteten Tunnel und Access → `127.0.0.1:3783` | Getestete Desktop-Anmeldung sowie Machine-Auth für Device-Verbindungen    |
+| Browser-Pairing zum Main-Environment                                                         | Eigenständiger Host-Worker; Provider-Verfügbarkeit und Anmeldung dort     |
+| Linux-/Windows-Build-Einstieg, ein automatischer PR-Check                                    | Windows-Laufzeitabnahme, Automation und Sandbox-Provisionierung           |
 
-Das Main-Environment hat derzeit keine Codex-CLI. Sie wird für seine künftige Steuerungsrolle nicht benötigt. Echte Agenten starten auf einem registrierten Ausführungs-Device. Bestehendes persönliches T3 und dessen `~/.t3/userdata` werden weder migriert noch als Foundry-Worker vereinnahmt.
+Die vorhandenen Descriptor-/Access-/PostgreSQL-Bausteine und Aktivierungshelfer belegen noch keine vollständige G1-/Windows-Abnahme; dieser Plan behauptet keine Prüfung des aktuellen Live-Deployments.
+
+Das Main-Environment benötigt für seine Steuerungsrolle keine Codex-CLI. Echte Agenten starten auf einem registrierten Ausführungs-Device. Bestehendes persönliches T3 und dessen `~/.t3/userdata` werden weder migriert noch als Foundry-Worker vereinnahmt.
 
 Der frühere Plan „eigener Cloudflare Worker + Clerk + Hyperdrive + Tunnel pro Environment“ entfällt. Keine Provisionierung dieser Ressourcen für den neuen Einstieg. Upstreams `infra/relay` bleibt für Integrationsmerges erhalten, wird aber nicht als Foundry-Dienst deployed.
 
@@ -123,13 +125,13 @@ Das Main-Image enthält Server und Web desselben Builds. Windows enthält diesel
 
 ### 5.2 Datenverantwortung und Migration
 
-| Bestand                                                                                                       | Speicher / Owner                                                                                          |
-| ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Instanzidentität, Benutzerbindung, Device-Registry, Grants, Zugangsgenerationen                               | `fork_connect`, neuer Instanz-Service der Main Node; Name bleibt aus bestehendem Grunddeployment erhalten |
-| Definitionen, Trigger-Inbox, Runs, Attempts, Dispatch-Outbox, Sandbox-Allocations, Artefakt-/Memory-Metadaten | `fork_automation`, Automation-/Provisionierungsservice                                                    |
-| Lokale Projekte, Threads, Provider-Sessions                                                                   | Bestehende lokale SQLite-Persistenz des jeweiligen Environments                                           |
-| Archive, Git-Objekte, große Anhänge                                                                           | Persistentes Artefaktverzeichnis, später Object Storage; keine großen Blobs in Queue-Zeilen               |
-| Private Schlüssel und Provider-/Connector-Zugänge                                                             | Geschützter Secret-Speicher, verschlüsselte Sicherung mit getrenntem Schlüsselmaterial                    |
+| Bestand                                                                                                                                                | Speicher / Owner                                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| Instanzidentität, Benutzerbindung, Device-Registry, Grants, Zugangsgenerationen                                                                        | `fork_connect`, neuer Instanz-Service der Main Node; Name bleibt aus bestehendem Grunddeployment erhalten |
+| Factories/Definitionen, Aufträge, persönliche Inbox, Trigger-Inbox, Runs/Attempts, Outbox, Sandbox-Allocations, Artefakt-/Memory-/Evaluationsmetadaten | `fork_automation`, Automation-/Provisionierungsservice                                                    |
+| Lokale Projekte, Threads, Provider-Sessions                                                                                                            | Bestehende lokale SQLite-Persistenz des jeweiligen Environments                                           |
+| Archive, Git-Objekte, große Anhänge                                                                                                                    | Persistentes Artefaktverzeichnis, später Object Storage; keine großen Blobs in Queue-Zeilen               |
+| Private Schlüssel und Provider-/Connector-Zugänge                                                                                                      | Geschützter Secret-Speicher, verschlüsselte Sicherung mit getrenntem Schlüsselmaterial                    |
 
 `fork_connect` erhält neue Foundry-Migrationen, nicht unverändert Upstreams Relay-Migrationen. Vor Migration muss nachgewiesen sein, ob die vorbereitete DB wirklich leer ist; unbekannte Daten blockieren statt gelöscht zu werden. Beide DBs haben eigene Runtime-/Migrationsrollen und Versionsprüfungen. Die bestehenden NOLOGIN-Owner und leeren DBs allein sind noch keine Anwendungseinrichtung. Upstreams SQLite-Migrationsnummern bleiben unangetastet.
 
@@ -138,6 +140,8 @@ Automation und Instanz-Service sprechen über begrenzte interne APIs. Es gibt ke
 Queue-Claims nutzen kurze Transaktionen, persistente Leases und `FOR UPDATE SKIP LOCKED`; Netzwerk/Agenten laufen außerhalb der Transaktion. Unique Constraints sichern Command-/Dispatch-/Delivery-IDs. `LISTEN/NOTIFY` weckt nur auf; nach Neustart wird die dauerhafte Queue gescannt. Eigene Effect-Pg-Layer, keine neue ORM-Plattform. [PostgreSQL: SELECT](https://www.postgresql.org/docs/17/sql-select.html), [NOTIFY](https://www.postgresql.org/docs/17/sql-notify.html)
 
 DB-Pools teilen ein gemessenes Budget mit Backups/Migration/Administration. Keine DB-Verbindungen für Devices und kein Hyperdrive-/Cloudflare-VPC-Zugang. Migrationen laufen einmal mit Sperre und eigener Rolle; danach prüft Runtime kompatible Schemas. DB-Ausfall sperrt neue Sessions, Grants und Auftragsannahme; keine lokale Ersatzdatenbank und kein erfolgreicher Webhook ohne Commit. Bereits aktive Zugriffe dürfen nicht unbefristet mit veraltetem Grant fortlaufen.
+
+Git ist im dateiverwalteten Modus Quelle der Factory-Definition, aber kein Speicher der laufenden Aufträge. Aktivierte Commit-/Definitionssnapshots und Sync-Cursor bleiben in PostgreSQL; Git-Ausfall blockiert Konfigurationsupdates, nicht bereits zulässige Starts mit gültigem Snapshot. Restore umfasst WorkItems, Inbox-Bezüge, Evaluationsversionen und deren Evidence. Scorer, Benchmark und Koordinator laufen auf Workern mit eigenen Budgets; Main führt keine Modellaufrufe oder Repository-Setup-Skripte dafür aus.
 
 ### 5.3 Portabilität und Verfügbarkeit
 
@@ -151,7 +155,7 @@ Der [Umsetzungsplan](implementation-plan.md) besitzt die PR-großen Arbeitspaket
 
 ## 7. Integrationsstellen und Kompatibilitätsvertrag
 
-Geplante neue Bereiche sind `apps/server/src/instance/`, `packages/contracts/src/instance/` und `packages/client-runtime/src/instance/`. Sie besitzen Instanzauth, Registry, Gateway und Client-State; die Workflow-Domäne bleibt in `automation/` mit ihrem T3-Adapter. Provisionierung ist auch ohne Workflow erreichbar und darf nicht nur an einen Run-Handler gebunden sein. Upstream-nahe Änderungen an Serverkomposition, Auth und Transport bleiben kleine benannte Integrationspatches.
+Die vorhandene Instanz-Grundlage unter `apps/server/src/foundry/` und `packages/contracts/src/foundry.ts` samt Client-Anbindung wird erweitert; die früher vorgeschlagenen `instance/`-Pfade erfordern keine Umbenennung. Im Ziel besitzen diese Module Instanzauth, Registry, Gateway und Client-State; die Workflow-Domäne bleibt in `automation/` mit ihrem T3-Adapter. Provisionierung ist auch ohne Workflow erreichbar und darf nicht nur an einen Run-Handler gebunden sein. Upstream-nahe Änderungen an Serverkomposition, Auth und Transport bleiben kleine benannte Integrationspatches.
 
 Client, Main, Worker und Sandbox-Image melden Protokollversion und Fähigkeiten. Zu Beginn werden Builds derselben freigegebenen Version unterstützt; ein älterer Teilnehmer bekommt eine klare Inkompatibilitätsmeldung statt teilweiser stiller Funktion. Spätere Versionstoleranz wird nur für getestete Bereiche zugesagt. Keine gleichnamigen neuen RPCs ohne Fork-Namespace, keine Migration in T3s Nummernfolge.
 
