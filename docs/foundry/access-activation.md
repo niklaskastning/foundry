@@ -22,21 +22,126 @@ sudo /usr/bin/python3 -I deploy/fork/updater/activate-access.py status
 ```
 
 This checks the actual image against the private Compose/runtime configuration,
-the pinned identities, readiness, schema 2, operator binding and disabled migration
+the pinned identities, readiness, schema 2 or 5, operator binding and disabled migration
 login. Its JSON contains no credentials or operator subject. It does not stop Main,
-change the database or approve an upgrade. Configuration drift or a later schema
+change the database or approve an upgrade. Configuration drift or an unsupported schema
 is rejected for explicit investigation. No installation or sudoers change is needed.
 
-A later schema-5 upgrade needs a separate coordinated procedure: retain the old
-image, stop Main, save state/workspaces and `fork_connect` together with the private
-configuration, verify restoration in isolation, temporarily enable only the
-migration login, migrate with the candidate image, disable that login again, then
-start and verify the same IDs and intended capabilities. Recovery must restore the
-matching database, volumes, configuration and old image; the activation-era empty
-database backup is not a backup of the current Access sessions. Do not rerun
-`activate` or follow an image-only deploy command from a build summary.
+## Upgrade an activated schema-2 Main to schema 5
 
-### First activation only
+This operator-only path accepts the original activated layout and exactly schema 2.
+It does not enable device enrollment, channels or gateways. Those need their own
+machine/Access acceptance. Finish active work in Docker Foundry and reserve a
+maintenance window. Keep the previous image locally and ensure space for a full
+state/workspace/database backup. No other process may write those volumes/database.
+Review the recovery steps below before running from the reviewed checkout:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/updater/activate-access.py upgrade sha256:<candidate-digest> <candidate-source-sha>
+```
+
+The helper checks the active configuration and candidate source/revision/platform,
+stops only Main, then writes a root-private `/var/lib/foundry-deploy/upgrade-*`
+bundle: state/workspace tar archives, `fork_connect.dump`, role evidence, current
+Compose/runtime files and image/identity manifest. It checks the dump listing and
+absence of other database connections before mutation. A backup failure restarts
+the old Main without migration. After a complete backup it temporarily enables only
+the migrator with a fresh password, runs the candidate's migration CLI, disables
+that login and clears its password, switches the Compose image, then verifies schema
+5, readiness, unchanged IDs/operator binding and Access sessions. Runtime credentials
+and configuration stay unchanged. Success prints the recovery directory.
+
+Any failure after the backup/mutation boundary leaves Main stopped. A process kill,
+power failure or failed PostgreSQL command needs administrator inspection; no claim
+of automatic recovery is made. Keep all backup files private, and copy the bundle
+to the existing protected backup destination. Do not rerun `activate`, restore the
+activation-era empty database, or downgrade only the image.
+
+### Recover this upgrade
+
+This discards work accepted after the upgrade backup. Stop Main and ensure no other
+writers are active. In an administrator shell without tracing, set the fixed Docker
+endpoint and the **exact printed upgrade directory**:
+
+```sh
+set -eu
+unset DOCKER_HOST DOCKER_CONTEXT COMPOSE_FILE
+export DOCKER_HOST=unix:///var/run/docker.sock
+export DOCKER_CONFIG=/etc/foundry-deploy/docker
+recovery=/var/lib/foundry-deploy/upgrade-<exact-directory>
+docker stop --time 60 foundry-main-1
+docker exec -i foundry-postgres-1 psql -X -v ON_ERROR_STOP=1 -U foundry_admin -d postgres <<'SQL'
+ALTER ROLE foundry_instance_runtime NOLOGIN;
+ALTER ROLE foundry_instance_migrator NOLOGIN PASSWORD NULL;
+SQL
+test -f "$recovery/backup-complete"
+tar -tf "$recovery/state.tar" >/dev/null
+tar -tf "$recovery/workspaces.tar" >/dev/null
+docker exec -i foundry-postgres-1 pg_restore --list < "$recovery/fork_connect.dump" >/dev/null
+```
+
+Restore the two archives into **fresh empty recovery volumes**, leaving the failed
+volumes intact. The temporary restore container is never started. Build a private
+recovery Compose file from this bundle's Access configuration, not the pre-activation
+baseline configuration:
+
+```sh
+umask 077
+previous_image=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["previous"]["image"])' "$recovery/manifest.json")
+docker image inspect "$previous_image" >/dev/null
+if docker volume inspect foundry_upgrade_restore_state >/dev/null 2>&1 ||
+   docker volume inspect foundry_upgrade_restore_workspaces >/dev/null 2>&1; then
+  echo 'Recovery volumes already exist; stop and investigate.' >&2
+  exit 1
+fi
+docker volume create foundry_upgrade_restore_state
+docker volume create foundry_upgrade_restore_workspaces
+docker create --name foundry-upgrade-restore --network none --user 1000:1000 \
+  --cap-drop ALL --security-opt no-new-privileges:true \
+  --mount type=volume,src=foundry_upgrade_restore_state,dst=/var/lib/foundry \
+  --mount type=volume,src=foundry_upgrade_restore_workspaces,dst=/workspaces \
+  "$previous_image"
+docker cp -a - foundry-upgrade-restore:/var/lib/foundry < "$recovery/state.tar"
+docker cp -a - foundry-upgrade-restore:/workspaces < "$recovery/workspaces.tar"
+docker rm foundry-upgrade-restore
+python3 - "$recovery" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+compose = json.loads((root / 'access-compose.json').read_text())
+compose['volumes']['foundry-state']['name'] = 'foundry_upgrade_restore_state'
+compose['volumes']['foundry-workspaces']['name'] = 'foundry_upgrade_restore_workspaces'
+compose['services']['main']['env_file'] = [str(root / 'access-runtime.env')]
+with (root / 'recovery-compose.json').open('x') as output:
+    json.dump(compose, output, indent=2)
+PY
+```
+
+Then restore only the coordinated database. If any command fails, keep Main stopped
+and investigate instead of continuing to the start command:
+
+```sh
+docker exec -i foundry-postgres-1 pg_restore -U foundry_admin --exit-on-error \
+  --clean --if-exists --create -d postgres < "$recovery/fork_connect.dump"
+docker exec -i foundry-postgres-1 psql -X -v ON_ERROR_STOP=1 -U foundry_admin -d fork_connect <<'SQL'
+BEGIN;
+UPDATE foundry_instance.instance SET access_generation = access_generation + 1;
+DELETE FROM foundry_instance.sessions;
+ALTER ROLE foundry_instance_runtime LOGIN;
+ALTER ROLE foundry_instance_migrator NOLOGIN PASSWORD NULL;
+COMMIT;
+SQL
+docker compose --project-name foundry --env-file /dev/null \
+  --file "$recovery/recovery-compose.json" up --detach --no-deps --no-build \
+  --pull never --wait --wait-timeout 180 main
+```
+
+Do not restore roles globally or touch `fork_automation`. Verify readiness and both
+pinned IDs, then sign in again because restored Foundry sessions were invalidated.
+Retain failed volumes/configuration for diagnosis. The helper intentionally rejects
+the recovery-volume layout until the operator reconciles it. The isolated PostgreSQL
+restore check uses synthetic data; it does not prove a live Docker-volume restore.
+
+## First activation only
 
 The remaining activation instructions apply only before PostgreSQL/Access has been
 enabled. For an active instance, use the inventory above and prepare its upgrade

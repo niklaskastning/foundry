@@ -70,7 +70,7 @@ class ActivationTest(unittest.TestCase):
 
                 def sql(statement):
                     self.assertTrue(statement.startswith('BEGIN READ ONLY;'))
-                    return json.dumps({'version': 5 if drift == 'schema' else 2,
+                    return json.dumps({'version': 7 if drift == 'schema' else 2,
                         'instanceId': 'wrong' if drift == 'identity' else activate.INSTANCE,
                         'environmentId': activate.ENVIRONMENT, 'operatorBound': True,
                         'runtimeLogin': True, 'migratorLogin': drift == 'migrator'})
@@ -100,6 +100,86 @@ class ActivationTest(unittest.TestCase):
                         self.assertFalse(report['upgradePerformed'])
                         self.assertNotIn(secret, json.dumps(report).replace(DIGEST, 'digest'))
                 self.assertTrue(calls)
+
+    def test_upgrade_keeps_the_current_backup_and_disables_migration_login_on_failure(self):
+        for failure in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']:
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                config, state = root / 'config', root / 'state'
+                config.mkdir()
+                state.mkdir()
+                for name in ['access-runtime.env', 'access-compose.json']:
+                    (config / name).write_text('original-' + name)
+                actions = []
+                running = True
+
+                def status(expected_schema=None):
+                    actions.append(('status', expected_schema))
+                    if expected_schema == 5 and failure == 'verify':
+                        raise RuntimeError('verification failed')
+                    return {'image': activate.REGISTRY + '@' + (DIGEST if expected_schema == 5 else 'sha256:' + 'c' * 64),
+                            'revision': REVISION if expected_schema == 5 else 'd' * 40}
+
+                def docker(*args, data=None, output=None):
+                    nonlocal running
+                    actions.append(args)
+                    if args[:2] == ('image', 'inspect'):
+                        return json.dumps([{'Id': 'candidate', 'Os': 'linux', 'Architecture': 'amd64',
+                            'Config': {'Labels': {'org.opencontainers.image.source':
+                                'other' if failure == 'source' else activate.SOURCE,
+                                'org.opencontainers.image.revision': REVISION}}}])
+                    if args[0] == 'stop':
+                        running = False
+                    if args[0] == 'start':
+                        running = True
+                    if output is not None:
+                        self.assertFalse(running)
+                        if failure == 'backup':
+                            raise RuntimeError('backup failed')
+                        output.write(b'coordinated fixture')
+                    if args[0] == 'run':
+                        self.assertFalse(running)
+                        recovery = next(state.iterdir())
+                        self.assertTrue((recovery / 'backup-complete').is_file())
+                        self.assertEqual((recovery / 'access-runtime.env').read_text(), 'original-access-runtime.env')
+                        if failure == 'migrate':
+                            raise RuntimeError('migration failed')
+                    if args[0] == 'compose':
+                        self.assertIn('--no-deps', args)
+                        running = True
+                        if failure == 'start':
+                            raise RuntimeError('start failed')
+                    return ''
+
+                def sql(statement):
+                    actions.append(('sql', statement))
+                    if statement.startswith('SELECT count'):
+                        return '1' if failure == 'connections' else '0'
+                    if failure == 'disable' and 'NOLOGIN' in statement:
+                        raise RuntimeError('disable failed')
+                    return ''
+
+                with patch.object(activate, 'CONFIG', config), patch.object(activate, 'STATE', state), \
+                     patch.object(activate, 'active_status', status), patch.object(activate, 'docker', docker), \
+                     patch.object(activate, 'sql', sql), patch('sys.stdout', new=io.StringIO()), \
+                     patch('sys.stderr', new=io.StringIO()):
+                    if failure:
+                        with self.assertRaises(RuntimeError):
+                            activate.upgrade(DIGEST, REVISION)
+                    else:
+                        activate.upgrade(DIGEST, REVISION)
+                self.assertEqual(running, failure in [None, 'source', 'backup', 'connections'])
+                altered = any(a[0] == 'sql' and 'LOGIN PASSWORD' in a[1] for a in actions)
+                if failure in ['source', 'backup', 'connections']:
+                    self.assertFalse(altered)
+                    self.assertEqual((config / 'access-compose.json').read_text(), 'original-access-compose.json')
+                else:
+                    self.assertTrue(altered)
+                    self.assertIn(('sql', 'ALTER ROLE foundry_instance_migrator NOLOGIN PASSWORD NULL;'), actions)
+                    recovery = next(state.iterdir())
+                    self.assertEqual((recovery / 'access-compose.json').read_text(), 'original-access-compose.json')
+                    self.assertEqual((recovery / 'success').exists(), failure is None)
+                    self.assertEqual((config / 'access-runtime.env').read_text(), 'original-access-runtime.env')
 
     def test_rejects_wrong_targets_identity_and_nonempty_database(self):
         changes = [
