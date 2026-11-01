@@ -49,6 +49,7 @@ class WorkerInstallationTest(unittest.TestCase):
             manifest.write_text(json.dumps(previous))
             settings["revision"] = "b" * 40
             settings["memoryMaxMiB"] = 2048
+            settings["providerInstanceId"] = "codex-worker"
             release(installation, settings)
             original_write = installation.write
             def fail_once(name, text, mode):
@@ -61,6 +62,8 @@ class WorkerInstallationTest(unittest.TestCase):
             self.assertIn("Description=Previous installer template", installation.path(worker.UNITS + "/foundry-host.service").read_text())
             installation.install(settings)
             installation.install(settings)
+            self.assertEqual(json.loads(manifest.read_text())["config"]["providerInstanceId"], "codex-worker")
+            self.assertIn("FOUNDRY_WORKER_PROVIDER_INSTANCE_ID=codex-worker", installation.path(worker.UNITS + "/foundry-host.service").read_text())
             self.assertIn("MemoryMax=2048M", installation.path(worker.UNITS + "/foundry-host.slice").read_text())
             self.assertIn("b" * 40, installation.path(worker.UNITS + "/foundry-host.service").read_text())
             self.assertEqual(installation.path(worker.WORKER_HOME).stat().st_mode & 0o777, 0o700)
@@ -73,7 +76,7 @@ class WorkerInstallationTest(unittest.TestCase):
             self.assertEqual(identity.read_text(), "isolated-worker-identity\n")
 
     def test_refuses_path_injection_unowned_units_changed_bindings_and_dirty_releases(self):
-        for field, value in [("node", "/home/person/node"), ("node", "/usr/bin/node\nExecStart=/bin/sh"), ("origin", "https://main.example/path"), ("origin", "https://user:secret@main.example"), ("origin", "https://main.example%20"), ("revision", "../personal"), ("workspaceRoots", ["/home/person"]), ("workspaceRoots", [worker.WORKSPACES + "/../private"]), ("memoryMaxMiB", 0), ("tasksMax", True), ("accessFile", "yes")]:
+        for field, value in [("providerInstanceId", "codex\nExecStart=/bin/sh"), ("providerInstanceId", "1invalid"), ("node", "/home/person/node"), ("node", "/usr/bin/node\nExecStart=/bin/sh"), ("origin", "https://main.example/path"), ("origin", "https://user:secret@main.example"), ("origin", "https://main.example%20"), ("revision", "../personal"), ("workspaceRoots", ["/home/person"]), ("workspaceRoots", [worker.WORKSPACES + "/../private"]), ("memoryMaxMiB", 0), ("tasksMax", True), ("accessFile", "yes")]:
             with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as directory:
                 installation = worker.Installation(directory)
                 invalid = {**config(), field: value}

@@ -1,3 +1,4 @@
+import { FoundryWorkerStatus, FoundryWorkerError } from "./foundryWorker.ts";
 import {
   AssetReadChunkInput,
   AssetReadChunkResult,
@@ -431,6 +432,7 @@ export const WS_METHODS = {
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
   assetsCreateUrl: "assets.createUrl",
+  foundryWorkerStatus: "foundry.workerStatus",
   assetsReadChunk: "assets.readChunk",
   attachmentsWriteChunk: "attachments.writeChunk",
   attachmentsChunkStatus: "attachments.chunkStatus",
@@ -1392,6 +1394,11 @@ const WsAgentSessionsImportRpc = Rpc.make(WS_METHODS.agentSessionsImport, {
   ]),
 });
 
+const WsFoundryWorkerStatusRpc = Rpc.make(WS_METHODS.foundryWorkerStatus, {
+  payload: Schema.Struct({}),
+  success: FoundryWorkerStatus,
+  error: Schema.Union([FoundryWorkerError, EnvironmentAuthorizationError]),
+});
 const WsAssetsReadChunkRpc = Rpc.make(WS_METHODS.assetsReadChunk, {
   payload: AssetReadChunkInput,
   success: AssetReadChunkResult,
@@ -2127,6 +2134,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
   WsAssetsCreateUrlRpc,
+  WsFoundryWorkerStatusRpc,
   WsAssetsReadChunkRpc,
   WsAttachmentsWriteChunkRpc,
   WsAttachmentsChunkStatusRpc,
