@@ -1,3 +1,4 @@
+import * as AssetTransfer from "./assets/AssetTransfer.ts";
 import * as FoundryRuntime from "./foundry/Runtime.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
@@ -587,6 +588,7 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
+  AssetTransfer.layer.pipe(Layer.provide(NativeAppIconResolver.layer)),
   AgentAwarenessRelay.layer,
   HeldHooksWaker.layer,
   layerThreadSettlementWorker,

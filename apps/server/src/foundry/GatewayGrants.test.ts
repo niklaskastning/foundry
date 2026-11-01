@@ -403,14 +403,26 @@ it.effect("binds single-use stream tickets to live sessions, scopes, origin and 
   Effect.gen(function* () {
     const f = yield* fixture;
     const session = yield* f.sessions.issue({
-      scopes: ["orchestration:read", "terminal:operate"],
+      scopes: ["orchestration:read", "terminal:operate", "filesystem:read"],
       method: "bearer-access-token",
     });
     const request = f.request(session.token);
     const grant = yield* f.grants.create(request, {
       ...f.input,
-      scopes: ["orchestration:read", "terminal:operate"],
+      scopes: ["orchestration:read", "terminal:operate", "filesystem:read"],
     });
+    const withoutFileAccess = yield* f.sessions.issue({
+      scopes: ["orchestration:read", "terminal:operate"],
+      method: "bearer-access-token",
+    });
+    expect(
+      (yield* f.grants
+        .create(f.request(withoutFileAccess.token), {
+          ...f.input,
+          scopes: ["orchestration:read", "filesystem:read"],
+        })
+        .pipe(Effect.result))._tag,
+    ).toBe("Failure");
     const lookup = { ...f.target, grantId: grant.grantId };
     const upgrade = Effect.succeed(
       Socket.make({ reader: Effect.die("unused"), writer: Effect.die("unused") }),
@@ -469,7 +481,7 @@ it.effect("binds single-use stream tickets to live sessions, scopes, origin and 
       (yield* f.grants
         .create(f.request(f.read.token), {
           ...f.input,
-          scopes: ["orchestration:read", "terminal:operate"],
+          scopes: ["orchestration:read", "terminal:operate", "filesystem:read"],
         })
         .pipe(Effect.result))._tag,
     ).toBe("Failure");

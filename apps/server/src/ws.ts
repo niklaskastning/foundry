@@ -1,3 +1,4 @@
+import * as AssetTransfer from "./assets/AssetTransfer.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -199,7 +200,7 @@ import {
   createDeterministicAttachmentId,
 } from "./attachmentStore.ts";
 import { parseBase64DataUrl } from "./imageMime.ts";
-import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
+import { issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
@@ -1346,6 +1347,7 @@ export const layerWsRpc = (
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+      const assetTransfer = yield* AssetTransfer.AssetTransfer;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
@@ -2850,7 +2852,10 @@ export const layerWsRpc = (
             ),
           ),
         [WS_METHODS.attachmentsCreateUploadUrl]: (input) => issueAttachmentUploadUrl(input),
-        [WS_METHODS.attachmentsDelete]: (input) => deletePendingAttachment(input.attachmentId),
+        [WS_METHODS.attachmentsDelete]: (input) => assetTransfer.remove(input.attachmentId),
+        [WS_METHODS.assetsReadChunk]: (input) => assetTransfer.read(input),
+        [WS_METHODS.attachmentsWriteChunk]: (input) => assetTransfer.write(input),
+        [WS_METHODS.attachmentsChunkStatus]: (input) => assetTransfer.status(input),
         [WS_METHODS.agentSessionsScan]: () => agentSessionScanner.scan,
         [WS_METHODS.agentSessionsImport]: (input) =>
           agentSessionImporter.importRecentAgentThreads(input),
