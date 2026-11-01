@@ -11,6 +11,7 @@ export * from "./model.ts";
 export * as ConnectionOnboarding from "./onboarding.ts";
 export { FoundryInstanceSession } from "./foundryGateway.ts";
 export * as FoundryOnboarding from "./foundry.ts";
+export { createDeviceCatalogClient, restoreDeviceSelection } from "./foundryCatalog.ts";
 export * from "./presentation.ts";
 export * as ProfileStore from "./profileStore.ts";
 export * from "./routes.ts";

@@ -48,6 +48,7 @@ const fixture = Effect.gen(function* () {
   const checked = yield* Deferred.make<void>();
   const origin = "https://main.example.test";
   const registry = DeviceRegistry.DeviceRegistry.of({
+    list: () => Effect.die("not used"),
     approve: () => Effect.die("not used"),
     enroll: () => Effect.die("not used"),
     get: () => Effect.sync(() => ({ ...device, revoked })),

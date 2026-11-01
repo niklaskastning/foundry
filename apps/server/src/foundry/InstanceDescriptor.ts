@@ -43,7 +43,8 @@ const make = Effect.gen(function* () {
       (enrollment || capability !== "foundry.device-enrollment") &&
       (channel || capability !== "foundry.device-channel") &&
       (gateway || capability !== "foundry.http-gateway") &&
-      (streams || capability !== "foundry.rpc-streams"),
+      (streams || capability !== "foundry.rpc-streams") &&
+      (streams || capability !== "foundry.device-catalog"),
   );
   const identity = yield* InstanceIdentityStore.InstanceIdentityStore;
   const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;

@@ -33,6 +33,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as DeviceGrants from "./DeviceGrants.ts";
+import * as DeviceRegistry from "./DeviceRegistry.ts";
 import { bridge } from "./StreamBridge.ts";
 import * as Queue from "effect/Queue";
 import * as DeviceChannel from "./DeviceChannel.ts";
@@ -65,6 +66,35 @@ const fixture = Effect.gen(function* () {
   const finish = yield* Deferred.make<void>();
   const services = yield* Layer.build(
     GatewayGrants.layer.pipe(
+      Layer.provide(
+        Layer.succeed(DeviceRegistry.DeviceRegistry, {
+          list: (operatorId) =>
+            Effect.succeed(
+              operatorId === "operator"
+                ? [
+                    {
+                      deviceId: device.deviceId,
+                      environmentId: device.environmentId,
+                      revoked,
+                      clientAccess: {
+                        enabled: accessEnabled && !revoked,
+                        generation: accessGeneration,
+                      },
+                    },
+                  ]
+                : [],
+            ),
+          approve: () => Effect.die("not used"),
+          enroll: () => Effect.die("not used"),
+          get: () => Effect.succeed(device),
+          revoke: () =>
+            Effect.sync(() => {
+              revoked = true;
+            }),
+          claimChannel: () => Effect.die("not used"),
+          checkChannel: () => Effect.die("not used"),
+        }),
+      ),
       Layer.provide(
         Layer.succeed(DeviceGrants.DeviceGrants, {
           read: () =>
@@ -124,7 +154,11 @@ const fixture = Effect.gen(function* () {
             }),
           current: (id) =>
             online && id === device.deviceId && !revoked
-              ? Effect.succeed({ device: { ...device, revoked }, channelGeneration })
+              ? Effect.succeed({
+                  device: { ...device, revoked },
+                  channelGeneration,
+                  rpcStream: true,
+                })
               : Effect.fail(new FoundryDeviceError({ code: "unavailable" })),
         }),
       ),
@@ -202,13 +236,47 @@ it.effect(
     Effect.gen(function* () {
       const f = yield* fixture;
       const request = f.request(f.read.token);
+      const catalog = yield* f.grants.catalog(request, {});
+      expect(catalog).toMatchObject({
+        canManage: false,
+        devices: [{ online: true, rpcReady: true, clientAccess: { enabled: true } }],
+      });
+      expect(catalog.devices[0]).not.toHaveProperty("publicKey");
+      const second = yield* f.sessions.issue({
+        scopes: ["orchestration:read"],
+        subject: "second-client",
+        method: "bearer-access-token",
+      });
+      expect(
+        yield* f.grants.catalog(
+          f.request(second.token, {
+            cookie: `${FoundrySessions.FOUNDRY_SESSION_COOKIE}=foundry-fixture-other`,
+            "x-foundry-csrf": "b".repeat(43),
+          }),
+          {},
+        ),
+      ).toEqual(catalog);
+      expect(
+        (yield* f.grants
+          .catalog(f.request(f.read.token, { "x-foundry-csrf": "wrong" }), {})
+          .pipe(Effect.result))._tag,
+      ).toBe("Failure");
+      expect((yield* f.grants.approveDevice(request, {}).pipe(Effect.result))._tag).toBe("Failure");
+      expect((yield* f.grants.revokeDevice(request, f.target).pipe(Effect.result))._tag).toBe(
+        "Failure",
+      );
+      f.disconnect();
+      expect((yield* f.grants.catalog(request, {})).devices).toMatchObject([
+        { online: false, rpcReady: false },
+      ]);
+      f.reconnect();
       const grant = yield* f.grants.create(request, f.input);
       expect(grant).toMatchObject({
         ...f.input,
         subject: "client",
         clientSessionId: f.read.sessionId,
         generation: 1,
-        channelGeneration: 1,
+        channelGeneration: 2,
       });
       expect(
         (yield* f.grants.readAccess(request, { deviceId: f.target.deviceId }).pipe(Effect.result))
@@ -287,7 +355,21 @@ it.effect(
           ._tag,
       ).toBe("Failure");
       const active = yield* f.grants.create(request, f.input);
-      f.revoke();
+      expect(
+        (yield* f.grants
+          .revokeDevice(f.request(manager.token), {
+            deviceId: FoundryDeviceId.make("44444444-4444-4444-8444-444444444444"),
+          })
+          .pipe(Effect.result))._tag,
+      ).toBe("Failure");
+      yield* f.grants.revokeDevice(f.request(manager.token), { deviceId: f.target.deviceId });
+      expect((yield* f.grants.catalog(request, {})).devices).toMatchObject([
+        { revoked: true, online: false, clientAccess: { enabled: false } },
+      ]);
+      expect((yield* f.grants.catalog(f.request(second.token), {})).devices).toMatchObject([
+        { revoked: true, clientAccess: { enabled: false } },
+      ]);
+
       expect(
         (yield* f.grants
           .inspect(request, { ...lookup, grantId: active.grantId })

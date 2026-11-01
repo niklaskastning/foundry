@@ -7,6 +7,10 @@ export const FoundryDeviceId = Schema.String.check(Schema.isUUID()).pipe(
 );
 export type FoundryDeviceId = typeof FoundryDeviceId.Type;
 export const FoundryDevicePublicKey = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/));
+export const FoundryDeviceApproval = Schema.Struct({
+  environmentId: EnvironmentId,
+  publicKey: FoundryDevicePublicKey,
+});
 export const FoundryEnrollment = Schema.Struct({
   protocolVersion: Schema.Literal("1"),
   instanceId: FoundryInstanceId,
