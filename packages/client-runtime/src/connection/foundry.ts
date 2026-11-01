@@ -30,7 +30,8 @@ export class OnboardingError extends Error {
     | "identity"
     | "unsupported"
     | "session"
-    | "storage";
+    | "storage"
+    | "coordination";
 
   constructor(code: OnboardingError["code"]) {
     super(
@@ -46,6 +47,8 @@ export class OnboardingError extends Error {
         unsupported:
           "This server does not support Foundry instance onboarding. Access sessions and public origin/issuer metadata are required; native sign-in is not available yet.",
         session: "The Foundry session is missing, expired or revoked. Sign in again.",
+        coordination:
+          "This browser cannot coordinate instance sessions across tabs. Use a current browser on HTTPS.",
         storage:
           "The saved instance could not be read or updated. No existing binding was replaced.",
       }[code],
@@ -192,6 +195,15 @@ export interface OnboardingResult {
 
 const STORAGE_KEY = "foundry:instance-binding:v1";
 
+function sameBinding(left: InstanceBinding | undefined, right: InstanceBinding | undefined) {
+  return (
+    left?.origin === right?.origin &&
+    left?.issuer === right?.issuer &&
+    left?.instanceId === right?.instanceId &&
+    left?.mainEnvironmentId === right?.mainEnvironmentId
+  );
+}
+
 export function createInstanceClient(options: {
   readonly origin: string;
   readonly storage: Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -211,7 +223,20 @@ export function createInstanceClient(options: {
     operation: Operation,
     candidate?: InstanceBinding,
   ): Promise<OnboardingResult> {
+    if (candidate && operation !== "inspect") {
+      const current = readBinding();
+      if (current && !sameBinding(current, candidate)) throw new OnboardingError("identity");
+    }
     if (operation === "forget") {
+      if (!candidate) {
+        let current: InstanceBinding | undefined;
+        try {
+          current = readBinding();
+        } catch (error) {
+          if (!(error instanceof OnboardingError && error.code === "storage")) throw error;
+        }
+        if (current) throw new OnboardingError("identity");
+      }
       try {
         options.storage.removeItem(STORAGE_KEY);
       } catch {
@@ -226,7 +251,21 @@ export function createInstanceClient(options: {
       };
     }
     const saved = readBinding();
-    const request = options.request;
+    const assertCurrent = () => {
+      if (!sameBinding(saved, readBinding())) throw new OnboardingError("identity");
+    };
+    const request = async (path: string, csrf?: string) => {
+      assertCurrent();
+      let value: unknown;
+      try {
+        value = await options.request(path, csrf);
+      } catch (error) {
+        assertCurrent();
+        throw error;
+      }
+      assertCurrent();
+      return value;
+    };
     if (operation !== "inspect" && !saved && operation !== "confirm")
       throw new OnboardingError("identity");
     const { binding } = verifyDescriptor(

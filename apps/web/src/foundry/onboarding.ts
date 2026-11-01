@@ -18,18 +18,28 @@ async function request(path: string, csrf?: string) {
   return FoundryOnboarding.readResponse(response);
 }
 
+export async function executeInstanceOperation(input: {
+  operation: Operation;
+  candidate?: FoundryOnboarding.InstanceBinding;
+}) {
+  if (!navigator.locks) throw new FoundryOnboarding.OnboardingError("coordination");
+  // Foundry cookies are shared across tabs, so a per-tab command queue cannot serialize renewal.
+  return navigator.locks.request("foundry:instance-session:v1", () =>
+    FoundryOnboarding.createInstanceClient({
+      origin: window.location.origin,
+      storage: localStorage,
+      now: Date.now,
+      request,
+    }).execute(input.operation, input.candidate),
+  );
+}
+
 export const instanceCommand = createRuntimeCommand(appAtomRuntime, {
   label: "foundry:instance-onboarding",
   concurrency: { mode: "serial", key: () => "active-instance" },
   execute: (input: { operation: Operation; candidate?: FoundryOnboarding.InstanceBinding }) =>
     Effect.tryPromise({
-      try: () =>
-        FoundryOnboarding.createInstanceClient({
-          origin: window.location.origin,
-          storage: localStorage,
-          now: Date.now,
-          request,
-        }).execute(input.operation, input.candidate),
+      try: () => executeInstanceOperation(input),
       catch: (error) =>
         new ConnectionBlockedError({
           reason: "configuration",

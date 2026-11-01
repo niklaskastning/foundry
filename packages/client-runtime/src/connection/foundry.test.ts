@@ -116,6 +116,55 @@ describe("Foundry instance onboarding", () => {
     ]);
   });
 
+  it.each(["confirm", "login", "refresh", "session", "remove", "forget"] as const)(
+    "rejects a stale tab's %s instead of adopting or removing another confirmed identity",
+    async (operation) => {
+      const f = fixture();
+      await f.client.execute("confirm", f.binding);
+      f.descriptor.instanceAuth.issuer = "https://replacement.cloudflareaccess.com";
+      const replacement = verifyDescriptor(f.descriptor, f.origin).binding;
+      f.storage.setItem("foundry:instance-binding:v1", JSON.stringify(replacement));
+      const count = f.calls.length;
+      await expect(f.client.execute(operation, f.binding)).rejects.toMatchObject({
+        code: "identity",
+      });
+      expect(f.calls).toHaveLength(count);
+      expect(f.client.readBinding()).toEqual(replacement);
+      if (operation === "forget")
+        await expect(f.client.execute("forget")).rejects.toMatchObject({ code: "identity" });
+    },
+  );
+
+  it("does not restore a binding or start login after it was forgotten during descriptor verification", async () => {
+    const f = fixture();
+    await f.client.execute("confirm", f.binding);
+    const entered = Promise.withResolvers<void>();
+    const descriptor = Promise.withResolvers<unknown>();
+    const paths: string[] = [];
+    const client = createInstanceClient({
+      origin: f.origin,
+      storage: f.storage,
+      now: () => 100,
+      request: async (path) => {
+        paths.push(path);
+        if (path.startsWith("/.well-known/")) {
+          entered.resolve();
+          return descriptor.promise;
+        }
+        return f.session;
+      },
+    });
+    const login = client.execute("login", f.binding);
+    await entered.promise;
+    await f.client.execute("forget", f.binding);
+    descriptor.resolve(f.descriptor);
+    await expect(login).rejects.toMatchObject({ code: "identity" });
+    expect(paths).toEqual([
+      "/.well-known/foundry?protocolVersion=1&requiredCapability=foundry.access-sessions",
+    ]);
+    expect(client.readBinding()).toBeUndefined();
+  });
+
   it("retains the binding on failed revocation and refuses corrupted persisted state", async () => {
     const f = fixture();
     await f.client.execute("confirm", f.binding);
