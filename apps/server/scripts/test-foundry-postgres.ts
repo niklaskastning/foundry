@@ -1,3 +1,4 @@
+import { verifyGateway } from "./foundry-gateway-integration.ts";
 import * as Schema from "effect/Schema";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as FoundryRuntime from "../src/foundry/Runtime.ts";
@@ -1013,6 +1014,10 @@ try {
       await runtimeHandler.dispose();
     }
   }
+  await verifyGateway({ root, mainHome: home, databaseSocket: path });
+  await report(
+    "PASS integrated gateway: two clients, real worker HTTP/RPC, idempotent Replay launch, attachment hash/resume, terminal and persistent revocation; direct T3 access preserved",
+  );
   await report(
     "PASS production runtime composition: opt-in auth routes and descriptor capability, no JWKS request without an assertion",
   );

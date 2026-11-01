@@ -20,5 +20,6 @@ export function readDeviceSelection(): ReadonlyArray<PlatformConnectionRegistrat
 }
 
 export function writeDeviceSelection(target: FoundryConnectionTarget | null) {
+  if (target === null && sessionStorage.getItem(key) === null) return;
   sessionStorage.setItem(key, JSON.stringify(target));
 }

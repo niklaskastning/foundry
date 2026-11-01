@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""One-time operator-run activation of the existing Docker Foundry instance."""
+"""Operator-run activation, inventory and schema-2-to-5 upgrade of Docker Foundry."""
 
 import fcntl
 import json
@@ -56,7 +56,7 @@ def check_identity(descriptor, environment):
         raise RuntimeError('The pinned instance/environment identity differs.')
 
 
-def check_main(current):
+def check_main(current, baseline=True):
     labels = current['Config'].get('Labels') or {}
     mounts = {m['Destination']: (m['Type'], m.get('Name')) for m in current['Mounts']}
     if (labels.get('com.docker.compose.project') != 'foundry'
@@ -69,9 +69,134 @@ def check_main(current):
             or not current['State']['Running']):
         raise RuntimeError('Main is not the expected running Foundry deployment.')
     original = json.loads(docker('image', 'inspect', current['Image']))[0]
-    if (any(value.startswith('FOUNDRY_') for value in current['Config'].get('Env') or [])
+    if baseline and (any(value.startswith('FOUNDRY_') for value in current['Config'].get('Env') or [])
             or set(current['Config'].get('Env') or []) != set(original['Config'].get('Env') or [])):
         raise RuntimeError('Only the baseline file-store deployment can be activated once.')
+
+
+def active_status(expected_schema=None):
+    current = inspect(MAIN)
+    check_main(current, baseline=False)
+    check_postgres(inspect(POSTGRES))
+    image = json.loads(docker('image', 'inspect', current['Image']))[0]
+    labels = image['Config'].get('Labels') or {}
+    revision = labels.get('org.opencontainers.image.revision', '')
+    if labels.get('org.opencontainers.image.source') != SOURCE or not re.fullmatch(r'[a-f0-9]{40}', revision):
+        raise RuntimeError('Running image has no confirmed Foundry source revision.')
+    runtime_file = CONFIG / 'access-runtime.env'
+    for path in [runtime_file, CONFIG / 'access-compose.json']:
+        stat = path.lstat()
+        if path.is_symlink() or not path.is_file() or stat.st_uid != 0 or stat.st_mode & 0o077:
+            raise RuntimeError('Active configuration must be root-owned and private.')
+    runtime = runtime_file.read_text().splitlines()
+    entries = [line.split('=', 1) for line in runtime if line]
+    expected = {'FOUNDRY_INSTANCE_STORE', 'FOUNDRY_ACCESS_ENABLED', 'FOUNDRY_INSTANCE_DATABASE_URL',
+                'FOUNDRY_ACCESS_ISSUER', 'FOUNDRY_ACCESS_AUDIENCE', 'FOUNDRY_PUBLIC_ORIGIN'}
+    if any(len(entry) != 2 for entry in entries) or len(entries) != len(expected):
+        raise RuntimeError('Unexpected active runtime configuration.')
+    values = dict(entries)
+    if (set(values) != expected or values['FOUNDRY_INSTANCE_STORE'] != 'postgres'
+            or values['FOUNDRY_ACCESS_ENABLED'] != 'true' or values['FOUNDRY_ACCESS_ISSUER'] != ISSUER
+            or values['FOUNDRY_PUBLIC_ORIGIN'] != ORIGIN
+            or not re.fullmatch(r'[a-f0-9]{64}', values['FOUNDRY_ACCESS_AUDIENCE'])
+            or not re.fullmatch(r'postgresql://foundry_instance_runtime:[a-f0-9]{64}@postgres:5432/fork_connect',
+                                values['FOUNDRY_INSTANCE_DATABASE_URL'])):
+        raise RuntimeError('Active runtime configuration differs from the one-time activation format.')
+    configured = json.loads((CONFIG / 'access-compose.json').read_text())
+    configured_image = configured.get('services', {}).get('main', {}).get('image', '')
+    if (not re.fullmatch(re.escape(REGISTRY) + r'@sha256:[a-f0-9]{64}', configured_image)
+            or configured != composition(configured_image, runtime_file)
+            or json.loads(docker('image', 'inspect', configured_image))[0]['Id'] != current['Image']):
+        raise RuntimeError('Active Compose configuration differs from the running image or expected layout.')
+    actual = dict(value.split('=', 1) for value in current['Config'].get('Env') or [])
+    base = dict(value.split('=', 1) for value in image['Config'].get('Env') or [])
+    if actual != {**base, **values}:
+        raise RuntimeError('Running environment differs from the private configuration.')
+    descriptor = metadata('/.well-known/foundry?protocolVersion=1')
+    check_identity(descriptor, metadata('/.well-known/t3/environment'))
+    if (metadata('/api/foundry/ready').get('ready') is not True
+            or 'foundry.access-sessions' not in descriptor.get('capabilities', [])):
+        raise RuntimeError('Main is not ready with Access sessions enabled.')
+    database = json.loads(sql("""BEGIN READ ONLY;
+      SELECT json_build_object(
+        'version', (SELECT version FROM foundry_instance.schema_version),
+        'instanceId', (SELECT instance_id FROM foundry_instance.instance),
+        'environmentId', (SELECT main_environment_id FROM foundry_instance.instance),
+        'operatorBound', (SELECT count(*)=1 FROM foundry_instance.operator_binding),
+        'runtimeLogin', (SELECT rolcanlogin FROM pg_roles WHERE rolname='foundry_instance_runtime'),
+        'migratorLogin', (SELECT rolcanlogin FROM pg_roles WHERE rolname='foundry_instance_migrator'));
+      COMMIT;"""))
+    if (database['version'] not in ([expected_schema] if expected_schema else [2, 5]) or database['instanceId'] != INSTANCE
+            or database['environmentId'] != ENVIRONMENT or database['operatorBound'] is not True
+            or database['runtimeLogin'] is not True or database['migratorLogin'] is not False):
+        raise RuntimeError('Unexpected instance schema, identity, operator binding or login state.')
+    return {'revision': revision, 'image': configured_image, 'schemaVersion': database['version'],
+            'instanceId': INSTANCE, 'environmentId': ENVIRONMENT, 'ready': True,
+            'operatorBound': True, 'migratorLogin': False, 'configurationMatches': True,
+            'upgradePerformed': False}
+
+
+def upgrade(digest, revision):
+    if not re.fullmatch(r'sha256:[a-f0-9]{64}', digest) or not re.fullmatch(r'[a-f0-9]{40}', revision):
+        raise ValueError('Use an immutable image digest and its exact reviewed source SHA.')
+    previous = active_status(expected_schema=2)
+    image = REGISTRY + '@' + digest
+    docker('pull', image)
+    candidate = json.loads(docker('image', 'inspect', image))[0]
+    labels = candidate['Config'].get('Labels') or {}
+    if (labels.get('org.opencontainers.image.source') != SOURCE
+            or labels.get('org.opencontainers.image.revision') != revision
+            or candidate.get('Os') != 'linux' or candidate.get('Architecture') != 'amd64'):
+        raise RuntimeError('Candidate source, revision or platform differs.')
+    backup = Path(tempfile.mkdtemp(prefix='upgrade-', dir=STATE))
+    write_private(backup / 'manifest.json', json.dumps({
+        'previous': previous, 'candidateImage': image, 'revision': revision,
+        'targetSchema': 5, 'instanceId': INSTANCE, 'environmentId': ENVIRONMENT,
+    }, indent=2) + '\n')
+    for name in ['access-runtime.env', 'access-compose.json']:
+        write_private(backup / name, (CONFIG / name).read_text())
+    print(f'Recovery directory: {backup}', flush=True)
+    docker('stop', '--time', '60', MAIN)
+    try:
+        save(backup / 'state.tar', 'cp', f'{MAIN}:/var/lib/foundry/.', '-')
+        save(backup / 'workspaces.tar', 'cp', f'{MAIN}:/workspaces/.', '-')
+        save(backup / 'fork_connect.dump', 'exec', POSTGRES, 'pg_dump', '-U', 'foundry_admin', '-Fc', 'fork_connect')
+        save(backup / 'roles.sql', 'exec', POSTGRES, 'pg_dumpall', '-U', 'foundry_admin', '--roles-only')
+        docker('exec', '-i', POSTGRES, 'pg_restore', '--list', data=(backup / 'fork_connect.dump').read_bytes())
+        if sql("SELECT count(*) FROM pg_stat_activity WHERE datname='fork_connect' AND pid<>pg_backend_pid();") != '0':
+            raise RuntimeError('Another connection is using fork_connect; no migration performed.')
+        write_private(backup / 'backup-complete', 'Coordinated pre-upgrade backup completed.\n')
+    except BaseException:
+        docker('start', MAIN)
+        raise
+    migration_file = backup / 'migration.env'
+    try:
+        password = secrets.token_hex(32)
+        write_private(migration_file,
+                      f'FOUNDRY_INSTANCE_MIGRATION_URL=postgresql://foundry_instance_migrator:{password}@postgres:5432/fork_connect\n')
+        try:
+            sql(f"ALTER ROLE foundry_instance_migrator LOGIN PASSWORD '{password}';")
+            print('Migrating schema 2 to 5 with Main stopped; operator and identities are preserved.', flush=True)
+            run_cli(image, migration_file, 'migrate', '--base-dir', '/var/lib/foundry',
+                    '--runtime-role', 'foundry_instance_runtime')
+        finally:
+            sql('ALTER ROLE foundry_instance_migrator NOLOGIN PASSWORD NULL;')
+        migration_file.unlink()
+        replacement = backup / 'candidate-compose.json'
+        write_private(replacement, json.dumps(composition(image, CONFIG / 'access-runtime.env'), indent=2) + '\n')
+        os.replace(replacement, CONFIG / 'access-compose.json')
+        docker('compose', '--project-name', 'foundry', '--env-file', '/dev/null',
+               '--file', str(CONFIG / 'access-compose.json'), 'up', '--detach', '--no-deps',
+               '--no-build', '--pull', 'never', '--wait', '--wait-timeout', '180', 'main')
+        result = active_status(expected_schema=5)
+        if result['image'] != image or result['revision'] != revision:
+            raise RuntimeError('Candidate image verification failed.')
+        write_private(backup / 'success', revision + '\n')
+        print(json.dumps({**result, 'upgradePerformed': True, 'backup': str(backup)}, indent=2))
+    except BaseException:
+        docker('stop', '--time', '60', MAIN)
+        print(f'Main stays stopped. Restore the coordinated backup {backup}; never downgrade only the image.', file=sys.stderr)
+        raise
 
 
 def check_postgres(current):
@@ -262,16 +387,20 @@ def activate(digest, revision):
 
 
 def main(args):
-    if args != ['preflight'] and not (len(args) == 3 and args[0] == 'activate'):
-        raise ValueError('Usage: foundry-activate-access preflight | activate sha256:<digest> <source-sha>')
+    if args not in [['preflight'], ['status']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade']):
+        raise ValueError('Usage: foundry-activate-access status | preflight | activate|upgrade sha256:<digest> <source-sha>')
     if os.geteuid() != 0:
-        raise RuntimeError('This one-time operation requires the administrator; no sudo grant is installed.')
+        raise RuntimeError('This operation requires the administrator; no sudo grant is installed.')
     os.umask(0o077)
     with (STATE / 'lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if args == ['preflight']:
+        if args == ['status']:
+            print(json.dumps(active_status(), indent=2))
+        elif args == ['preflight']:
             preflight()
             print('PASS pinned Docker Main, private PostgreSQL, empty fork_connect, absent login roles, stable IDs.')
+        elif args[0] == 'upgrade':
+            upgrade(*args[1:])
         else:
             activate(*args[1:])
 
@@ -282,5 +411,5 @@ if __name__ == '__main__':
     except (Exception, KeyboardInterrupt) as error:
         if isinstance(error, RuntimeError):
             print(str(error), file=sys.stderr)
-        print('Activation stopped. Check the preconditions and recovery runbook; no secret diagnostics are printed.', file=sys.stderr)
+        print('Foundry operation stopped. Check the preconditions and recovery runbook; no secret diagnostics are printed.', file=sys.stderr)
         sys.exit(1)

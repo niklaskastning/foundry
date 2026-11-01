@@ -1,6 +1,25 @@
 import { expect, it, vi } from "vite-plus/test";
 import { FoundryOnboarding } from "@t3tools/client-runtime/connection";
 import { executeInstanceOperation } from "./onboarding";
+import { readDeviceSelection, writeDeviceSelection } from "./selection";
+
+it("keeps Main discovery when managing sign-in without a selected device, but preserves explicit disconnection", () => {
+  const key = "foundry:selected-device:v1";
+  const previous = sessionStorage.getItem(key);
+  using _storage = {
+    [Symbol.dispose]: () => {
+      if (previous === null) sessionStorage.removeItem(key);
+      else sessionStorage.setItem(key, previous);
+    },
+  };
+  sessionStorage.removeItem(key);
+  expect(readDeviceSelection()).toBeUndefined();
+  writeDeviceSelection(null);
+  expect(readDeviceSelection()).toBeUndefined();
+  sessionStorage.setItem(key, "null");
+  writeDeviceSelection(null);
+  expect(readDeviceSelection()).toEqual([]);
+});
 
 function deferred() {
   let resolve!: () => void;

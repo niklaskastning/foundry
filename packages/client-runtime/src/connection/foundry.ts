@@ -28,6 +28,7 @@ export class OnboardingError extends Error {
     | "network"
     | "descriptor"
     | "identity"
+    | "unconfirmed"
     | "unsupported"
     | "session"
     | "storage"
@@ -44,6 +45,8 @@ export class OnboardingError extends Error {
         descriptor: "This server did not return a compatible Foundry descriptor.",
         identity:
           "The instance identity, origin or issuer changed. Access is blocked; verify the deployment with its operator before removing the saved binding.",
+        unconfirmed:
+          "Verify and confirm this instance in Manage instance sign-in before signing in or loading devices.",
         unsupported:
           "This server does not support Foundry instance onboarding. Access sessions and public origin/issuer metadata are required; native sign-in is not available yet.",
         session: "The Foundry session is missing, expired or revoked. Sign in again.",
@@ -267,7 +270,7 @@ export function createInstanceClient(options: {
       return value;
     };
     if (operation !== "inspect" && !saved && operation !== "confirm")
-      throw new OnboardingError("identity");
+      throw new OnboardingError("unconfirmed");
     const { binding } = verifyDescriptor(
       await request(
         "/.well-known/foundry?protocolVersion=1&requiredCapability=foundry.access-sessions",

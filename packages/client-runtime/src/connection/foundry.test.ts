@@ -84,7 +84,7 @@ function fixture() {
 describe("Foundry instance onboarding", () => {
   it("confirms before login, rechecks identity before mutations and preserves unrelated storage on removal", async () => {
     const f = fixture();
-    await expect(f.client.execute("login")).rejects.toMatchObject({ code: "identity" });
+    await expect(f.client.execute("login")).rejects.toMatchObject({ code: "unconfirmed" });
     expect(f.calls).toHaveLength(0);
     const candidate = await f.client.execute("inspect");
     expect(candidate.confirmed).toBe(false);
@@ -106,7 +106,7 @@ describe("Foundry instance onboarding", () => {
       ["personal-t3", "untouched"],
       ["other-instance", "untouched"],
     ]);
-    await expect(f.client.execute("login")).rejects.toMatchObject({ code: "identity" });
+    await expect(f.client.execute("login")).rejects.toMatchObject({ code: "unconfirmed" });
     await f.client.execute("confirm", f.binding);
     f.invalidateSession();
     expect((await f.client.execute("remove")).binding).toBeNull();

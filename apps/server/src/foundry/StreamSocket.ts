@@ -52,8 +52,11 @@ export const connect = Effect.fn("StreamSocket.connect")(function* (
     }),
     (socket) => Effect.sync(() => socket.terminate()),
   );
-  return yield* Socket.fromWebSocket(Effect.succeed(ws), {
+  const socket = yield* Socket.fromWebSocket(Effect.succeed(ws), {
     highWaterMark: 262144,
     openTimeout: "10 seconds",
   });
+  // Buffer peer frames while the bridge is still attaching its other endpoint.
+  const reader = yield* socket.reader;
+  return Socket.make({ reader: Effect.succeed(reader), writer: socket.writer });
 });
