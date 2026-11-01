@@ -6,7 +6,12 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { FoundryDescriptor, FoundryInstanceId, FoundrySession } from "@t3tools/contracts";
+import {
+  AuthSessionState,
+  FoundryDescriptor,
+  FoundryInstanceId,
+  FoundrySession,
+} from "@t3tools/contracts";
 import { AccessOAuthError, createAccessOAuth, type AccessOAuthGrant } from "./AccessOAuth.ts";
 
 import { authorizeInstanceRequest, isInstanceRequest } from "./AccessTransportPolicy.ts";
@@ -24,6 +29,7 @@ const StoredGrant = Schema.Struct({
 const decodeInstanceId = Schema.decodeSync(FoundryInstanceId);
 const decodeStoredGrant = Schema.decodeUnknownSync(StoredGrant);
 const decodeDescriptor = Schema.decodeUnknownSync(FoundryDescriptor);
+const decodeAuthState = Schema.decodeUnknownSync(AuthSessionState);
 const decodeSession = Schema.decodeUnknownSync(FoundrySession);
 
 export async function runAccessProbe(args: readonly string[], platform: NodeJS.Platform) {
@@ -63,6 +69,7 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
   partition.setPermissionCheckHandler(() => false);
   partition.on("will-download", (event) => event.preventDefault());
   let grant: AccessOAuthGrant | undefined;
+  let sessionCookieName: string | undefined;
   let expiresAt = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const windows = new Set<Electron.BrowserWindow>();
@@ -84,6 +91,7 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
         details.url,
         details.requestHeaders,
         grant && expiresAt > Date.now() ? Redacted.value(grant.tokens.accessToken) : undefined,
+        sessionCookieName,
       ),
     );
   });
@@ -144,7 +152,7 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
 
   async function response(path: string, csrf?: string) {
     const result = await partition.fetch(`${origin}${path}`, {
-      method: path.startsWith("/api/") ? "POST" : "GET",
+      method: path.startsWith("/api/foundry/auth/") ? "POST" : "GET",
       redirect: "error",
       credentials: "include",
       headers: {
@@ -165,6 +173,7 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
   }
 
   async function verify() {
+    sessionCookieName = undefined;
     const descriptor = decodeDescriptor(await response("/.well-known/foundry?protocolVersion=1"));
     if (descriptor.instanceId !== instanceId)
       throw new AccessOAuthError("Foundry instance identity changed.");
@@ -172,6 +181,10 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
       throw new AccessOAuthError(
         "Access transport reached the correct instance, but Foundry Access sessions are not enabled on Main.",
       );
+    const auth = decodeAuthState(await response("/api/auth/session")).auth;
+    if (!/^t3_session_[a-z0-9_]+$/.test(auth.sessionCookieName))
+      throw new AccessOAuthError("The instance did not advertise a supported T3 session cookie.");
+    sessionCookieName = auth.sessionCookieName;
     return descriptor;
   }
 

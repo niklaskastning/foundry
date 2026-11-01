@@ -174,8 +174,12 @@ expiry, closing/relaunching the probe, and logout. Restoring the encrypted grant
 refreshes it remotely; **Check session** then verifies the persisted Foundry cookie.
 Logout clears this partition and its local grant even if remote revocation fails,
 but reports that failure rather than claiming complete logout. Test a second instance
-and unexpected identity/issuer changes separately. Access headers never replace a
-T3 bearer or DPoP header; such a conflicting request is refused.
+and unexpected identity/issuer changes separately. The probe reserves the Authorization header for Managed OAuth. For an ordinary T3
+bearer request, it sends that same T3 credential in the instance-advertised T3 session
+cookie header for this request only; it does not persist an extra cookie. T3 still
+checks the credential, scopes, origin and revocation. The cookie name is read only
+after verifying the pinned Foundry descriptor. DPoP and unknown authorization schemes
+remain unsupported and are refused rather than weakened.
 
 Focused tests cover the OAuth protocol and request boundary. They do not establish
 Google/Cloudflare/Windows compatibility, OS-backed persistence, real WebSocket
