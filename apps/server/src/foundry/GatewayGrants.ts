@@ -5,6 +5,7 @@ import {
   FoundryGatewayGrantRequest,
   FoundryGatewayGrantLookup,
   type FoundryGatewayGrant,
+  type FoundryGatewaySocketTicket,
   type ProjectSnapshot,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -15,6 +16,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import type * as Socket from "effect/socket/Socket";
+import * as Redacted from "effect/Redacted";
+import { base64UrlEncode } from "../auth/utils.ts";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
@@ -37,6 +41,14 @@ type Request = HttpServerRequest.HttpServerRequest;
 export class GatewayGrants extends Context.Service<
   GatewayGrants,
   {
+    readonly ticket: (
+      request: Request,
+      input: unknown,
+    ) => Effect.Effect<FoundryGatewaySocketTicket, FoundryGatewayError>;
+    readonly stream: (
+      request: Request,
+      upgrade: Effect.Effect<Socket.Socket, FoundryGatewayError>,
+    ) => Effect.Effect<void, FoundryGatewayError>;
     readonly projects: (
       request: Request,
       input: unknown,
@@ -60,6 +72,15 @@ const make = Effect.gen(function* () {
   const channels = yield* DeviceChannel.DeviceChannel;
   const { origin } = yield* DeviceConfig.DeviceOrigin;
   const crypto = yield* Crypto.Crypto;
+  const streamsEnabled = yield* DeviceConfig.StreamGatewayEnabled;
+  const tickets = new Map<
+    string,
+    {
+      grant: FoundryGatewayGrant;
+      validate: Effect.Effect<void, FoundryGatewayError>;
+      expiresAt: number;
+    }
+  >();
   // Handles are not credentials: every use reauthenticates both sessions and the device lease.
   const grants = new Map<string, { grant: FoundryGatewayGrant; binding: string }>();
   const authenticate = Effect.fn("GatewayGrants.authenticate")(
@@ -86,7 +107,13 @@ const make = Effect.gen(function* () {
   const create = Effect.fn("GatewayGrants.create")(function* (request: Request, input: unknown) {
     const identity = yield* authenticate(request);
     const target = yield* decodeRequest(input).pipe(Effect.mapError(invalid));
-    if (!identity.client.scopes.includes(AuthOrchestrationReadScope)) return yield* denied();
+    if (
+      !target.scopes.includes(AuthOrchestrationReadScope) ||
+      new Set(target.scopes).size !== target.scopes.length ||
+      !target.scopes.every((scope) => identity.client.scopes.includes(scope)) ||
+      (!streamsEnabled && target.scopes.some((scope) => scope !== AuthOrchestrationReadScope))
+    )
+      return yield* denied();
     const lease = yield* channels.current(target.deviceId).pipe(Effect.mapError(denied));
     if (
       lease.device.revoked ||
@@ -135,7 +162,10 @@ const make = Effect.gen(function* () {
       return yield* denied();
     return { ...entry, client: identity.client };
   });
-  const inspect = Effect.fn("GatewayGrants.inspect")(function* (request: Request, input: unknown) {
+  const inspectWithClient = Effect.fn("GatewayGrants.inspect")(function* (
+    request: Request,
+    input: unknown,
+  ) {
     const target = yield* decodeLookup(input).pipe(Effect.mapError(invalid));
     const { grant, client } = yield* owned(request, target.grantId);
     if (grant.expiresAt <= (yield* Clock.currentTimeMillis)) {
@@ -143,7 +173,7 @@ const make = Effect.gen(function* () {
       return yield* denied();
     }
     if (
-      !client.scopes.includes(AuthOrchestrationReadScope) ||
+      !grant.scopes.every((scope) => client.scopes.includes(scope)) ||
       grant.deviceId !== target.deviceId ||
       grant.environmentId !== target.environmentId
     )
@@ -157,8 +187,10 @@ const make = Effect.gen(function* () {
       lease.channelGeneration !== grant.channelGeneration
     )
       return yield* denied();
-    return grant;
+    return { grant, client };
   });
+  const inspect = (request: Request, input: unknown) =>
+    inspectWithClient(request, input).pipe(Effect.map((result) => result.grant));
   const remove = Effect.fn("GatewayGrants.remove")(function* (request: Request, input: unknown) {
     const target = yield* decodeLookup(input).pipe(Effect.mapError(invalid));
     const { grant } = yield* owned(request, target.grantId);
@@ -166,36 +198,79 @@ const make = Effect.gen(function* () {
       return yield* denied();
     grants.delete(grant.grantId);
   });
+  const validation = Effect.fn("GatewayGrants.validate")(function* (
+    request: Request,
+    grant: FoundryGatewayGrant,
+  ) {
+    const foundry = yield* sessions
+      .inspect(request.cookies[FoundrySessions.FOUNDRY_SESSION_COOKIE])
+      .pipe(Effect.mapError(denied));
+    const entry = grants.get(grant.grantId);
+    const clients = yield* clientSessions
+      .listActive()
+      .pipe(Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })));
+    if (
+      !entry ||
+      entry.grant !== grant ||
+      entry.binding !== foundry.csrfToken ||
+      foundry.instanceId !== grant.instanceId ||
+      foundry.operatorId !== grant.operatorId ||
+      grant.expiresAt <= (yield* Clock.currentTimeMillis) ||
+      !clients.some(
+        (client) =>
+          client.sessionId === grant.clientSessionId &&
+          grant.scopes.every((scope) => client.scopes.includes(scope)),
+      )
+    )
+      return yield* denied();
+  });
   const projects = Effect.fn("GatewayGrants.projects")(function* (
     request: Request,
     input: unknown,
   ) {
     const grant = yield* inspect(request, input);
-    const validate = Effect.gen(function* () {
-      const foundry = yield* sessions
-        .inspect(request.cookies[FoundrySessions.FOUNDRY_SESSION_COOKIE])
-        .pipe(Effect.mapError(denied));
-      const entry = grants.get(grant.grantId);
-      const clients = yield* clientSessions
-        .listActive()
-        .pipe(Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })));
-      if (
-        !entry ||
-        entry.grant !== grant ||
-        entry.binding !== foundry.csrfToken ||
-        foundry.instanceId !== grant.instanceId ||
-        foundry.operatorId !== grant.operatorId ||
-        grant.expiresAt <= (yield* Clock.currentTimeMillis) ||
-        !clients.some(
-          (client) =>
-            client.sessionId === grant.clientSessionId &&
-            client.scopes.includes(AuthOrchestrationReadScope),
-        )
-      )
-        return yield* denied();
-    });
-    return yield* channels.projects(grant, validate);
+    return yield* channels.projects(grant, validation(request, grant));
   });
-  return GatewayGrants.of({ create, inspect, remove, projects });
+  const ticket = Effect.fn("GatewayGrants.ticket")(function* (request: Request, input: unknown) {
+    if (!streamsEnabled) return yield* denied();
+    const { grant, client } = yield* inspectWithClient(request, input);
+    const now = yield* Clock.currentTimeMillis;
+    for (const [key, entry] of tickets) if (entry.expiresAt <= now) tickets.delete(key);
+    const key = base64UrlEncode(yield* crypto.randomBytes(32).pipe(Effect.orDie));
+    const issued = yield* auth
+      .issueWebSocketTicket(client, { use: "rpc" })
+      .pipe(Effect.mapError(denied));
+    const expiresAt = Math.min(now + 10000, grant.expiresAt);
+    if (tickets.size >= 128) return yield* new FoundryGatewayError({ code: "capacity" });
+    tickets.set(key, { grant, expiresAt, validate: validation(request, grant) });
+    return { ticket: key, wsTicket: Redacted.value(issued.ticket), expiresAt };
+  });
+  const stream = Effect.fn("GatewayGrants.stream")(function* (
+    request: Request,
+    upgrade: Effect.Effect<Socket.Socket, FoundryGatewayError>,
+  ) {
+    const url = HttpServerRequest.toURL(request);
+    if (
+      !streamsEnabled ||
+      Option.isNone(url) ||
+      url.value.origin !== origin ||
+      request.headers.origin !== origin
+    )
+      return yield* denied();
+    const key = url.value.searchParams.get("ticket") ?? "";
+    const entry = tickets.get(key);
+    tickets.delete(key);
+    if (!entry || entry.expiresAt <= (yield* Clock.currentTimeMillis)) return yield* denied();
+    const client = yield* auth
+      .authenticateWebSocketUpgrade(request, "rpc")
+      .pipe(Effect.mapError(denied));
+    if (client.sessionId !== entry.grant.clientSessionId) return yield* denied();
+    yield* entry.validate;
+    const socket = yield* upgrade.pipe(
+      Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })),
+    );
+    yield* channels.stream(entry.grant, entry.validate, socket);
+  });
+  return GatewayGrants.of({ create, inspect, remove, projects, ticket, stream });
 });
 export const layer = Layer.effect(GatewayGrants, make);

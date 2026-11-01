@@ -42,6 +42,7 @@ export const FoundryDeviceChallenge = Schema.Struct({
 export type FoundryDeviceChallenge = typeof FoundryDeviceChallenge.Type;
 export const FoundryDeviceHello = Schema.Struct({
   httpRead: Schema.optionalKey(Schema.Boolean),
+  rpcStream: Schema.optionalKey(Schema.Boolean),
   type: Schema.Literal("hello"),
   deviceId: FoundryDeviceId,
   instanceId: FoundryInstanceId,

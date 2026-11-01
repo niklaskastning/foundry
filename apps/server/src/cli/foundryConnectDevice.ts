@@ -1,4 +1,9 @@
-import { EnvironmentId, FoundryDevice, FoundryDeviceError } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  FoundryDevice,
+  FoundryDeviceError,
+  type FoundryGatewayGrant,
+} from "@t3tools/contracts";
 import * as Console from "effect/Console";
 import { FetchHttpClient } from "effect/http";
 import * as Layer from "effect/Layer";
@@ -10,6 +15,10 @@ import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { Command, Flag } from "effect/cli";
+import * as StreamBridge from "../foundry/StreamBridge.ts";
+import * as StreamSocket from "../foundry/StreamSocket.ts";
+import { FoundryGatewayError } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as DeviceHttpAdapter from "../foundry/DeviceHttpAdapter.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -46,6 +55,7 @@ export const connectDeviceCommand = Command.make("connect-device", {
   registration: Flag.String("registration"),
   keyFile: Flag.String("key-file"),
   gatewayOrigin: Flag.String("gateway-origin").pipe(Flag.optional),
+  streams: Flag.Boolean("streams"),
   accessFile: Flag.String("access-file").pipe(Flag.optional),
 }).pipe(
   Command.withDescription(
@@ -91,6 +101,8 @@ export const connectDeviceCommand = Command.make("connect-device", {
           `Foundry device ${device.deviceId} connected; project-read adapter ${Option.isSome(flags.gatewayOrigin) ? "enabled" : "disabled"}.`,
         ),
       };
+      if (flags.streams && Option.isNone(flags.gatewayOrigin))
+        return yield* new FoundryDeviceError({ code: "configuration" });
       if (Option.isNone(flags.gatewayOrigin)) return yield* DeviceConnector.run(socket, options);
       if ((yield* localEnvironmentId) !== device.environmentId)
         return yield* new FoundryDeviceError({ code: "configuration" });
@@ -101,7 +113,46 @@ export const connectDeviceCommand = Command.make("connect-device", {
       );
       return yield* Effect.gen(function* () {
         const adapter = yield* DeviceHttpAdapter.make({ ...options, localOrigin });
-        return yield* DeviceConnector.run(socket, { ...options, projects: adapter.projects });
+        return yield* DeviceConnector.run(socket, {
+          ...options,
+          projects: adapter.projects,
+          ...(flags.streams
+            ? {
+                stream: Effect.fn("foundry.connectDevice.stream")(function* (
+                  grant: FoundryGatewayGrant,
+                  generation: number,
+                  ticket: string,
+                ) {
+                  const local = yield* adapter.openStream(grant, generation);
+                  const remote = yield* StreamSocket.connect(
+                    `${flags.origin.replace(/^https:/, "wss:")}/api/foundry/devices/stream`,
+                    {
+                      "x-foundry-stream-ticket": ticket,
+                      ...(access
+                        ? {
+                            "CF-Access-Client-Id": access.clientId,
+                            "CF-Access-Client-Secret": access.clientSecret,
+                          }
+                        : {}),
+                    },
+                  ).pipe(Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })));
+                  return yield* StreamBridge.bridge(
+                    local,
+                    remote,
+                    Effect.gen(function* () {
+                      if (
+                        grant.expiresAt <= (yield* Clock.currentTimeMillis) ||
+                        (yield* localEnvironmentId.pipe(
+                          Effect.mapError(() => new FoundryGatewayError({ code: "forbidden" })),
+                        )) !== grant.environmentId
+                      )
+                        return yield* new FoundryGatewayError({ code: "forbidden" });
+                    }),
+                  );
+                }, Effect.scoped),
+              }
+            : {}),
+        });
       }).pipe(
         Effect.provide(
           Layer.merge(

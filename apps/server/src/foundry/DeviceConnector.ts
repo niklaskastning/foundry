@@ -66,6 +66,11 @@ export interface ConnectionOptions {
   readonly origin: string;
   readonly privateKey: Redacted.Redacted<string>;
   readonly localEnvironmentId: Effect.Effect<EnvironmentId, FoundryDeviceError>;
+  readonly stream?: (
+    grant: FoundryGatewayGrant,
+    channelGeneration: number,
+    ticket: string,
+  ) => Effect.Effect<void, FoundryGatewayError>;
   readonly projects?: (
     grant: FoundryGatewayGrant,
     channelGeneration: number,
@@ -115,6 +120,7 @@ export const runOnce = Effect.fn("DeviceConnector.runOnce")(function* (
         options.device,
         Redacted.value(options.privateKey),
         options.projects !== undefined,
+        options.stream !== undefined,
       ),
     catch: () => new FoundryDeviceError({ code: "invalid_proof" }),
   });
@@ -133,9 +139,26 @@ export const runOnce = Effect.fn("DeviceConnector.runOnce")(function* (
       acknowledgement = yield* Deferred.make<void>();
     }
   });
+  let streams = 0;
   const messages = Effect.gen(function* () {
     while (true) {
       const message = yield* next.pipe(Effect.timeout("30 seconds"));
+      if (message.type === "stream-open") {
+        if (!options.stream || message.connectionId !== ready.connectionId || streams >= 4)
+          return yield* new FoundryDeviceError({ code: "channel_protocol" });
+        yield* checkEnvironment;
+        streams++;
+        yield* options.stream(message.grant, ready.channelGeneration, message.ticket).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              streams--;
+            }),
+          ),
+          Effect.ignore,
+          Effect.forkScoped,
+        );
+        continue;
+      }
       if (message.type === "ack") {
         if (
           message.connectionId !== ready.connectionId ||

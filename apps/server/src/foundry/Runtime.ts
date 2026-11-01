@@ -38,6 +38,10 @@ export const layer = Layer.unwrap(
     const gateway = yield* Config.Boolean("FOUNDRY_HTTP_GATEWAY_ENABLED").pipe(
       Config.withDefault(false),
     );
+    const streams = yield* Config.Boolean("FOUNDRY_STREAM_GATEWAY_ENABLED").pipe(
+      Config.withDefault(false),
+    );
+    if (streams && !gateway) return yield* new FoundryDeviceError({ code: "configuration" });
     if (gateway && !grants) return yield* new FoundryDeviceError({ code: "configuration" });
     if (grants && !channel) return yield* new FoundryDeviceError({ code: "configuration" });
     if (!enabled)
@@ -69,6 +73,7 @@ export const layer = Layer.unwrap(
       Layer.provide(Layer.succeed(DeviceConfig.DeviceEnrollmentEnabled, enrollment)),
       Layer.provide(Layer.succeed(DeviceConfig.DeviceChannelEnabled, channel)),
       Layer.provide(Layer.succeed(DeviceConfig.HttpGatewayEnabled, gateway)),
+      Layer.provide(Layer.succeed(DeviceConfig.StreamGatewayEnabled, streams)),
       Layer.provide(InstancePostgres.layerIdentity),
       Layer.provide(InstancePostgres.layer),
       Layer.provide(InstanceDatabase.layer({ url })),

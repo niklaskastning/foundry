@@ -21,6 +21,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Socket from "effect/socket/Socket";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpRouter, HttpServerRequest } from "effect/http";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
@@ -56,6 +57,7 @@ const fixture = Effect.gen(function* () {
   const services = yield* Layer.build(
     GatewayGrants.layer.pipe(
       Layer.provide(Layer.succeed(DeviceConfig.DeviceOrigin, { origin })),
+      Layer.provide(Layer.succeed(DeviceConfig.StreamGatewayEnabled, true)),
       Layer.provide(
         Layer.succeed(FoundrySessions.FoundrySessions, {
           inspect: (token) =>
@@ -79,6 +81,8 @@ const fixture = Effect.gen(function* () {
       Layer.provide(
         Layer.succeed(DeviceChannel.DeviceChannel, {
           serve: () => Effect.die("not used"),
+          stream: () => Effect.void,
+          attachStream: () => Effect.die("not used"),
           projects: (_, validate) =>
             Effect.gen(function* () {
               yield* validate;
@@ -356,7 +360,7 @@ it.live("bounds HTTP bodies without Content-Length and returns no credential or 
     for (const body of [
       "{}".repeat(3000),
       "<html>Access</html>",
-      JSON.stringify({ ...f.input, scopes: ["orchestration:operate"] }),
+      JSON.stringify({ ...f.input, scopes: ["access:write"] }),
     ])
       expect((yield* send(body)).status).toBe(400);
     const grant = yield* f.grants.create(f.request(f.read.token), f.input);
@@ -392,4 +396,134 @@ it.effect.each(["success", "session-revoke", "grant-remove", "foundry-logout"] a
       yield* Deferred.succeed(f.finish, undefined);
       expect((yield* Fiber.join(read))._tag).toBe(action === "success" ? "Success" : "Failure");
     }).pipe(Effect.scoped),
+);
+
+it.effect("binds single-use stream tickets to live sessions, scopes, origin and expiry", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    const session = yield* f.sessions.issue({
+      scopes: ["orchestration:read", "terminal:operate"],
+      method: "bearer-access-token",
+    });
+    const request = f.request(session.token);
+    const grant = yield* f.grants.create(request, {
+      ...f.input,
+      scopes: ["orchestration:read", "terminal:operate"],
+    });
+    const lookup = { ...f.target, grantId: grant.grantId };
+    const upgrade = Effect.succeed(
+      Socket.make({ reader: Effect.die("unused"), writer: Effect.die("unused") }),
+    );
+    const socketRequest = (
+      ticket: { ticket: string; wsTicket: string },
+      headers = request.headers,
+    ) =>
+      HttpServerRequest.fromWeb(
+        new Request(
+          `${origin}/api/foundry/gateway/stream?ticket=${ticket.ticket}&wsTicket=${ticket.wsTicket}`,
+          { headers },
+        ),
+      );
+    const first = yield* f.grants.ticket(request, lookup);
+    yield* f.grants.stream(socketRequest(first), upgrade);
+    expect(
+      (yield* f.grants
+        .stream(socketRequest(first), Effect.die("no replay upgrade"))
+        .pipe(Effect.result))._tag,
+    ).toBe("Failure");
+    const wrongOrigin = yield* f.grants.ticket(request, lookup);
+    expect(
+      (yield* f.grants
+        .stream(
+          socketRequest(wrongOrigin, { ...request.headers, origin: "https://foreign.test" }),
+          Effect.die("no foreign upgrade"),
+        )
+        .pipe(Effect.result))._tag,
+    ).toBe("Failure");
+    const expired = yield* f.grants.ticket(request, lookup);
+    yield* TestClock.adjust("10 seconds");
+    expect(
+      (yield* f.grants
+        .stream(socketRequest(expired), Effect.die("no expired upgrade"))
+        .pipe(Effect.result))._tag,
+    ).toBe("Failure");
+    const removed = yield* f.grants.ticket(request, lookup);
+    yield* f.grants.remove(request, lookup);
+    expect(
+      (yield* f.grants
+        .stream(socketRequest(removed), Effect.die("no removed grant upgrade"))
+        .pipe(Effect.result))._tag,
+    ).toBe("Failure");
+    expect(
+      (yield* f.grants
+        .create(f.request(f.read.token), {
+          ...f.input,
+          scopes: ["orchestration:read", "terminal:operate"],
+        })
+        .pipe(Effect.result))._tag,
+    ).toBe("Failure");
+  }).pipe(Effect.scoped),
+);
+
+it.effect("keeps the client's DPoP binding on the Main stream ticket", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    const { privateKey, publicKey } = NodeCrypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+    const jwk = publicKey.export({ format: "jwk" }) as DpopPublicJwk;
+    const session = yield* f.sessions.issue({
+      scopes: ["orchestration:read"],
+      method: "dpop-access-token",
+      proofKeyThumbprint: computeDpopJwkThumbprint(jwk),
+    });
+    const now = yield* Clock.currentTimeMillis;
+    const proof = (path: string, token: string, method = "POST") => {
+      const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+      const unsigned = `${encode({ typ: "dpop+jwt", alg: "ES256", jwk })}.${encode({ htm: method, htu: `${origin}${path}`, jti: NodeCrypto.randomUUID(), iat: Math.floor(now / 1000), ath: computeDpopAccessTokenHash(token) })}`;
+      return `${unsigned}.${NodeCrypto.sign("sha256", Buffer.from(unsigned), { key: privateKey, dsaEncoding: "ieee-p1363" }).toString("base64url")}`;
+    };
+    const request = (operation: string) =>
+      f.request(
+        session.token,
+        {
+          authorization: `DPoP ${session.token}`,
+          dpop: proof(`/api/foundry/gateway/grants/${operation}`, session.token),
+        },
+        operation,
+      );
+    const grant = yield* f.grants.create(request("create"), f.input);
+    const lookup = { ...f.target, grantId: grant.grantId };
+    const missing = yield* f.grants.ticket(request("ticket"), lookup);
+    const get = (ticket: typeof missing, dpop?: string) =>
+      HttpServerRequest.fromWeb(
+        new Request(
+          `${origin}/api/foundry/gateway/stream?ticket=${ticket.ticket}&wsTicket=${ticket.wsTicket}${dpop ? `&dpop=${dpop}` : ""}`,
+          { headers: { origin, host: "main.example.test", "x-forwarded-proto": "https" } },
+        ),
+      );
+    expect(
+      (yield* f.grants.stream(get(missing), Effect.die("proof required")).pipe(Effect.result))._tag,
+    ).toBe("Failure");
+    const valid = yield* f.grants.ticket(request("ticket"), lookup);
+    yield* f.grants.stream(
+      get(valid, proof("/api/foundry/gateway/stream", valid.wsTicket, "GET")),
+      Effect.succeed(Socket.make({ reader: Effect.die("unused"), writer: Effect.die("unused") })),
+    );
+  }).pipe(Effect.scoped),
+);
+
+it.effect("bounds concurrently issued stream tickets and reclaims expired slots", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    const request = f.request(f.read.token);
+    const grant = yield* f.grants.create(request, f.input);
+    const lookup = { ...f.target, grantId: grant.grantId };
+    const results = yield* Effect.all(
+      Array.from({ length: 129 }, () => f.grants.ticket(request, lookup).pipe(Effect.result)),
+      { concurrency: "unbounded" },
+    );
+    expect(results.filter((result) => result._tag === "Success")).toHaveLength(128);
+    expect(results.filter((result) => result._tag === "Failure")).toHaveLength(1);
+    yield* TestClock.adjust("10 seconds");
+    yield* f.grants.ticket(request, lookup);
+  }).pipe(Effect.scoped),
 );

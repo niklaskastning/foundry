@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+import * as StreamSocket from "./StreamSocket.ts";
 import * as DeviceConfig from "./DeviceConfig.ts";
 import * as GatewayGrants from "./GatewayGrants.ts";
 
@@ -12,8 +13,9 @@ const headers = { "cache-control": "no-store", pragma: "no-cache" };
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const enabled = yield* DeviceConfig.HttpGatewayEnabled;
+    const streams = yield* DeviceConfig.StreamGatewayEnabled;
     const grants = yield* GatewayGrants.GatewayGrants;
-    const route = (operation: "create" | "inspect" | "remove" | "projects") =>
+    const route = (operation: "create" | "inspect" | "remove" | "projects" | "ticket") =>
       HttpRouter.add(
         "POST",
         operation === "projects"
@@ -68,6 +70,23 @@ export const layer = Layer.unwrap(
       route("inspect"),
       route("remove"),
       enabled ? route("projects") : Layer.empty,
+      streams ? route("ticket") : Layer.empty,
+      streams
+        ? HttpRouter.add(
+            "GET",
+            "/api/foundry/gateway/stream",
+            Effect.gen(function* () {
+              const request = yield* HttpServerRequest.HttpServerRequest;
+              yield* grants.stream(request, StreamSocket.upgrade(request));
+              return HttpServerResponse.empty();
+            }).pipe(
+              Effect.catchTags({
+                FoundryGatewayError: () =>
+                  Effect.succeed(HttpServerResponse.empty({ status: 403, headers })),
+              }),
+            ),
+          )
+        : Layer.empty,
     );
   }),
 );
