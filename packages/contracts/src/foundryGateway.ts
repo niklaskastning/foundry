@@ -10,6 +10,22 @@ import {
 import { FoundryInstanceId } from "./foundry.ts";
 import { FoundryDeviceId } from "./foundryDevices.ts";
 
+export const FoundryDeviceGrantKind = Schema.Literals([
+  "clientAccess",
+  "automationExecution",
+  "sandboxProvisioning",
+]);
+export const FoundryDeviceGrant = Schema.Struct({
+  deviceId: FoundryDeviceId,
+  kind: FoundryDeviceGrantKind,
+  enabled: Schema.Boolean,
+  generation: Schema.Int.check(Schema.isGreaterThan(0)),
+});
+export type FoundryDeviceGrant = typeof FoundryDeviceGrant.Type;
+export const FoundryDeviceGrantUpdate = Schema.Struct({
+  ...FoundryDeviceGrant.fields,
+});
+
 export const FoundryGatewayGrantId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("FoundryGatewayGrantId"),
 );
@@ -36,7 +52,9 @@ export const FoundryGatewayGrantLookup = Schema.Struct({
 export const FoundryGatewayGrant = Schema.Struct({
   ...FoundryGatewayGrantRequest.fields,
   grantId: FoundryGatewayGrantId,
-  protocolVersion: Schema.Literal("1"),
+  protocolVersion: Schema.Literal("2"),
+  grantKind: Schema.Literal("clientAccess"),
+  accessGeneration: Schema.Int.check(Schema.isGreaterThan(0)),
   instanceId: FoundryInstanceId,
   origin: Schema.String,
   operatorId: Schema.String,

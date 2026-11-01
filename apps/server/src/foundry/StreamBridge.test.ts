@@ -8,7 +8,7 @@ import * as Socket from "effect/socket/Socket";
 import * as TestClock from "effect/testing/TestClock";
 import { bridge } from "./StreamBridge.ts";
 
-it.effect.each(["slow", "oversize", "revoked"] as const)(
+it.effect.each(["slow", "oversize", "revoked", "close-stall"] as const)(
   "closes both stream ends without replay after %s",
   (mode) =>
     Effect.gen(function* () {
@@ -18,7 +18,10 @@ it.effect.each(["slow", "oversize", "revoked"] as const)(
       let writes = 0;
       let valid = true;
       const write: Socket.Writer["write"] = (frame) => {
-        if (Socket.isCloseEvent(frame)) return Queue.offer(closes, undefined).pipe(Effect.asVoid);
+        if (Socket.isCloseEvent(frame))
+          return mode === "close-stall"
+            ? Effect.never
+            : Queue.offer(closes, undefined).pipe(Effect.asVoid);
         writes++;
         return Deferred.succeed(writing, undefined).pipe(Effect.andThen(Effect.never));
       };
@@ -45,9 +48,9 @@ it.effect.each(["slow", "oversize", "revoked"] as const)(
           valid ? Effect.void : Effect.fail(new FoundryGatewayError({ code: "forbidden" })),
         ),
       ).pipe(Effect.result, Effect.forkScoped);
-      if (mode === "revoked") {
+      if (mode === "revoked" || mode === "close-stall") {
         valid = false;
-        yield* TestClock.adjust("1 second");
+        yield* TestClock.adjust(mode === "close-stall" ? "6 seconds" : "1 second");
       } else {
         yield* Queue.offer(
           input,
@@ -59,8 +62,10 @@ it.effect.each(["slow", "oversize", "revoked"] as const)(
         }
       }
       expect((yield* Fiber.join(fiber))._tag).toBe("Failure");
-      yield* Queue.take(closes);
-      yield* Queue.take(closes);
+      if (mode !== "close-stall") {
+        yield* Queue.take(closes);
+        yield* Queue.take(closes);
+      }
       expect(writes).toBe(mode === "slow" ? 1 : 0);
     }).pipe(Effect.scoped),
 );

@@ -328,7 +328,9 @@ it.effect.each(["success", "revoked", "disconnect", "timeout", "authority"] as c
       yield* Deferred.await(connected);
       const lease = yield* f.channels.current(f.device.deviceId);
       const grant = {
-        protocolVersion: "1" as const,
+        protocolVersion: "2" as const,
+        grantKind: "clientAccess" as const,
+        accessGeneration: 1,
         grantId: FoundryGatewayGrantId.make("33333333-3333-4333-8333-333333333333"),
         instanceId: f.device.instanceId,
         origin: f.origin,
@@ -401,7 +403,9 @@ it.live(
       }).pipe(Effect.result, Effect.forkScoped);
       yield* Deferred.await(connected);
       const grant = {
-        protocolVersion: "1" as const,
+        protocolVersion: "2" as const,
+        grantKind: "clientAccess" as const,
+        accessGeneration: 1,
         grantId: FoundryGatewayGrantId.make("33333333-3333-4333-8333-333333333333"),
         instanceId: f.device.instanceId,
         origin: f.origin,

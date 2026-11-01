@@ -12,11 +12,11 @@ outstanding release gates and follow-up work are tracked in
 [issue #13](https://github.com/niklaskastning/foundry/issues/13). Do not activate it
 on the existing production deployment as part of development testing.
 
-Use an isolated Main with PostgreSQL instance schema **4**, the existing operator
+Use an isolated Main with PostgreSQL instance schema **5**, the existing operator
 binding, and the configured `FOUNDRY_PUBLIC_ORIGIN`. Run the existing
 `foundry migrate` command with the migration role before starting this source
-version; it upgrades schemas 1/2/3 while preserving instance identity, operator and
-sessions. Older binaries reject schema 4: an image-only downgrade is not
+version; it upgrades schemas 1/2/3/4 while preserving instance identity, operator and
+sessions. Older binaries reject schema 5: an image-only downgrade is not
 a recovery procedure. The runtime role cannot change device keys or enrollment
 expiry. Set `FOUNDRY_DEVICE_ENROLLMENT_ENABLED=true` explicitly alongside
 `FOUNDRY_ACCESS_ENABLED=true` to expose `/api/foundry/devices/enroll` and advertise
@@ -75,7 +75,7 @@ registered as an execution device.
 
 ## Experimental outgoing device channel (P07)
 
-On an isolated schema-4 Main, explicitly enable
+On an isolated schema-5 Main, explicitly enable
 `FOUNDRY_DEVICE_CHANNEL_ENABLED=true` alongside the Access and enrollment flags.
 This exposes the authenticated WebSocket at `/api/foundry/devices/channel` and
 advertises `foundry.device-channel`. The default remains disabled. No client
@@ -612,3 +612,13 @@ Resume gilt während des Worker-Prozesses und der bestehenden zehnminütigen Upl
 HTML-Downloads werden lokal als `text/plain` mit opaker Data-Origin dargestellt, SVGs als opake Data-URLs; andere Medien erhalten ausschließlich bekannte passive MIME-Typen, unbekannte Dateien `application/octet-stream`. Blob-URLs gehören der jeweiligen Asset-Abfrage und werden bei deren Ende oder Verbindungsverlust widerrufen. Kein Fallback lädt Foundry-Dateien aus einer persönlichen lokalen T3-Umgebung. Textdateien und Checkpoint-Diffs nutzen ihre bestehenden RPCs mit einem Foundry-Leselimit von 16 KiB; größere Antworten werden mit der bestehenden Trunkierungsanzeige begrenzt. Vollständige signierte Datei-Downloads bleiben bis 16 MiB möglich.
 
 Durchgehende Main-/Client-Integration, Browser-Nachweis der Content-Isolation und Windows-Abnahme bleiben in [Issue #13](https://github.com/niklaskastning/foundry/issues/13) offen.
+
+### Device-Freigaben und aktive Gateway-Sessions
+
+Instanzschema 5 trennt `clientAccess`, `automationExecution` und `sandboxProvisioning` pro Device mit eigener Generation. Die Migration erhält den bisherigen Client-Zugang registrierter, nicht widerrufener Devices; neue Enrollments erhalten nur `clientAccess`. Automation und Sandbox-Provisionierung bleiben deaktiviert und können über die API nicht freigegeben werden. Die Device-Registrierung und ihr dauerhafter Widerruf bleiben getrennt von dieser wiedererteilbaren Client-Freigabe.
+
+Am bestehenden Gateway sind POST `/api/foundry/gateway/grants/readAccess` (`deviceId`) und `/api/foundry/gateway/grants/updateAccess` (`deviceId`, `kind: "clientAccess"`, `enabled`, aktuelle `generation`) verfügbar. Beide benötigen die bestätigte Foundry-Session, Origin/CSRF und eine Main-T3-Session mit `access:write`. Jede erfolgreiche Änderung erhöht die Generation; ein veralteter Schreibstand wird abgewiesen. Die interaktive Bedienung folgt mit P12. Bestehendes `/remove` entfernt dagegen nur einen kurzlebigen Gateway-Grant dieser Client-Session.
+
+Gateway-Grants verwenden jetzt Protokoll 2 mit `grantKind` und `accessGeneration`; Client, Main und Connector müssen aus passenden Builds stammen. Main prüft die aktuelle PostgreSQL-Freigabe beim Erteilen und Verwenden eines Grants sowie vor jedem Datenframe. Im Leerlauf wird einmal pro Sekunde geprüft. Eine hängende Stream-Autorisierungsprüfung wird nach zwei Sekunden abgebrochen; das Schließen der beiden Enden wartet höchstens fünf weitere Sekunden. Es gibt keinen unbegrenzt gültigen Autorisierungscache. Entzug oder Wiedererteilung invalidieren alte Generationen; andere Grant-Arten und unabhängige direkte T3-Sessions bleiben erhalten. Der Connector widerruft seine lokale DPoP-Session beim Ende des Streams; bei Verbindungsverlust begrenzt zusätzlich deren Ablauf die Gültigkeit. Kein versprochener Fern-Kill eines offline laufenden Agenten oder externer Provider-Tokens.
+
+Migration und Widerruf sind auf isoliertem Zustand zu prüfen, nicht als Image-only-Upgrade/-Downgrade gegen das aktive Deployment. Die noch fehlende integrierte Windows-/Browser-/Mehrmaschinen-Abnahme bleibt in [Issue #13](https://github.com/niklaskastning/foundry/issues/13) erfasst.

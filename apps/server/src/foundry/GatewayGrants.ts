@@ -2,6 +2,9 @@ import {
   ORCHESTRATION_PROTOCOL_QUERY_PARAM,
   ORCHESTRATION_PROTOCOL_VERSION,
   AuthOrchestrationReadScope,
+  AuthAccessWriteScope,
+  FoundryDeviceId,
+  type FoundryDeviceGrant,
   FoundryGatewayError,
   FoundryGatewayGrantId,
   FoundryGatewayGrantRequest,
@@ -25,6 +28,7 @@ import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import { timingSafeEqualBase64Url } from "../auth/utils.ts";
+import * as DeviceGrants from "./DeviceGrants.ts";
 import * as DeviceChannel from "./DeviceChannel.ts";
 import * as DeviceConfig from "./DeviceConfig.ts";
 import * as FoundrySessions from "./FoundrySessions.ts";
@@ -35,6 +39,9 @@ const decodeRequest = Schema.decodeUnknownEffect(FoundryGatewayGrantRequest, {
 const decodeLookup = Schema.decodeUnknownEffect(FoundryGatewayGrantLookup, {
   onExcessProperty: "error",
 });
+const decodeDeviceId = Schema.decodeUnknownEffect(Schema.Struct({ deviceId: FoundryDeviceId }), {
+  onExcessProperty: "error",
+});
 const decodeId = Schema.decodeUnknownEffect(FoundryGatewayGrantId);
 const denied = () => new FoundryGatewayError({ code: "forbidden" });
 const invalid = () => new FoundryGatewayError({ code: "invalid_request" });
@@ -43,6 +50,14 @@ type Request = HttpServerRequest.HttpServerRequest;
 export class GatewayGrants extends Context.Service<
   GatewayGrants,
   {
+    readonly readAccess: (
+      request: Request,
+      input: unknown,
+    ) => Effect.Effect<ReadonlyArray<FoundryDeviceGrant>, FoundryGatewayError>;
+    readonly updateAccess: (
+      request: Request,
+      input: unknown,
+    ) => Effect.Effect<FoundryDeviceGrant, FoundryGatewayError>;
     readonly ticket: (
       request: Request,
       input: unknown,
@@ -72,6 +87,7 @@ const make = Effect.gen(function* () {
   const auth = yield* EnvironmentAuth.EnvironmentAuth;
   const clientSessions = yield* SessionStore.SessionStore;
   const channels = yield* DeviceChannel.DeviceChannel;
+  const access = yield* DeviceGrants.DeviceGrants;
   const { origin } = yield* DeviceConfig.DeviceOrigin;
   const crypto = yield* Crypto.Crypto;
   const streamsEnabled = yield* DeviceConfig.StreamGatewayEnabled;
@@ -116,6 +132,7 @@ const make = Effect.gen(function* () {
       (!streamsEnabled && target.scopes.some((scope) => scope !== AuthOrchestrationReadScope))
     )
       return yield* denied();
+    const accessGeneration = yield* access.check(target.deviceId, identity.foundry.operatorId);
     const lease = yield* channels.current(target.deviceId).pipe(Effect.mapError(denied));
     if (
       lease.device.revoked ||
@@ -134,7 +151,9 @@ const make = Effect.gen(function* () {
     const grant: FoundryGatewayGrant = {
       ...target,
       grantId,
-      protocolVersion: "1",
+      protocolVersion: "2",
+      grantKind: "clientAccess",
+      accessGeneration,
       instanceId: identity.foundry.instanceId,
       origin,
       operatorId: identity.foundry.operatorId,
@@ -180,6 +199,7 @@ const make = Effect.gen(function* () {
       grant.environmentId !== target.environmentId
     )
       return yield* denied();
+    yield* access.check(grant.deviceId, grant.operatorId, grant.accessGeneration);
     const lease = yield* channels.current(grant.deviceId).pipe(Effect.mapError(denied));
     if (
       lease.device.revoked ||
@@ -208,6 +228,7 @@ const make = Effect.gen(function* () {
       .inspect(request.cookies[FoundrySessions.FOUNDRY_SESSION_COOKIE])
       .pipe(Effect.mapError(denied));
     const entry = grants.get(grant.grantId);
+    yield* access.check(grant.deviceId, grant.operatorId, grant.accessGeneration);
     const clients = yield* clientSessions
       .listActive()
       .pipe(Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })));
@@ -275,6 +296,32 @@ const make = Effect.gen(function* () {
     );
     yield* channels.stream(entry.grant, entry.validate, socket);
   });
-  return GatewayGrants.of({ create, inspect, remove, projects, ticket, stream });
+  const readAccess = Effect.fn("GatewayGrants.readAccess")(function* (
+    request: Request,
+    input: unknown,
+  ) {
+    const identity = yield* authenticate(request);
+    if (!identity.client.scopes.includes(AuthAccessWriteScope)) return yield* denied();
+    const { deviceId } = yield* decodeDeviceId(input).pipe(Effect.mapError(invalid));
+    return yield* access.read(deviceId, identity.foundry.operatorId);
+  });
+  const updateAccess = Effect.fn("GatewayGrants.updateAccess")(function* (
+    request: Request,
+    input: unknown,
+  ) {
+    const identity = yield* authenticate(request);
+    if (!identity.client.scopes.includes(AuthAccessWriteScope)) return yield* denied();
+    return yield* access.update(input, identity.foundry.operatorId);
+  });
+  return GatewayGrants.of({
+    create,
+    inspect,
+    remove,
+    projects,
+    ticket,
+    stream,
+    readAccess,
+    updateAccess,
+  });
 });
 export const layer = Layer.effect(GatewayGrants, make);

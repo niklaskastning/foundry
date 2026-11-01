@@ -46,7 +46,7 @@ export const layer = (config: PgClient.PgPoolConfig) =>
 export const checkSchema = Effect.fn("InstanceDatabase.checkSchema")(function* () {
   const sql = yield* InstanceDatabase;
   const rows = yield* sql<{ version: number }>`SELECT version FROM foundry_instance.schema_version`;
-  if (rows.length !== 1 || rows[0]?.version !== 4) {
+  if (rows.length !== 1 || rows[0]?.version !== 5) {
     return yield* new InstanceDatabaseError({ reason: "schema_incompatible" });
   }
 });

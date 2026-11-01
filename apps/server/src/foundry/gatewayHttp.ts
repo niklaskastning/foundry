@@ -15,7 +15,16 @@ export const layer = Layer.unwrap(
     const enabled = yield* DeviceConfig.HttpGatewayEnabled;
     const streams = yield* DeviceConfig.StreamGatewayEnabled;
     const grants = yield* GatewayGrants.GatewayGrants;
-    const route = (operation: "create" | "inspect" | "remove" | "projects" | "ticket") =>
+    const route = (
+      operation:
+        | "create"
+        | "inspect"
+        | "remove"
+        | "projects"
+        | "ticket"
+        | "readAccess"
+        | "updateAccess",
+    ) =>
       HttpRouter.add(
         "POST",
         operation === "projects"
@@ -69,6 +78,8 @@ export const layer = Layer.unwrap(
       route("create"),
       route("inspect"),
       route("remove"),
+      route("readAccess"),
+      route("updateAccess"),
       enabled ? route("projects") : Layer.empty,
       streams ? route("ticket") : Layer.empty,
       streams

@@ -137,6 +137,9 @@ const make = Effect.gen(function* () {
             yield* sql`INSERT INTO foundry_instance.devices (device_id, instance_id, operator_id, environment_id, public_key)
           VALUES (${row.device_id}, ${instanceId}, ${row.operator_id}, ${row.environment_id}, ${row.public_key}) ON CONFLICT DO NOTHING RETURNING device_id`;
           if (inserted.length !== 1) return yield* new FoundryDeviceError({ code: "conflict" });
+          yield* sql`INSERT INTO foundry_instance.device_grants (device_id, kind, enabled)
+            SELECT ${row.device_id}, kind, kind = 'clientAccess'
+            FROM (VALUES ('clientAccess'), ('automationExecution'), ('sandboxProvisioning')) AS kinds(kind)`;
           yield* sql`UPDATE foundry_instance.device_enrollments SET consumed = true WHERE token_hash = ${digest}`;
         }
         const devices =

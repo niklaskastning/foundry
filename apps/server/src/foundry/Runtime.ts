@@ -17,6 +17,7 @@ import * as DeviceRegistry from "./DeviceRegistry.ts";
 import * as DeviceHttp from "./deviceHttp.ts";
 import * as DeviceChannel from "./DeviceChannel.ts";
 import * as DeviceChannelHttp from "./deviceChannelHttp.ts";
+import * as DeviceGrants from "./DeviceGrants.ts";
 import * as GatewayGrants from "./GatewayGrants.ts";
 import * as GatewayHttp from "./gatewayHttp.ts";
 import { FoundryDeviceError } from "@t3tools/contracts";
@@ -59,7 +60,11 @@ export const layer = Layer.unwrap(
           channel
             ? Layer.merge(
                 DeviceChannelHttp.layer,
-                grants ? GatewayHttp.layer.pipe(Layer.provide(GatewayGrants.layer)) : Layer.empty,
+                grants
+                  ? GatewayHttp.layer.pipe(
+                      Layer.provide(GatewayGrants.layer.pipe(Layer.provide(DeviceGrants.layer))),
+                    )
+                  : Layer.empty,
               ).pipe(Layer.provide(DeviceChannel.layer))
             : Layer.empty,
         ).pipe(Layer.provide(DeviceRegistry.layer), Layer.provide(DeviceConfig.layer))

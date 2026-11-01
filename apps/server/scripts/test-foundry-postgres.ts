@@ -35,6 +35,7 @@ import * as EnvironmentAuthPolicy from "../src/auth/EnvironmentAuthPolicy.ts";
 import * as EnvironmentAuth from "../src/auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../src/auth/ServerSecretStore.ts";
 import * as SqlitePersistence from "../src/persistence/Sqlite.ts";
+import * as DeviceGrants from "../src/foundry/DeviceGrants.ts";
 import * as DeviceRegistry from "../src/foundry/DeviceRegistry.ts";
 import * as DeviceConfig from "../src/foundry/DeviceConfig.ts";
 import * as DeviceHttp from "../src/foundry/deviceHttp.ts";
@@ -255,7 +256,7 @@ try {
     await query("UPDATE foundry_instance.schema_version SET version=99", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 503);
     await expectFailure(migrate());
-    await query("UPDATE foundry_instance.schema_version SET version=4", "foundry_migrate");
+    await query("UPDATE foundry_instance.schema_version SET version=5", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 200);
     await query("GRANT CREATE ON SCHEMA public TO foundry_runtime");
     NodeAssert.equal((await ready()).status, 503);
@@ -367,7 +368,7 @@ try {
     await expectFailure(bind("foreign-operator"));
     const operatorBefore = await query("SELECT * FROM foundry_instance.operator_binding");
     await query(
-      "DROP TABLE foundry_instance.device_enrollments, foundry_instance.devices",
+      "DROP TABLE foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
       "foundry_migrate",
     );
     await query("DROP TABLE foundry_instance.sessions", "foundry_migrate");
@@ -594,7 +595,7 @@ try {
     "SELECT * FROM foundry_instance.sessions ORDER BY token_hash",
   );
   await query(
-    "DROP TABLE foundry_instance.device_enrollments, foundry_instance.devices",
+    "DROP TABLE foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
     "foundry_migrate",
   );
   await query("UPDATE foundry_instance.schema_version SET version=2", "foundry_migrate");
@@ -699,12 +700,81 @@ try {
       "ALTER TABLE foundry_instance.devices DROP COLUMN channel_generation",
       "foundry_migrate",
     );
+    await query("DROP TABLE foundry_instance.device_grants", "foundry_migrate");
     await query("UPDATE foundry_instance.schema_version SET version=3", "foundry_migrate");
     await expectFailure(readIdentity);
     await run(Effect.all([migrate(), migrate()], { concurrency: "unbounded" }));
     NodeAssert.deepEqual(
       await deviceCall((registry) => registry.get(registered.deviceId)),
       registered,
+    );
+    const operatorId = String(
+      (await query("SELECT operator_id FROM foundry_instance.operator_binding"))[0]!.operator_id,
+    );
+    const grantLayer = DeviceGrants.layer.pipe(
+      Layer.provide(identityLayer),
+      Layer.provide(db("foundry_runtime")),
+    );
+    const grantCall = <A>(
+      f: (
+        service: DeviceGrants.DeviceGrants["Service"],
+      ) => Effect.Effect<A, import("@t3tools/contracts").FoundryGatewayError>,
+    ) => run(DeviceGrants.DeviceGrants.pipe(Effect.flatMap(f), Effect.provide(grantLayer)));
+    const initialGrants = await grantCall((service) =>
+      service.read(registered.deviceId, operatorId),
+    );
+    NodeAssert.deepEqual(initialGrants.map((g) => [g.kind, g.enabled]).sort(), [
+      ["automationExecution", false],
+      ["clientAccess", true],
+      ["sandboxProvisioning", false],
+    ]);
+    const access = initialGrants.find((g) => g.kind === "clientAccess")!;
+    const disabled = await grantCall((service) =>
+      service.update({ ...access, enabled: false }, operatorId),
+    );
+    NodeAssert.equal(disabled.generation, access.generation + 1);
+    NodeAssert.equal((await enroll(proof)).status, 200);
+    await NodeAssert.rejects(
+      grantCall((service) => service.check(registered.deviceId, operatorId)),
+    );
+    await NodeAssert.rejects(
+      grantCall((service) => service.update({ ...access, enabled: true }, operatorId)),
+    );
+    for (const kind of ["automationExecution", "sandboxProvisioning"]) {
+      await NodeAssert.rejects(
+        grantCall((service) => service.update({ ...access, kind, enabled: true }, operatorId)),
+      );
+    }
+    const restored = await grantCall((service) =>
+      service.update({ ...disabled, enabled: true }, operatorId),
+    );
+    await NodeAssert.rejects(
+      grantCall((service) => service.check(registered.deviceId, operatorId, access.generation)),
+    );
+    NodeAssert.equal(
+      await grantCall((service) =>
+        service.check(registered.deviceId, operatorId, restored.generation),
+      ),
+      restored.generation,
+    );
+    await NodeAssert.rejects(
+      grantCall((service) =>
+        service.read(registered.deviceId, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+      ),
+    );
+    await run(migrate());
+    NodeAssert.equal(
+      await grantCall((service) => service.check(registered.deviceId, operatorId)),
+      restored.generation,
+    );
+    NodeAssert.deepEqual(
+      (await grantCall((service) => service.read(registered.deviceId, operatorId))).filter(
+        (g) => g.kind !== "clientAccess",
+      ),
+      initialGrants.filter((g) => g.kind !== "clientAccess"),
+    );
+    await report(
+      "PASS P11 PostgreSQL: separated grant kinds, durable revoke/regrant generations, stale update rejection, operator isolation and idempotent migration",
     );
     const epochs = await Promise.all(
       Array.from({ length: 4 }, () => deviceCall((registry) => registry.claimChannel(registered))),
@@ -716,6 +786,34 @@ try {
       await NodeAssert.rejects(deviceCall((registry) => registry.checkChannel(registered, epoch)));
     }
     NodeAssert.equal((await query("SELECT * FROM foundry_instance.devices")).length, 1);
+    const independentKey = generateDeviceKey();
+    const independentInvitation = await deviceCall((registry) =>
+      registry.approve({
+        environmentId: EnvironmentId.make("p11-independent-worker"),
+        publicKey: independentKey.publicKey,
+      }),
+    );
+    const independentDevice = await deviceCall((registry) =>
+      registry.enroll(signEnrollment(independentInvitation, independentKey.privateKey)),
+    );
+    const independentGrants = await grantCall((service) =>
+      service.read(independentDevice.deviceId, operatorId),
+    );
+    await grantCall((service) => service.update({ ...restored, enabled: false }, operatorId));
+    await NodeAssert.rejects(
+      grantCall((service) => service.check(registered.deviceId, operatorId)),
+    );
+    NodeAssert.equal(
+      await grantCall((service) => service.check(independentDevice.deviceId, operatorId)),
+      1,
+    );
+    NodeAssert.deepEqual(
+      await grantCall((service) => service.read(independentDevice.deviceId, operatorId)),
+      independentGrants,
+    );
+    await report(
+      "PASS P11 device isolation: revoking one device's client access preserves every grant of another device",
+    );
     NodeAssert.equal(
       JSON.stringify(
         await query("SELECT token_hash FROM foundry_instance.device_enrollments"),

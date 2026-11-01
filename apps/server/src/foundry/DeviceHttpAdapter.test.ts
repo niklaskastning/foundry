@@ -61,7 +61,9 @@ const fixture = Effect.gen(function* () {
   const origin = "https://main.example.test";
   const grant: FoundryGatewayGrant = {
     grantId: FoundryGatewayGrantId.make("33333333-3333-4333-8333-333333333333"),
-    protocolVersion: "1",
+    protocolVersion: "2",
+    grantKind: "clientAccess",
+    accessGeneration: 1,
     deviceId: device.deviceId,
     instanceId: device.instanceId,
     environmentId,
@@ -221,6 +223,10 @@ it.live(
         { instanceId: "44444444-4444-4444-8444-444444444444" },
         { origin: "https://other.test" },
         { generation: 2 },
+        { grantKind: "automationExecution" },
+        { grantKind: "sandboxProvisioning" },
+        { accessGeneration: 0 },
+        { protocolVersion: "1" },
         { channelGeneration: 2 },
         { expiresAt: 0 },
         { scopes: ["orchestration:operate"] },
@@ -290,6 +296,11 @@ it.live(
       expect((yield* f.adapter.openStream(f.grant, 1).pipe(Effect.result))._tag).toBe("Failure");
       expect(yield* f.sessions.listActive()).toHaveLength(0);
       f.setMode("ok");
+      const direct = yield* f.sessions.issue({
+        scopes: ["orchestration:read"],
+        subject: "independent-direct-client",
+        method: "bearer-access-token",
+      });
       yield* Effect.gen(function* () {
         const socket = yield* f.adapter.openStream(
           { ...f.grant, scopes: ["orchestration:read", "terminal:read"] },
@@ -308,9 +319,13 @@ it.live(
           ),
         ).toEqual(["one terminal frame"]);
         const active = yield* f.sessions.listActive();
-        expect(active).toHaveLength(1);
-        expect(active[0]?.scopes).toEqual(["orchestration:read", "terminal:read"]);
+        expect(active).toHaveLength(2);
+        const gateway = active.find((session) => session.sessionId !== direct.sessionId)!;
+        expect(gateway.scopes).toEqual(["orchestration:read", "terminal:read"]);
+        expect(gateway.subject).toContain('"grantKind":"clientAccess"');
+        expect(gateway.subject).toContain('"accessGeneration":1');
       }).pipe(Effect.scoped);
-      expect(yield* f.sessions.listActive()).toHaveLength(0);
+      expect((yield* f.sessions.verify(direct.token)).sessionId).toBe(direct.sessionId);
+      expect(yield* f.sessions.listActive()).toHaveLength(1);
     }).pipe(Effect.scoped),
 );

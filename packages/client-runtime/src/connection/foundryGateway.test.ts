@@ -95,7 +95,9 @@ it.effect.each([
       if (path.endsWith("/create")) {
         grants++;
         return Response.json({
-          protocolVersion: "1",
+          protocolVersion: "2",
+          grantKind: "clientAccess",
+          accessGeneration: 1,
           grantId: FoundryGatewayGrantId.make("44444444-4444-4444-8444-444444444444"),
           instanceId: target.binding.instanceId,
           origin: target.binding.origin,
