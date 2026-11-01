@@ -15,6 +15,8 @@ import {
   computeDpopJwkThumbprint,
   type DpopPublicJwk,
 } from "@t3tools/shared/dpop";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -49,6 +51,8 @@ const fixture = Effect.gen(function* () {
   let revoked = false;
   let foundryActive = true;
   const expiresAt = (yield* Clock.currentTimeMillis) + 600_000;
+  const dispatched = yield* Deferred.make<void>();
+  const finish = yield* Deferred.make<void>();
   const services = yield* Layer.build(
     GatewayGrants.layer.pipe(
       Layer.provide(Layer.succeed(DeviceConfig.DeviceOrigin, { origin })),
@@ -75,6 +79,14 @@ const fixture = Effect.gen(function* () {
       Layer.provide(
         Layer.succeed(DeviceChannel.DeviceChannel, {
           serve: () => Effect.die("not used"),
+          projects: (_, validate) =>
+            Effect.gen(function* () {
+              yield* validate;
+              yield* Deferred.succeed(dispatched, undefined);
+              yield* Deferred.await(finish);
+              yield* validate;
+              return { projects: [], updatedAt: "2026-11-01T00:00:00.000Z" };
+            }),
           current: (id) =>
             online && id === device.deviceId && !revoked
               ? Effect.succeed({ device: { ...device, revoked }, channelGeneration })
@@ -116,6 +128,8 @@ const fixture = Effect.gen(function* () {
   });
   return {
     grants,
+    dispatched,
+    finish,
     sessions,
     request,
     read,
@@ -310,18 +324,26 @@ it.live("bounds HTTP bodies without Content-Length and returns no credential or 
   Effect.gen(function* () {
     const f = yield* fixture;
     const handler = HttpRouter.toWebHandler(
-      GatewayHttp.layer.pipe(Layer.provide(Layer.succeed(GatewayGrants.GatewayGrants, f.grants))),
+      GatewayHttp.layer.pipe(
+        Layer.provide(Layer.succeed(GatewayGrants.GatewayGrants, f.grants)),
+        Layer.provide(Layer.succeed(DeviceConfig.HttpGatewayEnabled, true)),
+      ),
       { disableLogger: true },
     );
     yield* Effect.addFinalizer(() => Effect.promise(() => handler.dispose()));
     const send = (body: string, path = "create") =>
       Effect.promise(() =>
         handler.handler(
-          new Request(`${origin}/api/foundry/gateway/grants/${path}`, {
-            method: "POST",
-            headers: f.request(f.read.token).headers,
-            body,
-          }),
+          new Request(
+            path === "projects"
+              ? `${origin}/api/foundry/gateway/projects`
+              : `${origin}/api/foundry/gateway/grants/${path}`,
+            {
+              method: "POST",
+              headers: f.request(f.read.token).headers,
+              body,
+            },
+          ),
         ),
       );
     const response = yield* send(JSON.stringify(f.input));
@@ -337,5 +359,37 @@ it.live("bounds HTTP bodies without Content-Length and returns no credential or 
       JSON.stringify({ ...f.input, scopes: ["orchestration:operate"] }),
     ])
       expect((yield* send(body)).status).toBe(400);
+    const grant = yield* f.grants.create(f.request(f.read.token), f.input);
+    yield* Deferred.succeed(f.finish, undefined);
+    for (const extra of [
+      { path: "/api/projects/../../auth/session" },
+      { method: "POST" },
+      { url: "https://other.test" },
+    ]) {
+      const response = yield* send(
+        JSON.stringify({ ...f.target, grantId: grant.grantId, ...extra }),
+        "projects",
+      );
+      expect(response.status).toBe(400);
+    }
+    expect(yield* Deferred.isDone(f.dispatched)).toBe(false);
   }).pipe(Effect.scoped),
+);
+
+it.effect.each(["success", "session-revoke", "grant-remove", "foundry-logout"] as const)(
+  "revalidates authority before returning a device response: %s",
+  (action) =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const request = f.request(f.read.token);
+      const grant = yield* f.grants.create(request, f.input);
+      const lookup = { ...f.target, grantId: grant.grantId };
+      const read = yield* f.grants.projects(request, lookup).pipe(Effect.result, Effect.forkScoped);
+      yield* Deferred.await(f.dispatched);
+      if (action === "session-revoke") yield* f.sessions.revoke(f.read.sessionId);
+      if (action === "grant-remove") yield* f.grants.remove(request, lookup);
+      if (action === "foundry-logout") f.logout();
+      yield* Deferred.succeed(f.finish, undefined);
+      expect((yield* Fiber.join(read))._tag).toBe(action === "success" ? "Success" : "Failure");
+    }).pipe(Effect.scoped),
 );

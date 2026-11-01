@@ -79,7 +79,7 @@ On an isolated schema-4 Main, explicitly enable
 `FOUNDRY_DEVICE_CHANNEL_ENABLED=true` alongside the Access and enrollment flags.
 This exposes the authenticated WebSocket at `/api/foundry/devices/channel` and
 advertises `foundry.device-channel`. The default remains disabled. No client
-gateway, project API, filesystem or provider access is exposed by this channel.
+gateway, project API, filesystem or provider access is exposed by this flag alone.
 
 On the execution machine, use the P06 key and registration response, the confirmed
 Main HTTPS origin, and the explicit home of the existing local T3 environment:
@@ -107,20 +107,21 @@ An initial connection log means the device channel is authenticated, not that a
 T3 client can access it through Main.
 
 Authentication has a ten-second deadline. Heartbeats run every ten seconds with
-acknowledgement; Main closes a channel missing a heartbeat for thirty seconds.
+acknowledgement; Main closes a channel without activity for thirty seconds.
 Each heartbeat rechecks PostgreSQL registration/generation; DB failure closes the
 channel rather than keeping an unverified grant alive. Every successful handshake
 advances a durable channel generation, fencing previous channels, including those
 from another Main process. This is a single-Main design, not an HA routing system.
 Control frames are limited to 4 KiB and outgoing socket buffering is bounded.
-There is no command replay or data forwarding in P07. Real machine/Access and
+There is no command replay. HTTP project reads require the separate P08 opt-ins below. Real machine/Access and
 Windows integration remain tracked separately in issue #13.
 
-## Experimental gateway grants (P08a)
+## Experimental gateway project reads (P08)
 
-This is only the Main authorization boundary; it does not forward HTTP requests
-or advertise a gateway capability. P08b and the integration gates tracked in
-[issue #13](https://github.com/niklaskastning/foundry/issues/13) remain required.
+This exposes only typed project-list reads, not a general T3 connection, device
+catalog, mutation, file API or stream. Real machine/Access/Windows integration
+and the remaining G2 packages are tracked in
+[issue #13](https://github.com/niklaskastning/foundry/issues/13).
 Do not enable it on the production deployment for testing.
 
 On an isolated Main with P03 and P06/P07 enabled,
@@ -143,8 +144,43 @@ grant, including when its device is offline.
 Grants expire within 60 seconds (earlier when either parent session expires),
 are limited to 128 in-memory entries per Main, and disappear on Main restart.
 Logout or session renewal requires a new grant; read-only grants cannot request
-mutation scopes. There is no persistent grant migration or device-side session
-in this part, and no claim of completed P08/G2 acceptance.
+mutation scopes. Grants alone do not enable forwarding.
+
+For the read path, additionally set `FOUNDRY_HTTP_GATEWAY_ENABLED=true` on the
+isolated Main. It advertises `foundry.http-gateway` and enables
+`POST /api/foundry/gateway/projects`, accepting `{grantId, deviceId, environmentId}`
+with the same authenticated headers. The result is the existing typed T3
+`ProjectSnapshot`; there is no caller-selected path, method, header or destination.
+This flag requires the grant flag. Defaults remain disabled.
+
+On the execution machine, add `--gateway-origin http://127.0.0.1:3773` to
+`connect-device`, using the actual port of its already-running isolated T3
+backend. The origin must be exactly an IPv4 loopback HTTP origin, without path,
+query or credentials. Its descriptor must match the registered environment.
+The explicit home must belong to that environment; this opt-in uses its existing
+T3 session store. It does not start a backend or touch other T3 profiles.
+
+The connector signs its project-read opt-in into the handshake. The adapter
+creates a fresh `orchestration:read` T3 session per request, bound to its local
+DPoP key and valid for at most five seconds. The versioned session subject records
+the Foundry actor, origin, grant and device/channel binding. A fresh proof binds
+`GET /api/projects` on the actual local URL. No Main cookie, bearer token or
+client DPoP proof is forwarded. The local session is revoked when the request
+finishes, fails or is cancelled; a crash leaves only its short expiry.
+
+One request may be in flight per device. Requests and heartbeats share the
+existing socket reader; HTTP data is not retried after reconnect. Local JSON
+responses are limited to 64 KiB, channel frames to 128 KiB (control frames 4 KiB),
+and socket output buffering is bounded. The local operation has a five-second
+deadline and Main waits at most ten seconds for its response. Cancellation or a
+missing response closes that channel; reconnect requires a new grant. Main
+rechecks session/grant authority before dispatch and before returning data,
+and checks the registry generation on dispatch and response. Redirects,
+non-JSON bodies, oversized responses and mismatched identities fail; device
+cookies and response headers are never forwarded.
+
+These isolated paths do not constitute Windows, P08/G1/G2 or production
+acceptance. No persistent Foundry migration is added by this HTTP adapter.
 
 ## Build and start
 

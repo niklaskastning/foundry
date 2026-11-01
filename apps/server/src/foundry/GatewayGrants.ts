@@ -5,6 +5,7 @@ import {
   FoundryGatewayGrantRequest,
   FoundryGatewayGrantLookup,
   type FoundryGatewayGrant,
+  type ProjectSnapshot,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -15,14 +16,19 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as SessionStore from "../auth/SessionStore.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import { timingSafeEqualBase64Url } from "../auth/utils.ts";
 import * as DeviceChannel from "./DeviceChannel.ts";
 import * as DeviceConfig from "./DeviceConfig.ts";
 import * as FoundrySessions from "./FoundrySessions.ts";
 
-const decodeRequest = Schema.decodeUnknownEffect(FoundryGatewayGrantRequest);
-const decodeLookup = Schema.decodeUnknownEffect(FoundryGatewayGrantLookup);
+const decodeRequest = Schema.decodeUnknownEffect(FoundryGatewayGrantRequest, {
+  onExcessProperty: "error",
+});
+const decodeLookup = Schema.decodeUnknownEffect(FoundryGatewayGrantLookup, {
+  onExcessProperty: "error",
+});
 const decodeId = Schema.decodeUnknownEffect(FoundryGatewayGrantId);
 const denied = () => new FoundryGatewayError({ code: "forbidden" });
 const invalid = () => new FoundryGatewayError({ code: "invalid_request" });
@@ -31,6 +37,10 @@ type Request = HttpServerRequest.HttpServerRequest;
 export class GatewayGrants extends Context.Service<
   GatewayGrants,
   {
+    readonly projects: (
+      request: Request,
+      input: unknown,
+    ) => Effect.Effect<ProjectSnapshot, FoundryGatewayError>;
     readonly create: (
       request: Request,
       input: unknown,
@@ -46,6 +56,7 @@ export class GatewayGrants extends Context.Service<
 const make = Effect.gen(function* () {
   const sessions = yield* FoundrySessions.FoundrySessions;
   const auth = yield* EnvironmentAuth.EnvironmentAuth;
+  const clientSessions = yield* SessionStore.SessionStore;
   const channels = yield* DeviceChannel.DeviceChannel;
   const { origin } = yield* DeviceConfig.DeviceOrigin;
   const crypto = yield* Crypto.Crypto;
@@ -155,6 +166,36 @@ const make = Effect.gen(function* () {
       return yield* denied();
     grants.delete(grant.grantId);
   });
-  return GatewayGrants.of({ create, inspect, remove });
+  const projects = Effect.fn("GatewayGrants.projects")(function* (
+    request: Request,
+    input: unknown,
+  ) {
+    const grant = yield* inspect(request, input);
+    const validate = Effect.gen(function* () {
+      const foundry = yield* sessions
+        .inspect(request.cookies[FoundrySessions.FOUNDRY_SESSION_COOKIE])
+        .pipe(Effect.mapError(denied));
+      const entry = grants.get(grant.grantId);
+      const clients = yield* clientSessions
+        .listActive()
+        .pipe(Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })));
+      if (
+        !entry ||
+        entry.grant !== grant ||
+        entry.binding !== foundry.csrfToken ||
+        foundry.instanceId !== grant.instanceId ||
+        foundry.operatorId !== grant.operatorId ||
+        grant.expiresAt <= (yield* Clock.currentTimeMillis) ||
+        !clients.some(
+          (client) =>
+            client.sessionId === grant.clientSessionId &&
+            client.scopes.includes(AuthOrchestrationReadScope),
+        )
+      )
+        return yield* denied();
+    });
+    return yield* channels.projects(grant, validate);
+  });
+  return GatewayGrants.of({ create, inspect, remove, projects });
 });
 export const layer = Layer.effect(GatewayGrants, make);

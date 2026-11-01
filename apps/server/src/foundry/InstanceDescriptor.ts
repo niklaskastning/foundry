@@ -31,11 +31,13 @@ const make = Effect.gen(function* () {
   const enabled = yield* AccessConfig.AccessEnabled;
   const enrollment = yield* DeviceConfig.DeviceEnrollmentEnabled;
   const channel = yield* DeviceConfig.DeviceChannelEnabled;
+  const gateway = yield* DeviceConfig.HttpGatewayEnabled;
   const capabilities = FOUNDRY_CAPABILITIES.filter(
     (capability) =>
       (enabled || capability !== "foundry.access-sessions") &&
       (enrollment || capability !== "foundry.device-enrollment") &&
-      (channel || capability !== "foundry.device-channel"),
+      (channel || capability !== "foundry.device-channel") &&
+      (gateway || capability !== "foundry.http-gateway"),
   );
   const identity = yield* InstanceIdentityStore.InstanceIdentityStore;
   const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;

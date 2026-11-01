@@ -713,12 +713,13 @@ try {
     await deviceHandler.dispose();
   }
   await NodeFSP.writeFile(NodePath.join(home, "userdata", "environment-id"), mainEnvironmentId);
-  for (const [enabled, enrollmentEnabled, channelEnabled, grantsEnabled] of [
-    [false, false, false, false],
-    [true, false, false, false],
-    [true, true, false, false],
-    [true, true, true, false],
-    [true, true, true, true],
+  for (const [enabled, enrollmentEnabled, channelEnabled, grantsEnabled, gatewayEnabled] of [
+    [false, false, false, false, false],
+    [true, false, false, false, false],
+    [true, true, false, false, false],
+    [true, true, true, false, false],
+    [true, true, true, true, false],
+    [true, true, true, true, true],
   ] as const) {
     const runtimeRoutes = FoundryRuntime.layer.pipe(
       Layer.provide(
@@ -739,6 +740,7 @@ try {
             FOUNDRY_DEVICE_ENROLLMENT_ENABLED: String(enrollmentEnabled),
             FOUNDRY_DEVICE_CHANNEL_ENABLED: String(channelEnabled),
             FOUNDRY_GATEWAY_GRANTS_ENABLED: String(grantsEnabled),
+            FOUNDRY_HTTP_GATEWAY_ENABLED: String(gatewayEnabled),
             FOUNDRY_INSTANCE_STORE: "postgres",
             FOUNDRY_INSTANCE_DATABASE_URL: `postgresql://foundry_runtime@localhost/fork_connect?host=${encodeURIComponent(root)}`,
             FOUNDRY_ACCESS_ISSUER: accessConfig.issuer,
@@ -762,7 +764,16 @@ try {
         }),
       );
       NodeAssert.equal(grant.status, grantsEnabled ? 403 : 404);
+      const projectRead = await runtimeHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/gateway/projects`, {
+          method: "POST",
+          headers: { origin: accessConfig.origin, "content-type": "application/json" },
+          body: "{}",
+        }),
+      );
+      NodeAssert.equal(projectRead.status, gatewayEnabled ? 400 : 404);
       const descriptor = decodeDescriptor(await metadata.json());
+      NodeAssert.equal(descriptor.capabilities.includes("foundry.http-gateway"), gatewayEnabled);
       NodeAssert.equal(Object.hasOwn(descriptor, "instanceAuth"), enabled);
       NodeAssert.equal(descriptor.capabilities.includes("foundry.device-channel"), channelEnabled);
       NodeAssert.equal(

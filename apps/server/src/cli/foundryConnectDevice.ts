@@ -1,5 +1,8 @@
 import { EnvironmentId, FoundryDevice, FoundryDeviceError } from "@t3tools/contracts";
 import * as Console from "effect/Console";
+import { FetchHttpClient } from "effect/http";
+import * as Layer from "effect/Layer";
+import * as GlobalFlag from "effect/cli/GlobalFlag";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -7,6 +10,13 @@ import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { Command, Flag } from "effect/cli";
+import * as DeviceHttpAdapter from "../foundry/DeviceHttpAdapter.ts";
+import * as SessionStore from "../auth/SessionStore.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ServerConfig from "../config.ts";
+import { resolveCliAuthConfig } from "./config.ts";
 import * as DeviceConnector from "../foundry/DeviceConnector.ts";
 
 const parseJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
@@ -35,6 +45,7 @@ export const connectDeviceCommand = Command.make("connect-device", {
   origin: Flag.String("origin"),
   registration: Flag.String("registration"),
   keyFile: Flag.String("key-file"),
+  gatewayOrigin: Flag.String("gateway-origin").pipe(Flag.optional),
   accessFile: Flag.String("access-file").pipe(Flag.optional),
 }).pipe(
   Command.withDescription(
@@ -71,15 +82,39 @@ export const connectDeviceCommand = Command.make("connect-device", {
           Effect.flatMap((value) => decodeEnvironment(value.trim())),
           Effect.mapError(() => new FoundryDeviceError({ code: "configuration" })),
         );
-      return yield* DeviceConnector.run(socket, {
+      const options = {
         origin: flags.origin,
         device,
         privateKey: Redacted.make(key.privateKey),
         localEnvironmentId,
         connected: Console.log(
-          `Foundry device ${device.deviceId} connected; no gateway access is provided by this channel.`,
+          `Foundry device ${device.deviceId} connected; project-read adapter ${Option.isSome(flags.gatewayOrigin) ? "enabled" : "disabled"}.`,
         ),
-      });
+      };
+      if (Option.isNone(flags.gatewayOrigin)) return yield* DeviceConnector.run(socket, options);
+      if ((yield* localEnvironmentId) !== device.environmentId)
+        return yield* new FoundryDeviceError({ code: "configuration" });
+      const localOrigin = flags.gatewayOrigin.value;
+      const config = yield* resolveCliAuthConfig(
+        { baseDir: Option.some(flags.baseDir) },
+        yield* GlobalFlag.LogLevel,
+      );
+      return yield* Effect.gen(function* () {
+        const adapter = yield* DeviceHttpAdapter.make({ ...options, localOrigin });
+        return yield* DeviceConnector.run(socket, { ...options, projects: adapter.projects });
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            FetchHttpClient.layer,
+            SessionStore.layer.pipe(
+              Layer.provide(SqlitePersistence.layerConfig),
+              Layer.provide(ServerSecretStore.layer),
+              Layer.provideMerge(ServerEnvironment.layerIdentity),
+              Layer.provide(ServerConfig.layer(config)),
+            ),
+          ),
+        ),
+      );
     }),
   ),
 );

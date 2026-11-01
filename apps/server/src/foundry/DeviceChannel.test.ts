@@ -4,11 +4,15 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
   EnvironmentId,
+  AuthSessionId,
+  FoundryGatewayGrantId,
   FoundryDeviceId,
   FoundryDeviceError,
+  FoundryGatewayError,
   FoundryInstanceId,
   type FoundryDevice,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -210,7 +214,7 @@ it.effect("refuses an Access credential bound to another origin before dialing",
   }),
 );
 
-it.live.each(["environment", "generation", "signature"] as const)(
+it.live.each(["environment", "generation", "signature", "httpRead"] as const)(
   "rejects a foreign channel %s",
   (field) =>
     Effect.gen(function* () {
@@ -227,7 +231,13 @@ it.live.each(["environment", "generation", "signature"] as const)(
         },
         f.key.privateKey,
       );
-      yield* io.send(field === "signature" ? { ...hello, signature: "A".repeat(86) } : hello);
+      yield* io.send(
+        field === "signature"
+          ? { ...hello, signature: "A".repeat(86) }
+          : field === "httpRead"
+            ? { ...hello, httpRead: true }
+            : hello,
+      );
       expect(yield* io.read).toEqual({ type: "error", code: "invalid_proof" });
     }).pipe(Effect.scoped),
 );
@@ -255,4 +265,77 @@ it.live("runs the actual connector handshake and heartbeat without starting a lo
     }).pipe(Effect.result);
     expect(mismatch).toMatchObject({ _tag: "Failure", failure: { code: "configuration" } });
   }).pipe(Effect.scoped),
+);
+
+it.effect.each(["success", "revoked", "disconnect", "timeout", "authority"] as const)(
+  "bounds and fences a project read over the actual connector: %s",
+  (outcome) =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const connected = yield* Deferred.make<void>();
+      const dispatched = yield* Deferred.make<void>();
+      const finish = yield* Deferred.make<void>();
+      const snapshot = { projects: [], updatedAt: "2026-11-01T00:00:00.000Z" };
+      let reads = 0;
+      const connector = yield* DeviceConnector.runOnce(yield* f.socket, {
+        origin: f.origin,
+        device: f.device,
+        privateKey: Redacted.make(f.key.privateKey),
+        localEnvironmentId: Effect.succeed(f.device.environmentId),
+        connected: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
+        projects: (grant, generation) =>
+          Effect.gen(function* () {
+            expect(grant.environmentId).toBe(f.device.environmentId);
+            expect(grant.channelGeneration).toBe(generation);
+            reads++;
+            yield* Deferred.succeed(dispatched, undefined);
+            yield* Deferred.await(finish);
+            return snapshot;
+          }),
+      }).pipe(Effect.result, Effect.forkScoped);
+      yield* Deferred.await(connected);
+      const lease = yield* f.channels.current(f.device.deviceId);
+      const grant = {
+        protocolVersion: "1" as const,
+        grantId: FoundryGatewayGrantId.make("33333333-3333-4333-8333-333333333333"),
+        instanceId: f.device.instanceId,
+        origin: f.origin,
+        deviceId: f.device.deviceId,
+        environmentId: f.device.environmentId,
+        generation: 1,
+        channelGeneration: lease.channelGeneration,
+        operatorId: "operator",
+        clientSessionId: AuthSessionId.make("client"),
+        subject: "client",
+        scopes: ["orchestration:read"] as const,
+        expiresAt: (yield* Clock.currentTimeMillis) + 60000,
+      };
+      let validations = 0;
+      const validate = Effect.suspend(() =>
+        ++validations === 2 && outcome === "authority"
+          ? Effect.fail(new FoundryGatewayError({ code: "forbidden" }))
+          : Effect.void,
+      );
+      const read = yield* f.channels
+        .projects(grant, validate)
+        .pipe(Effect.result, Effect.forkScoped);
+      yield* Deferred.await(dispatched);
+      expect(yield* f.channels.projects(grant, Effect.void).pipe(Effect.flip)).toMatchObject({
+        code: "capacity",
+      });
+      if (outcome === "revoked") yield* f.registry.revoke(f.device.deviceId);
+      if (outcome === "disconnect") yield* Fiber.interrupt(connector);
+      if (outcome === "timeout") yield* TestClock.adjust("10 seconds");
+      yield* Deferred.succeed(finish, undefined);
+      const result = yield* Fiber.join(read);
+      if (outcome === "success") {
+        expect(result._tag).toBe("Success");
+        if (result._tag === "Success") expect(result.success).toEqual(snapshot);
+      } else expect(result._tag).toBe("Failure");
+      expect(reads).toBe(1);
+      if (outcome === "authority")
+        expect((yield* f.channels.current(f.device.deviceId)).channelGeneration).toBe(
+          lease.channelGeneration,
+        );
+    }).pipe(Effect.scoped),
 );
