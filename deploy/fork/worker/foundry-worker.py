@@ -88,8 +88,8 @@ StandardError=journal
     return {
         "foundry-host.target": "[Unit]\nDescription=Foundry host worker\nWants=foundry-host.service foundry-connector.service\nAfter=network-online.target\n\n[Install]\nWantedBy=multi-user.target\n",
         "foundry-host.slice": f"[Unit]\nDescription=Foundry worker resource budget\n\n[Slice]\nCPUQuota={config['cpuQuotaPercent']}%\nMemoryMax={config['memoryMaxMiB']}M\nTasksMax={config['tasksMax']}\n",
-        "foundry-host.service": "[Unit]\nDescription=Foundry isolated T3 host\nPartOf=foundry-host.target\nAfter=network-online.target\nWants=network-online.target\n\n" + common + f"ExecStart={command} --base-dir {T3} --host 127.0.0.1 --port {config['port']} --no-browser\n",
-        "foundry-connector.service": f"[Unit]\nDescription=Foundry outgoing device connector\nPartOf=foundry-host.target\nAfter=foundry-host.service network-online.target\nRequires=foundry-host.service\nConditionPathExists={STATE}/registration.json\nConditionPathExists={STATE}/device-key.json\n\n" + common + f"ExecStart={connector}\n",
+        "foundry-host.service": "[Unit]\nDescription=Foundry isolated T3 host\nPartOf=foundry-host.target\nAfter=network-online.target\nWants=network-online.target foundry-connector.service\n\n" + common + f"ExecStart={command} --base-dir {T3} --host 127.0.0.1 --port {config['port']} --no-browser\n",
+        "foundry-connector.service": f"[Unit]\nDescription=Foundry outgoing device connector\nPartOf=foundry-host.target foundry-host.service\nAfter=foundry-host.service network-online.target\nRequires=foundry-host.service\nConditionPathExists={STATE}/registration.json\nConditionPathExists={STATE}/device-key.json\n\n" + common + f"ExecStart={connector}\n",
     }
 
 
@@ -125,11 +125,14 @@ class Installation:
             if any(self.path(UNITS + "/" + name).exists() for name in NAMES):
                 raise RuntimeError("Unowned Foundry unit already exists")
             return None
-        config = validate(json.loads(manifest.read_text()))
-        for name, expected in render(config).items():
+        record = json.loads(manifest.read_text())
+        if set(record) != {"version", "config", "units"} or record["version"] != 1 or set(record["units"]) != set(NAMES):
+            raise ValueError("Unsupported installation manifest")
+        validate(record["config"])
+        for name, expected in record["units"].items():
             if self.path(UNITS + "/" + name).read_text() != expected:
                 raise RuntimeError("Managed units changed outside this installer; reconcile them explicitly")
-        return config
+        return record
 
     def write(self, name, text, mode):
         destination = self.path(name)
@@ -149,7 +152,7 @@ class Installation:
         validate(config)
         self.stopped()
         previous = self.previous()
-        if previous and (previous["port"] != config["port"] or previous["origin"] != config["origin"] or previous["workspaceRoots"] != config["workspaceRoots"]):
+        if previous and any(previous["config"][field] != config[field] for field in ("port", "origin", "workspaceRoots")):
             raise ValueError("Upgrade must preserve origin, port and workspace roots; instance migration is separate")
         metadata = json.loads(self.path(release(config) + "/dist/foundry-build.json").read_text())
         if metadata != {"repository": "niklaskastning/foundry", "revision": config["revision"], "dirty": False}:
@@ -178,10 +181,10 @@ class Installation:
         try:
             for name, contents in render(config).items():
                 self.write(UNITS + "/" + name, contents, 0o644)
-            self.write(MANIFEST, json.dumps(config, sort_keys=True) + "\n", 0o600)
+            self.write(MANIFEST, json.dumps({"version": 1, "config": config, "units": render(config)}, sort_keys=True) + "\n", 0o600)
         except OSError:
             if previous:
-                for name, contents in render(previous).items():
+                for name, contents in previous["units"].items():
                     self.write(UNITS + "/" + name, contents, 0o644)
             else:
                 for name in NAMES:

@@ -42,6 +42,11 @@ class WorkerInstallationTest(unittest.TestCase):
             personal = installation.path(worker.UNITS + "/personal-t3.service")
             personal.write_text("personal service fixture")
             before = {p: p.read_bytes() for p in (identity, credential, personal)}
+            manifest = installation.path(worker.MANIFEST)
+            previous = json.loads(manifest.read_text())
+            previous["units"]["foundry-host.service"] = previous["units"]["foundry-host.service"].replace("Description=Foundry isolated T3 host", "Description=Previous installer template")
+            installation.path(worker.UNITS + "/foundry-host.service").write_text(previous["units"]["foundry-host.service"])
+            manifest.write_text(json.dumps(previous))
             settings["revision"] = "b" * 40
             settings["memoryMaxMiB"] = 2048
             release(installation, settings)
@@ -53,6 +58,7 @@ class WorkerInstallationTest(unittest.TestCase):
             with patch.object(installation, "write", side_effect=fail_once), self.assertRaises(OSError):
                 installation.install(settings)
             self.assertIn("a" * 40, installation.path(worker.UNITS + "/foundry-host.service").read_text())
+            self.assertIn("Description=Previous installer template", installation.path(worker.UNITS + "/foundry-host.service").read_text())
             installation.install(settings)
             installation.install(settings)
             self.assertIn("MemoryMax=2048M", installation.path(worker.UNITS + "/foundry-host.slice").read_text())
