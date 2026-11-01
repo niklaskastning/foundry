@@ -56,8 +56,8 @@ export function FoundryPage() {
         <div>
           <h1 className="text-xl font-semibold">Foundry instance</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Sign in to your Main instance. Device discovery and gateway access are not available
-            yet.
+            Sign in to your Main instance. Device access is available in connection settings when
+            this Main supports the device catalog.
           </p>
         </div>
         <div className="space-y-2">
@@ -151,10 +151,13 @@ export function FoundryPage() {
               Foundry session verified until {new Date(state.session.expiresAt).toLocaleString()}.
               T3 connection status is shown in the environment view.
             </p>
-            <Button onClick={() => window.location.assign("/")}>Open T3 environment</Button>
+            <Button onClick={() => window.location.assign("/settings/connections")}>
+              Open connection settings
+            </Button>
             <p className="text-xs text-muted-foreground">
-              Existing T3 pairing is still required. Its connection and reconnection use the normal
-              environment connection manager.
+              A Main T3 session is still required in addition to Foundry sign-in. Device selection
+              uses the existing connection manager; a Foundry session alone does not grant device
+              access.
             </p>
           </div>
         ) : null}

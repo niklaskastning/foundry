@@ -23,7 +23,10 @@ export const layer = Layer.unwrap(
         | "projects"
         | "ticket"
         | "readAccess"
-        | "updateAccess",
+        | "updateAccess"
+        | "catalog"
+        | "approveDevice"
+        | "revokeDevice",
     ) =>
       HttpRouter.add(
         "POST",
@@ -80,6 +83,9 @@ export const layer = Layer.unwrap(
       route("remove"),
       route("readAccess"),
       route("updateAccess"),
+      streams ? route("catalog") : Layer.empty,
+      streams ? route("approveDevice") : Layer.empty,
+      streams ? route("revokeDevice") : Layer.empty,
       enabled ? route("projects") : Layer.empty,
       streams ? route("ticket") : Layer.empty,
       streams

@@ -44,6 +44,7 @@ import * as Stream from "effect/Stream";
 import { FetchHttpClient } from "effect/http";
 
 import { executeInstanceOperation } from "../foundry/onboarding";
+import { readDeviceSelection } from "../foundry/selection";
 import { APP_VERSION } from "../branding";
 import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
 import * as PrimaryEnvironmentHttpLayer from "../environments/primary/httpLayer";
@@ -635,6 +636,8 @@ const layerPlatformConnectionSource = Layer.effect(
     const rejectedRef = yield* Ref.make(new Map<string, RejectedSecondaryBootstrap>());
 
     const buildPlatformRegistrations = Effect.gen(function* () {
+      const selected = readDeviceSelection();
+      if (selected !== undefined) return selected;
       const previous = yield* Ref.get(cacheRef);
       const nowEpochMs = yield* Clock.currentTimeMillis;
       const next = new Map<string, CachedPlatformRegistration>();
@@ -779,7 +782,9 @@ const layerPlatformConnectionSource = Layer.effect(
       }
 
       yield* Ref.set(cacheRef, next);
-      return registrations as ReadonlyArray<PlatformConnectionRegistration>;
+      return (
+        readDeviceSelection() ?? (registrations as ReadonlyArray<PlatformConnectionRegistration>)
+      );
     }).pipe(Effect.provide(FetchHttpClient.layer));
 
     return PlatformConnectionSource.PlatformConnectionSource.of({

@@ -47,6 +47,7 @@ export class DeviceChannel extends Context.Service<
       {
         readonly device: FoundryDevice;
         readonly channelGeneration: number;
+        readonly rpcStream: boolean;
       },
       FoundryDeviceError
     >;

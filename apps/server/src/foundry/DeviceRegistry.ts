@@ -6,6 +6,7 @@ import {
   FoundryDeviceError,
   FoundryEnrollmentRequest,
   type FoundryEnrollment,
+  type FoundryCatalogDevice,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -44,6 +45,12 @@ const fromRow = (row: DeviceRow) =>
 export class DeviceRegistry extends Context.Service<
   DeviceRegistry,
   {
+    readonly list: (
+      operatorId: string,
+    ) => Effect.Effect<
+      ReadonlyArray<Omit<FoundryCatalogDevice, "online" | "rpcReady">>,
+      FoundryDeviceError
+    >;
     readonly approve: (
       input: typeof Approval.Type,
     ) => Effect.Effect<FoundryEnrollment, FoundryDeviceError>;
@@ -81,6 +88,29 @@ const make = Effect.gen(function* () {
       yield* sql<DeviceRow>`SELECT * FROM foundry_instance.devices WHERE device_id = ${deviceId} AND instance_id = ${instanceId}`;
     if (!rows[0]) return yield* new FoundryDeviceError({ code: "not_found" });
     return yield* fromRow(rows[0]);
+  }, Effect.catchTags(failures));
+  const list = Effect.fn("DeviceRegistry.list")(function* (operatorId: string) {
+    const instanceId = yield* identity.readIdentity;
+    const rows = yield* sql<DeviceRow & { enabled: boolean; access_generation: number }>`
+      SELECT d.*, g.enabled, g.generation AS access_generation
+      FROM foundry_instance.devices d
+      JOIN foundry_instance.device_grants g ON g.device_id = d.device_id AND g.kind = 'clientAccess'
+      WHERE d.instance_id = ${instanceId} AND d.operator_id = ${operatorId}
+      ORDER BY d.device_id LIMIT 129`;
+    if (rows.length > 128) return yield* new FoundryDeviceError({ code: "unavailable" });
+    return yield* Effect.forEach(rows, (row) =>
+      fromRow(row).pipe(
+        Effect.map((device) => ({
+          deviceId: device.deviceId,
+          environmentId: device.environmentId,
+          revoked: device.revoked,
+          clientAccess: {
+            enabled: row.enabled && !device.revoked,
+            generation: row.access_generation,
+          },
+        })),
+      ),
+    );
   }, Effect.catchTags(failures));
   const approve = Effect.fn("DeviceRegistry.approve")(function* (input: typeof Approval.Type) {
     const value = yield* decodeApproval(input);
@@ -195,6 +225,6 @@ const make = Effect.gen(function* () {
       SqlError: failures.SqlError,
     }),
   );
-  return DeviceRegistry.of({ approve, enroll, get, revoke, claimChannel, checkChannel });
+  return DeviceRegistry.of({ list, approve, enroll, get, revoke, claimChannel, checkChannel });
 });
 export const layer = Layer.effect(DeviceRegistry, make);

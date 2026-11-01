@@ -4,6 +4,9 @@ import {
   AuthOrchestrationReadScope,
   AuthAccessWriteScope,
   FoundryDeviceId,
+  FoundryDeviceApproval,
+  type FoundryDeviceCatalog,
+  type FoundryEnrollment,
   type FoundryDeviceGrant,
   FoundryGatewayError,
   FoundryGatewayGrantId,
@@ -29,6 +32,7 @@ import * as SessionStore from "../auth/SessionStore.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import { timingSafeEqualBase64Url } from "../auth/utils.ts";
 import * as DeviceGrants from "./DeviceGrants.ts";
+import * as DeviceRegistry from "./DeviceRegistry.ts";
 import * as DeviceChannel from "./DeviceChannel.ts";
 import * as DeviceConfig from "./DeviceConfig.ts";
 import * as FoundrySessions from "./FoundrySessions.ts";
@@ -42,6 +46,10 @@ const decodeLookup = Schema.decodeUnknownEffect(FoundryGatewayGrantLookup, {
 const decodeDeviceId = Schema.decodeUnknownEffect(Schema.Struct({ deviceId: FoundryDeviceId }), {
   onExcessProperty: "error",
 });
+const decodeEmpty = Schema.decodeUnknownEffect(Schema.Struct({}), { onExcessProperty: "error" });
+const decodeApproval = Schema.decodeUnknownEffect(FoundryDeviceApproval, {
+  onExcessProperty: "error",
+});
 const decodeId = Schema.decodeUnknownEffect(FoundryGatewayGrantId);
 const denied = () => new FoundryGatewayError({ code: "forbidden" });
 const invalid = () => new FoundryGatewayError({ code: "invalid_request" });
@@ -50,6 +58,18 @@ type Request = HttpServerRequest.HttpServerRequest;
 export class GatewayGrants extends Context.Service<
   GatewayGrants,
   {
+    readonly catalog: (
+      request: Request,
+      input: unknown,
+    ) => Effect.Effect<FoundryDeviceCatalog, FoundryGatewayError>;
+    readonly approveDevice: (
+      request: Request,
+      input: unknown,
+    ) => Effect.Effect<FoundryEnrollment, FoundryGatewayError>;
+    readonly revokeDevice: (
+      request: Request,
+      input: unknown,
+    ) => Effect.Effect<void, FoundryGatewayError>;
     readonly readAccess: (
       request: Request,
       input: unknown,
@@ -88,6 +108,7 @@ const make = Effect.gen(function* () {
   const clientSessions = yield* SessionStore.SessionStore;
   const channels = yield* DeviceChannel.DeviceChannel;
   const access = yield* DeviceGrants.DeviceGrants;
+  const registry = yield* DeviceRegistry.DeviceRegistry;
   const { origin } = yield* DeviceConfig.DeviceOrigin;
   const crypto = yield* Crypto.Crypto;
   const streamsEnabled = yield* DeviceConfig.StreamGatewayEnabled;
@@ -313,7 +334,60 @@ const make = Effect.gen(function* () {
     if (!identity.client.scopes.includes(AuthAccessWriteScope)) return yield* denied();
     return yield* access.update(input, identity.foundry.operatorId);
   });
+  const catalog = Effect.fn("GatewayGrants.catalog")(function* (request: Request, input: unknown) {
+    if (!streamsEnabled) return yield* denied();
+    yield* decodeEmpty(input).pipe(Effect.mapError(invalid));
+    const identity = yield* authenticate(request);
+    if (!identity.client.scopes.includes(AuthOrchestrationReadScope)) return yield* denied();
+    const devices = yield* registry
+      .list(identity.foundry.operatorId)
+      .pipe(Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })));
+    return {
+      instanceId: identity.foundry.instanceId,
+      canManage: identity.client.scopes.includes(AuthAccessWriteScope),
+      scopes: identity.client.scopes,
+      devices: yield* Effect.forEach(devices, (device) =>
+        channels.current(device.deviceId).pipe(
+          Effect.map((lease) => ({ ...device, online: true, rpcReady: lease.rpcStream })),
+          Effect.catchTags({
+            FoundryDeviceError: () => Effect.succeed({ ...device, online: false, rpcReady: false }),
+          }),
+        ),
+      ),
+    };
+  });
+  const approveDevice = Effect.fn("GatewayGrants.approveDevice")(function* (
+    request: Request,
+    input: unknown,
+  ) {
+    if (!streamsEnabled) return yield* denied();
+    const identity = yield* authenticate(request);
+    if (!identity.client.scopes.includes(AuthAccessWriteScope)) return yield* denied();
+    const value = yield* decodeApproval(input).pipe(Effect.mapError(invalid));
+    return yield* registry
+      .approve(value)
+      .pipe(Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })));
+  });
+  const revokeDevice = Effect.fn("GatewayGrants.revokeDevice")(function* (
+    request: Request,
+    input: unknown,
+  ) {
+    if (!streamsEnabled) return yield* denied();
+    const identity = yield* authenticate(request);
+    if (!identity.client.scopes.includes(AuthAccessWriteScope)) return yield* denied();
+    const { deviceId } = yield* decodeDeviceId(input).pipe(Effect.mapError(invalid));
+    const ownedDevices = yield* registry
+      .list(identity.foundry.operatorId)
+      .pipe(Effect.mapError(denied));
+    if (!ownedDevices.some((device) => device.deviceId === deviceId)) return yield* denied();
+    yield* registry
+      .revoke(deviceId)
+      .pipe(Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })));
+  });
   return GatewayGrants.of({
+    catalog,
+    approveDevice,
+    revokeDevice,
     create,
     inspect,
     remove,

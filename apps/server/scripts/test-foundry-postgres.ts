@@ -715,6 +715,18 @@ try {
       Layer.provide(identityLayer),
       Layer.provide(db("foundry_runtime")),
     );
+    NodeAssert.deepEqual(await deviceCall((registry) => registry.list(operatorId)), [
+      {
+        deviceId: registered.deviceId,
+        environmentId: registered.environmentId,
+        revoked: false,
+        clientAccess: { enabled: true, generation: 1 },
+      },
+    ]);
+    NodeAssert.deepEqual(
+      await deviceCall((registry) => registry.list("33333333-3333-4333-8333-333333333333")),
+      [],
+    );
     const grantCall = <A>(
       f: (
         service: DeviceGrants.DeviceGrants["Service"],
@@ -864,6 +876,12 @@ try {
     const revoked = await deviceCall((registry) => registry.get(registered.deviceId));
     NodeAssert.equal(revoked.revoked, true);
     NodeAssert.equal(revoked.generation, 2);
+    NodeAssert.equal(
+      (await deviceCall((registry) => registry.list(operatorId))).find(
+        (device) => device.deviceId === registered.deviceId,
+      )?.clientAccess.enabled,
+      false,
+    );
     await NodeAssert.rejects(
       deviceCall((registry) => registry.checkChannel(registered, currentEpoch)),
     );
@@ -961,6 +979,7 @@ try {
       const descriptor = decodeDescriptor(await metadata.json());
       NodeAssert.equal(descriptor.capabilities.includes("foundry.http-gateway"), gatewayEnabled);
       NodeAssert.equal(descriptor.capabilities.includes("foundry.rpc-streams"), streamsEnabled);
+      NodeAssert.equal(descriptor.capabilities.includes("foundry.device-catalog"), streamsEnabled);
       NodeAssert.equal(Object.hasOwn(descriptor, "instanceAuth"), enabled);
       if (enabled) {
         const verified = FoundryOnboarding.verifyDescriptor(descriptor, accessConfig.origin, {

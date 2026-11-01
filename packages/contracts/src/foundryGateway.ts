@@ -22,6 +22,22 @@ export const FoundryDeviceGrant = Schema.Struct({
   generation: Schema.Int.check(Schema.isGreaterThan(0)),
 });
 export type FoundryDeviceGrant = typeof FoundryDeviceGrant.Type;
+export const FoundryCatalogDevice = Schema.Struct({
+  deviceId: FoundryDeviceId,
+  environmentId: EnvironmentId,
+  revoked: Schema.Boolean,
+  online: Schema.Boolean,
+  rpcReady: Schema.Boolean,
+  clientAccess: Schema.Struct({ enabled: Schema.Boolean, generation: Schema.Int }),
+});
+export type FoundryCatalogDevice = typeof FoundryCatalogDevice.Type;
+export const FoundryDeviceCatalog = Schema.Struct({
+  instanceId: FoundryInstanceId,
+  devices: Schema.Array(FoundryCatalogDevice),
+  canManage: Schema.Boolean,
+  scopes: Schema.Array(Schema.String),
+});
+export type FoundryDeviceCatalog = typeof FoundryDeviceCatalog.Type;
 export const FoundryDeviceGrantUpdate = Schema.Struct({
   ...FoundryDeviceGrant.fields,
 });
