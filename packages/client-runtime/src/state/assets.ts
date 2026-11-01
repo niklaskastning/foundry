@@ -24,7 +24,8 @@ import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { request } from "../rpc/client.ts";
 import type { ProjectFaviconCache, ProjectFaviconTarget } from "../projectFaviconCache.ts";
-import { createEnvironmentQueryAtomFamily } from "./runtime.ts";
+import { materializeAsset, readAssetChunks } from "./assetTransfer.ts";
+import { createEnvironmentQueryAtomFamily, createEnvironmentRpcCommand } from "./runtime.ts";
 
 const ASSET_URL_REFRESH_INTERVAL_MS = 30 * 60_000;
 const ASSET_URL_STALE_TIME_MS = 5 * 60_000;
@@ -58,7 +59,14 @@ function parseAssetCollectionKey(
 
 export function resolveAssetUrl(httpBaseUrl: string, relativeUrl: string): string | null {
   try {
-    return new URL(relativeUrl, httpBaseUrl).toString();
+    const base = new URL(httpBaseUrl);
+    if (
+      base.pathname.startsWith("/api/foundry/gateway/devices/") &&
+      !relativeUrl.startsWith("blob:") &&
+      !relativeUrl.startsWith("data:")
+    )
+      return null;
+    return new URL(relativeUrl, base).toString();
   } catch {
     return null;
   }
@@ -129,6 +137,31 @@ export function assetUrlStateFromResult(
   };
 }
 
+export function materializeAssetQuery<E, DE>(
+  source: Atom.Atom<
+    AsyncResult.AsyncResult<AssetCreateUrlResult & { readonly foundry: boolean }, E>
+  >,
+  download: (
+    asset: AssetCreateUrlResult,
+    registry: AtomRegistry.AtomRegistry,
+  ) => Effect.Effect<Uint8Array<ArrayBuffer>, DE>,
+) {
+  return Atom.make((get): Effect.Effect<AssetCreateUrlResult, E | DE> => {
+    const result = get(source);
+    if (result._tag === "Initial") return Effect.never;
+    if (result._tag === "Failure") return Effect.failCause(result.cause);
+    const asset = result.value;
+    if (!asset.foundry) return Effect.succeed<AssetCreateUrlResult>(asset);
+    return download(asset, get.registry).pipe(
+      Effect.map((bytes): AssetCreateUrlResult => {
+        const local = materializeAsset(bytes, asset.relativeUrl);
+        get.addFinalizer(local.dispose);
+        return { ...asset, relativeUrl: local.url };
+      }),
+    );
+  }).pipe(Atom.setIdleTTL(0));
+}
+
 export function createAssetEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, E>,
   localMediaEnvironment?: Atom.Atom<{
@@ -136,16 +169,23 @@ export function createAssetEnvironmentAtoms<R, E>(
     readonly httpBaseUrl: string;
   } | null>,
 ) {
+  const readChunk = createEnvironmentRpcCommand(runtime, {
+    label: "environment-command:assets:read-chunk",
+    tag: WS_METHODS.assetsReadChunk,
+  });
   const execute = Effect.fn("assets.createUrl")(function* (input: AssetCreateUrlInput) {
     const result = yield* request(WS_METHODS.assetsCreateUrl, input).pipe(Effect.result);
-    if (Result.isSuccess(result)) return result.success;
+    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+    if (Result.isSuccess(result)) {
+      return { ...result.success, foundry: supervisor.target._tag === "FoundryConnectionTarget" };
+    }
     const error = result.failure;
     const resource = input.resource;
     const local = localMediaEnvironment
       ? (yield* AtomRegistry.AtomRegistry).get(localMediaEnvironment)
       : null;
-    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
     if (
+      supervisor.target._tag === "FoundryConnectionTarget" ||
       !local ||
       local.environmentId === supervisor.target.environmentId ||
       !(
@@ -158,14 +198,18 @@ export function createAssetEnvironmentAtoms<R, E>(
       mediaMimeTypeFromExtension(resource.path.slice(resource.path.lastIndexOf("."))) === null
     )
       return yield* error;
-    const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+    const environments = yield* EnvironmentRegistry.EnvironmentRegistry;
     // Map the full cause so retry defects and interruption survive.
-    const asset = yield* registry
+    const asset = yield* environments
       .run(local.environmentId, request(WS_METHODS.assetsCreateUrl, input))
       .pipe(Effect.catchCause((cause) => Effect.failCause(Cause.map(cause, () => error))));
-    return { ...asset, relativeUrl: new URL(asset.relativeUrl, local.httpBaseUrl).href };
+    return {
+      ...asset,
+      relativeUrl: new URL(asset.relativeUrl, local.httpBaseUrl).href,
+      foundry: false,
+    };
   });
-  const createUrl = createEnvironmentQueryAtomFamily(runtime, {
+  const query = createEnvironmentQueryAtomFamily(runtime, {
     label: "environment-data:assets:create-url",
     execute,
     staleTimeMs: ASSET_URL_STALE_TIME_MS,
@@ -174,6 +218,28 @@ export function createAssetEnvironmentAtoms<R, E>(
     refreshTrigger: ({ input }) =>
       input.resource._tag === "media-file" ? localMediaEnvironment : undefined,
   });
+  const materialized = Atom.family((environmentId: EnvironmentId) =>
+    Atom.family((source: ReturnType<typeof query>) =>
+      materializeAssetQuery(source, (asset, registry) =>
+        readAssetChunks(asset.relativeUrl, (chunk) =>
+          Effect.promise(() =>
+            readChunk.run(registry, {
+              environmentId,
+              input: chunk,
+            }),
+          ).pipe(
+            Effect.flatMap((result) =>
+              result._tag === "Success"
+                ? Effect.succeed(result.value)
+                : Effect.failCause(result.cause),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  const createUrl = (target: Parameters<typeof query>[0]) =>
+    materialized(target.environmentId)(query(target));
   const createUrlsFamily = Atom.family((key: string) => {
     const [environmentId, resources] = parseAssetCollectionKey(key);
     return Atom.make((get) =>
@@ -185,13 +251,11 @@ export function createAssetEnvironmentAtoms<R, E>(
           }),
         ),
       ),
-    ).pipe(
-      Atom.setIdleTTL(ASSET_URL_IDLE_TTL_MS),
-      Atom.withLabel(`environment-data:assets:create-urls:${key}`),
-    );
+    ).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-data:assets:create-urls:${key}`));
   });
 
   return {
+    createSignedUrl: query,
     createUrl,
     createUrls: (target: {
       readonly environmentId: EnvironmentId;
@@ -243,7 +307,7 @@ export function createProjectFaviconUrlAtomFamily(input: {
         Option.isSome(connection) ? connection.value.httpBaseUrl : null,
       );
       return state._tag === "Success" ? state.url : Option.getOrNull(get.self<string | null>());
-    }).pipe(Atom.setIdleTTL(ASSET_URL_IDLE_TTL_MS));
+    }).pipe(Atom.setIdleTTL(0));
     const cache = input.imageCache;
     if (!cache) return resolvedUrl;
 
@@ -252,13 +316,13 @@ export function createProjectFaviconUrlAtomFamily(input: {
       get(request);
       const url = get(resolvedUrl);
       return Effect.promise((signal) => cache.resolve(target, url, signal));
-    }).pipe(Atom.setIdleTTL(ASSET_URL_IDLE_TTL_MS));
+    }).pipe(Atom.setIdleTTL(0));
 
     return Atom.make((get): string | null => {
       const result = get(image);
       if (isProjectFaviconFallbackUrl(get(resolvedUrl))) return null;
       return AsyncResult.getOrElse(result, () => cache.peek(target));
-    }).pipe(Atom.setIdleTTL(ASSET_URL_IDLE_TTL_MS));
+    }).pipe(Atom.setIdleTTL(0));
   });
   return (target: ProjectFaviconTarget) =>
     family(getProjectFaviconResourceKey(target.environmentId, target.cwd, target.faviconPath));

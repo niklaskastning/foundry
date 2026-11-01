@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   createUploadUrl: Symbol("create-upload-url"),
   executeAtomQuery: vi.fn(),
   removeUpload: Symbol("remove-upload"),
+  writeChunk: Symbol("write-chunk"),
+  chunkStatus: Symbol("chunk-status"),
   runAtomCommand: vi.fn(),
   readEnvironmentScope: vi.fn(),
   readPreparedConnection: vi.fn(),
@@ -38,13 +40,15 @@ vi.mock("../connection/catalog", () => ({
 }));
 
 vi.mock("../state/assets", () => ({
-  assetEnvironment: { createUrl: mocks.createAssetUrl },
+  assetEnvironment: { createSignedUrl: mocks.createAssetUrl },
 }));
 
 vi.mock("../state/attachments", () => ({
   attachmentEnvironment: {
     createUploadUrl: mocks.createUploadUrl,
     remove: mocks.removeUpload,
+    writeChunk: mocks.writeChunk,
+    chunkStatus: mocks.chunkStatus,
   },
 }));
 
@@ -55,6 +59,7 @@ vi.mock("../state/session", () => ({
 
 import {
   awaitAttachmentUploads,
+  clearAttachmentUploadsEnvironment,
   getUploadedAttachments,
   readAttachmentUpload,
   releaseAttachmentUpload,
@@ -176,7 +181,10 @@ describe("attachmentUploadQueue", () => {
     mocks.runAtomCommand.mockReset();
     mocks.readEnvironmentScope.mockReset().mockReturnValue(true);
     mocks.readPreparedConnection.mockReset();
-    mocks.readPreparedConnection.mockReturnValue({ httpBaseUrl: "https://environment.test/" });
+    mocks.readPreparedConnection.mockReturnValue({
+      httpBaseUrl: "https://environment.test/",
+      target: { _tag: "DirectConnectionTarget" },
+    });
     mocks.runAtomCommand.mockImplementation(
       async (
         _registry: unknown,
@@ -208,6 +216,64 @@ describe("attachmentUploadQueue", () => {
       releaseAttachmentUpload(imageId);
     }
     vi.unstubAllGlobals();
+  });
+
+  it("resumes a Foundry upload without HTTP or another mint and clears only its environment", async () => {
+    const image = makeImage("foundry-resume");
+    const target = {
+      _tag: "FoundryConnectionTarget",
+      environmentId: firstEnvironment,
+      deviceId: "device-a",
+      binding: { origin: "https://main.test" },
+    };
+    mocks.readPreparedConnection.mockReturnValue({
+      httpBaseUrl: "https://main.test/api/foundry/gateway/devices/device-a/",
+      target,
+    });
+    let mintCount = 0;
+    let confirmed = { offset: 0, complete: false, fileSha256: null as string | null };
+    mocks.runAtomCommand.mockImplementation(
+      async (_registry, command, { environmentId, input }) => {
+        expect(environmentId).toBe(firstEnvironment);
+        if (command === mocks.createUploadUrl) {
+          mintCount++;
+          return AsyncResult.success({
+            attachmentId: "resume-id",
+            relativeUrl: "/api/attachments/upload/resume-id",
+            expiresAt: Number.MAX_SAFE_INTEGER,
+          });
+        }
+        if (command === mocks.chunkStatus) return AsyncResult.success(confirmed);
+        if (command === mocks.writeChunk) {
+          confirmed = { offset: 3, complete: true, fileSha256: input.fileSha256 };
+          return { _tag: "Failure", error: new Error("reply lost") };
+        }
+        return AsyncResult.success(undefined);
+      },
+    );
+    startAttachmentUpload({ environmentId: firstEnvironment, image });
+    await awaitAttachmentUploads([image.id]);
+    expect(readAttachmentUpload(image.id)?.status).toBe("failed");
+    retryAttachmentUpload({ environmentId: firstEnvironment, image });
+    await awaitAttachmentUploads([image.id]);
+    expect(readAttachmentUpload(image.id)).toMatchObject({
+      status: "ready",
+      attachmentId: "resume-id",
+    });
+    expect(mintCount).toBe(1);
+    expect(TestXmlHttpRequest.requests).toHaveLength(0);
+    useAttachmentUploadStore.setState((state) => ({
+      uploadsByImageId: {
+        ...state.uploadsByImageId,
+        unrelated: { status: "ready", environmentId: secondEnvironment, attachmentId: "personal" },
+      },
+    }));
+    clearAttachmentUploadsEnvironment(firstEnvironment);
+    expect(readAttachmentUpload(image.id)).toBeUndefined();
+    expect(readAttachmentUpload("unrelated")).toMatchObject({
+      status: "ready",
+      attachmentId: "personal",
+    });
   });
 
   it("keeps an attachment local until its own environment grants write access", async () => {

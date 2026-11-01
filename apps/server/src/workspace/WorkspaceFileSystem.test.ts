@@ -378,6 +378,14 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
         expect(result.truncated).toBe(true);
         expect(result.byteLength).toBe(bytes.length);
         expect(result.contents).toBe("a".repeat(limit - 1));
+        const bounded = yield* workspaceFileSystem.readFile({
+          cwd,
+          relativePath: "large.txt",
+          maxBytes: 16 * 1024,
+        });
+        expect(bounded.truncated).toBe(true);
+        expect(bounded.byteLength).toBe(bytes.length);
+        expect(bounded.contents).toBe("a".repeat(16 * 1024));
       }),
     );
 
