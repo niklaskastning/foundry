@@ -64,7 +64,7 @@ const make = Effect.gen(function* () {
           const versions = yield* sql<{
             version: number;
           }>`SELECT version FROM foundry_instance.schema_version`;
-          if (versions.length !== 1 || ![1, 2, 3, 4].includes(versions[0]?.version ?? 0)) {
+          if (versions.length !== 1 || ![1, 2, 3, 4, 5].includes(versions[0]?.version ?? 0)) {
             return yield* new InstanceDatabase.InstanceDatabaseError({
               reason: "schema_incompatible",
             });
@@ -105,6 +105,18 @@ const make = Effect.gen(function* () {
             yield* sql`ALTER TABLE foundry_instance.devices ADD COLUMN channel_generation integer NOT NULL DEFAULT 0 CHECK (channel_generation >= 0)`;
             yield* sql`UPDATE foundry_instance.schema_version SET version = 4`;
           }
+          if ((versions[0]?.version ?? 0) < 5) {
+            yield* sql`CREATE TABLE foundry_instance.device_grants (
+              device_id uuid NOT NULL REFERENCES foundry_instance.devices(device_id),
+              kind text NOT NULL CHECK (kind IN ('clientAccess', 'automationExecution', 'sandboxProvisioning')),
+              enabled boolean NOT NULL DEFAULT false,
+              generation integer NOT NULL DEFAULT 1 CHECK (generation > 0),
+              PRIMARY KEY (device_id, kind))`;
+            yield* sql`INSERT INTO foundry_instance.device_grants (device_id, kind, enabled)
+              SELECT device_id, kind, kind = 'clientAccess' AND NOT revoked FROM foundry_instance.devices
+              CROSS JOIN (VALUES ('clientAccess'), ('automationExecution'), ('sandboxProvisioning')) AS kinds(kind)`;
+            yield* sql`UPDATE foundry_instance.schema_version SET version = 5`;
+          }
           yield* InstanceDatabase.checkSchema();
           const identities = yield* sql<{
             instance_id: string;
@@ -127,6 +139,8 @@ const make = Effect.gen(function* () {
           yield* sql`GRANT SELECT, INSERT ON foundry_instance.devices, foundry_instance.device_enrollments TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT UPDATE (generation, revoked) ON foundry_instance.devices TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT UPDATE (channel_generation) ON foundry_instance.devices TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT SELECT, INSERT ON foundry_instance.device_grants TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT UPDATE (enabled, generation) ON foundry_instance.device_grants TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT UPDATE (consumed) ON foundry_instance.device_enrollments TO ${sql(input.runtimeRole)}`;
         }),
       );

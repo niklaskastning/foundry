@@ -9,6 +9,7 @@ import {
   FoundryDeviceId,
   FoundryAuthError,
   FoundryDeviceError,
+  FoundryGatewayError,
   type FoundryDevice,
 } from "@t3tools/contracts";
 import {
@@ -31,6 +32,9 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as DeviceGrants from "./DeviceGrants.ts";
+import { bridge } from "./StreamBridge.ts";
+import * as Queue from "effect/Queue";
 import * as DeviceChannel from "./DeviceChannel.ts";
 import * as DeviceConfig from "./DeviceConfig.ts";
 import * as FoundrySessions from "./FoundrySessions.ts";
@@ -52,11 +56,37 @@ const fixture = Effect.gen(function* () {
   let online = true;
   let revoked = false;
   let foundryActive = true;
+  let accessGeneration = 1;
+  let accessEnabled = true;
+  let databaseHangs = false;
+  let stream: DeviceChannel.DeviceChannel["Service"]["stream"] = () => Effect.void;
   const expiresAt = (yield* Clock.currentTimeMillis) + 600_000;
   const dispatched = yield* Deferred.make<void>();
   const finish = yield* Deferred.make<void>();
   const services = yield* Layer.build(
     GatewayGrants.layer.pipe(
+      Layer.provide(
+        Layer.succeed(DeviceGrants.DeviceGrants, {
+          read: () =>
+            Effect.succeed(
+              ["clientAccess", "automationExecution", "sandboxProvisioning"].map((kind) => ({
+                deviceId: device.deviceId,
+                kind: kind as "clientAccess" | "automationExecution" | "sandboxProvisioning",
+                generation: accessGeneration,
+                enabled: kind === "clientAccess" && accessEnabled,
+              })),
+            ),
+          update: () => Effect.die("not used"),
+          check: (_id, _operator, generation) =>
+            Effect.suspend(() =>
+              databaseHangs
+                ? Effect.never
+                : accessEnabled && (generation === undefined || generation === accessGeneration)
+                  ? Effect.succeed(accessGeneration)
+                  : Effect.fail(new FoundryGatewayError({ code: "forbidden" })),
+            ),
+        }),
+      ),
       Layer.provide(Layer.succeed(DeviceConfig.DeviceOrigin, { origin })),
       Layer.provide(Layer.succeed(DeviceConfig.StreamGatewayEnabled, true)),
       Layer.provide(
@@ -82,7 +112,7 @@ const fixture = Effect.gen(function* () {
       Layer.provide(
         Layer.succeed(DeviceChannel.DeviceChannel, {
           serve: () => Effect.die("not used"),
-          stream: () => Effect.void,
+          stream: (...args) => stream(...args),
           attachStream: () => Effect.die("not used"),
           projects: (_, validate) =>
             Effect.gen(function* () {
@@ -133,6 +163,16 @@ const fixture = Effect.gen(function* () {
   });
   return {
     grants,
+    setStream: (value: typeof stream) => {
+      stream = value;
+    },
+    setAccess: (enabled: boolean) => {
+      accessEnabled = enabled;
+      accessGeneration++;
+    },
+    hangDatabase: () => {
+      databaseHangs = true;
+    },
     dispatched,
     finish,
     sessions,
@@ -170,6 +210,19 @@ it.effect(
         generation: 1,
         channelGeneration: 1,
       });
+      expect(
+        (yield* f.grants.readAccess(request, { deviceId: f.target.deviceId }).pipe(Effect.result))
+          ._tag,
+      ).toBe("Failure");
+      expect((yield* f.grants.updateAccess(request, {}).pipe(Effect.result))._tag).toBe("Failure");
+      const manager = yield* f.sessions.issue({
+        scopes: ["access:write"],
+        subject: "operator",
+        method: "bearer-access-token",
+      });
+      expect(
+        yield* f.grants.readAccess(f.request(manager.token), { deviceId: f.target.deviceId }),
+      ).toHaveLength(3);
       const lookup = { ...f.target, grantId: grant.grantId };
       expect(yield* f.grants.inspect(request, lookup)).toEqual(grant);
       expect(
@@ -549,4 +602,63 @@ it.effect("bounds concurrently issued stream tickets and reclaims expired slots"
     yield* TestClock.adjust("10 seconds");
     yield* f.grants.ticket(request, lookup);
   }).pipe(Effect.scoped),
+);
+
+it.effect.each(["grant-remove", "device-access", "database-hang"] as const)(
+  "closes active streams after %s and never revives old access generations",
+  (action) =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const request = f.request(f.read.token);
+      const grant = yield* f.grants.create(request, f.input);
+      const other = yield* f.grants.create(request, f.input);
+      const lookup = { ...f.target, grantId: grant.grantId };
+      const ticket = yield* f.grants.ticket(request, lookup);
+      const closed = yield* Queue.unbounded<void>();
+      const started = yield* Deferred.make<void>();
+      const socket = () =>
+        Socket.make({
+          reader: Effect.succeed({ pull: Effect.never, upgrade: () => Effect.void }),
+          writer: Effect.succeed({
+            write: () => Queue.offer(closed, undefined).pipe(Effect.asVoid),
+            writeAll: () => Effect.void,
+          }),
+        });
+      f.setStream((_, validate, client) =>
+        bridge(
+          client,
+          socket(),
+          validate.pipe(Effect.tap(() => Deferred.succeed(started, undefined))),
+        ),
+      );
+      const get = HttpServerRequest.fromWeb(
+        new Request(
+          `${origin}/api/foundry/gateway/stream?orchestrationProtocol=${ORCHESTRATION_PROTOCOL_VERSION}&ticket=${ticket.ticket}&wsTicket=${ticket.wsTicket}`,
+          { headers: { origin, host: "main.example.test", "x-forwarded-proto": "https" } },
+        ),
+      );
+      const fiber = yield* f.grants
+        .stream(get, Effect.succeed(socket()))
+        .pipe(Effect.result, Effect.forkScoped);
+      yield* Deferred.await(started);
+      if (action === "grant-remove") yield* f.grants.remove(request, lookup);
+      else if (action === "device-access") f.setAccess(false);
+      else f.hangDatabase();
+      yield* TestClock.adjust("3 seconds");
+      expect((yield* Fiber.join(fiber))._tag).toBe("Failure");
+      yield* Queue.take(closed);
+      yield* Queue.take(closed);
+      if (action === "database-hang") return;
+      if (action === "device-access") {
+        expect((yield* f.grants.create(request, f.input).pipe(Effect.result))._tag).toBe("Failure");
+        f.setAccess(true);
+        const renewed = yield* f.grants.create(request, f.input);
+        expect(renewed.accessGeneration).toBeGreaterThan(grant.accessGeneration);
+      } else {
+        expect(
+          (yield* f.grants.inspect(request, { ...f.target, grantId: other.grantId })).grantId,
+        ).toBe(other.grantId);
+      }
+      expect((yield* f.grants.inspect(request, lookup).pipe(Effect.result))._tag).toBe("Failure");
+    }).pipe(Effect.scoped),
 );

@@ -8,6 +8,7 @@ export const bridge = Effect.fn("StreamBridge.bridge")(
     right: Socket.Socket,
     validate: Effect.Effect<void, FoundryGatewayError>,
   ) {
+    const check = validate.pipe(Effect.timeout("2 seconds"));
     const a = yield* left.reader;
     const b = yield* right.reader;
     const aw = yield* left.writer;
@@ -23,14 +24,14 @@ export const bridge = Effect.fn("StreamBridge.bridge")(
           bytes +=
             typeof frame === "string" ? new TextEncoder().encode(frame).length : frame.length;
           if (bytes > 262144) return yield* new FoundryGatewayError({ code: "capacity" });
-          yield* validate;
+          yield* check;
           yield* writer.write(frame).pipe(Effect.timeout("5 seconds"));
         }
       }
     });
     const authority = Effect.gen(function* () {
       while (true) {
-        yield* validate;
+        yield* check;
         yield* Effect.sleep("1 second");
       }
     });
@@ -42,7 +43,7 @@ export const bridge = Effect.fn("StreamBridge.bridge")(
             bw.write(new Socket.CloseEvent(1011, "Foundry stream ended")),
           ],
           { concurrency: "unbounded" },
-        ).pipe(Effect.ignore),
+        ).pipe(Effect.timeout("5 seconds"), Effect.ignore),
       ),
     );
   },
