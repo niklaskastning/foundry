@@ -352,12 +352,61 @@ expiry, closing/relaunching the probe, and logout. Restoring the encrypted grant
 refreshes it remotely; **Check session** then verifies the persisted Foundry cookie.
 Logout clears this partition and its local grant even if remote revocation fails,
 but reports that failure rather than claiming complete logout. Test a second instance
-and unexpected identity/issuer changes separately. Access headers never replace a
-T3 bearer or DPoP header; such a conflicting request is refused.
+and unexpected identity/issuer changes separately. The probe reserves the Authorization header for Managed OAuth. For an ordinary T3
+bearer request, it sends that same T3 credential in the instance-advertised T3 session
+cookie header for this request only; it does not persist an extra cookie. T3 still
+checks the credential, scopes, origin and revocation. The cookie name is read only
+after verifying the pinned Foundry descriptor. DPoP and unknown authorization schemes
+remain unsupported and are refused rather than weakened.
 
 Focused tests cover the OAuth protocol and request boundary. They do not establish
 Google/Cloudflare/Windows compatibility, OS-backed persistence, real WebSocket
 behavior or completion of P04. Record those results with the tested build in its PR.
+
+## Instance onboarding (P05, acceptance pending)
+
+Open `/foundry` on the chosen Main origin before T3 pairing. **Verify current
+origin** reads the descriptor without following redirects; confirm its instance ID,
+origin and issuer against the operator's values, then sign in. HTML/Access challenges
+are reported as login requirements. **Check session** and **Refresh session** use the
+existing Foundry session endpoints. A saved identity is checked again before each
+operation and before constructing the normal T3 connection runtime after a reload.
+
+**Open T3 environment** returns to the existing pairing/connection supervisor.
+Foundry sign-in does not supply a T3 bearer, discover devices or authorize a gateway.
+Web users can return through **Settings → Connections → Manage instance sign-in**.
+The page has no background environment connections or separate reconnect loop.
+
+To switch Web origins, **Sign out and remove** first, then enter the next HTTPS
+origin and choose **Open URL**. This revokes the current Foundry session and removes
+only its saved identity. Independent T3 pairing/caches and browser Access SSO remain
+separate. Failed revocation retains the binding. The explicit **Forget local identity
+without revocation** recovery action removes only the local pin and reports that
+remote revocation is unconfirmed; it is not a successful logout.
+
+For the isolated Windows instance client, use a Foundry build containing P05:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\foundry\Foundry.exe" -- --foundry-instance
+```
+
+The local selector takes the instance URL, operator-confirmed instance UUID and Access
+issuer at runtime. It has no preload or Node access. **Sign in** uses P04's existing
+system-browser/PKCE transport. **Open instance** opens the Web onboarding page in the
+same protected partition. Close that window to return to the native controls for
+OAuth refresh or **Remove / switch instance**. Removal closes its windows and
+connections, attempts Foundry/OAuth revocation and clears only that identity's
+partition, encrypted grant and pin. Failed remote revocation is explicitly reported.
+Only one instance is active. `Foundry-Instances` is separate from `Foundry-Auth-Probe`,
+the normal Foundry profile and personal T3 profiles; nothing is imported.
+
+This opt-in entry does not replace the normal desktop launcher or the P04 acceptance
+probe. Main must also contain P05's additive public origin/issuer descriptor metadata
+and Web page; an older Main is reported as unsupported. No native Foundry login is
+provided when Access is disabled. Developing this entry does not satisfy the outstanding
+Windows P04 tests or authorize deploying a new Main image. Full Web/Windows integration,
+restart/expiry/revocation and second-instance isolation still require recorded runtime
+acceptance on the matching builds.
 
 ## Actions budget
 
