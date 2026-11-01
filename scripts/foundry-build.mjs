@@ -43,6 +43,10 @@ for (const name of Object.keys(env)) {
 }
 const args =
   target === "server" ? ["run", "--filter", "t3", "build"] : ["run", "dist:desktop:win:x64"];
+if (target === "server")
+  NodeFS.rmSync(new URL("../apps/server/dist/foundry-build.json", import.meta.url), {
+    force: true,
+  });
 const result = NodeChildProcess.spawnSync(platform === "win32" ? "vp.cmd" : "vp", args, {
   cwd: root,
   env,
@@ -50,4 +54,19 @@ const result = NodeChildProcess.spawnSync(platform === "win32" ? "vp.cmd" : "vp"
   shell: platform === "win32",
 });
 if (result.error) throw result.error;
+if (result.status === 0 && target === "server") {
+  const revision = NodeChildProcess.execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
+  const dirty =
+    NodeChildProcess.execFileSync("git", ["status", "--porcelain"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim().length > 0;
+  NodeFS.writeFileSync(
+    new URL("../apps/server/dist/foundry-build.json", import.meta.url),
+    JSON.stringify({ repository: profile.repository, revision, dirty }) + "\n",
+  );
+}
 process.exit(result.status ?? 1);

@@ -6,6 +6,8 @@ This is the isolated base deployment, not the planned instance gateway, Automati
 
 ## Experimental device enrollment (P06)
 
+Der separate Linux-Host-Dienst hat einen [eigenen Installer und Betriebsweg](../../deploy/fork/worker/README.md). Er wird nicht durch Main-Deployment oder Device-Enrollment installiert; seine reale Dienstkonto-/G2-Abnahme bleibt offen.
+
 This opt-in backend registers a device key and its first local environment. It does
 not connect that environment, provide gateway access or install an agent. The
 outstanding release gates and follow-up work are tracked in
