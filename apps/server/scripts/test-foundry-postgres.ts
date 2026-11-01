@@ -32,6 +32,7 @@ import * as FoundryHttp from "../src/foundry/http.ts";
 import * as ServerConfig from "../src/config.ts";
 import * as ServerEnvironment from "../src/environment/ServerEnvironment.ts";
 import * as EnvironmentAuthPolicy from "../src/auth/EnvironmentAuthPolicy.ts";
+import * as FoundryOnboarding from "../../../packages/client-runtime/src/connection/foundry.ts";
 
 const decodeDescriptor = Schema.decodeUnknownSync(FoundryDescriptor);
 const decodeSession = Schema.decodeUnknownSync(FoundrySession);
@@ -503,6 +504,76 @@ try {
     await report(
       "PASS P03: v1 upgrade preserves identity/operator; signed login, origin/CSRF, header spoofing, atomic refresh, durable logout, expiry, generations and DB outage",
     );
+    const descriptorHandler = HttpRouter.toWebHandler(
+      routes.pipe(
+        Layer.provide(Layer.succeed(AccessConfig.AccessEnabled, true)),
+        Layer.provide(Layer.succeed(AccessConfig.AccessConfig, accessConfig)),
+      ),
+      { disableLogger: true },
+    );
+    try {
+      const values = new Map<string, string>([["unrelated-profile", "preserved"]]);
+      let cookie = "";
+      const client = FoundryOnboarding.createInstanceClient({
+        origin: accessConfig.origin,
+        now: () => now,
+        storage: {
+          getItem: (key) => values.get(key) ?? null,
+          setItem: (key, value) => {
+            values.set(key, value);
+          },
+          removeItem: (key) => {
+            values.delete(key);
+          },
+        },
+        request: async (path, csrf) => {
+          const response = path.startsWith("/.well-known/")
+            ? await descriptorHandler.handler(new Request(`${accessConfig.origin}${path}`))
+            : await post(path.slice("/api/foundry/auth/".length), {
+                "cf-access-jwt-assertion": await sign(),
+                cookie,
+                ...(csrf ? { "x-foundry-csrf": csrf } : {}),
+              });
+          const issuedCookie = response.headers.get("set-cookie");
+          if (issuedCookie) cookie = issuedCookie.split(";", 1)[0]!;
+          return FoundryOnboarding.readResponse(response);
+        },
+      });
+      const inspected = await client.execute("inspect");
+      NodeAssert.equal(inspected.confirmed, false);
+      NodeAssert.ok(inspected.binding);
+      NodeAssert.equal(inspected.binding.instanceId, instanceId);
+      NodeAssert.equal(inspected.binding.mainEnvironmentId, mainEnvironmentId);
+      await client.execute("confirm", inspected.binding);
+      NodeAssert.equal((await client.execute("login")).session?.instanceId, instanceId);
+      const beforeRefresh = cookie;
+      await client.execute("refresh");
+      NodeAssert.notEqual(cookie, beforeRefresh);
+      NodeAssert.equal((await post("session", { cookie: beforeRefresh })).status, 401);
+      await authHandler.dispose();
+      authHandler = HttpRouter.toWebHandler(authRoutes, { disableLogger: true });
+      NodeAssert.equal((await client.execute("session")).session?.instanceId, instanceId);
+      const beforeLogout = cookie;
+      await client.execute("remove");
+      NodeAssert.deepEqual([...values], [["unrelated-profile", "preserved"]]);
+      await authHandler.dispose();
+      authHandler = HttpRouter.toWebHandler(authRoutes, { disableLogger: true });
+      NodeAssert.equal((await post("session", { cookie: beforeLogout })).status, 401);
+      await client.execute("confirm", inspected.binding);
+      await client.execute("login");
+      await query(
+        "UPDATE foundry_instance.instance SET access_generation=access_generation+1",
+        "foundry_runtime",
+      );
+      await NodeAssert.rejects(client.execute("session"), { code: "invalid_session" });
+      await client.execute("remove");
+      NodeAssert.deepEqual([...values], [["unrelated-profile", "preserved"]]);
+      await report(
+        "PASS P05 client with real HTTP handlers/PostgreSQL: descriptor, confirmed login, cookie rotation, handler restart, durable logout, remote revocation and scoped removal",
+      );
+    } finally {
+      await descriptorHandler.dispose();
+    }
   } finally {
     await authHandler.dispose();
   }
