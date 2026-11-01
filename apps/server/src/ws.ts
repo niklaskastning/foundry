@@ -1,3 +1,4 @@
+import * as WorkerReadiness from "./foundry/WorkerReadiness.ts";
 import * as AssetTransfer from "./assets/AssetTransfer.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -1347,6 +1348,7 @@ export const layerWsRpc = (
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+      const workerReadiness = yield* WorkerReadiness.WorkerReadiness;
       const assetTransfer = yield* AssetTransfer.AssetTransfer;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
@@ -2853,6 +2855,7 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.attachmentsCreateUploadUrl]: (input) => issueAttachmentUploadUrl(input),
         [WS_METHODS.attachmentsDelete]: (input) => assetTransfer.remove(input.attachmentId),
+        [WS_METHODS.foundryWorkerStatus]: () => workerReadiness.read(),
         [WS_METHODS.assetsReadChunk]: (input) => assetTransfer.read(input),
         [WS_METHODS.attachmentsWriteChunk]: (input) => assetTransfer.write(input),
         [WS_METHODS.attachmentsChunkStatus]: (input) => assetTransfer.status(input),

@@ -67,3 +67,13 @@ python3 -m unittest discover -s deploy/fork/worker -p 'test_*.py' -v
 ```
 
 Dies ersetzt **nicht** Start/Neustart, Ressourcenbegrenzung und Erreichbarkeitsprüfung unter dem echten Dienstkonto. Offene G1/G2/P13-Nachweise stehen in [Issue #13](https://github.com/niklaskastning/foundry/issues/13).
+
+## Codex im Worker einrichten und prüfen
+
+Der Betreiber richtet Codex über die vorhandenen Provider-Einstellungen **dieses Workers** ein: lokalen Worker-Zugriff über einen geschützten Tunnel herstellen, mit einer eigenen lokalen T3-Session koppeln und unter Settings → Providers installieren/anmelden. Diese Session benötigt die normalen Provider-Verwaltungsrechte; der Main-Gateway-Zugang reicht dafür nicht aus. Alle Konfiguration und Anmeldung gehören zum Dienstkonto `foundry-worker` und dessen Home, niemals zum persönlichen T3-Profil. Keine bestehenden Credentials kopieren, keine API-Abrechnung automatisch aktivieren. Eine Installation oder Anmeldung startet noch keinen Agent-Turn.
+
+Die dort gewählte Codex-Instanz-ID als optionales `providerInstanceId` in die Installer-Konfiguration aufnehmen, beispielsweise `"providerInstanceId": "codex"` für die tatsächlich vorhandene Standardinstanz. Dienst stoppen und das oben beschriebene Update-Verfahren ausführen. Der Installer erhält die explizite Bindung im Manifest und den Units über Neustarts und Updates; er wählt bei gelöschter/deaktivierter Instanz keinen Ersatz. Ohne dieses Feld bleibt der Worker ausdrücklich ungebunden. Provider-Konfiguration und Credential-Speicherung verwenden die bestehenden T3-Dienste im Worker-State.
+
+Nach Auswahl des Devices in Connections prüft **Check selected worker** über dessen bestehende RPC-Verbindung die gebundene Instanz neu. Online, Provider-Bereitschaft und Kapazität sind getrennt. Fehlendes Binary, fehlende/unklare Anmeldung und unbekannte oder inkompatible Versionen ergeben keine Bereitschaft. Bei einem fehlgeschlagenen Probe darf ein älterer Registry-Cache keinen erfolgreichen Status vortäuschen. Antworten enthalten keine Kontodaten oder Credentials.
+
+Die Kapazität ist vorerst ein Snapshot: kein unvollendeter T3-Run auf diesem Worker, unabhängig von Archivierung und Provider. Abfragefehler ergeben unbekannt. Sie reserviert keine Ressourcen und ersetzt weder Launch-Berechtigungen noch die spätere Workspace-Zuteilung. Hintergrundprozesse außerhalb eines Runs sind damit nicht inventarisiert. Live-Status nach Verbindungsverlust erneut abfragen. Die integrierte Prüfung unter dem tatsächlichen Dienstkonto und ein autorisierter echter Codex-Turn bleiben eigene Abnahmen; Replay-/Service-Fixtures sind kein Codex-Login-Nachweis.

@@ -139,6 +139,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   projectOrganization: Schema.optionalKey(Schema.Boolean),
   /** Server answers projects.listIgnoredFiles. */
   ignoredFileListing: Schema.optionalKey(Schema.Boolean),
+  foundryWorkerReadiness: Schema.optionalKey(Schema.Boolean),
   assetChunkTransfer: Schema.optionalKey(Schema.Boolean),
   environmentIcon: Schema.optionalKey(Schema.Boolean),
   desktopAppUpdate: Schema.optionalKey(Schema.Boolean),

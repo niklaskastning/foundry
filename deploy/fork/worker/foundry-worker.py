@@ -23,7 +23,7 @@ MANIFEST = CONFIG + "/installation.json"
 
 
 def validate(config):
-    if set(config) != {"revision", "node", "origin", "port", "workspaceRoots", "cpuQuotaPercent", "memoryMaxMiB", "tasksMax", "accessFile"}:
+    if set(config) - {"providerInstanceId"} != {"revision", "node", "origin", "port", "workspaceRoots", "cpuQuotaPercent", "memoryMaxMiB", "tasksMax", "accessFile"}:
         raise ValueError("Supply exactly the documented worker configuration fields")
     if not isinstance(config["revision"], str) or not re.fullmatch(r"[0-9a-f]{40}", config["revision"]):
         raise ValueError("A full release commit is required")
@@ -40,6 +40,8 @@ def validate(config):
     roots = config["workspaceRoots"]
     if not isinstance(roots, list) or not 1 <= len(roots) <= 32 or any(not isinstance(p, str) or not re.fullmatch(WORKSPACES + r"/[A-Za-z0-9_-]+", p) for p in roots) or len(set(roots)) != len(roots):
         raise ValueError("Workspace roots must be distinct direct children of " + WORKSPACES)
+    if "providerInstanceId" in config and (not isinstance(config["providerInstanceId"], str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,63}", config["providerInstanceId"])):
+        raise ValueError("Invalid provider instance binding")
     return config
 
 
@@ -60,6 +62,8 @@ WorkingDirectory={WORKER_HOME}
 Environment=HOME={WORKER_HOME}
 Environment=T3CODE_HOME={T3}
 Environment=PATH=/opt/foundry-worker/providers/bin:/usr/local/bin:/usr/bin:/bin
+Environment=FOUNDRY_WORKER_ENABLED=true
+Environment=FOUNDRY_WORKER_PROVIDER_INSTANCE_ID={config.get("providerInstanceId", "")}
 Environment=NODE_ENV=production
 Environment=T3CODE_TELEMETRY_ENABLED=false
 Environment=T3CODE_DISABLE_AUTO_UPDATE=1

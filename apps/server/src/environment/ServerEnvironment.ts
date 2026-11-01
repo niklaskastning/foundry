@@ -5,6 +5,7 @@ import {
   type ExecutionEnvironmentDescriptor,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -266,6 +267,9 @@ export const make = Effect.gen(function* () {
       projectCloneTracking: true,
       projectOrganization: true,
       ignoredFileListing: true,
+      foundryWorkerReadiness: yield* Config.Boolean("FOUNDRY_WORKER_ENABLED").pipe(
+        Config.withDefault(false),
+      ),
       assetChunkTransfer: true,
       triage: true,
       npmReleaseLookup: true,

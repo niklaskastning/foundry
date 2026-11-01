@@ -1,3 +1,4 @@
+import { WorkerStatus } from "./WorkerStatus";
 import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { AsyncResult } from "effect/reactivity";
@@ -90,6 +91,9 @@ export function DeviceCatalog() {
       <p role="status" className="text-sm">
         {busy ? "Updating devices…" : message}
       </p>
+      {selected ? (
+        <WorkerStatus key={selected.environmentId} environmentId={selected.environmentId} />
+      ) : null}
       {catalog?.devices.length === 0 ? <p className="text-sm">No devices registered.</p> : null}
       {catalog?.devices.map((device) => (
         <div key={device.deviceId} className="space-y-2 rounded-md border p-3">
