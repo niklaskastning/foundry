@@ -1,3 +1,5 @@
+import { FoundryWorkerLaunchError } from "@t3tools/contracts";
+import * as WorkerLaunch from "./foundry/WorkerLaunch.ts";
 import * as WorkerReadiness from "./foundry/WorkerReadiness.ts";
 import * as AssetTransfer from "./assets/AssetTransfer.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
@@ -1348,6 +1350,7 @@ export const layerWsRpc = (
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+      const workerLaunch = yield* WorkerLaunch.WorkerLaunch;
       const workerReadiness = yield* WorkerReadiness.WorkerReadiness;
       const assetTransfer = yield* AssetTransfer.AssetTransfer;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -2855,6 +2858,13 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.attachmentsCreateUploadUrl]: (input) => issueAttachmentUploadUrl(input),
         [WS_METHODS.attachmentsDelete]: (input) => assetTransfer.remove(input.attachmentId),
+        [WS_METHODS.foundryWorkerLaunch]: (input) =>
+          startup.enqueueCommand(workerLaunch.launch(input)).pipe(
+            Effect.catchTags({
+              ServerRuntimeStartupError: () =>
+                Effect.fail(new FoundryWorkerLaunchError({ code: "launch_failed" })),
+            }),
+          ),
         [WS_METHODS.foundryWorkerStatus]: () => workerReadiness.read(),
         [WS_METHODS.assetsReadChunk]: (input) => assetTransfer.read(input),
         [WS_METHODS.attachmentsWriteChunk]: (input) => assetTransfer.write(input),

@@ -1,3 +1,7 @@
+import * as WorkerLaunch from "../foundry/WorkerLaunch.ts";
+import { WorkerReadiness } from "../foundry/WorkerReadiness.ts";
+import * as ConfigProvider from "effect/ConfigProvider";
+import * as Path from "effect/Path";
 import * as DocumentText from "../provider/DocumentText.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
@@ -266,6 +270,7 @@ function makeHarness(options: HarnessOptions = {}) {
   return {
     layer: Layer.mergeAll(
       layerLaunch,
+      layerReceipts,
       layerRegistry,
       layerThreadManagement,
       layerTitleRegeneration,
@@ -2387,4 +2392,223 @@ it.effect("replays an accepted send after the project disables the instance", ()
       assert.fail(`expected ThreadManagementProviderInstanceDisabledError, got ${fresh._tag}`);
     }
   }).pipe(Effect.provide(Layer.mergeAll(harness.layer, layerFiles)));
+});
+
+function workerLayer(roots = ["/repo"], providerReady = true) {
+  return WorkerLaunch.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              FOUNDRY_WORKER_ENABLED: "true",
+              FOUNDRY_WORKER_PROVIDER_INSTANCE_ID: "codex",
+              FOUNDRY_WORKER_WORKSPACE_ROOTS: JSON.stringify(roots),
+            },
+          }),
+        ),
+        Path.layer,
+        FileSystem.layerNoop({ realPath: (path) => Effect.succeed(path) }),
+        Layer.succeed(WorkerReadiness, {
+          read: () =>
+            Effect.succeed({
+              online: true,
+              providerInstanceId: modelSelection.instanceId,
+              providerReady,
+              providerState: "ready",
+              version: "fixture",
+              checkedAt: "2026-01-01T00:00:00.000Z",
+              capacityAvailable: true,
+              activeRuns: 0,
+            }),
+        }),
+      ),
+    ),
+  );
+}
+const workerInput = {
+  commandId: CommandId.make("worker-launch-fixture"),
+  projectId,
+  title: "Worker task",
+  model: modelSelection.model,
+  prompt: "An isolated launch without a parent agent",
+};
+
+it.effect.each([
+  "before-commit",
+  "after-thread-commit",
+  "after-message-commit",
+  "lost-response",
+] as const)("worker receipt survives %s and recreation of its service", (failurePoint) => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+    const ids = WorkerLaunch.workerLaunchIds(workerInput, "codex");
+    if (failurePoint === "before-commit") {
+      const fault = Layer.mock(ThreadLaunch.ThreadLaunchService)({
+        launch: () =>
+          Effect.fail(
+            new ThreadLaunch.ThreadLaunchError({
+              commandId: ids.commandId,
+              projectId,
+              operation: "create-thread",
+              cause: "injected before commit",
+            }),
+          ),
+      });
+      const failed = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+        worker.launch(workerInput),
+      ).pipe(Effect.provide(workerLayer().pipe(Layer.provide(fault))), Effect.flip);
+      assert.deepInclude(failed, { code: "launch_failed" });
+      assert.isTrue(Option.isNone(yield* receipts.getByCommandId(ids.commandId)));
+    } else if (failurePoint === "after-thread-commit") {
+      yield* threads.dispatch({
+        type: "thread.create",
+        ...ids,
+        projectId,
+        title: workerInput.title,
+        modelSelection,
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "system",
+        creationSource: "server",
+      });
+      assert.isTrue(
+        Option.isNone(
+          yield* receipts.getByCommandId(CommandId.make(`${ids.commandId}:initial-message`)),
+        ),
+      );
+    } else if (failurePoint === "after-message-commit") {
+      const interruptedLaunch = Layer.fresh(ThreadLaunch.layer).pipe(
+        Layer.provide(IdAllocator.layer),
+        Layer.provide(
+          Layer.succeed(ThreadManagement.ThreadManagementService, {
+            ...threads,
+            dispatch: (command) =>
+              threads
+                .dispatch(command)
+                .pipe(
+                  Effect.tap(() =>
+                    command.type === "message.dispatch"
+                      ? Effect.die("injected exit after message commit")
+                      : Effect.void,
+                  ),
+                ),
+          }),
+        ),
+      );
+      const stopped = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+        worker.launch(workerInput),
+      ).pipe(Effect.provide(workerLayer().pipe(Layer.provide(interruptedLaunch))), Effect.exit);
+      assert.isTrue(Exit.isFailure(stopped));
+      if (Exit.isFailure(stopped))
+        assert.include(Cause.pretty(stopped.cause), "injected exit after message commit");
+      assert.isTrue(
+        Option.isSome(
+          yield* receipts.getByCommandId(CommandId.make(`${ids.commandId}:initial-message`)),
+        ),
+      );
+    } else {
+      // The durable launch completes but its response is lost before the caller sees it.
+      yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) => worker.launch(workerInput)).pipe(
+        Effect.provide(workerLayer()),
+        Effect.andThen(Effect.fail("lost response")),
+        Effect.flip,
+      );
+    }
+    const first = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+      worker.launch(workerInput),
+    ).pipe(Effect.provide(workerLayer()));
+    const settings = yield* ServerSettings.ServerSettingsService;
+    yield* settings.updateSettings({
+      projectSettingsOverrides: {
+        [projectId]: { providerInstances: { [modelSelection.instanceId]: { enabled: false } } },
+      },
+    });
+    const second = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+      worker.launch(workerInput),
+    ).pipe(Effect.provide(workerLayer()));
+    assert.deepEqual(first, second);
+    assert.equal(first.threadId, ids.threadId);
+    const projection = yield* threads.getThreadProjection(first.threadId);
+    assert.equal(projection.messages.length, 1);
+    assert.equal(projection.runs.length, 1);
+    assert.equal(
+      (yield* threads.listProjectThreads({ projectId, includeSubagents: true })).length,
+      1,
+    );
+    const conflict = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+      worker.launch({ ...workerInput, prompt: "Different request" }),
+    ).pipe(Effect.provide(workerLayer()), Effect.flip);
+    assert.deepInclude(conflict, { code: "command_conflict" });
+    assert.equal((yield* threads.getThreadProjection(first.threadId)).messages.length, 1);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("worker rejects outside projects and disabled providers before committing work", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    for (const roots of [[], ["/other"], ["/rep"], ["relative"]]) {
+      const denied = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+        worker.launch(workerInput),
+      ).pipe(Effect.provide(workerLayer(roots)), Effect.flip);
+      assert.deepInclude(denied, { code: "project_denied" });
+    }
+    const notReady = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+      worker.launch(workerInput),
+    ).pipe(Effect.provide(workerLayer(["/repo"], false)), Effect.flip);
+    assert.deepInclude(notReady, { code: "provider_not_ready" });
+    const settings = yield* ServerSettings.ServerSettingsService;
+    yield* settings.updateSettings({
+      projectSettingsOverrides: {
+        [projectId]: { providerInstances: { [modelSelection.instanceId]: { enabled: false } } },
+      },
+    });
+    const disabled = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+      worker.launch(workerInput),
+    ).pipe(Effect.provide(workerLayer()), Effect.flip);
+    assert.deepInclude(disabled, { code: "provider_disabled" });
+    assert.equal(
+      (yield* threads.listProjectThreads({ projectId, includeSubagents: true })).length,
+      0,
+    );
+    const ids = WorkerLaunch.workerLaunchIds(workerInput, "codex");
+    yield* settings.updateSettings({
+      projectSettingsOverrides: {
+        [projectId]: { providerInstances: { [modelSelection.instanceId]: { enabled: true } } },
+      },
+    });
+    yield* threads.dispatch({
+      type: "thread.create",
+      ...ids,
+      projectId,
+      title: workerInput.title,
+      modelSelection,
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "system",
+      creationSource: "server",
+    });
+    yield* settings.updateSettings({
+      projectSettingsOverrides: {
+        [projectId]: { providerInstances: { [modelSelection.instanceId]: { enabled: false } } },
+      },
+    });
+    const partial = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+      worker.launch(workerInput),
+    ).pipe(Effect.provide(workerLayer()), Effect.flip);
+    assert.deepInclude(partial, { code: "provider_disabled" });
+    const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+    assert.isTrue(
+      Option.isNone(
+        yield* receipts.getByCommandId(CommandId.make(`${ids.commandId}:initial-message`)),
+      ),
+    );
+  }).pipe(Effect.provide(harness.layer));
 });

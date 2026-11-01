@@ -62,6 +62,7 @@ WorkingDirectory={WORKER_HOME}
 Environment=HOME={WORKER_HOME}
 Environment=T3CODE_HOME={T3}
 Environment=PATH=/opt/foundry-worker/providers/bin:/usr/local/bin:/usr/bin:/bin
+Environment='FOUNDRY_WORKER_WORKSPACE_ROOTS={json.dumps(config["workspaceRoots"], separators=(",", ":"))}'
 Environment=FOUNDRY_WORKER_ENABLED=true
 Environment=FOUNDRY_WORKER_PROVIDER_INSTANCE_ID={config.get("providerInstanceId", "")}
 Environment=NODE_ENV=production
