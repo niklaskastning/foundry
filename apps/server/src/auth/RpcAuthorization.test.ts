@@ -361,6 +361,43 @@ it.effect("separates host file URLs from readable attachment URLs", () =>
   }).pipe(Effect.scoped),
 );
 
+it.effect("denies chunk upload and resume inspection before handlers for a read-only client", () =>
+  Effect.gen(function* () {
+    const tags = [WS_METHODS.attachmentsWriteChunk, WS_METHODS.attachmentsChunkStatus] as const;
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof tags)[number]> =>
+          tag !== tags[0] && tag !== tags[1],
+      ),
+    );
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayer({
+            [WS_METHODS.attachmentsWriteChunk]: () => Effect.die("write must not run"),
+            [WS_METHODS.attachmentsChunkStatus]: () => Effect.die("status must not run"),
+          }),
+          RpcAuthorization.layer([AuthOrchestrationReadScope]),
+        ),
+      ),
+    );
+    expect(
+      yield* client[WS_METHODS.attachmentsChunkStatus]({
+        url: "/api/attachments/upload/fixture",
+      }).pipe(Effect.flip),
+    ).toMatchObject({ requiredPermission: AuthOrchestrationOperateScope });
+    expect(
+      yield* client[WS_METHODS.attachmentsWriteChunk]({
+        url: "/api/attachments/upload/fixture",
+        offset: 0,
+        data: "YQ==",
+        sha256: "a".repeat(64),
+        fileSha256: "b".repeat(64),
+      }).pipe(Effect.flip),
+    ).toMatchObject({ requiredPermission: AuthOrchestrationOperateScope });
+  }).pipe(Effect.scoped),
+);
+
 it.effect("denies manual cleanup before the handler without settings permission", () =>
   Effect.gen(function* () {
     const group = WsRpcGroup.omit(

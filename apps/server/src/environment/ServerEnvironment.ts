@@ -266,6 +266,7 @@ export const make = Effect.gen(function* () {
       projectCloneTracking: true,
       projectOrganization: true,
       ignoredFileListing: true,
+      assetChunkTransfer: true,
       triage: true,
       npmReleaseLookup: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),

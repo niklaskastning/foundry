@@ -5,6 +5,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthTerminalReadScope,
   AuthTerminalOperateScope,
+  AuthFilesystemReadScope,
 } from "./auth.ts";
 import { FoundryInstanceId } from "./foundry.ts";
 import { FoundryDeviceId } from "./foundryDevices.ts";
@@ -24,8 +25,9 @@ export const FoundryGatewayGrantRequest = Schema.Struct({
       AuthOrchestrationOperateScope,
       AuthTerminalReadScope,
       AuthTerminalOperateScope,
+      AuthFilesystemReadScope,
     ]),
-  ).check(Schema.isMinLength(1), Schema.isMaxLength(4)),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(5)),
 });
 export const FoundryGatewayGrantLookup = Schema.Struct({
   ...FoundryGatewayTarget.fields,
