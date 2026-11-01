@@ -14,6 +14,7 @@ export const FOUNDRY_CAPABILITIES = [
   "foundry.device-enrollment",
   "foundry.device-channel",
   "foundry.http-gateway",
+  "foundry.rpc-streams",
 ] as const;
 
 export const FoundryDescriptor = Schema.Struct({

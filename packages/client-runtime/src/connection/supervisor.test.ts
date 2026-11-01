@@ -1,4 +1,10 @@
-import { AuthStandardClientScopes, EnvironmentId, type ServerConfig } from "@t3tools/contracts";
+import {
+  AuthStandardClientScopes,
+  EnvironmentId,
+  FoundryDeviceId,
+  FoundryInstanceId,
+  type ServerConfig,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -26,6 +32,7 @@ import {
   ConnectionBlockedError,
   ConnectionTransientError,
   PrimaryConnectionTarget,
+  FoundryConnectionTarget,
   RelayConnectionTarget,
   type ConnectionAttemptError,
   type ConnectionTarget,
@@ -496,12 +503,31 @@ describe("EnvironmentSupervisor", () => {
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
-  it.effect("treats an involuntary session close as transient and reconnects", () =>
+  it.effect.each([
+    TARGET,
+    new FoundryConnectionTarget({
+      environmentId: TARGET.environmentId,
+      label: "Worker",
+      binding: {
+        origin: "https://main.test",
+        issuer: "https://team.cloudflareaccess.com",
+        instanceId: FoundryInstanceId.make("11111111-1111-4111-8111-111111111111"),
+        mainEnvironmentId: EnvironmentId.make("main"),
+      },
+      deviceId: FoundryDeviceId.make("22222222-2222-4222-8222-222222222222"),
+      scopes: ["orchestration:read"],
+    }),
+  ])("reconnects an involuntarily closed $_tag session", (target) =>
     Effect.gen(function* () {
-      const harness = yield* makeHarness();
-      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
-        initiallyDesired: true,
-      }).pipe(Effect.provide(harness.dependencies));
+      const harness = yield* makeHarness({
+        prepare: () => Effect.succeed({ ...PREPARED_CONNECTION, target }),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(
+        { ...TARGET_ENTRY, target },
+        {
+          initiallyDesired: true,
+        },
+      ).pipe(Effect.provide(harness.dependencies));
 
       yield* awaitState(supervisor.state, (state) => state.phase === "connected");
       yield* harness.closeLatestSession();

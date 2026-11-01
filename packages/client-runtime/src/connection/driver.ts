@@ -6,6 +6,8 @@ import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
+import { verifyDescriptor } from "./foundry.ts";
+import type { InstanceBinding } from "./foundry.ts";
 
 import type { ConnectionCatalogEntry, ConnectionRoute } from "./catalog.ts";
 import type {
@@ -171,8 +173,34 @@ export const make = Effect.gen(function* () {
     );
   };
 
+  const checkFoundryHost = Effect.fn("ConnectionDriver.checkFoundryHost")(
+    function* (binding: InstanceBinding) {
+      const response = yield* httpClient.get(
+        `${binding.origin}/.well-known/foundry?protocolVersion=1`,
+      );
+      if (
+        response.status !== 200 ||
+        !response.headers["content-type"]?.includes("application/json")
+      )
+        return "silent" as const;
+      const value = yield* response.json;
+      yield* Effect.try(() => verifyDescriptor(value, binding.origin, binding));
+      return "answered" as const;
+    },
+    Effect.timeout(ROUTE_CHECK_TIMEOUT_MS),
+    Effect.orElseSucceed((): RouteCheck => "silent"),
+    Effect.provideService(FetchHttpClient.RequestInit, {
+      cache: "no-store",
+      redirect: "manual",
+      credentials: "include",
+    }),
+  );
+
   const checkHost = (prepared: PreparedConnection) =>
-    checkDescriptor(prepared.httpBaseUrl, prepared.environmentId).pipe(
+    (prepared.target._tag === "FoundryConnectionTarget"
+      ? checkFoundryHost(prepared.target.binding)
+      : checkDescriptor(prepared.httpBaseUrl, prepared.environmentId)
+    ).pipe(
       Effect.withSpan("ConnectionDriver.checkHost", {
         attributes: { "connection.target.kind": prepared.target._tag },
       }),

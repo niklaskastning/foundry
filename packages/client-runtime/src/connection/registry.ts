@@ -639,6 +639,11 @@ export const make = Effect.gen(function* () {
               : registered;
           const persisted = (yield* Ref.get(persistedEnvironmentIds)).has(target.environmentId);
           if (
+            target._tag === "FoundryConnectionTarget" &&
+            (persisted || (previous && previous.target._tag !== "FoundryConnectionTarget"))
+          )
+            return false;
+          if (
             persisted ||
             (previous !== undefined &&
               pullRequestRoutingConnectionKey(previous) !== pullRequestRoutingConnectionKey(entry))

@@ -33,6 +33,7 @@ const make = Effect.gen(function* () {
   const enrollment = yield* DeviceConfig.DeviceEnrollmentEnabled;
   const channel = yield* DeviceConfig.DeviceChannelEnabled;
   const gateway = yield* DeviceConfig.HttpGatewayEnabled;
+  const streams = yield* DeviceConfig.StreamGatewayEnabled;
   const access = yield* Effect.serviceOption(AccessConfig.AccessConfig);
   if (enabled && Option.isNone(access))
     return yield* Effect.die(new AccessConfig.AccessConfigurationError({}));
@@ -41,7 +42,8 @@ const make = Effect.gen(function* () {
       (enabled || capability !== "foundry.access-sessions") &&
       (enrollment || capability !== "foundry.device-enrollment") &&
       (channel || capability !== "foundry.device-channel") &&
-      (gateway || capability !== "foundry.http-gateway"),
+      (gateway || capability !== "foundry.http-gateway") &&
+      (streams || capability !== "foundry.rpc-streams"),
   );
   const identity = yield* InstanceIdentityStore.InstanceIdentityStore;
   const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;

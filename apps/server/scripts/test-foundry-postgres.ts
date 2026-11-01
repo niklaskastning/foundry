@@ -862,6 +862,7 @@ try {
       NodeAssert.equal(streamTicket.status, streamsEnabled ? 400 : 404);
       const descriptor = decodeDescriptor(await metadata.json());
       NodeAssert.equal(descriptor.capabilities.includes("foundry.http-gateway"), gatewayEnabled);
+      NodeAssert.equal(descriptor.capabilities.includes("foundry.rpc-streams"), streamsEnabled);
       NodeAssert.equal(Object.hasOwn(descriptor, "instanceAuth"), enabled);
       if (enabled) {
         const verified = FoundryOnboarding.verifyDescriptor(descriptor, accessConfig.origin, {

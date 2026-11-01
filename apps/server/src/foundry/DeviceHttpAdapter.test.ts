@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  ORCHESTRATION_PROTOCOL_VERSION,
   AuthSessionId,
   FoundryDeviceId,
   FoundryInstanceId,
@@ -75,7 +76,8 @@ const fixture = Effect.gen(function* () {
   };
   const requests = yield* Queue.unbounded<HttpServerRequest.HttpServerRequest>();
   const snapshot = { projects: [], updatedAt: "2026-11-01T00:00:00.000Z" };
-  let mode: "ok" | "redirect" | "html" | "oversize" | "wrong-environment" | "hang" = "ok";
+  let mode: "ok" | "redirect" | "html" | "oversize" | "wrong-environment" | "protocol" | "hang" =
+    "ok";
   let targetHits = 0;
   const routes = Layer.mergeAll(
     HttpRouter.add(
@@ -104,6 +106,10 @@ const fixture = Effect.gen(function* () {
           label: "isolated worker",
           platform: { os: "linux", arch: "x64" },
           serverVersion: "test",
+          orchestrationProtocolVersion:
+            mode === "protocol"
+              ? ORCHESTRATION_PROTOCOL_VERSION + 1
+              : ORCHESTRATION_PROTOCOL_VERSION,
           capabilities: {},
         }),
       ),
@@ -280,6 +286,10 @@ it.live(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture;
+      f.setMode("protocol");
+      expect((yield* f.adapter.openStream(f.grant, 1).pipe(Effect.result))._tag).toBe("Failure");
+      expect(yield* f.sessions.listActive()).toHaveLength(0);
+      f.setMode("ok");
       yield* Effect.gen(function* () {
         const socket = yield* f.adapter.openStream(
           { ...f.grant, scopes: ["orchestration:read", "terminal:read"] },
