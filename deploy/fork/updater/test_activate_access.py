@@ -2,6 +2,7 @@ import copy
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -27,6 +28,79 @@ def main_container():
 
 
 class ActivationTest(unittest.TestCase):
+    def test_active_status_is_read_only_and_rejects_drift_without_disclosing_secrets(self):
+        for drift in [None, 'environment', 'compose', 'schema', 'identity', 'migrator', 'permissions']:
+            with self.subTest(drift=drift), tempfile.TemporaryDirectory() as directory:
+                config = Path(directory)
+                runtime = config / 'access-runtime.env'
+                secret = 'a' * 64
+                values = {
+                    'FOUNDRY_INSTANCE_STORE': 'postgres', 'FOUNDRY_ACCESS_ENABLED': 'true',
+                    'FOUNDRY_INSTANCE_DATABASE_URL': f'postgresql://foundry_instance_runtime:{secret}@postgres:5432/fork_connect',
+                    'FOUNDRY_ACCESS_ISSUER': activate.ISSUER, 'FOUNDRY_ACCESS_AUDIENCE': secret,
+                    'FOUNDRY_PUBLIC_ORIGIN': activate.ORIGIN,
+                }
+                runtime.write_text(''.join(f'{key}={value}\n' for key, value in values.items()))
+                runtime.chmod(0o644 if drift == 'permissions' else 0o600)
+                configured = activate.composition(activate.REGISTRY + '@' + DIGEST, runtime)
+                if drift == 'compose':
+                    configured['services']['main']['ports'] = ['0.0.0.0:3783:3773']
+                compose = config / 'access-compose.json'
+                compose.write_text(json.dumps(configured))
+                compose.chmod(0o600)
+                current = main_container()
+                current['Config']['Env'] = [f'{key}={value}' for key, value in values.items()]
+                if drift == 'environment':
+                    current['Config']['Env'].append('UNKNOWN=secret')
+                image = {'Id': current['Image'], 'Config': {'Env': [], 'Labels': {
+                    'org.opencontainers.image.source': activate.SOURCE,
+                    'org.opencontainers.image.revision': REVISION}}}
+                postgres = main_container()
+                postgres['Config']['Labels']['com.docker.compose.service'] = 'postgres'
+                postgres['Mounts'] = [{'Destination': '/var/lib/postgresql/data', 'Type': 'volume',
+                                       'Name': 'foundry_foundry-postgres'}]
+                postgres['HostConfig']['PortBindings'] = {}
+                calls = []
+
+                def docker(*args, **kwargs):
+                    calls.append(args)
+                    self.assertIn(args[:2], [('container', 'inspect'), ('image', 'inspect')])
+                    return json.dumps([image if args[0] == 'image' else
+                                       current if args[2] == activate.MAIN else postgres])
+
+                def sql(statement):
+                    self.assertTrue(statement.startswith('BEGIN READ ONLY;'))
+                    return json.dumps({'version': 5 if drift == 'schema' else 2,
+                        'instanceId': 'wrong' if drift == 'identity' else activate.INSTANCE,
+                        'environmentId': activate.ENVIRONMENT, 'operatorBound': True,
+                        'runtimeLogin': True, 'migratorLogin': drift == 'migrator'})
+
+                def metadata(path):
+                    return {'instanceId': activate.INSTANCE, 'mainEnvironmentId': activate.ENVIRONMENT,
+                            'environmentId': activate.ENVIRONMENT, 'ready': True,
+                            'capabilities': ['foundry.access-sessions']}
+
+                lstat = Path.lstat
+
+                def owned(path):
+                    fields = list(lstat(path))
+                    fields[4] = 0
+                    return os.stat_result(fields)
+
+                with patch.object(activate, 'CONFIG', config), patch.object(activate, 'docker', docker), \
+                     patch.object(activate, 'sql', sql), patch.object(activate, 'metadata', metadata), \
+                     patch.object(Path, 'lstat', owned):
+                    if drift:
+                        with self.assertRaises(RuntimeError) as error:
+                            activate.active_status()
+                        self.assertNotIn(secret, str(error.exception))
+                    else:
+                        report = activate.active_status()
+                        self.assertEqual(report['revision'], REVISION)
+                        self.assertFalse(report['upgradePerformed'])
+                        self.assertNotIn(secret, json.dumps(report).replace(DIGEST, 'digest'))
+                self.assertTrue(calls)
+
     def test_rejects_wrong_targets_identity_and_nonempty_database(self):
         changes = [
             lambda c: c['Config']['Labels'].update({'com.docker.compose.project': 'other'}),

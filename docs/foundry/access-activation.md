@@ -12,6 +12,36 @@ revision first; the script is deliberately pinned to this deployment's IDs and o
 
 ## Before the maintenance window
 
+### Inspect an already activated Main
+
+After activation, neither the baseline updater nor `preflight` supports an upgrade.
+From the reviewed checkout, an administrator can run the read-only inventory:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/updater/activate-access.py status
+```
+
+This checks the actual image against the private Compose/runtime configuration,
+the pinned identities, readiness, schema 2, operator binding and disabled migration
+login. Its JSON contains no credentials or operator subject. It does not stop Main,
+change the database or approve an upgrade. Configuration drift or a later schema
+is rejected for explicit investigation. No installation or sudoers change is needed.
+
+A later schema-5 upgrade needs a separate coordinated procedure: retain the old
+image, stop Main, save state/workspaces and `fork_connect` together with the private
+configuration, verify restoration in isolation, temporarily enable only the
+migration login, migrate with the candidate image, disable that login again, then
+start and verify the same IDs and intended capabilities. Recovery must restore the
+matching database, volumes, configuration and old image; the activation-era empty
+database backup is not a backup of the current Access sessions. Do not rerun
+`activate` or follow an image-only deploy command from a build summary.
+
+### First activation only
+
+The remaining activation instructions apply only before PostgreSQL/Access has been
+enabled. For an active instance, use the inventory above and prepare its upgrade
+separately.
+
 1. Verify the candidate Linux build succeeded, its source commit is the reviewed
    server revision, and its immutable GHCR digest is recorded. The activator checks
    image source/revision/platform labels; labels are not a substitute for build provenance.
