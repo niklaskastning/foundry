@@ -652,6 +652,39 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         headers: { host: "localhost:13773", origin: "http://localhost:3000" },
       } as never);
       expect(state.authenticated).toBe(false);
+
+      const bearer = yield* serverAuth.issueSession({ scopes: ["orchestration:read"] });
+      const adapted = {
+        cookies: { [sessions.cookieName]: bearer.token },
+        headers: {
+          host: "foundry.example",
+          origin: "https://foundry.example",
+          authorization: "Bearer opaque-access-token",
+        },
+      };
+      const session = yield* serverAuth.authenticateHttpRequest(adapted as never);
+      expect(session.sessionId).toBe(bearer.sessionId);
+      expect(session.scopes).toEqual(["orchestration:read"]);
+      const ticket = yield* serverAuth.issueWebSocketTicket(session, { use: "rpc" });
+      const upgrade = yield* serverAuth.authenticateWebSocketUpgrade(
+        {
+          url: `/ws?orchestrationProtocol=2&wsTicket=${Redacted.value(ticket.ticket)}`,
+          cookies: {},
+          headers: adapted.headers,
+        } as never,
+        "rpc",
+      );
+      expect(upgrade.sessionId).toBe(bearer.sessionId);
+      const foreign = yield* serverAuth
+        .authenticateHttpRequest({
+          ...adapted,
+          headers: { ...adapted.headers, origin: "https://other.example" },
+        } as never)
+        .pipe(Effect.flip);
+      expect(foreign._tag).toBe("ServerAuthInvalidCredentialError");
+      yield* serverAuth.revokeSession(bearer.sessionId);
+      const revoked = yield* serverAuth.getSessionState(adapted as never);
+      expect(revoked.authenticated).toBe(false);
     }).pipe(Effect.provide(layerEnvironmentAuth({ mode: "web" }))),
   );
 
