@@ -11,6 +11,7 @@ export const FOUNDRY_PROTOCOL_VERSION = "1";
 export const FOUNDRY_CAPABILITIES = [
   "foundry.instance-descriptor",
   "foundry.access-sessions",
+  "foundry.device-enrollment",
 ] as const;
 
 export const FoundryDescriptor = Schema.Struct({

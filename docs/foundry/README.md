@@ -25,3 +25,5 @@ Der nächste Entwicklungsabschnitt ist **G1: Instanzeinstieg und Anmeldung**. Zu
 Jedes Arbeitspaket erhält einen eigenen Branch, fokussierte Commits und einen PR zum Fork. Die IDs P01–P46 sind Planungsschlüssel, keine GitHub-PR-Nummern. Konkreter Status, Entscheidungen und Nachweise leben im zugehörigen Issue/PR; dieser Ordner ist kein zweites Fortschrittsboard. Ein Gate wird mit den tatsächlich geprüften Commit-/Build-Ständen belegt.
 
 Die Maintainer-Vorgaben stehen in [AGENTS.md](../../AGENTS.md). Ein automatischer PR-Check, manuelle Artefakt-Builds bei Bedarf; keine zusätzliche CI-Matrix. Implementierungsnotizen und temporäre Versuchsergebnisse bleiben außerhalb des Repositories. Die ausdrücklich angeforderten Architektur-, Deployment- und Umsetzungsdokumente sind versionierte Ausnahmen davon.
+
+Die ausdrücklich vorgezogene Entwicklung von P06–P08 und die später nachzuholenden Windows-/G1-/Integrationsnachweise werden in [Tracking-Issue #13](https://github.com/niklaskastning/foundry/issues/13) geführt. Vor Weiterarbeit dieses Issue und seine Paket-PRs lesen; Entwicklungsfreigabe ist keine Gate-Abnahme oder Deployment-Freigabe.

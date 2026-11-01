@@ -32,6 +32,11 @@ import * as FoundryHttp from "../src/foundry/http.ts";
 import * as ServerConfig from "../src/config.ts";
 import * as ServerEnvironment from "../src/environment/ServerEnvironment.ts";
 import * as EnvironmentAuthPolicy from "../src/auth/EnvironmentAuthPolicy.ts";
+import * as DeviceRegistry from "../src/foundry/DeviceRegistry.ts";
+import * as DeviceConfig from "../src/foundry/DeviceConfig.ts";
+import * as DeviceHttp from "../src/foundry/deviceHttp.ts";
+import { generateDeviceKey, signEnrollment } from "../src/foundry/DeviceProof.ts";
+import { FoundryDevice, FoundryEnrollmentRequest } from "@t3tools/contracts";
 
 const decodeDescriptor = Schema.decodeUnknownSync(FoundryDescriptor);
 const decodeSession = Schema.decodeUnknownSync(FoundrySession);
@@ -246,7 +251,7 @@ try {
     await query("UPDATE foundry_instance.schema_version SET version=99", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 503);
     await expectFailure(migrate());
-    await query("UPDATE foundry_instance.schema_version SET version=2", "foundry_migrate");
+    await query("UPDATE foundry_instance.schema_version SET version=3", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 200);
     await query("GRANT CREATE ON SCHEMA public TO foundry_runtime");
     NodeAssert.equal((await ready()).status, 503);
@@ -296,6 +301,7 @@ try {
   const clock = await run(Clock.Clock);
   const testContext = Context.make(Clock.Clock, {
     ...clock,
+    sleep: clock.sleep.bind(clock),
     currentTimeMillis: Effect.sync(() => now),
     currentTimeMillisUnsafe: () => now,
     currentTimeNanos: Effect.sync(() => BigInt(now) * 1_000_000n),
@@ -356,6 +362,10 @@ try {
     await run(bind());
     await expectFailure(bind("foreign-operator"));
     const operatorBefore = await query("SELECT * FROM foundry_instance.operator_binding");
+    await query(
+      "DROP TABLE foundry_instance.device_enrollments, foundry_instance.devices",
+      "foundry_migrate",
+    );
     await query("DROP TABLE foundry_instance.sessions", "foundry_migrate");
     await query("UPDATE foundry_instance.schema_version SET version=1", "foundry_migrate");
     await expectFailure(readIdentity);
@@ -506,8 +516,181 @@ try {
   } finally {
     await authHandler.dispose();
   }
+  const sessionsBeforeUpgrade = await query(
+    "SELECT * FROM foundry_instance.sessions ORDER BY token_hash",
+  );
+  await query(
+    "DROP TABLE foundry_instance.device_enrollments, foundry_instance.devices",
+    "foundry_migrate",
+  );
+  await query("UPDATE foundry_instance.schema_version SET version=2", "foundry_migrate");
+  await expectFailure(readIdentity);
+  await run(Effect.all([migrate(), migrate()], { concurrency: "unbounded" }));
+  NodeAssert.equal(await run(readIdentity), instanceId);
+  NodeAssert.deepEqual(
+    await query("SELECT * FROM foundry_instance.sessions ORDER BY token_hash"),
+    sessionsBeforeUpgrade,
+  );
+  const registryLayer = DeviceRegistry.layer.pipe(
+    Layer.provide(Layer.succeed(DeviceConfig.DeviceOrigin, { origin: accessConfig.origin })),
+    Layer.provide(identityLayer),
+    Layer.provide(db("foundry_runtime")),
+    Layer.provide(NodeServices.layer),
+  );
+  const deviceHandler = HttpRouter.toWebHandler(
+    DeviceHttp.layer.pipe(Layer.provide(registryLayer)),
+    { disableLogger: true },
+  );
+  try {
+    const deviceCall = <A>(
+      f: (
+        registry: DeviceRegistry.DeviceRegistry["Service"],
+      ) => Effect.Effect<A, import("@t3tools/contracts").FoundryDeviceError>,
+    ) =>
+      run(
+        DeviceRegistry.DeviceRegistry.pipe(
+          Effect.flatMap(f),
+          Effect.provide(registryLayer),
+          Effect.provide(testContext),
+        ),
+      );
+    const enroll = (input: FoundryEnrollmentRequest) =>
+      deviceHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/devices/enroll`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(input),
+        }),
+        testContext,
+      );
+    const keyFile = NodePath.join(root, "device-key.json");
+    const invitationFile = NodePath.join(root, "invitation.json");
+    const requestFile = NodePath.join(root, "request.json");
+    const cli = (...args: string[]) =>
+      NodeChildProcess.spawnSync(
+        process.execPath,
+        [NodePath.join(import.meta.dirname, "../src/bin.ts"), "foundry", ...args],
+        { encoding: "utf8" },
+      );
+    NodeAssert.equal(cli("device-keygen", "--output", keyFile).status, 0, "device-keygen failed");
+    const keyContent = await NodeFSP.readFile(keyFile, "utf8");
+    const key = Schema.decodeUnknownSync(
+      Schema.Struct({ publicKey: Schema.String, privateKey: Schema.String }),
+    )(JSON.parse(keyContent));
+    NodeAssert.equal((await NodeFSP.stat(keyFile)).mode & 0o777, 0o600);
+    NodeAssert.notEqual(cli("device-keygen", "--output", keyFile).status, 0);
+    NodeAssert.equal((await NodeFSP.readFile(keyFile, "utf8")) === keyContent, true);
+    const invitation = await deviceCall((registry) =>
+      registry.approve({
+        environmentId: EnvironmentId.make("p06-worker"),
+        publicKey: key.publicKey,
+      }),
+    );
+    await NodeFSP.writeFile(invitationFile, JSON.stringify(invitation), { mode: 0o600 });
+    NodeAssert.equal(
+      cli(
+        "sign-enrollment",
+        "--invitation",
+        invitationFile,
+        "--key-file",
+        keyFile,
+        "--output",
+        requestFile,
+      ).status,
+      0,
+      "sign-enrollment failed",
+    );
+    const proof = Schema.decodeUnknownSync(FoundryEnrollmentRequest)(
+      JSON.parse(await NodeFSP.readFile(requestFile, "utf8")),
+    );
+    NodeAssert.equal((await NodeFSP.stat(requestFile)).mode & 0o777, 0o600);
+    const initial = await Promise.all(Array.from({ length: 8 }, () => enroll(proof)));
+    const devices: FoundryDevice[] = [];
+    for (const response of initial) {
+      NodeAssert.equal(response.status, 200);
+      devices.push(Schema.decodeUnknownSync(FoundryDevice)(await response.json()));
+    }
+    for (const device of devices) NodeAssert.deepEqual(device, devices[0]);
+    const oversized = await deviceHandler.handler(
+      new Request(`${accessConfig.origin}/api/foundry/devices/enroll`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: `${JSON.stringify(proof)}${" ".repeat(8192)}`,
+      }),
+      testContext,
+    );
+    NodeAssert.equal(oversized.status, 403);
+    const registered = devices[0]!;
+    NodeAssert.equal((await query("SELECT * FROM foundry_instance.devices")).length, 1);
+    NodeAssert.equal(
+      JSON.stringify(
+        await query("SELECT token_hash FROM foundry_instance.device_enrollments"),
+      ).includes(invitation.token),
+      false,
+    );
+    NodeAssert.deepEqual(await (await enroll(proof)).json(), registered);
+    const otherKey = generateDeviceKey();
+    for (const changed of [
+      { ...invitation, instanceId: FoundryInstanceId.make("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa") },
+      { ...invitation, origin: "https://foreign.example.test" },
+      { ...invitation, environmentId: EnvironmentId.make("foreign-environment") },
+      { ...invitation, expiresAt: invitation.expiresAt + 1000 },
+    ])
+      NodeAssert.equal((await enroll(signEnrollment(changed, key.privateKey))).status, 403);
+    NodeAssert.equal(
+      (
+        await enroll(
+          signEnrollment({ ...invitation, publicKey: otherKey.publicKey }, otherKey.privateKey),
+        )
+      ).status,
+      403,
+    );
+    NodeAssert.equal((await enroll({ ...proof, signature: "A".repeat(86) })).status, 403);
+    const duplicate = await deviceCall((registry) =>
+      registry.approve({ environmentId: invitation.environmentId, publicKey: otherKey.publicKey }),
+    );
+    NodeAssert.equal((await enroll(signEnrollment(duplicate, otherKey.privateKey))).status, 409);
+    const expired = await deviceCall((registry) =>
+      registry.approve({
+        environmentId: EnvironmentId.make("expired-worker"),
+        publicKey: otherKey.publicKey,
+      }),
+    );
+    const beforeExpiry = now;
+    now = expired.expiresAt;
+    const denied = await enroll(signEnrollment(expired, otherKey.privateKey));
+    NodeAssert.equal(denied.status, 403);
+    NodeAssert.equal(
+      Schema.decodeUnknownSync(Schema.Struct({ code: Schema.String }))(await denied.json()).code,
+      "expired_enrollment",
+    );
+    now = beforeExpiry;
+    await deviceCall((registry) => registry.revoke(registered.deviceId));
+    await deviceCall((registry) => registry.revoke(registered.deviceId));
+    await stop();
+    await start();
+    const revoked = await deviceCall((registry) => registry.get(registered.deviceId));
+    NodeAssert.equal(revoked.revoked, true);
+    NodeAssert.equal(revoked.generation, 2);
+    NodeAssert.equal((await enroll(proof)).status, 403);
+    for (const statement of [
+      "UPDATE foundry_instance.devices SET public_key='replacement'",
+      "DELETE FROM foundry_instance.devices",
+      "UPDATE foundry_instance.device_enrollments SET expires_at=9999999999999",
+    ])
+      await NodeAssert.rejects(query(statement, "foundry_runtime"));
+    await report(
+      "PASS P06: v2 upgrade preserves sessions/identity; concurrent key-bound enrollment and lost-answer retry; foreign proof, identity, expiry and duplicate rejection; revocation survives PostgreSQL restart; runtime grants restricted",
+    );
+  } finally {
+    await deviceHandler.dispose();
+  }
   await NodeFSP.writeFile(NodePath.join(home, "userdata", "environment-id"), mainEnvironmentId);
-  for (const enabled of [false, true]) {
+  for (const [enabled, enrollmentEnabled] of [
+    [false, false],
+    [true, false],
+    [true, true],
+  ] as const) {
     const runtimeRoutes = FoundryRuntime.layer.pipe(
       Layer.provide(environment),
       Layer.provide(ServerConfig.layerTest(root, home)),
@@ -517,6 +700,7 @@ try {
           ConfigProvider.ConfigProvider,
           ConfigProvider.fromUnknown({
             FOUNDRY_ACCESS_ENABLED: String(enabled),
+            FOUNDRY_DEVICE_ENROLLMENT_ENABLED: String(enrollmentEnabled),
             FOUNDRY_INSTANCE_STORE: "postgres",
             FOUNDRY_INSTANCE_DATABASE_URL: `postgresql://foundry_runtime@localhost/fork_connect?host=${encodeURIComponent(root)}`,
             FOUNDRY_ACCESS_ISSUER: accessConfig.issuer,
@@ -532,10 +716,20 @@ try {
         new Request(`${accessConfig.origin}/.well-known/foundry?protocolVersion=1`),
       );
       NodeAssert.equal(metadata.status, 200);
+      const descriptor = decodeDescriptor(await metadata.json());
+      NodeAssert.equal(Object.hasOwn(descriptor, "instanceAuth"), enabled);
       NodeAssert.equal(
-        Object.hasOwn(decodeDescriptor(await metadata.json()), "instanceAuth"),
-        enabled,
+        descriptor.capabilities.includes("foundry.device-enrollment"),
+        enrollmentEnabled,
       );
+      const enrollment = await runtimeHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/devices/enroll`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      );
+      NodeAssert.equal(enrollment.status, enrollmentEnabled ? 403 : 404);
       const login = await runtimeHandler.handler(
         new Request(`${accessConfig.origin}/api/foundry/auth/login`, {
           method: "POST",
