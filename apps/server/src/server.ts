@@ -18,6 +18,7 @@ import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Config from "effect/Config";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
@@ -306,6 +307,9 @@ const layerRelayClient = Layer.unwrap(
 const layerHttpServer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    const foundryStreams = yield* Config.Boolean("FOUNDRY_STREAM_GATEWAY_ENABLED").pipe(
+      Config.withDefault(false),
+    );
     return NodeHttpServer.layer(
       () => {
         const server = rejectRequestsUntilServing(
@@ -328,7 +332,7 @@ const layerHttpServer = Layer.unwrap(
         // window is shared across frames — that also makes small frames cheap
         // to compress, so no size threshold is set (ws only honors
         // `threshold` when context takeover is disabled).
-        websocket: { perMessageDeflate: true },
+        websocket: { perMessageDeflate: true, ...(foundryStreams ? { maxPayload: 262144 } : {}) },
       },
     );
   }),

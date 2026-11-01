@@ -22,7 +22,8 @@ import * as Redacted from "effect/Redacted";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 import * as Socket from "effect/socket/Socket";
-import { HttpRouter, HttpServer } from "effect/http";
+import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
+import * as StreamSocket from "./StreamSocket.ts";
 import * as DeviceChannel from "./DeviceChannel.ts";
 import * as DeviceConfig from "./DeviceConfig.ts";
 import * as DeviceRegistry from "./DeviceRegistry.ts";
@@ -73,8 +74,25 @@ const fixture = Effect.gen(function* () {
     Layer.provide(Layer.succeed(DeviceConfig.DeviceOrigin, { origin })),
     Layer.provide(NodeServices.layer),
   );
+  let clientStream = (_socket: Socket.Socket): Effect.Effect<void, FoundryGatewayError> =>
+    Effect.fail(new FoundryGatewayError({ code: "unavailable" }));
   const services = yield* Layer.build(
-    HttpRouter.serve(ChannelHttp.layer, { disableListenLog: true }).pipe(
+    HttpRouter.serve(
+      Layer.merge(
+        ChannelHttp.layer,
+        HttpRouter.add(
+          "GET",
+          "/fixture-client",
+          Effect.gen(function* () {
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            yield* clientStream(yield* StreamSocket.upgrade(request));
+            return HttpServerResponse.empty();
+          }).pipe(Effect.orElseSucceed(() => HttpServerResponse.empty({ status: 403 }))),
+        ),
+      ),
+      { disableListenLog: true },
+    ).pipe(
+      Layer.provide(Layer.succeed(DeviceConfig.StreamGatewayEnabled, true)),
       Layer.provideMerge(channelLayer),
       Layer.provideMerge(NodeHttpServer.layerTest),
     ),
@@ -88,7 +106,19 @@ const fixture = Effect.gen(function* () {
   const socket = Socket.makeWebSocket(url).pipe(
     Effect.provide(NodeSocket.layerWebSocketConstructor),
   );
-  return { socket, url, device, key, registry, origin, checked, channels };
+  return {
+    socket,
+    url,
+    device,
+    key,
+    registry,
+    origin,
+    checked,
+    channels,
+    setClientStream: (handler: typeof clientStream) => {
+      clientStream = handler;
+    },
+  };
 });
 
 it.live(
@@ -214,7 +244,7 @@ it.effect("refuses an Access credential bound to another origin before dialing",
   }),
 );
 
-it.live.each(["environment", "generation", "signature", "httpRead"] as const)(
+it.live.each(["environment", "generation", "signature", "httpRead", "rpcStream"] as const)(
   "rejects a foreign channel %s",
   (field) =>
     Effect.gen(function* () {
@@ -236,7 +266,9 @@ it.live.each(["environment", "generation", "signature", "httpRead"] as const)(
           ? { ...hello, signature: "A".repeat(86) }
           : field === "httpRead"
             ? { ...hello, httpRead: true }
-            : hello,
+            : field === "rpcStream"
+              ? { ...hello, rpcStream: true }
+              : hello,
       );
       expect(yield* io.read).toEqual({ type: "error", code: "invalid_proof" });
     }).pipe(Effect.scoped),
@@ -337,5 +369,98 @@ it.effect.each(["success", "revoked", "disconnect", "timeout", "authority"] as c
         expect((yield* f.channels.current(f.device.deviceId)).channelGeneration).toBe(
           lease.channelGeneration,
         );
+    }).pipe(Effect.scoped),
+);
+
+it.live(
+  "carries isolated data streams while control traffic continues and closes them on channel loss",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const connected = yield* Deferred.make<void>();
+      const tickets = yield* Queue.unbounded<string>();
+      const connector = yield* DeviceConnector.runOnce(yield* f.socket, {
+        origin: f.origin,
+        device: f.device,
+        privateKey: Redacted.make(f.key.privateKey),
+        localEnvironmentId: Effect.succeed(f.device.environmentId),
+        connected: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
+        stream: Effect.fn("fixture.echo")(
+          function* (_grant, _generation, ticket) {
+            const socket = yield* StreamSocket.connect(f.url.replace("/channel", "/stream"), {
+              "x-foundry-stream-ticket": ticket,
+            }).pipe(Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })));
+            const reader = yield* socket.reader;
+            const writer = yield* socket.writer;
+            yield* Queue.offer(tickets, ticket);
+            while (true) yield* writer.writeAll(yield* reader.pull);
+          },
+          Effect.scoped,
+          Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })),
+        ),
+      }).pipe(Effect.result, Effect.forkScoped);
+      yield* Deferred.await(connected);
+      const grant = {
+        protocolVersion: "1" as const,
+        grantId: FoundryGatewayGrantId.make("33333333-3333-4333-8333-333333333333"),
+        instanceId: f.device.instanceId,
+        origin: f.origin,
+        deviceId: f.device.deviceId,
+        environmentId: f.device.environmentId,
+        generation: 1,
+        channelGeneration: (yield* f.channels.current(f.device.deviceId)).channelGeneration,
+        operatorId: "operator",
+        clientSessionId: AuthSessionId.make("client"),
+        subject: "client",
+        scopes: ["orchestration:read"] as const,
+        expiresAt: (yield* Clock.currentTimeMillis) + 60000,
+      };
+      f.setClientStream((socket) => f.channels.stream(grant, Effect.void, socket));
+      const client = yield* StreamSocket.connect(
+        f.url.replace("/api/foundry/devices/channel", "/fixture-client"),
+      );
+      const reader = yield* client.reader;
+      const writer = yield* client.writer;
+      yield* writer.write("one command, never replayed");
+      expect(
+        (yield* reader.pull).map((value) =>
+          typeof value === "string" ? value : new TextDecoder().decode(value),
+        ),
+      ).toEqual(["one command, never replayed"]);
+      const ticket = yield* Queue.take(tickets);
+      expect(
+        (yield* f.channels
+          .attachStream(ticket, Effect.die("must not upgrade twice"))
+          .pipe(Effect.result))._tag,
+      ).toBe("Failure");
+      const others = [];
+      for (let index = 0; index < 3; index++) {
+        const other = yield* StreamSocket.connect(
+          f.url.replace("/api/foundry/devices/channel", "/fixture-client"),
+        );
+        const otherReader = yield* other.reader;
+        const otherWriter = yield* other.writer;
+        yield* otherWriter.write("other stream");
+        yield* otherReader.pull;
+        yield* Queue.take(tickets);
+        others.push(otherReader);
+      }
+      expect((yield* f.channels.stream(grant, Effect.void, client).pipe(Effect.result))._tag).toBe(
+        "Failure",
+      );
+      yield* writer.write("first still works");
+      expect(
+        (yield* reader.pull).map((value) =>
+          typeof value === "string" ? value : new TextDecoder().decode(value),
+        ),
+      ).toEqual(["first still works"]);
+      yield* Deferred.await(f.checked);
+      expect((yield* f.channels.current(f.device.deviceId)).channelGeneration).toBe(
+        grant.channelGeneration,
+      );
+      yield* Fiber.interrupt(connector);
+      expect((yield* reader.pull.pipe(Effect.result))._tag).toBe("Failure");
+      for (const other of others)
+        expect((yield* other.pull.pipe(Effect.result))._tag).toBe("Failure");
     }).pipe(Effect.scoped),
 );

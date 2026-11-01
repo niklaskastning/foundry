@@ -20,6 +20,7 @@ import * as DeviceRegistry from "./DeviceRegistry.ts";
 import * as DeviceConfig from "./DeviceConfig.ts";
 import * as InstancePostgres from "./InstancePostgres.ts";
 import { verifyChannel } from "./DeviceProof.ts";
+import { bridge } from "./StreamBridge.ts";
 import { openFrames } from "./DeviceChannelProtocol.ts";
 
 const isDeviceError = Schema.is(FoundryDeviceError);
@@ -28,6 +29,15 @@ const isGatewayError = Schema.is(FoundryGatewayError);
 export class DeviceChannel extends Context.Service<
   DeviceChannel,
   {
+    readonly stream: (
+      grant: FoundryGatewayGrant,
+      validate: Effect.Effect<void, FoundryGatewayError>,
+      socket: Socket.Socket,
+    ) => Effect.Effect<void, FoundryGatewayError>;
+    readonly attachStream: (
+      ticket: string,
+      socket: Effect.Effect<Socket.Socket, FoundryGatewayError>,
+    ) => Effect.Effect<void, FoundryGatewayError>;
     readonly projects: (
       grant: FoundryGatewayGrant,
       validate: Effect.Effect<void, FoundryGatewayError>,
@@ -60,6 +70,9 @@ const make = Effect.gen(function* () {
     channelGeneration: number;
     connectionId: string;
     httpRead: boolean;
+    rpcStream: boolean;
+    ended: Deferred.Deferred<void>;
+    streams: number;
     pending: Pending | undefined;
     send: (
       frame: FoundryDeviceChannelFrame,
@@ -67,6 +80,17 @@ const make = Effect.gen(function* () {
     close: Effect.Effect<void, Socket.SocketError>;
   };
   const active = new Map<FoundryDeviceId, Lease>();
+  const transfers = new Map<
+    string,
+    {
+      lease: Lease;
+      grant: FoundryGatewayGrant;
+      socket: Deferred.Deferred<Socket.Socket>;
+      done: Deferred.Deferred<void>;
+      validate: Effect.Effect<void, FoundryGatewayError>;
+    }
+  >();
+  let streamCount = 0;
   const current = Effect.fn("DeviceChannel.current")(function* (deviceId: FoundryDeviceId) {
     const lease = active.get(deviceId);
     if (!lease) return yield* new FoundryDeviceError({ code: "unavailable" });
@@ -74,6 +98,97 @@ const make = Effect.gen(function* () {
     if (active.get(deviceId) !== lease)
       return yield* new FoundryDeviceError({ code: "channel_superseded" });
     return lease;
+  });
+  const stream = Effect.fn("DeviceChannel.stream")(function* (
+    grant: FoundryGatewayGrant,
+    validate: Effect.Effect<void, FoundryGatewayError>,
+    socket: Socket.Socket,
+  ) {
+    const lease = yield* current(grant.deviceId).pipe(
+      Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })),
+    );
+    if (
+      !lease.rpcStream ||
+      lease.channelGeneration !== grant.channelGeneration ||
+      lease.device.generation !== grant.generation ||
+      lease.device.instanceId !== grant.instanceId ||
+      lease.device.environmentId !== grant.environmentId
+    )
+      return yield* new FoundryGatewayError({ code: "forbidden" });
+    const ticket = base64UrlEncode(yield* crypto.randomBytes(32).pipe(Effect.orDie));
+    const transfer = {
+      lease,
+      grant,
+      validate,
+      socket: yield* Deferred.make<Socket.Socket>(),
+      done: yield* Deferred.make<void>(),
+    };
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        if (streamCount >= 32 || lease.streams >= 4) return false;
+        streamCount++;
+        lease.streams++;
+        transfers.set(ticket, transfer);
+        return true;
+      }).pipe(
+        Effect.flatMap((ok) =>
+          ok ? Effect.void : Effect.fail(new FoundryGatewayError({ code: "capacity" })),
+        ),
+      ),
+      () =>
+        Effect.gen(function* () {
+          transfers.delete(ticket);
+          streamCount--;
+          lease.streams--;
+          yield* Deferred.succeed(transfer.done, undefined);
+        }),
+    );
+    yield* validate;
+    yield* lease
+      .send({ type: "stream-open", connectionId: lease.connectionId, ticket, grant })
+      .pipe(Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })));
+    return yield* Effect.raceFirst(
+      Effect.gen(function* () {
+        const remote = yield* Deferred.await(transfer.socket).pipe(
+          Effect.timeout("10 seconds"),
+          Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })),
+        );
+        return yield* bridge(
+          socket,
+          remote,
+          validate.pipe(
+            Effect.andThen(current(grant.deviceId)),
+            Effect.flatMap((currentLease) =>
+              currentLease === lease
+                ? Effect.void
+                : Effect.fail(new FoundryGatewayError({ code: "forbidden" })),
+            ),
+            Effect.mapError(() => new FoundryGatewayError({ code: "forbidden" })),
+          ),
+        );
+      }),
+      Deferred.await(lease.ended).pipe(
+        Effect.andThen(Effect.fail(new FoundryGatewayError({ code: "unavailable" }))),
+      ),
+    );
+  }, Effect.scoped);
+  const attachStream = Effect.fn("DeviceChannel.attachStream")(function* (
+    ticket: string,
+    upgrade: Effect.Effect<Socket.Socket, FoundryGatewayError>,
+  ) {
+    const transfer = transfers.get(ticket);
+    transfers.delete(ticket);
+    if (!transfer || active.get(transfer.grant.deviceId) !== transfer.lease)
+      return yield* new FoundryGatewayError({ code: "forbidden" });
+    yield* transfer.validate;
+    yield* current(transfer.grant.deviceId).pipe(
+      Effect.mapError(() => new FoundryGatewayError({ code: "forbidden" })),
+    );
+    const socket = yield* upgrade.pipe(
+      Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })),
+    );
+    yield* Deferred.succeed(transfer.socket, socket);
+    yield* Deferred.await(transfer.done);
   });
   const projects = Effect.fn("DeviceChannel.projects")(function* (
     grant: FoundryGatewayGrant,
@@ -168,6 +283,9 @@ const make = Effect.gen(function* () {
           channelGeneration,
           connectionId,
           httpRead: hello.httpRead === true,
+          rpcStream: hello.rpcStream === true,
+          ended: yield* Deferred.make<void>(),
+          streams: 0,
           pending: undefined,
           send: io.send,
           close: io.writer.write(new Socket.CloseEvent(1008, "Gateway request ended")),
@@ -177,6 +295,7 @@ const make = Effect.gen(function* () {
           () =>
             Effect.gen(function* () {
               if (active.get(device.deviceId) === lease) active.delete(device.deviceId);
+              yield* Deferred.succeed(lease.ended, undefined);
               if (lease.pending)
                 yield* Deferred.fail(
                   lease.pending.reply,
@@ -229,6 +348,6 @@ const make = Effect.gen(function* () {
     Effect.scoped,
     Effect.ignore(),
   );
-  return DeviceChannel.of({ serve, current, projects });
+  return DeviceChannel.of({ serve, current, projects, stream, attachStream });
 });
 export const layer = Layer.effect(DeviceChannel, make);

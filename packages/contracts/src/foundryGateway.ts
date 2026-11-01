@@ -1,6 +1,11 @@
 import * as Schema from "effect/Schema";
 import { AuthSessionId, EnvironmentId } from "./baseSchemas.ts";
-import { AuthOrchestrationReadScope } from "./auth.ts";
+import {
+  AuthOrchestrationReadScope,
+  AuthOrchestrationOperateScope,
+  AuthTerminalReadScope,
+  AuthTerminalOperateScope,
+} from "./auth.ts";
 import { FoundryInstanceId } from "./foundry.ts";
 import { FoundryDeviceId } from "./foundryDevices.ts";
 
@@ -13,7 +18,14 @@ export const FoundryGatewayTarget = Schema.Struct({
 });
 export const FoundryGatewayGrantRequest = Schema.Struct({
   ...FoundryGatewayTarget.fields,
-  scopes: Schema.Tuple([Schema.Literal(AuthOrchestrationReadScope)]),
+  scopes: Schema.Array(
+    Schema.Literals([
+      AuthOrchestrationReadScope,
+      AuthOrchestrationOperateScope,
+      AuthTerminalReadScope,
+      AuthTerminalOperateScope,
+    ]),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(4)),
 });
 export const FoundryGatewayGrantLookup = Schema.Struct({
   ...FoundryGatewayTarget.fields,
@@ -33,6 +45,13 @@ export const FoundryGatewayGrant = Schema.Struct({
   expiresAt: Schema.Number,
 });
 export type FoundryGatewayGrant = typeof FoundryGatewayGrant.Type;
+
+export const FoundryGatewaySocketTicket = Schema.Struct({
+  ticket: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/)),
+  wsTicket: Schema.String,
+  expiresAt: Schema.Number,
+});
+export type FoundryGatewaySocketTicket = typeof FoundryGatewaySocketTicket.Type;
 
 export class FoundryGatewayError extends Schema.TaggedError<FoundryGatewayError>()(
   "FoundryGatewayError",

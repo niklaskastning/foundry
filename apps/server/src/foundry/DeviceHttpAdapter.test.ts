@@ -80,6 +80,23 @@ const fixture = Effect.gen(function* () {
   const routes = Layer.mergeAll(
     HttpRouter.add(
       "GET",
+      "/ws",
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const session = yield* auth.authenticateWebSocketUpgrade(request, "rpc");
+        expect(session.proofKeyThumbprint).toBeDefined();
+        expect(session.subject).toContain(grant.grantId);
+        yield* Queue.offer(requests, request);
+        const socket = yield* request.upgrade;
+        const reader = yield* socket.reader;
+        const writer = yield* socket.writer;
+        const frames = yield* reader.pull;
+        yield* writer.writeAll(frames);
+        return HttpServerResponse.empty();
+      }).pipe(Effect.orElseSucceed(() => HttpServerResponse.empty({ status: 403 }))),
+    ),
+    HttpRouter.add(
+      "GET",
       "/.well-known/t3/environment",
       Effect.sync(() =>
         HttpServerResponse.jsonUnsafe({
@@ -256,4 +273,34 @@ it.live("revokes the local session when a pending HTTP request is cancelled", ()
         .pipe(Effect.result))._tag,
     ).toBe("Failure");
   }).pipe(Effect.scoped),
+);
+
+it.live(
+  "opens the real local RPC socket with a proof-bound grant and revokes its session on close",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* Effect.gen(function* () {
+        const socket = yield* f.adapter.openStream(
+          { ...f.grant, scopes: ["orchestration:read", "terminal:read"] },
+          1,
+        );
+        const writer = yield* socket.writer;
+        const reader = yield* socket.reader;
+        yield* writer.write("one terminal frame");
+        const request = yield* Queue.take(f.requests);
+        expect(
+          (yield* f.auth.authenticateWebSocketUpgrade(request, "rpc").pipe(Effect.result))._tag,
+        ).toBe("Failure");
+        expect(
+          (yield* reader.pull).map((value) =>
+            typeof value === "string" ? value : new TextDecoder().decode(value),
+          ),
+        ).toEqual(["one terminal frame"]);
+        const active = yield* f.sessions.listActive();
+        expect(active).toHaveLength(1);
+        expect(active[0]?.scopes).toEqual(["orchestration:read", "terminal:read"]);
+      }).pipe(Effect.scoped);
+      expect(yield* f.sessions.listActive()).toHaveLength(0);
+    }).pipe(Effect.scoped),
 );

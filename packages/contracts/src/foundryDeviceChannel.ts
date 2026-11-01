@@ -6,6 +6,12 @@ export const FoundryDeviceChannelFrame = Schema.Union([
   FoundryDeviceChallenge,
   FoundryDeviceHello,
   Schema.Struct({
+    type: Schema.Literal("stream-open"),
+    connectionId: Schema.String,
+    ticket: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/)),
+    grant: FoundryGatewayGrant,
+  }),
+  Schema.Struct({
     type: Schema.Literal("projects-read"),
     connectionId: Schema.String,
     requestId: Schema.String,

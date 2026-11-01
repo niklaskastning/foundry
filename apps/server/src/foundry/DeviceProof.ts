@@ -27,6 +27,7 @@ function channelPayload(
   challenge: FoundryDeviceChallenge,
   device: Pick<FoundryDevice, "deviceId" | "instanceId" | "environmentId" | "generation"> & {
     readonly httpRead?: boolean;
+    readonly rpcStream?: boolean;
   },
 ) {
   return new TextEncoder().encode(
@@ -40,6 +41,7 @@ function channelPayload(
       device.environmentId,
       device.generation,
       ...(device.httpRead ? ["projects-read-v1"] : []),
+      ...(device.rpcStream ? ["rpc-stream-v1"] : []),
     ]),
   );
 }
@@ -49,17 +51,19 @@ export function signChannel(
   device: FoundryDevice,
   privateKey: string,
   httpRead = false,
+  rpcStream = false,
 ): FoundryDeviceHello {
   return {
     type: "hello",
     ...(httpRead ? { httpRead: true } : {}),
+    ...(rpcStream ? { rpcStream: true } : {}),
     deviceId: device.deviceId,
     instanceId: device.instanceId,
     environmentId: device.environmentId,
     generation: device.generation,
     signature: NodeCrypto.sign(
       null,
-      channelPayload(challenge, { ...device, httpRead }),
+      channelPayload(challenge, { ...device, httpRead, rpcStream }),
       NodeCrypto.createPrivateKey(privateKey),
     ).toString("base64url"),
   };
