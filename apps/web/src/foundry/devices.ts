@@ -163,7 +163,8 @@ export const deviceCommand = createRuntimeCommand(connectionAtomRuntime, {
             detail: "Device selection could not be saved.",
           }),
       });
-      yield* registry.reconcilePlatform(readDeviceSelection() ?? []);
+      const selection = readDeviceSelection();
+      if (selection !== undefined) yield* registry.reconcilePlatform(selection);
       if (target) {
         const installed = (yield* SubscriptionRef.get(registry.entries)).get(
           target.environmentId,
