@@ -72,3 +72,4 @@ export * from "./settingsSecretValue.ts";
 export * from "./clientRpcPermissions.ts";
 export * from "./foundry.ts";
 export * from "./foundryDevices.ts";
+export * from "./foundryGateway.ts";

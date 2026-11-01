@@ -59,22 +59,23 @@ const fixture = Effect.gen(function* () {
         yield* Deferred.succeed(checked, undefined);
       }),
   });
-  const services = yield* Layer.build(
-    HttpRouter.serve(
-      ChannelHttp.layer.pipe(
-        Layer.provide(DeviceChannel.layer),
-        Layer.provide(Layer.succeed(DeviceRegistry.DeviceRegistry, registry)),
-        Layer.provide(
-          Layer.succeed(InstancePostgres.InstancePostgres, {
-            readIdentity: Effect.succeed(device.instanceId),
-          }),
-        ),
-        Layer.provide(Layer.succeed(DeviceConfig.DeviceOrigin, { origin })),
-        Layer.provide(NodeServices.layer),
-      ),
-      { disableListenLog: true },
-    ).pipe(Layer.provideMerge(NodeHttpServer.layerTest)),
+  const channelLayer = DeviceChannel.layer.pipe(
+    Layer.provide(Layer.succeed(DeviceRegistry.DeviceRegistry, registry)),
+    Layer.provide(
+      Layer.succeed(InstancePostgres.InstancePostgres, {
+        readIdentity: Effect.succeed(device.instanceId),
+      }),
+    ),
+    Layer.provide(Layer.succeed(DeviceConfig.DeviceOrigin, { origin })),
+    Layer.provide(NodeServices.layer),
   );
+  const services = yield* Layer.build(
+    HttpRouter.serve(ChannelHttp.layer, { disableListenLog: true }).pipe(
+      Layer.provideMerge(channelLayer),
+      Layer.provideMerge(NodeHttpServer.layerTest),
+    ),
+  );
+  const channels = Context.get(services, DeviceChannel.DeviceChannel);
   const url =
     HttpServer.formatAddress(Context.get(services, HttpServer.HttpServer).address).replace(
       /^http/,
@@ -83,7 +84,7 @@ const fixture = Effect.gen(function* () {
   const socket = Socket.makeWebSocket(url).pipe(
     Effect.provide(NodeSocket.layerWebSocketConstructor),
   );
-  return { socket, url, device, key, registry, origin, checked };
+  return { socket, url, device, key, registry, origin, checked, channels };
 });
 
 it.live(
@@ -91,6 +92,9 @@ it.live(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture;
+      expect((yield* f.channels.current(f.device.deviceId).pipe(Effect.result))._tag).toBe(
+        "Failure",
+      );
       const first = yield* openFrames(yield* f.socket);
       const challenge = yield* first.read;
       expect(challenge.type).toBe("challenge");
@@ -118,9 +122,18 @@ it.live(
       const current = yield* second.read;
       if (current.type !== "ready") return yield* Effect.die("ready missing");
       expect(current.channelGeneration).toBeGreaterThan(ready.channelGeneration);
+      expect((yield* f.channels.current(f.device.deviceId)).channelGeneration).toBe(
+        current.channelGeneration,
+      );
       yield* first.send({ type: "heartbeat", connectionId: ready.connectionId, sequence: 2 });
       expect(yield* first.read).toEqual({ type: "error", code: "channel_superseded" });
+      expect((yield* f.channels.current(f.device.deviceId)).channelGeneration).toBe(
+        current.channelGeneration,
+      );
       yield* f.registry.revoke(f.device.deviceId);
+      expect((yield* f.channels.current(f.device.deviceId).pipe(Effect.result))._tag).toBe(
+        "Failure",
+      );
       yield* second.send({ type: "heartbeat", connectionId: current.connectionId, sequence: 1 });
       expect(yield* second.read).toEqual({ type: "error", code: "revoked" });
     }).pipe(Effect.scoped),

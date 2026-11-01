@@ -1,0 +1,160 @@
+import {
+  AuthOrchestrationReadScope,
+  FoundryGatewayError,
+  FoundryGatewayGrantId,
+  FoundryGatewayGrantRequest,
+  FoundryGatewayGrantLookup,
+  type FoundryGatewayGrant,
+} from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
+import { timingSafeEqualBase64Url } from "../auth/utils.ts";
+import * as DeviceChannel from "./DeviceChannel.ts";
+import * as DeviceConfig from "./DeviceConfig.ts";
+import * as FoundrySessions from "./FoundrySessions.ts";
+
+const decodeRequest = Schema.decodeUnknownEffect(FoundryGatewayGrantRequest);
+const decodeLookup = Schema.decodeUnknownEffect(FoundryGatewayGrantLookup);
+const decodeId = Schema.decodeUnknownEffect(FoundryGatewayGrantId);
+const denied = () => new FoundryGatewayError({ code: "forbidden" });
+const invalid = () => new FoundryGatewayError({ code: "invalid_request" });
+type Request = HttpServerRequest.HttpServerRequest;
+
+export class GatewayGrants extends Context.Service<
+  GatewayGrants,
+  {
+    readonly create: (
+      request: Request,
+      input: unknown,
+    ) => Effect.Effect<FoundryGatewayGrant, FoundryGatewayError>;
+    readonly inspect: (
+      request: Request,
+      input: unknown,
+    ) => Effect.Effect<FoundryGatewayGrant, FoundryGatewayError>;
+    readonly remove: (request: Request, input: unknown) => Effect.Effect<void, FoundryGatewayError>;
+  }
+>()("t3/foundry/GatewayGrants") {}
+
+const make = Effect.gen(function* () {
+  const sessions = yield* FoundrySessions.FoundrySessions;
+  const auth = yield* EnvironmentAuth.EnvironmentAuth;
+  const channels = yield* DeviceChannel.DeviceChannel;
+  const { origin } = yield* DeviceConfig.DeviceOrigin;
+  const crypto = yield* Crypto.Crypto;
+  // Handles are not credentials: every use reauthenticates both sessions and the device lease.
+  const grants = new Map<string, { grant: FoundryGatewayGrant; binding: string }>();
+  const authenticate = Effect.fn("GatewayGrants.authenticate")(
+    function* (request: Request) {
+      const url = HttpServerRequest.toURL(request);
+      if (request.headers.origin !== origin || Option.isNone(url) || url.value.origin !== origin)
+        return yield* denied();
+      yield* sessions.checkOrigin(request.headers.origin, request.headers["content-type"]);
+      const foundry = yield* sessions.inspect(
+        request.cookies[FoundrySessions.FOUNDRY_SESSION_COOKIE],
+      );
+      const csrf = request.headers["x-foundry-csrf"];
+      if (!csrf || !timingSafeEqualBase64Url(csrf, foundry.csrfToken)) return yield* denied();
+      const client = yield* auth.authenticateHttpRequest(request);
+      return { foundry, client };
+    },
+    Effect.mapError((error) =>
+      EnvironmentAuth.isServerAuthInternalError(error) ||
+      (error._tag === "FoundryAuthError" && error.code === "unavailable")
+        ? new FoundryGatewayError({ code: "unavailable" })
+        : denied(),
+    ),
+  );
+  const create = Effect.fn("GatewayGrants.create")(function* (request: Request, input: unknown) {
+    const identity = yield* authenticate(request);
+    const target = yield* decodeRequest(input).pipe(Effect.mapError(invalid));
+    if (!identity.client.scopes.includes(AuthOrchestrationReadScope)) return yield* denied();
+    const lease = yield* channels.current(target.deviceId).pipe(Effect.mapError(denied));
+    if (
+      lease.device.revoked ||
+      lease.device.instanceId !== identity.foundry.instanceId ||
+      lease.device.environmentId !== target.environmentId
+    )
+      return yield* denied();
+    const now = yield* Clock.currentTimeMillis;
+    const expiresAt = Math.min(
+      now + 60_000,
+      identity.foundry.expiresAt,
+      identity.client.expiresAt ? DateTime.toEpochMillis(identity.client.expiresAt) : Infinity,
+    );
+    if (expiresAt <= now) return yield* denied();
+    const grantId = FoundryGatewayGrantId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie));
+    const grant: FoundryGatewayGrant = {
+      ...target,
+      grantId,
+      protocolVersion: "1",
+      instanceId: identity.foundry.instanceId,
+      origin,
+      operatorId: identity.foundry.operatorId,
+      clientSessionId: identity.client.sessionId,
+      subject: identity.client.subject,
+      generation: lease.device.generation,
+      channelGeneration: lease.channelGeneration,
+      expiresAt,
+    };
+    for (const [id, entry] of grants) if (entry.grant.expiresAt <= now) grants.delete(id);
+    if (grants.size >= 128) return yield* new FoundryGatewayError({ code: "capacity" });
+    grants.set(grantId, { grant, binding: identity.foundry.csrfToken });
+    return grant;
+  });
+  const owned = Effect.fn("GatewayGrants.owned")(function* (request: Request, grantId: unknown) {
+    const identity = yield* authenticate(request);
+    const id = yield* decodeId(grantId).pipe(Effect.mapError(invalid));
+    const entry = grants.get(id);
+    if (
+      !entry ||
+      entry.binding !== identity.foundry.csrfToken ||
+      entry.grant.operatorId !== identity.foundry.operatorId ||
+      entry.grant.instanceId !== identity.foundry.instanceId ||
+      entry.grant.clientSessionId !== identity.client.sessionId ||
+      entry.grant.subject !== identity.client.subject
+    )
+      return yield* denied();
+    return { ...entry, client: identity.client };
+  });
+  const inspect = Effect.fn("GatewayGrants.inspect")(function* (request: Request, input: unknown) {
+    const target = yield* decodeLookup(input).pipe(Effect.mapError(invalid));
+    const { grant, client } = yield* owned(request, target.grantId);
+    if (grant.expiresAt <= (yield* Clock.currentTimeMillis)) {
+      grants.delete(grant.grantId);
+      return yield* denied();
+    }
+    if (
+      !client.scopes.includes(AuthOrchestrationReadScope) ||
+      grant.deviceId !== target.deviceId ||
+      grant.environmentId !== target.environmentId
+    )
+      return yield* denied();
+    const lease = yield* channels.current(grant.deviceId).pipe(Effect.mapError(denied));
+    if (
+      lease.device.revoked ||
+      lease.device.instanceId !== grant.instanceId ||
+      lease.device.environmentId !== grant.environmentId ||
+      lease.device.generation !== grant.generation ||
+      lease.channelGeneration !== grant.channelGeneration
+    )
+      return yield* denied();
+    return grant;
+  });
+  const remove = Effect.fn("GatewayGrants.remove")(function* (request: Request, input: unknown) {
+    const target = yield* decodeLookup(input).pipe(Effect.mapError(invalid));
+    const { grant } = yield* owned(request, target.grantId);
+    if (grant.deviceId !== target.deviceId || grant.environmentId !== target.environmentId)
+      return yield* denied();
+    grants.delete(grant.grantId);
+  });
+  return GatewayGrants.of({ create, inspect, remove });
+});
+export const layer = Layer.effect(GatewayGrants, make);

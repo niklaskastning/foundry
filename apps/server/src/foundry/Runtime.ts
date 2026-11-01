@@ -17,6 +17,8 @@ import * as DeviceRegistry from "./DeviceRegistry.ts";
 import * as DeviceHttp from "./deviceHttp.ts";
 import * as DeviceChannel from "./DeviceChannel.ts";
 import * as DeviceChannelHttp from "./deviceChannelHttp.ts";
+import * as GatewayGrants from "./GatewayGrants.ts";
+import * as GatewayHttp from "./gatewayHttp.ts";
 import { FoundryDeviceError } from "@t3tools/contracts";
 
 export const layer = Layer.unwrap(
@@ -30,6 +32,10 @@ export const layer = Layer.unwrap(
       Config.withDefault(false),
     );
     if (channel && !enrollment) return yield* new FoundryDeviceError({ code: "configuration" });
+    const grants = yield* Config.Boolean("FOUNDRY_GATEWAY_GRANTS_ENABLED").pipe(
+      Config.withDefault(false),
+    );
+    if (grants && !channel) return yield* new FoundryDeviceError({ code: "configuration" });
     if (!enabled)
       return FoundryHttp.layer.pipe(
         Layer.provide(InstanceDescriptor.layer),
@@ -42,7 +48,12 @@ export const layer = Layer.unwrap(
     const deviceRoutes = enrollment
       ? Layer.merge(
           DeviceHttp.layer,
-          channel ? DeviceChannelHttp.layer.pipe(Layer.provide(DeviceChannel.layer)) : Layer.empty,
+          channel
+            ? Layer.merge(
+                DeviceChannelHttp.layer,
+                grants ? GatewayHttp.layer.pipe(Layer.provide(GatewayGrants.layer)) : Layer.empty,
+              ).pipe(Layer.provide(DeviceChannel.layer))
+            : Layer.empty,
         ).pipe(Layer.provide(DeviceRegistry.layer), Layer.provide(DeviceConfig.layer))
       : Layer.empty;
     return Layer.mergeAll(FoundryHttp.layer, AuthHttp.layer, deviceRoutes).pipe(

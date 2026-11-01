@@ -1,4 +1,9 @@
-import { FoundryDeviceError, type FoundryDeviceChallenge } from "@t3tools/contracts";
+import {
+  FoundryDeviceError,
+  type FoundryDeviceChallenge,
+  type FoundryDevice,
+  type FoundryDeviceId,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -18,6 +23,13 @@ export class DeviceChannel extends Context.Service<
   DeviceChannel,
   {
     readonly serve: (socket: Socket.Socket) => Effect.Effect<void>;
+    readonly current: (deviceId: FoundryDeviceId) => Effect.Effect<
+      {
+        readonly device: FoundryDevice;
+        readonly channelGeneration: number;
+      },
+      FoundryDeviceError
+    >;
   }
 >()("t3/foundry/DeviceChannel") {}
 
@@ -26,6 +38,15 @@ const make = Effect.gen(function* () {
   const identity = yield* InstancePostgres.InstancePostgres;
   const { origin } = yield* DeviceConfig.DeviceOrigin;
   const crypto = yield* Crypto.Crypto;
+  const active = new Map<FoundryDeviceId, { device: FoundryDevice; channelGeneration: number }>();
+  const current = Effect.fn("DeviceChannel.current")(function* (deviceId: FoundryDeviceId) {
+    const lease = active.get(deviceId);
+    if (!lease) return yield* new FoundryDeviceError({ code: "unavailable" });
+    yield* registry.checkChannel(lease.device, lease.channelGeneration);
+    if (active.get(deviceId) !== lease)
+      return yield* new FoundryDeviceError({ code: "channel_superseded" });
+    return lease;
+  });
   const serve = Effect.fn("DeviceChannel.serve")(
     function* (socket: Socket.Socket) {
       const io = yield* openFrames(socket);
@@ -53,6 +74,14 @@ const make = Effect.gen(function* () {
           return yield* new FoundryDeviceError({ code: "invalid_proof" });
         const channelGeneration = yield* registry.claimChannel(device);
         const connectionId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+        const lease = { device, channelGeneration };
+        yield* Effect.acquireRelease(
+          Effect.sync(() => active.set(device.deviceId, lease)),
+          () =>
+            Effect.sync(() => {
+              if (active.get(device.deviceId) === lease) active.delete(device.deviceId);
+            }),
+        );
         yield* io.send({ type: "ready", connectionId, channelGeneration });
         let sequence = 1;
         while (true) {
@@ -84,6 +113,6 @@ const make = Effect.gen(function* () {
     Effect.scoped,
     Effect.ignore(),
   );
-  return DeviceChannel.of({ serve });
+  return DeviceChannel.of({ serve, current });
 });
 export const layer = Layer.effect(DeviceChannel, make);

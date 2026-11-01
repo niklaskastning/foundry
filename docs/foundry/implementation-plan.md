@@ -127,6 +127,8 @@ G1 wird pro Betriebsart abgenommen: zunächst **G1-Access** für unser Deploymen
 
 **Gate P08 – Nachweis:** Scope-Eskalation, falsches Environment, DPoP-Replay und Path-Traversal ablehnen. Device-Cookies/Redirects werden nicht blind weitergereicht. Read-only-Grant kann keine Mutation auslösen; gültiger Read erreicht genau das registrierte Ziel.
 
+**Technische Aufteilung:** P08a führt die Main-seitige Ausgabe und erneute Prüfung kurzlebiger Grants mit Bindung an Foundry-/T3-Session, Akteur, Device, Environment und Kanalgeneration ein. P08b verwendet diese Grenze für Device-seitige Sessions und die begrenzte HTTP-Weiterleitung. Bestehende T3-Sessions allein tragen diese Delegationsbindung noch nicht; die Autorisierungsgrenze und ihre Transport-Einlösung werden daher separat geprüft. P08a bewirbt noch keine Gateway-Capability und besteht allein nicht Gate P08. Reihenfolge, Teilnachweise und offene Arbeit: [Issue #13](https://github.com/niklaskastning/foundry/issues/13).
+
 ### P09 · WebSocket-, Thread- und Terminaltransport
 
 **Voraussetzungen:** P08.

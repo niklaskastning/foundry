@@ -32,6 +32,9 @@ import * as FoundryHttp from "../src/foundry/http.ts";
 import * as ServerConfig from "../src/config.ts";
 import * as ServerEnvironment from "../src/environment/ServerEnvironment.ts";
 import * as EnvironmentAuthPolicy from "../src/auth/EnvironmentAuthPolicy.ts";
+import * as EnvironmentAuth from "../src/auth/EnvironmentAuth.ts";
+import * as ServerSecretStore from "../src/auth/ServerSecretStore.ts";
+import * as SqlitePersistence from "../src/persistence/Sqlite.ts";
 import * as DeviceRegistry from "../src/foundry/DeviceRegistry.ts";
 import * as DeviceConfig from "../src/foundry/DeviceConfig.ts";
 import * as DeviceHttp from "../src/foundry/deviceHttp.ts";
@@ -710,13 +713,21 @@ try {
     await deviceHandler.dispose();
   }
   await NodeFSP.writeFile(NodePath.join(home, "userdata", "environment-id"), mainEnvironmentId);
-  for (const [enabled, enrollmentEnabled, channelEnabled] of [
-    [false, false, false],
-    [true, false, false],
-    [true, true, false],
-    [true, true, true],
+  for (const [enabled, enrollmentEnabled, channelEnabled, grantsEnabled] of [
+    [false, false, false, false],
+    [true, false, false, false],
+    [true, true, false, false],
+    [true, true, true, false],
+    [true, true, true, true],
   ] as const) {
     const runtimeRoutes = FoundryRuntime.layer.pipe(
+      Layer.provide(
+        EnvironmentAuth.layer.pipe(
+          Layer.provide(SqlitePersistence.layerMemory),
+          Layer.provide(ServerSecretStore.layer),
+          Layer.provide(ServerEnvironment.layerIdentity),
+        ),
+      ),
       Layer.provide(environment),
       Layer.provide(ServerConfig.layerTest(root, home)),
       Layer.provide(NodeServices.layer),
@@ -727,6 +738,7 @@ try {
             FOUNDRY_ACCESS_ENABLED: String(enabled),
             FOUNDRY_DEVICE_ENROLLMENT_ENABLED: String(enrollmentEnabled),
             FOUNDRY_DEVICE_CHANNEL_ENABLED: String(channelEnabled),
+            FOUNDRY_GATEWAY_GRANTS_ENABLED: String(grantsEnabled),
             FOUNDRY_INSTANCE_STORE: "postgres",
             FOUNDRY_INSTANCE_DATABASE_URL: `postgresql://foundry_runtime@localhost/fork_connect?host=${encodeURIComponent(root)}`,
             FOUNDRY_ACCESS_ISSUER: accessConfig.issuer,
@@ -742,6 +754,14 @@ try {
         new Request(`${accessConfig.origin}/.well-known/foundry?protocolVersion=1`),
       );
       NodeAssert.equal(metadata.status, 200);
+      const grant = await runtimeHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/gateway/grants/create`, {
+          method: "POST",
+          headers: { origin: accessConfig.origin, "content-type": "application/json" },
+          body: "{}",
+        }),
+      );
+      NodeAssert.equal(grant.status, grantsEnabled ? 403 : 404);
       const descriptor = decodeDescriptor(await metadata.json());
       NodeAssert.equal(Object.hasOwn(descriptor, "instanceAuth"), enabled);
       NodeAssert.equal(descriptor.capabilities.includes("foundry.device-channel"), channelEnabled);
