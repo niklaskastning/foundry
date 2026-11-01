@@ -431,6 +431,7 @@ export class ProjectListEntriesError extends Schema.TaggedError<ProjectListEntri
 }
 
 export const ProjectReadFileInput = Schema.Struct({
+  maxBytes: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(1024 * 1024))),
   cwd: TrimmedNonEmptyString,
   // Workspace-relative or absolute host path; only workspace-relative paths are writable.
   relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),

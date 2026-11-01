@@ -793,10 +793,12 @@ const layerPlatformConnectionSource = Layer.effect(
 const layerEnvironmentOwnedDataCleanup = Layer.succeed(
   Persistence.EnvironmentOwnedDataCleanup,
   Persistence.EnvironmentOwnedDataCleanup.of({
-    clear: Effect.fn("Persistence.EnvironmentOwnedDataCleanup.clear")(function (environmentId) {
-      return Effect.sync(() => {
-        clearComposerDraftsEnvironment(environmentId);
-      });
+    clear: Effect.fn("Persistence.EnvironmentOwnedDataCleanup.clear")(function* (environmentId) {
+      const { clearAttachmentUploadsEnvironment } = yield* Effect.promise(
+        () => import("../lib/attachmentUploadQueue"),
+      );
+      clearAttachmentUploadsEnvironment(environmentId);
+      clearComposerDraftsEnvironment(environmentId);
     }),
   }),
 );

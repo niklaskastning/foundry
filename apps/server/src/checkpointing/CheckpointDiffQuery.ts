@@ -224,7 +224,11 @@ export const make = Effect.gen(function* () {
       const pathBatches =
         retainedFiles.length === files.length ? [undefined] : batchFilePaths(retainedFiles);
       let diff = "";
-      let remainingBytes = CHECKPOINT_DIFF_MAX_OUTPUT_BYTES;
+      const maxBytes = Math.min(
+        input.maxBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+        CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+      );
+      let remainingBytes = maxBytes;
       for (const filePaths of pathBatches) {
         const patch = yield* checkpointStore
           .diffCheckpoints({
@@ -241,10 +245,7 @@ export const make = Effect.gen(function* () {
           // Streaming decode drops an incomplete final UTF-8 character at the byte boundary.
           diff =
             new TextDecoder().decode(
-              Buffer.from(diff).subarray(
-                0,
-                CHECKPOINT_DIFF_MAX_OUTPUT_BYTES - Buffer.byteLength(DIFF_TRUNCATED_MARKER),
-              ),
+              Buffer.from(diff).subarray(0, maxBytes - Buffer.byteLength(DIFF_TRUNCATED_MARKER)),
               { stream: true },
             ) + DIFF_TRUNCATED_MARKER;
           break;
@@ -300,6 +301,7 @@ export const make = Effect.gen(function* () {
       fromTurnCount: 0,
       toTurnCount: input.toTurnCount,
       ignoreWhitespace,
+      ...(input.maxBytes === undefined ? {} : { maxBytes: input.maxBytes }),
     });
     if (!isTurnDiffResult(turnDiff)) {
       return yield* new CheckpointDiffResultInvalidError({
