@@ -251,7 +251,7 @@ try {
     await query("UPDATE foundry_instance.schema_version SET version=99", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 503);
     await expectFailure(migrate());
-    await query("UPDATE foundry_instance.schema_version SET version=3", "foundry_migrate");
+    await query("UPDATE foundry_instance.schema_version SET version=4", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 200);
     await query("GRANT CREATE ON SCHEMA public TO foundry_runtime");
     NodeAssert.equal((await ready()).status, 503);
@@ -621,6 +621,26 @@ try {
     );
     NodeAssert.equal(oversized.status, 403);
     const registered = devices[0]!;
+    await query(
+      "ALTER TABLE foundry_instance.devices DROP COLUMN channel_generation",
+      "foundry_migrate",
+    );
+    await query("UPDATE foundry_instance.schema_version SET version=3", "foundry_migrate");
+    await expectFailure(readIdentity);
+    await run(Effect.all([migrate(), migrate()], { concurrency: "unbounded" }));
+    NodeAssert.deepEqual(
+      await deviceCall((registry) => registry.get(registered.deviceId)),
+      registered,
+    );
+    const epochs = await Promise.all(
+      Array.from({ length: 4 }, () => deviceCall((registry) => registry.claimChannel(registered))),
+    );
+    NodeAssert.equal(new Set(epochs).size, 4);
+    const currentEpoch = Math.max(...epochs);
+    await deviceCall((registry) => registry.checkChannel(registered, currentEpoch));
+    for (const epoch of epochs.filter((value) => value !== currentEpoch)) {
+      await NodeAssert.rejects(deviceCall((registry) => registry.checkChannel(registered, epoch)));
+    }
     NodeAssert.equal((await query("SELECT * FROM foundry_instance.devices")).length, 1);
     NodeAssert.equal(
       JSON.stringify(
@@ -672,6 +692,10 @@ try {
     const revoked = await deviceCall((registry) => registry.get(registered.deviceId));
     NodeAssert.equal(revoked.revoked, true);
     NodeAssert.equal(revoked.generation, 2);
+    await NodeAssert.rejects(
+      deviceCall((registry) => registry.checkChannel(registered, currentEpoch)),
+    );
+    await NodeAssert.rejects(deviceCall((registry) => registry.claimChannel(registered)));
     NodeAssert.equal((await enroll(proof)).status, 403);
     for (const statement of [
       "UPDATE foundry_instance.devices SET public_key='replacement'",
@@ -686,10 +710,11 @@ try {
     await deviceHandler.dispose();
   }
   await NodeFSP.writeFile(NodePath.join(home, "userdata", "environment-id"), mainEnvironmentId);
-  for (const [enabled, enrollmentEnabled] of [
-    [false, false],
-    [true, false],
-    [true, true],
+  for (const [enabled, enrollmentEnabled, channelEnabled] of [
+    [false, false, false],
+    [true, false, false],
+    [true, true, false],
+    [true, true, true],
   ] as const) {
     const runtimeRoutes = FoundryRuntime.layer.pipe(
       Layer.provide(environment),
@@ -701,6 +726,7 @@ try {
           ConfigProvider.fromUnknown({
             FOUNDRY_ACCESS_ENABLED: String(enabled),
             FOUNDRY_DEVICE_ENROLLMENT_ENABLED: String(enrollmentEnabled),
+            FOUNDRY_DEVICE_CHANNEL_ENABLED: String(channelEnabled),
             FOUNDRY_INSTANCE_STORE: "postgres",
             FOUNDRY_INSTANCE_DATABASE_URL: `postgresql://foundry_runtime@localhost/fork_connect?host=${encodeURIComponent(root)}`,
             FOUNDRY_ACCESS_ISSUER: accessConfig.issuer,
@@ -718,6 +744,7 @@ try {
       NodeAssert.equal(metadata.status, 200);
       const descriptor = decodeDescriptor(await metadata.json());
       NodeAssert.equal(Object.hasOwn(descriptor, "instanceAuth"), enabled);
+      NodeAssert.equal(descriptor.capabilities.includes("foundry.device-channel"), channelEnabled);
       NodeAssert.equal(
         descriptor.capabilities.includes("foundry.device-enrollment"),
         enrollmentEnabled,

@@ -15,6 +15,8 @@ import * as AuthHttp from "./authHttp.ts";
 import * as DeviceConfig from "./DeviceConfig.ts";
 import * as DeviceRegistry from "./DeviceRegistry.ts";
 import * as DeviceHttp from "./deviceHttp.ts";
+import * as DeviceChannel from "./DeviceChannel.ts";
+import * as DeviceChannelHttp from "./deviceChannelHttp.ts";
 import { FoundryDeviceError } from "@t3tools/contracts";
 
 export const layer = Layer.unwrap(
@@ -24,6 +26,10 @@ export const layer = Layer.unwrap(
       Config.withDefault(false),
     );
     if (enrollment && !enabled) return yield* new FoundryDeviceError({ code: "configuration" });
+    const channel = yield* Config.Boolean("FOUNDRY_DEVICE_CHANNEL_ENABLED").pipe(
+      Config.withDefault(false),
+    );
+    if (channel && !enrollment) return yield* new FoundryDeviceError({ code: "configuration" });
     if (!enabled)
       return FoundryHttp.layer.pipe(
         Layer.provide(InstanceDescriptor.layer),
@@ -34,10 +40,10 @@ export const layer = Layer.unwrap(
     if (store !== "postgres") return yield* new AccessConfig.AccessConfigurationError({});
     const url = yield* Config.Redacted("FOUNDRY_INSTANCE_DATABASE_URL");
     const deviceRoutes = enrollment
-      ? DeviceHttp.layer.pipe(
-          Layer.provide(DeviceRegistry.layer),
-          Layer.provide(DeviceConfig.layer),
-        )
+      ? Layer.merge(
+          DeviceHttp.layer,
+          channel ? DeviceChannelHttp.layer.pipe(Layer.provide(DeviceChannel.layer)) : Layer.empty,
+        ).pipe(Layer.provide(DeviceRegistry.layer), Layer.provide(DeviceConfig.layer))
       : Layer.empty;
     return Layer.mergeAll(FoundryHttp.layer, AuthHttp.layer, deviceRoutes).pipe(
       Layer.provide(Layer.merge(InstanceDescriptor.layer, FoundrySessions.layer)),
@@ -46,6 +52,7 @@ export const layer = Layer.unwrap(
       Layer.provide(AccessConfig.layer),
       Layer.provide(Layer.succeed(AccessConfig.AccessEnabled, true)),
       Layer.provide(Layer.succeed(DeviceConfig.DeviceEnrollmentEnabled, enrollment)),
+      Layer.provide(Layer.succeed(DeviceConfig.DeviceChannelEnabled, channel)),
       Layer.provide(InstancePostgres.layerIdentity),
       Layer.provide(InstancePostgres.layer),
       Layer.provide(InstanceDatabase.layer({ url })),

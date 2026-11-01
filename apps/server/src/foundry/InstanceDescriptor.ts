@@ -30,10 +30,12 @@ export class InstanceDescriptor extends Context.Service<
 const make = Effect.gen(function* () {
   const enabled = yield* AccessConfig.AccessEnabled;
   const enrollment = yield* DeviceConfig.DeviceEnrollmentEnabled;
+  const channel = yield* DeviceConfig.DeviceChannelEnabled;
   const capabilities = FOUNDRY_CAPABILITIES.filter(
     (capability) =>
       (enabled || capability !== "foundry.access-sessions") &&
-      (enrollment || capability !== "foundry.device-enrollment"),
+      (enrollment || capability !== "foundry.device-enrollment") &&
+      (channel || capability !== "foundry.device-channel"),
   );
   const identity = yield* InstanceIdentityStore.InstanceIdentityStore;
   const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;

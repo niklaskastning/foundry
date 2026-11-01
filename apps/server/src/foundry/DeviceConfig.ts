@@ -8,6 +8,10 @@ export class DeviceEnrollmentEnabled extends Context.Reference<boolean>(
   "t3/foundry/DeviceEnrollmentEnabled",
   { defaultValue: () => false },
 ) {}
+export class DeviceChannelEnabled extends Context.Reference<boolean>(
+  "t3/foundry/DeviceConfig/DeviceChannelEnabled",
+  { defaultValue: () => false },
+) {}
 export class DeviceOrigin extends Context.Service<DeviceOrigin, { readonly origin: string }>()(
   "t3/foundry/DeviceConfig/DeviceOrigin",
 ) {}

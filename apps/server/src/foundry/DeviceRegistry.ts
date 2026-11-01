@@ -52,6 +52,11 @@ export class DeviceRegistry extends Context.Service<
     ) => Effect.Effect<FoundryDevice, FoundryDeviceError>;
     readonly get: (deviceId: FoundryDeviceId) => Effect.Effect<FoundryDevice, FoundryDeviceError>;
     readonly revoke: (deviceId: FoundryDeviceId) => Effect.Effect<void, FoundryDeviceError>;
+    readonly claimChannel: (device: FoundryDevice) => Effect.Effect<number, FoundryDeviceError>;
+    readonly checkChannel: (
+      device: FoundryDevice,
+      channelGeneration: number,
+    ) => Effect.Effect<void, FoundryDeviceError>;
   }
 >()("t3/foundry/DeviceRegistry") {}
 
@@ -154,6 +159,39 @@ const make = Effect.gen(function* () {
       SqlError: failures.SqlError,
     }),
   );
-  return DeviceRegistry.of({ approve, enroll, get, revoke });
+  const claimChannel = Effect.fn("DeviceRegistry.claimChannel")(
+    function* (device: FoundryDevice) {
+      const instanceId = yield* identity.readIdentity;
+      const rows = yield* sql<{
+        channel_generation: number;
+      }>`UPDATE foundry_instance.devices SET channel_generation = channel_generation + 1
+      WHERE device_id = ${device.deviceId} AND instance_id = ${instanceId} AND generation = ${device.generation} AND NOT revoked RETURNING channel_generation`;
+      if (!rows[0]) return yield* new FoundryDeviceError({ code: "revoked" });
+      return rows[0].channel_generation;
+    },
+    Effect.catchTags({
+      InstanceDatabaseError: failures.InstanceDatabaseError,
+      SqlError: failures.SqlError,
+    }),
+  );
+  const checkChannel = Effect.fn("DeviceRegistry.checkChannel")(
+    function* (device: FoundryDevice, channelGeneration: number) {
+      const instanceId = yield* identity.readIdentity;
+      const rows = yield* sql<{
+        generation: number;
+        channel_generation: number;
+        revoked: boolean;
+      }>`SELECT generation, channel_generation, revoked FROM foundry_instance.devices WHERE device_id = ${device.deviceId} AND instance_id = ${instanceId}`;
+      if (!rows[0] || rows[0].revoked || rows[0].generation !== device.generation)
+        return yield* new FoundryDeviceError({ code: "revoked" });
+      if (rows[0].channel_generation !== channelGeneration)
+        return yield* new FoundryDeviceError({ code: "channel_superseded" });
+    },
+    Effect.catchTags({
+      InstanceDatabaseError: failures.InstanceDatabaseError,
+      SqlError: failures.SqlError,
+    }),
+  );
+  return DeviceRegistry.of({ approve, enroll, get, revoke, claimChannel, checkChannel });
 });
 export const layer = Layer.effect(DeviceRegistry, make);

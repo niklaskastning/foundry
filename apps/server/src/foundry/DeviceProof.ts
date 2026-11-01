@@ -4,6 +4,9 @@ import {
   FoundryDeviceError,
   type FoundryEnrollment,
   type FoundryEnrollmentRequest,
+  type FoundryDeviceChallenge,
+  type FoundryDeviceHello,
+  type FoundryDevice,
 } from "@t3tools/contracts";
 
 function enrollmentPayload(enrollment: FoundryEnrollment): Uint8Array {
@@ -18,6 +21,68 @@ function enrollmentPayload(enrollment: FoundryEnrollment): Uint8Array {
       enrollment.expiresAt,
     ]),
   );
+}
+
+function channelPayload(
+  challenge: FoundryDeviceChallenge,
+  device: Pick<FoundryDevice, "deviceId" | "instanceId" | "environmentId" | "generation">,
+) {
+  return new TextEncoder().encode(
+    JSON.stringify([
+      "foundry-device-channel-v1",
+      challenge.origin,
+      challenge.instanceId,
+      challenge.nonce,
+      device.deviceId,
+      device.instanceId,
+      device.environmentId,
+      device.generation,
+    ]),
+  );
+}
+
+export function signChannel(
+  challenge: FoundryDeviceChallenge,
+  device: FoundryDevice,
+  privateKey: string,
+): FoundryDeviceHello {
+  return {
+    type: "hello",
+    deviceId: device.deviceId,
+    instanceId: device.instanceId,
+    environmentId: device.environmentId,
+    generation: device.generation,
+    signature: NodeCrypto.sign(
+      null,
+      channelPayload(challenge, device),
+      NodeCrypto.createPrivateKey(privateKey),
+    ).toString("base64url"),
+  };
+}
+
+export function verifyChannel(
+  challenge: FoundryDeviceChallenge,
+  hello: FoundryDeviceHello,
+  publicKey: string,
+): boolean {
+  try {
+    const signature = Buffer.from(hello.signature, "base64url");
+    return (
+      signature.length === 64 &&
+      signature.toString("base64url") === hello.signature &&
+      NodeCrypto.verify(
+        null,
+        channelPayload(challenge, hello),
+        NodeCrypto.createPublicKey({
+          key: { kty: "OKP", crv: "Ed25519", x: publicKey },
+          format: "jwk",
+        }),
+        signature,
+      )
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function verifyEnrollmentProof(request: FoundryEnrollmentRequest): boolean {
