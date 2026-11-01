@@ -1,4 +1,6 @@
 import {
+  ORCHESTRATION_PROTOCOL_QUERY_PARAM,
+  ORCHESTRATION_PROTOCOL_VERSION,
   AuthOrchestrationReadScope,
   FoundryGatewayError,
   FoundryGatewayGrantId,
@@ -253,6 +255,8 @@ const make = Effect.gen(function* () {
     if (
       !streamsEnabled ||
       Option.isNone(url) ||
+      url.value.searchParams.get(ORCHESTRATION_PROTOCOL_QUERY_PARAM) !==
+        String(ORCHESTRATION_PROTOCOL_VERSION) ||
       url.value.origin !== origin ||
       request.headers.origin !== origin
     )

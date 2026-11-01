@@ -205,7 +205,20 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
     environmentLabel: supervisor.target.label,
     method: tag,
   });
-  return yield* method(input).pipe(Effect.ensuring(completeObservation));
+  return yield* method(input).pipe(
+    Effect.mapError((error) =>
+      isRpcClientError(error) &&
+      supervisor.target._tag === "FoundryConnectionTarget" &&
+      tag === WS_METHODS.terminalWrite
+        ? new EnvironmentRpcUnavailableError({
+            environmentId: supervisor.target.environmentId,
+            message:
+              "Terminal input was not acknowledged. It may have reached the shell; it was not resent. Check the terminal before typing it again.",
+          })
+        : error,
+    ),
+    Effect.ensuring(completeObservation),
+  );
 });
 
 export function runStreamGuarded<TTag extends EnvironmentStreamCommandRpcTag>(

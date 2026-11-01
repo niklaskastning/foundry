@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
+  ORCHESTRATION_PROTOCOL_VERSION,
   EnvironmentId,
   FoundryInstanceId,
   FoundryDeviceId,
@@ -417,13 +418,23 @@ it.effect("binds single-use stream tickets to live sessions, scopes, origin and 
     const socketRequest = (
       ticket: { ticket: string; wsTicket: string },
       headers = request.headers,
+      protocol = ORCHESTRATION_PROTOCOL_VERSION,
     ) =>
       HttpServerRequest.fromWeb(
         new Request(
-          `${origin}/api/foundry/gateway/stream?ticket=${ticket.ticket}&wsTicket=${ticket.wsTicket}`,
+          `${origin}/api/foundry/gateway/stream?orchestrationProtocol=${protocol}&ticket=${ticket.ticket}&wsTicket=${ticket.wsTicket}`,
           { headers },
         ),
       );
+    const incompatible = yield* f.grants.ticket(request, lookup);
+    expect(
+      (yield* f.grants
+        .stream(
+          socketRequest(incompatible, request.headers, ORCHESTRATION_PROTOCOL_VERSION + 1),
+          Effect.die("no incompatible upgrade"),
+        )
+        .pipe(Effect.result))._tag,
+    ).toBe("Failure");
     const first = yield* f.grants.ticket(request, lookup);
     yield* f.grants.stream(socketRequest(first), upgrade);
     expect(
@@ -496,7 +507,7 @@ it.effect("keeps the client's DPoP binding on the Main stream ticket", () =>
     const get = (ticket: typeof missing, dpop?: string) =>
       HttpServerRequest.fromWeb(
         new Request(
-          `${origin}/api/foundry/gateway/stream?ticket=${ticket.ticket}&wsTicket=${ticket.wsTicket}${dpop ? `&dpop=${dpop}` : ""}`,
+          `${origin}/api/foundry/gateway/stream?orchestrationProtocol=${ORCHESTRATION_PROTOCOL_VERSION}&ticket=${ticket.ticket}&wsTicket=${ticket.wsTicket}${dpop ? `&dpop=${dpop}` : ""}`,
           { headers: { origin, host: "main.example.test", "x-forwarded-proto": "https" } },
         ),
       );

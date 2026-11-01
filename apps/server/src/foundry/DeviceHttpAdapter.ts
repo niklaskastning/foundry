@@ -1,6 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The local HTTP adapter signs fresh P-256 DPoP proofs; verification stays in EnvironmentAuth.
 import * as NodeCrypto from "node:crypto";
 import {
+  ORCHESTRATION_PROTOCOL_VERSION,
+  ORCHESTRATION_PROTOCOL_QUERY_PARAM,
   FoundryGatewayGrant,
   FoundryGatewayError,
   ProjectSnapshot,
@@ -117,7 +119,11 @@ export const make = Effect.fn("DeviceHttpAdapter.make")(function* (options: {
       Effect.flatMap(decodeDescriptor),
       Effect.mapError(unavailable),
     );
-    if (descriptor.environmentId !== grant.environmentId) return yield* forbidden();
+    if (
+      descriptor.environmentId !== grant.environmentId ||
+      (stream && descriptor.orchestrationProtocolVersion !== ORCHESTRATION_PROTOCOL_VERSION)
+    )
+      return yield* forbidden();
     const remaining = grant.expiresAt - (yield* Clock.currentTimeMillis);
     if (remaining <= 0) return yield* forbidden();
     const session = yield* Effect.acquireRelease(
@@ -171,6 +177,10 @@ export const make = Effect.fn("DeviceHttpAdapter.make")(function* (options: {
         })
         .pipe(Effect.mapError(unavailable));
       const url = new URL(`${local.origin}/ws`);
+      url.searchParams.set(
+        ORCHESTRATION_PROTOCOL_QUERY_PARAM,
+        String(ORCHESTRATION_PROTOCOL_VERSION),
+      );
       url.searchParams.set("wsTicket", issued.token);
       url.searchParams.set(
         "dpop",

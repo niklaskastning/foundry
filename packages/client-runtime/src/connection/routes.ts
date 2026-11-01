@@ -27,6 +27,8 @@ export const RELAY_ROUTE_ID = "relay";
 
 export function connectionRouteId(target: ConnectionTarget): string {
   switch (target._tag) {
+    case "FoundryConnectionTarget":
+      return `foundry:${target.binding.instanceId}:${target.deviceId}`;
     case "PrimaryConnectionTarget":
       return "primary";
     case "RelayConnectionTarget":
@@ -38,7 +40,14 @@ export function connectionRouteId(target: ConnectionTarget): string {
 }
 
 export function connectionRoutes(entry: ConnectionCatalogEntry): ReadonlyArray<ConnectionRoute> {
-  return [{ target: entry.target, profile: entry.profile }, ...(entry.alternateRoutes ?? [])];
+  if (entry.target._tag === "FoundryConnectionTarget")
+    return [{ target: entry.target, profile: entry.profile }];
+  return [
+    { target: entry.target, profile: entry.profile },
+    ...(entry.alternateRoutes ?? []).filter(
+      (route) => route.target._tag !== "FoundryConnectionTarget",
+    ),
+  ];
 }
 
 export function entryWithRoutes(
@@ -83,6 +92,8 @@ function routeHostname(route: ConnectionRoute): string | null {
 
 export function connectionRouteKind(route: ConnectionRoute): ConnectionRouteKind {
   switch (route.target._tag) {
+    case "FoundryConnectionTarget":
+      return "public";
     case "RelayConnectionTarget":
       return "relay";
     case "SshConnectionTarget":
@@ -156,6 +167,7 @@ function routeAddressKey(route: ConnectionRoute): string | null {
 }
 
 export function connectionRouteLabel(route: ConnectionRoute): string {
+  if (route.target._tag === "FoundryConnectionTarget") return "Foundry gateway";
   switch (connectionRouteKind(route)) {
     case "relay":
       return "T3 Connect";
