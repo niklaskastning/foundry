@@ -18,17 +18,26 @@ export const openFrames = Effect.fn("DeviceChannelProtocol.openFrames")(function
       if (pending.length > 16) return yield* new FoundryDeviceError({ code: "channel_protocol" });
       const frame = pending.shift()!;
       const bytes = typeof frame === "string" ? new TextEncoder().encode(frame) : frame;
-      if (bytes.byteLength > 4096)
+      if (bytes.byteLength > 131072)
         return yield* new FoundryDeviceError({ code: "channel_protocol" });
-      return yield* decode(new TextDecoder().decode(bytes)).pipe(
+      const decoded = yield* decode(new TextDecoder().decode(bytes)).pipe(
         Effect.mapError(() => new FoundryDeviceError({ code: "channel_protocol" })),
       );
+      if (decoded.type !== "projects-result" && bytes.byteLength > 4096)
+        return yield* new FoundryDeviceError({ code: "channel_protocol" });
+      return decoded;
     }),
   );
   const send = (frame: FoundryDeviceChannelFrame) =>
     encode(frame).pipe(
       Effect.mapError(() => new FoundryDeviceError({ code: "channel_protocol" })),
-      Effect.flatMap((message) => writer.write(message)),
+      Effect.flatMap(
+        Effect.fn("DeviceChannelProtocol.write")(function* (message) {
+          if (new TextEncoder().encode(message).byteLength > 131072)
+            return yield* new FoundryDeviceError({ code: "channel_protocol" });
+          yield* writer.write(message);
+        }),
+      ),
     );
   return { read, send, writer };
 });

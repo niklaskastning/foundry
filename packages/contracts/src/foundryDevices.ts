@@ -41,6 +41,7 @@ export const FoundryDeviceChallenge = Schema.Struct({
 });
 export type FoundryDeviceChallenge = typeof FoundryDeviceChallenge.Type;
 export const FoundryDeviceHello = Schema.Struct({
+  httpRead: Schema.optionalKey(Schema.Boolean),
   type: Schema.Literal("hello"),
   deviceId: FoundryDeviceId,
   instanceId: FoundryInstanceId,
@@ -49,22 +50,6 @@ export const FoundryDeviceHello = Schema.Struct({
   signature: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{86}$/)),
 });
 export type FoundryDeviceHello = typeof FoundryDeviceHello.Type;
-export const FoundryDeviceChannelFrame = Schema.Union([
-  FoundryDeviceChallenge,
-  FoundryDeviceHello,
-  Schema.Struct({
-    type: Schema.Literal("ready"),
-    connectionId: Schema.String,
-    channelGeneration: Schema.Int,
-  }),
-  Schema.Struct({
-    type: Schema.Literals(["heartbeat", "ack"]),
-    connectionId: Schema.String,
-    sequence: Schema.Int.check(Schema.isGreaterThan(0)),
-  }),
-  Schema.Struct({ type: Schema.Literal("error"), code: Schema.String }),
-]);
-export type FoundryDeviceChannelFrame = typeof FoundryDeviceChannelFrame.Type;
 
 export class FoundryDeviceError extends Schema.TaggedError<FoundryDeviceError>()(
   "FoundryDeviceError",

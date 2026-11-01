@@ -25,7 +25,9 @@ function enrollmentPayload(enrollment: FoundryEnrollment): Uint8Array {
 
 function channelPayload(
   challenge: FoundryDeviceChallenge,
-  device: Pick<FoundryDevice, "deviceId" | "instanceId" | "environmentId" | "generation">,
+  device: Pick<FoundryDevice, "deviceId" | "instanceId" | "environmentId" | "generation"> & {
+    readonly httpRead?: boolean;
+  },
 ) {
   return new TextEncoder().encode(
     JSON.stringify([
@@ -37,6 +39,7 @@ function channelPayload(
       device.instanceId,
       device.environmentId,
       device.generation,
+      ...(device.httpRead ? ["projects-read-v1"] : []),
     ]),
   );
 }
@@ -45,16 +48,18 @@ export function signChannel(
   challenge: FoundryDeviceChallenge,
   device: FoundryDevice,
   privateKey: string,
+  httpRead = false,
 ): FoundryDeviceHello {
   return {
     type: "hello",
+    ...(httpRead ? { httpRead: true } : {}),
     deviceId: device.deviceId,
     instanceId: device.instanceId,
     environmentId: device.environmentId,
     generation: device.generation,
     signature: NodeCrypto.sign(
       null,
-      channelPayload(challenge, device),
+      channelPayload(challenge, { ...device, httpRead }),
       NodeCrypto.createPrivateKey(privateKey),
     ).toString("base64url"),
   };

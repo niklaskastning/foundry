@@ -4,17 +4,21 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+import * as DeviceConfig from "./DeviceConfig.ts";
 import * as GatewayGrants from "./GatewayGrants.ts";
 
 const decode = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
 const headers = { "cache-control": "no-store", pragma: "no-cache" };
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
+    const enabled = yield* DeviceConfig.HttpGatewayEnabled;
     const grants = yield* GatewayGrants.GatewayGrants;
-    const route = (operation: "create" | "inspect" | "remove") =>
+    const route = (operation: "create" | "inspect" | "remove" | "projects") =>
       HttpRouter.add(
         "POST",
-        `/api/foundry/gateway/grants/${operation}`,
+        operation === "projects"
+          ? "/api/foundry/gateway/projects"
+          : `/api/foundry/gateway/grants/${operation}`,
         Effect.gen(function* () {
           const request = yield* HttpServerRequest.HttpServerRequest;
           const input = yield* request.stream.pipe(
@@ -59,6 +63,11 @@ export const layer = Layer.unwrap(
           }),
         ),
       );
-    return Layer.mergeAll(route("create"), route("inspect"), route("remove"));
+    return Layer.mergeAll(
+      route("create"),
+      route("inspect"),
+      route("remove"),
+      enabled ? route("projects") : Layer.empty,
+    );
   }),
 );

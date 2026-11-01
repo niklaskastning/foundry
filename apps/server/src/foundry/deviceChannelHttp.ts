@@ -23,7 +23,7 @@ export const layer = Layer.unwrap(
               Effect.map((writer) => {
                 const write: Socket.Writer["write"] = (frame) =>
                   Effect.suspend(() => {
-                    if (incoming.socket.writableLength > 65536) {
+                    if (incoming.socket.writableLength > 262144) {
                       incoming.socket.destroy();
                       return Effect.fail(
                         new Socket.SocketError({
