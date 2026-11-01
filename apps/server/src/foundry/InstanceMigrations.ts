@@ -64,7 +64,7 @@ const make = Effect.gen(function* () {
           const versions = yield* sql<{
             version: number;
           }>`SELECT version FROM foundry_instance.schema_version`;
-          if (versions.length !== 1 || ![1, 2, 3].includes(versions[0]?.version ?? 0)) {
+          if (versions.length !== 1 || ![1, 2, 3, 4].includes(versions[0]?.version ?? 0)) {
             return yield* new InstanceDatabase.InstanceDatabaseError({
               reason: "schema_incompatible",
             });
@@ -101,6 +101,10 @@ const make = Effect.gen(function* () {
               consumed boolean NOT NULL DEFAULT false)`;
             yield* sql`UPDATE foundry_instance.schema_version SET version = 3`;
           }
+          if ((versions[0]?.version ?? 0) < 4) {
+            yield* sql`ALTER TABLE foundry_instance.devices ADD COLUMN channel_generation integer NOT NULL DEFAULT 0 CHECK (channel_generation >= 0)`;
+            yield* sql`UPDATE foundry_instance.schema_version SET version = 4`;
+          }
           yield* InstanceDatabase.checkSchema();
           const identities = yield* sql<{
             instance_id: string;
@@ -122,6 +126,7 @@ const make = Effect.gen(function* () {
           yield* sql`GRANT INSERT, UPDATE ON foundry_instance.operator_binding TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT SELECT, INSERT ON foundry_instance.devices, foundry_instance.device_enrollments TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT UPDATE (generation, revoked) ON foundry_instance.devices TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT UPDATE (channel_generation) ON foundry_instance.devices TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT UPDATE (consumed) ON foundry_instance.device_enrollments TO ${sql(input.runtimeRole)}`;
         }),
       );

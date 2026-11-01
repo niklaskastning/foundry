@@ -32,6 +32,40 @@ export const FoundryDevice = Schema.Struct({
 });
 export type FoundryDevice = typeof FoundryDevice.Type;
 
+export const FoundryDeviceChallenge = Schema.Struct({
+  type: Schema.Literal("challenge"),
+  protocolVersion: Schema.Literal("1"),
+  instanceId: FoundryInstanceId,
+  origin: Schema.String,
+  nonce: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/)),
+});
+export type FoundryDeviceChallenge = typeof FoundryDeviceChallenge.Type;
+export const FoundryDeviceHello = Schema.Struct({
+  type: Schema.Literal("hello"),
+  deviceId: FoundryDeviceId,
+  instanceId: FoundryInstanceId,
+  environmentId: EnvironmentId,
+  generation: Schema.Int.check(Schema.isGreaterThan(0)),
+  signature: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{86}$/)),
+});
+export type FoundryDeviceHello = typeof FoundryDeviceHello.Type;
+export const FoundryDeviceChannelFrame = Schema.Union([
+  FoundryDeviceChallenge,
+  FoundryDeviceHello,
+  Schema.Struct({
+    type: Schema.Literal("ready"),
+    connectionId: Schema.String,
+    channelGeneration: Schema.Int,
+  }),
+  Schema.Struct({
+    type: Schema.Literals(["heartbeat", "ack"]),
+    connectionId: Schema.String,
+    sequence: Schema.Int.check(Schema.isGreaterThan(0)),
+  }),
+  Schema.Struct({ type: Schema.Literal("error"), code: Schema.String }),
+]);
+export type FoundryDeviceChannelFrame = typeof FoundryDeviceChannelFrame.Type;
+
 export class FoundryDeviceError extends Schema.TaggedError<FoundryDeviceError>()(
   "FoundryDeviceError",
   {
@@ -44,6 +78,8 @@ export class FoundryDeviceError extends Schema.TaggedError<FoundryDeviceError>()
       "not_found",
       "unavailable",
       "configuration",
+      "channel_superseded",
+      "channel_protocol",
     ]),
   },
 ) {

@@ -12,6 +12,7 @@ export const FOUNDRY_CAPABILITIES = [
   "foundry.instance-descriptor",
   "foundry.access-sessions",
   "foundry.device-enrollment",
+  "foundry.device-channel",
 ] as const;
 
 export const FoundryDescriptor = Schema.Struct({

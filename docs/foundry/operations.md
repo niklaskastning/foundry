@@ -12,11 +12,11 @@ outstanding release gates and follow-up work are tracked in
 [issue #13](https://github.com/niklaskastning/foundry/issues/13). Do not activate it
 on the existing production deployment as part of development testing.
 
-Use an isolated Main with PostgreSQL instance schema **3**, the existing operator
+Use an isolated Main with PostgreSQL instance schema **4**, the existing operator
 binding, and the configured `FOUNDRY_PUBLIC_ORIGIN`. Run the existing
 `foundry migrate` command with the migration role before starting this source
-version; it upgrades schemas 1/2 while preserving instance identity, operator and
-sessions. Older schema-2 binaries reject schema 3: an image-only downgrade is not
+version; it upgrades schemas 1/2/3 while preserving instance identity, operator and
+sessions. Older binaries reject schema 4: an image-only downgrade is not
 a recovery procedure. The runtime role cannot change device keys or enrollment
 expiry. Set `FOUNDRY_DEVICE_ENROLLMENT_ENABLED=true` explicitly alongside
 `FOUNDRY_ACCESS_ENABLED=true` to expose `/api/foundry/devices/enroll` and advertise
@@ -72,6 +72,49 @@ Revocation is durable and idempotent. Replaying the original enrollment cannot
 reactivate the device. Replacing a revoked key/environment is not supported yet;
 there is no implicit reset or deletion command. Main's own environment cannot be
 registered as an execution device.
+
+## Experimental outgoing device channel (P07)
+
+On an isolated schema-4 Main, explicitly enable
+`FOUNDRY_DEVICE_CHANNEL_ENABLED=true` alongside the Access and enrollment flags.
+This exposes the authenticated WebSocket at `/api/foundry/devices/channel` and
+advertises `foundry.device-channel`. The default remains disabled. No client
+gateway, project API, filesystem or provider access is exposed by this channel.
+
+On the execution machine, use the P06 key and registration response, the confirmed
+Main HTTPS origin, and the explicit home of the existing local T3 environment:
+
+```sh
+node apps/server/src/bin.ts foundry connect-device \
+  --base-dir /isolated/worker --origin https://main.example.com \
+  --registration /private/registration.json --key-file /private/device-key.json \
+  --access-file /private/access-machine.json
+```
+
+The optional Access file contains `origin`, `clientId` and `clientSecret`; keep it
+owner-readable and never put it in the repository. Its origin must exactly match
+the chosen Main before any credential is sent. Provision the machine credential
+separately for the intended Access path. The connector does not create tokens or
+change Cloudflare policy. Omit this file only when that endpoint needs no outer
+Access machine credential. Redirects and invalid TLS certificates are rejected.
+
+The connector reads `userdata/environment-id` from the specified home and checks
+it against the registration before connecting and on each heartbeat. It creates
+no local identity, backend or provider process. Stop it with Ctrl+C. Lost channels
+redial with a fresh signed challenge and bounded backoff (1–30 seconds); a wrong
+identity/key, revoked registration or superseded channel stops the connector.
+An initial connection log means the device channel is authenticated, not that a
+T3 client can access it through Main.
+
+Authentication has a ten-second deadline. Heartbeats run every ten seconds with
+acknowledgement; Main closes a channel missing a heartbeat for thirty seconds.
+Each heartbeat rechecks PostgreSQL registration/generation; DB failure closes the
+channel rather than keeping an unverified grant alive. Every successful handshake
+advances a durable channel generation, fencing previous channels, including those
+from another Main process. This is a single-Main design, not an HA routing system.
+Control frames are limited to 4 KiB and outgoing socket buffering is bounded.
+There is no command replay or data forwarding in P07. Real machine/Access and
+Windows integration remain tracked separately in issue #13.
 
 ## Build and start
 
