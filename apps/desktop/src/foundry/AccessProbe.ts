@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off - Native acceptance harness owns OS-protected state and wall-clock credential expiry.
 import * as Electron from "electron";
+import { FoundryOnboarding } from "@t3tools/client-runtime/connection";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeFS from "node:fs";
@@ -26,13 +27,18 @@ const StoredGrant = Schema.Struct({
   expiresAt: Schema.Number,
 });
 
+const decodeBinding = Schema.decodeUnknownSync(FoundryOnboarding.InstanceBinding);
 const decodeInstanceId = Schema.decodeSync(FoundryInstanceId);
 const decodeStoredGrant = Schema.decodeUnknownSync(StoredGrant);
 const decodeDescriptor = Schema.decodeUnknownSync(FoundryDescriptor);
 const decodeAuthState = Schema.decodeUnknownSync(AuthSessionState);
 const decodeSession = Schema.decodeUnknownSync(FoundrySession);
 
-export async function runAccessProbe(args: readonly string[], platform: NodeJS.Platform) {
+export async function runAccessProbe(
+  args: readonly string[],
+  platform: NodeJS.Platform,
+  onboardingRoot?: string,
+) {
   const [rawOrigin, rawIssuer, rawInstanceId] = args;
   if (args.length !== 3 || !rawOrigin || !rawIssuer || !rawInstanceId)
     throw new AccessOAuthError(
@@ -46,15 +52,18 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
     issuer,
     fetch: (url, init) => Electron.net.fetch(url instanceof URL ? url.href : url, init),
   });
-  const root = NodePath.join(Electron.app.getPath("appData"), "Foundry-Auth-Probe");
-  NodeFS.mkdirSync(root, { recursive: true, mode: 0o700 });
-  Electron.app.setPath("userData", root);
-  Electron.app.setPath("sessionData", root);
-  if (!Electron.app.requestSingleInstanceLock())
-    throw new AccessOAuthError("Another auth probe is already running.");
-  await Electron.app.whenReady();
-  // The probe's native action dialog remains usable after its remote window closes.
-  Electron.app.on("window-all-closed", () => {});
+  const root =
+    onboardingRoot ?? NodePath.join(Electron.app.getPath("appData"), "Foundry-Auth-Probe");
+  if (!onboardingRoot) {
+    NodeFS.mkdirSync(root, { recursive: true, mode: 0o700 });
+    Electron.app.setPath("userData", root);
+    Electron.app.setPath("sessionData", root);
+    if (!Electron.app.requestSingleInstanceLock())
+      throw new AccessOAuthError("Another auth probe is already running.");
+    await Electron.app.whenReady();
+    // The probe's native action dialog remains usable after its remote window closes.
+    Electron.app.on("window-all-closed", () => {});
+  }
   if (
     !Electron.safeStorage.isEncryptionAvailable() ||
     (platform === "linux" && Electron.safeStorage.getSelectedStorageBackend() === "basic_text")
@@ -64,7 +73,9 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
     .update(JSON.stringify([origin, issuer, instanceId]))
     .digest("hex");
   const file = NodePath.join(root, `${key}.bin`);
-  const partition = Electron.session.fromPartition(`persist:foundry-auth-probe-${key}`);
+  const partition = Electron.session.fromPartition(
+    `persist:${onboardingRoot ? "foundry-instance" : "foundry-auth-probe"}-${key}`,
+  );
   partition.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   partition.setPermissionCheckHandler(() => false);
   partition.on("will-download", (event) => event.preventDefault());
@@ -74,7 +85,19 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
   let timer: ReturnType<typeof setTimeout> | undefined;
   const windows = new Set<Electron.BrowserWindow>();
   const controller = new AbortController();
-  Electron.app.once("before-quit", () => controller.abort());
+  const abort = () => controller.abort();
+  Electron.app.once("before-quit", abort);
+  let outcome: "close" | "switch" = "close";
+  let pinned: FoundryOnboarding.InstanceBinding | undefined;
+  const bindingFile = NodePath.join(root, `${key}.identity.json`);
+  if (onboardingRoot) {
+    try {
+      pinned = decodeBinding(JSON.parse(await NodeFSP.readFile(bindingFile, "utf8")));
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
+        throw new FoundryOnboarding.OnboardingError("storage");
+    }
+  }
   const closeWindows = () => {
     for (const window of windows) window.destroy();
     windows.clear();
@@ -153,7 +176,7 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
   async function response(path: string, csrf?: string) {
     const result = await partition.fetch(`${origin}${path}`, {
       method: path.startsWith("/api/foundry/auth/") ? "POST" : "GET",
-      redirect: "error",
+      redirect: onboardingRoot ? "manual" : "error",
       credentials: "include",
       headers: {
         Origin: origin,
@@ -162,6 +185,7 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
       },
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
     });
+    if (onboardingRoot) return FoundryOnboarding.readResponse(result);
     if (path === "/api/foundry/auth/logout" && result.status === 204) return undefined;
     if (!result.ok || !result.headers.get("content-type")?.includes("application/json")) {
       await result.body?.cancel();
@@ -175,6 +199,15 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
   async function verify() {
     sessionCookieName = undefined;
     const descriptor = decodeDescriptor(await response("/.well-known/foundry?protocolVersion=1"));
+    if (onboardingRoot) {
+      const verified = FoundryOnboarding.verifyDescriptor(
+        descriptor,
+        origin,
+        pinned ?? { instanceId, issuer, origin },
+      );
+      pinned = verified.binding;
+      await NodeFSP.writeFile(bindingFile, JSON.stringify(pinned), { mode: 0o600 });
+    }
     if (descriptor.instanceId !== instanceId)
       throw new AccessOAuthError("Foundry instance identity changed.");
     if (!descriptor.capabilities.includes("foundry.access-sessions"))
@@ -203,7 +236,7 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
 
   async function openWindow() {
     const window = new Electron.BrowserWindow({
-      title: "Foundry access probe",
+      title: onboardingRoot ? "Foundry instance" : "Foundry access probe",
       width: 1100,
       height: 800,
       webPreferences: {
@@ -225,14 +258,15 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
       if (new URL(url).origin !== origin) event.preventDefault();
     });
     const closed = new Promise<void>((resolve) => window.once("closed", () => resolve()));
-    void window.loadURL(origin).catch(() => {
+    void window.loadURL(onboardingRoot ? `${origin}/foundry?desktop=1` : origin).catch(() => {
       if (!window.isDestroyed()) window.destroy();
     });
     await closed;
   }
 
-  let status =
-    "Isolated acceptance probe. No local T3 backend is started. Existing T3 pairing is still required for its WebSocket UI.";
+  let status = onboardingRoot
+    ? "Confirmed instance selected. Sign in through the system browser. T3 environment access still requires separate pairing; devices and gateway are not available."
+    : "Isolated acceptance probe. No local T3 backend is started. Existing T3 pairing is still required for its WebSocket UI.";
   try {
     await restore();
     if (grant) {
@@ -247,10 +281,19 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
     for (;;) {
       const choice = await Electron.dialog.showMessageBox({
         type: "info",
-        title: "Foundry P04 access probe",
+        title: onboardingRoot ? "Foundry instance" : "Foundry P04 access probe",
         message: origin,
         detail: status,
-        buttons: ["Sign in", "Open instance", "Refresh", "Check session", "Log out", "Close"],
+        buttons: onboardingRoot
+          ? [
+              "Sign in",
+              "Open instance",
+              "Refresh",
+              "Check session",
+              "Remove / switch instance",
+              "Close",
+            ]
+          : ["Sign in", "Open instance", "Refresh", "Check session", "Log out", "Close"],
         cancelId: 5,
         defaultId: 0,
       });
@@ -302,15 +345,27 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
           await partition.clearCache();
           await partition.closeAllConnections();
           await NodeFSP.rm(file, { force: true });
+          if (onboardingRoot) await NodeFSP.rm(bindingFile, { force: true });
           status = failed
             ? "Local credentials cleared. Remote revocation could not be fully confirmed."
             : "Foundry logout and OAuth revocation succeeded; local credentials cleared.";
+          if (onboardingRoot) {
+            await Electron.dialog.showMessageBox({
+              type: failed ? "warning" : "info",
+              message: status,
+              buttons: ["Continue"],
+            });
+            outcome = "switch";
+            break;
+          }
         }
       } catch (error) {
         status =
           error instanceof AccessOAuthError
             ? error.message
-            : "Probe operation failed. No credentials are included in this report.";
+            : onboardingRoot
+              ? FoundryOnboarding.errorMessage(error)
+              : "Probe operation failed. No credentials are included in this report.";
       }
     }
   } finally {
@@ -318,6 +373,9 @@ export async function runAccessProbe(args: readonly string[], platform: NodeJS.P
     if (timer) clearTimeout(timer);
     closeWindows();
     await partition.cookies.flushStore();
-    Electron.app.quit();
+    await partition.closeAllConnections();
+    Electron.app.removeListener("before-quit", abort);
+    if (!onboardingRoot) Electron.app.quit();
   }
+  return outcome;
 }

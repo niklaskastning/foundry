@@ -64,7 +64,7 @@ export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
     // Guest links open on the owner's tunnel host in a browser with no T3 session, and must
     // not trigger pairing or an environment connection.
-    if (location.pathname === GUEST_PAGE_PATH) {
+    if (location.pathname === GUEST_PAGE_PATH || location.pathname === "/foundry") {
       return {
         authGateState: {
           status: "guest",
@@ -153,7 +153,7 @@ function RootRouteBranch() {
     authGateState.status === "hosted-static",
   );
 
-  if (pathname === GUEST_PAGE_PATH) return <Outlet />;
+  if (pathname === GUEST_PAGE_PATH || pathname === "/foundry") return <Outlet />;
 
   if (pathname === "/pair" || pathname === "/connect" || pathname === "/connect-agent") {
     return <Outlet />;
