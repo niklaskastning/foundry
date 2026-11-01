@@ -1,3 +1,4 @@
+import { isFoundryBuild } from "@t3tools/shared/foundryBuild";
 import { SessionPermissions } from "./SessionPermissions";
 import { ChevronRightIcon, EllipsisIcon } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
@@ -1464,6 +1465,13 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
 
   return (
     <SettingsPageContainer>
+      {isFoundryBuild() && !desktopBridge ? (
+        <SettingsSection title="Foundry instance">
+          <Button variant="outline" onClick={() => window.location.assign("/foundry")}>
+            Manage instance sign-in
+          </Button>
+        </SettingsSection>
+      ) : null}
       {desktopBridge ? (
         <SettingsSection id="this-app" title="This app">
           <LocalEnvironmentSetting />

@@ -9,6 +9,7 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as EnvironmentAuthPolicy from "../auth/EnvironmentAuthPolicy.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as InstanceIdentityStore from "./InstanceIdentityStore.ts";
@@ -32,6 +33,9 @@ const make = Effect.gen(function* () {
   const enrollment = yield* DeviceConfig.DeviceEnrollmentEnabled;
   const channel = yield* DeviceConfig.DeviceChannelEnabled;
   const gateway = yield* DeviceConfig.HttpGatewayEnabled;
+  const access = yield* Effect.serviceOption(AccessConfig.AccessConfig);
+  if (enabled && Option.isNone(access))
+    return yield* Effect.die(new AccessConfig.AccessConfigurationError({}));
   const capabilities = FOUNDRY_CAPABILITIES.filter(
     (capability) =>
       (enabled || capability !== "foundry.access-sessions") &&
@@ -73,6 +77,8 @@ const make = Effect.gen(function* () {
       ...(enabled
         ? {
             instanceAuth: {
+              publicOrigin: Option.getOrThrow(access).origin,
+              issuer: Option.getOrThrow(access).issuer,
               bootstrapMethods: ["cloudflare-access-jwt"] as const,
               sessionMethods: ["foundry-session-cookie"] as const,
             },
