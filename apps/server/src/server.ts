@@ -1,3 +1,5 @@
+import * as CommandReceiptStore from "./orchestration-v2/CommandReceiptStore.ts";
+import * as WorkerLaunch from "./foundry/WorkerLaunch.ts";
 import * as WorkerReadiness from "./foundry/WorkerReadiness.ts";
 import * as AssetTransfer from "./assets/AssetTransfer.ts";
 import * as FoundryRuntime from "./foundry/Runtime.ts";
@@ -589,6 +591,10 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
+  WorkerLaunch.layer.pipe(
+    Layer.provide(CommandReceiptStore.layer),
+    Layer.provide(WorkerReadiness.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
+  ),
   WorkerReadiness.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
   AssetTransfer.layer.pipe(Layer.provide(NativeAppIconResolver.layer)),
   AgentAwarenessRelay.layer,

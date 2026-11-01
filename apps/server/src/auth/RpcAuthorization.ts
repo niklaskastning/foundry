@@ -157,6 +157,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.agentSessionsScan]: AuthOrchestrationReadScope,
   [WS_METHODS.agentSessionsImport]: AuthOrchestrationOperateScope,
   [WS_METHODS.assetsCreateUrl]: AuthOrchestrationReadScope,
+  [WS_METHODS.foundryWorkerLaunch]: AuthOrchestrationOperateScope,
   [WS_METHODS.foundryWorkerStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.assetsReadChunk]: AuthOrchestrationReadScope,
   [WS_METHODS.attachmentsWriteChunk]: AuthOrchestrationOperateScope,
