@@ -5,7 +5,8 @@ RUN npm install --global vite-plus@1.4.0
 WORKDIR /src
 COPY . .
 RUN vp install --frozen-lockfile
-RUN vp run foundry:build server
+ARG FOUNDRY_REVISION
+RUN FOUNDRY_ARCHIVE_REVISION="$FOUNDRY_REVISION" vp run foundry:build server
 # The production subset intentionally excludes patches for mobile and build tools.
 RUN npx --yes pnpm@12.14.0 --config.allow-unused-patches=true --filter t3 deploy --prod --legacy /output
 
