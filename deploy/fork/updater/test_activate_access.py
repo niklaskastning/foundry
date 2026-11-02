@@ -102,8 +102,9 @@ class ActivationTest(unittest.TestCase):
                 self.assertTrue(calls)
 
     def test_upgrade_keeps_the_current_backup_and_disables_migration_login_on_failure(self):
-        for failure in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']:
-            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+        for same_schema, failure in ([(False, f) for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
+                                     + [(True, f) for f in [None, 'source', 'backup', 'connections', 'start', 'verify']]):
+            with self.subTest(same_schema=same_schema, failure=failure), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 config, state = root / 'config', root / 'state'
                 config.mkdir()
@@ -115,7 +116,7 @@ class ActivationTest(unittest.TestCase):
 
                 def status(expected_schema=None):
                     actions.append(('status', expected_schema))
-                    if expected_schema == 5 and failure == 'verify':
+                    if len([a for a in actions if a[0] == 'status']) == 2 and failure == 'verify':
                         raise RuntimeError('verification failed')
                     return {'image': activate.REGISTRY + '@' + (DIGEST if expected_schema == 5 else 'sha256:' + 'c' * 64),
                             'revision': REVISION if expected_schema == 5 else 'd' * 40}
@@ -165,17 +166,21 @@ class ActivationTest(unittest.TestCase):
                      patch('sys.stderr', new=io.StringIO()):
                     if failure:
                         with self.assertRaises(RuntimeError):
-                            activate.upgrade(DIGEST, REVISION)
+                            activate.upgrade(DIGEST, REVISION, same_schema=same_schema)
                     else:
-                        activate.upgrade(DIGEST, REVISION)
+                        activate.upgrade(DIGEST, REVISION, same_schema=same_schema)
+                self.assertEqual(actions[0], ('status', 5 if same_schema else 2))
                 self.assertEqual(running, failure in [None, 'source', 'backup', 'connections'])
                 altered = any(a[0] == 'sql' and 'LOGIN PASSWORD' in a[1] for a in actions)
                 if failure in ['source', 'backup', 'connections']:
                     self.assertFalse(altered)
                     self.assertEqual((config / 'access-compose.json').read_text(), 'original-access-compose.json')
                 else:
-                    self.assertTrue(altered)
-                    self.assertIn(('sql', 'ALTER ROLE foundry_instance_migrator NOLOGIN PASSWORD NULL;'), actions)
+                    self.assertEqual(altered, not same_schema)
+                    if same_schema:
+                        self.assertFalse(any(a[0] == 'run' or (a[0] == 'sql' and 'ALTER ROLE' in a[1]) for a in actions))
+                    else:
+                        self.assertIn(('sql', 'ALTER ROLE foundry_instance_migrator NOLOGIN PASSWORD NULL;'), actions)
                     recovery = next(state.iterdir())
                     self.assertEqual((recovery / 'access-compose.json').read_text(), 'original-access-compose.json')
                     self.assertEqual((recovery / 'success').exists(), failure is None)

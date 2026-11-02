@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Operator-run activation, inventory and schema-2-to-5 upgrade of Docker Foundry."""
+"""Operator-run activation, inventory, upgrade and schema-5 update of Docker Foundry."""
 
 import fcntl
 import json
@@ -136,10 +136,10 @@ def active_status(expected_schema=None):
             'upgradePerformed': False}
 
 
-def upgrade(digest, revision):
+def upgrade(digest, revision, *, same_schema=False):
     if not re.fullmatch(r'sha256:[a-f0-9]{64}', digest) or not re.fullmatch(r'[a-f0-9]{40}', revision):
         raise ValueError('Use an immutable image digest and its exact reviewed source SHA.')
-    previous = active_status(expected_schema=2)
+    previous = active_status(expected_schema=5 if same_schema else 2)
     image = REGISTRY + '@' + digest
     docker('pull', image)
     candidate = json.loads(docker('image', 'inspect', image))[0]
@@ -171,17 +171,18 @@ def upgrade(digest, revision):
         raise
     migration_file = backup / 'migration.env'
     try:
-        password = secrets.token_hex(32)
-        write_private(migration_file,
-                      f'FOUNDRY_INSTANCE_MIGRATION_URL=postgresql://foundry_instance_migrator:{password}@postgres:5432/fork_connect\n')
-        try:
-            sql(f"ALTER ROLE foundry_instance_migrator LOGIN PASSWORD '{password}';")
-            print('Migrating schema 2 to 5 with Main stopped; operator and identities are preserved.', flush=True)
-            run_cli(image, migration_file, 'migrate', '--base-dir', '/var/lib/foundry',
-                    '--runtime-role', 'foundry_instance_runtime')
-        finally:
-            sql('ALTER ROLE foundry_instance_migrator NOLOGIN PASSWORD NULL;')
-        migration_file.unlink()
+        if not same_schema:
+            password = secrets.token_hex(32)
+            write_private(migration_file,
+                          f'FOUNDRY_INSTANCE_MIGRATION_URL=postgresql://foundry_instance_migrator:{password}@postgres:5432/fork_connect\n')
+            try:
+                sql(f"ALTER ROLE foundry_instance_migrator LOGIN PASSWORD '{password}';")
+                print('Migrating schema 2 to 5 with Main stopped; operator and identities are preserved.', flush=True)
+                run_cli(image, migration_file, 'migrate', '--base-dir', '/var/lib/foundry',
+                        '--runtime-role', 'foundry_instance_runtime')
+            finally:
+                sql('ALTER ROLE foundry_instance_migrator NOLOGIN PASSWORD NULL;')
+            migration_file.unlink()
         replacement = backup / 'candidate-compose.json'
         write_private(replacement, json.dumps(composition(image, CONFIG / 'access-runtime.env'), indent=2) + '\n')
         os.replace(replacement, CONFIG / 'access-compose.json')
@@ -387,8 +388,8 @@ def activate(digest, revision):
 
 
 def main(args):
-    if args not in [['preflight'], ['status']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade']):
-        raise ValueError('Usage: foundry-activate-access status | preflight | activate|upgrade sha256:<digest> <source-sha>')
+    if args not in [['preflight'], ['status']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade', 'update']):
+        raise ValueError('Usage: foundry-activate-access status | preflight | activate|upgrade|update sha256:<digest> <source-sha>')
     if os.geteuid() != 0:
         raise RuntimeError('This operation requires the administrator; no sudo grant is installed.')
     os.umask(0o077)
@@ -399,8 +400,8 @@ def main(args):
         elif args == ['preflight']:
             preflight()
             print('PASS pinned Docker Main, private PostgreSQL, empty fork_connect, absent login roles, stable IDs.')
-        elif args[0] == 'upgrade':
-            upgrade(*args[1:])
+        elif args[0] in ['upgrade', 'update']:
+            upgrade(*args[1:], same_schema=args[0] == 'update')
         else:
             activate(*args[1:])
 

@@ -57,7 +57,22 @@ of automatic recovery is made. Keep all backup files private, and copy the bundl
 to the existing protected backup destination. Do not rerun `activate`, restore the
 activation-era empty database, or downgrade only the image.
 
-### Recover this upgrade
+### Update an already activated schema-5 Main
+
+For a reviewed image that still uses schema 5, use the same maintenance window,
+backup prerequisites and recovery procedure, but run:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/updater/activate-access.py update sha256:<candidate-digest> <candidate-source-sha>
+```
+
+This mode requires schema 5 before and after the update. It takes the same
+coordinated backup and verifies the image, readiness, identities and configuration,
+but never enables the migration login or runs migrations. It does not enable
+devices or gateways. A failure after the backup boundary leaves Main stopped for
+recovery from that update's bundle; do not reuse an older upgrade backup.
+
+### Recover this upgrade or update
 
 This discards work accepted after the upgrade backup. Stop Main and ensure no other
 writers are active. In an administrator shell without tracing, set the fixed Docker
