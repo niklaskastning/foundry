@@ -1,3 +1,4 @@
+import * as ConfigProvider from "effect/ConfigProvider";
 import type { ProviderAdapterV2SessionRuntime } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as Reconciler from "./WorkspaceReconciler.ts";
 import * as Executions from "../ExecutionStore.ts";
@@ -528,5 +529,49 @@ it.live("keeps manual writers reserved until their terminal run has positive nat
       );
       assert.isTrue(yield* f.fs.exists(`${f.repositoryPath}/user.txt`));
     }).pipe(Effect.provide(runtime), Effect.scoped);
+  }).pipe(Effect.provide(infrastructure), Effect.scoped),
+);
+
+it.live("keeps unbound development workers on the ordinary interactive path", () =>
+  Effect.gen(function* () {
+    const inactive = Gate.layerConfigured.pipe(
+      Layer.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              FOUNDRY_WORKER_ENABLED: "true",
+              FOUNDRY_WORKER_PROVIDER_INSTANCE_ID: "",
+              FOUNDRY_WORKER_WORKSPACE_ROOTS: '["/nonexistent-unbound-worker-root"]',
+            },
+          }),
+        ),
+      ),
+      Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "foundry-unbound-worker-" })),
+    );
+    yield* Effect.gen(function* () {
+      const gate = yield* WorkspaceGate;
+      assert.isTrue(
+        yield* gate.prepare({
+          threadId: "replay",
+          runId: "one",
+          cwd: "/nonexistent-unbound-worker-root",
+        }),
+      );
+      assert.isTrue(
+        yield* gate.starting({
+          threadId: "replay",
+          runId: "one",
+          cwd: "/nonexistent-unbound-worker-root",
+        }),
+      );
+      assert.isTrue(
+        yield* gate.starting({
+          threadId: "replay",
+          runId: "two",
+          cwd: "/nonexistent-unbound-worker-root",
+        }),
+      );
+      assert.lengthOf(yield* gate.bindings, 0);
+    }).pipe(Effect.provide(inactive));
   }).pipe(Effect.provide(infrastructure), Effect.scoped),
 );

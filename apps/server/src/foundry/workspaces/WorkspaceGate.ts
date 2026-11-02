@@ -168,6 +168,12 @@ export const layerConfigured = Layer.unwrap(
   Effect.gen(function* () {
     if (!(yield* Config.Boolean("FOUNDRY_WORKER_ENABLED").pipe(Config.withDefault(false))))
       return Layer.empty;
+    if (
+      !(yield* Config.String("FOUNDRY_WORKER_PROVIDER_INSTANCE_ID").pipe(
+        Config.withDefault(""),
+      )).trim()
+    )
+      return Layer.empty;
     const config = yield* ServerConfig.ServerConfig;
     const path = yield* Path.Path;
     const roots = yield* decodeRoots(
