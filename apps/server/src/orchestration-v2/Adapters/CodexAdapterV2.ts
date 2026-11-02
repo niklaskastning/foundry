@@ -6919,7 +6919,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   includeTurns: true,
                 });
                 if (
-                  thread.status.type !== "idle" ||
+                  (thread.status.type !== "idle" && thread.status.type !== "notLoaded") ||
                   thread.turns.some((turn) => turn.status === "inProgress")
                 )
                   return false;
@@ -6930,6 +6930,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   )
                 )
                   return false;
+                for (const turn of thread.turns) {
+                  for (const item of turn.items) {
+                    if (item.type === "collabAgentToolCall")
+                      for (const child of item.receiverThreadIds) ids.add(child);
+                    if (item.type === "subAgentActivity") ids.add(item.agentThreadId);
+                  }
+                }
+                if (ids.size > 256) return false;
                 if (
                   thread.turns.some(
                     (turn) =>

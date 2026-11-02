@@ -1276,6 +1276,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     "summary",
     "command-running",
     "disconnected",
+    "child-running",
+    "child-completed",
   ] as const)(
     "confirms writing end from native full history rather than app terminal state: %s",
     (state) =>
@@ -1317,8 +1319,19 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                       status: state === "inProgress" ? "inProgress" : "completed",
                     }),
                     itemsView: state === "summary" ? "summary" : "full",
-                    items:
-                      state !== "command-running"
+                    items: state.startsWith("child-")
+                      ? [
+                          {
+                            type: "collabAgentToolCall",
+                            id: "spawn",
+                            tool: "spawnAgent",
+                            senderThreadId: nativeThreadId,
+                            receiverThreadIds: ["child-evidence"],
+                            status: "completed",
+                            agentsStates: {},
+                          },
+                        ]
+                      : state !== "command-running"
                         ? []
                         : [
                             {
@@ -1359,6 +1372,41 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   ? { id: 3, error: { code: -32603, message: "offline fixture" } }
                   : { id: 3, result: { thread } },
             },
+            ...(state.startsWith("child-")
+              ? [
+                  {
+                    type: "expect_outbound" as const,
+                    label: "child-proof",
+                    frame: {
+                      id: 4,
+                      method: "thread/read",
+                      params: { threadId: "child-evidence", includeTurns: true },
+                    },
+                  },
+                  {
+                    type: "emit_inbound" as const,
+                    label: "child-proof",
+                    frame: {
+                      id: 4,
+                      result: {
+                        thread: {
+                          ...thread,
+                          id: "child-evidence",
+                          turns: [
+                            {
+                              ...makeCodexReplayTurn({
+                                id: "child-turn",
+                                status: state === "child-running" ? "inProgress" : "completed",
+                              }),
+                              itemsView: "full",
+                            },
+                          ],
+                        },
+                      },
+                    },
+                  },
+                ]
+              : []),
           ],
         });
         const harness = yield* makeCodexReplayHarness(transcript);
@@ -1369,7 +1417,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             nativeTurnId,
             runId: RunId.make("writer-evidence-run"),
           }),
-          state === "completed",
+          state === "completed" || state === "child-completed",
         );
       }).pipe(
         Effect.scoped,
