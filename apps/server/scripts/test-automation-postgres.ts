@@ -1,0 +1,261 @@
+// @effect-diagnostics nodeBuiltinImport:off -- The isolated harness owns its temporary cluster and filesystem.
+// @effect-diagnostics globalProcess:off -- Only a PostgreSQL binary directory is read from the environment.
+import * as NodeAssert from "node:assert/strict";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Console from "effect/Console";
+import * as Database from "../src/automation/AutomationDatabase.ts";
+import * as Migrations from "../src/automation/AutomationMigrations.ts";
+import * as Factories from "../src/automation/Factories.ts";
+const bin = process.env.FOUNDRY_TEST_PG_BIN;
+NodeAssert.ok(
+  bin,
+  "Set FOUNDRY_TEST_PG_BIN to a PostgreSQL 17+ bin directory; no existing database is used.",
+);
+const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "foundry-automation-pg-"));
+const data = NodePath.join(root, "data");
+const path = NodePath.join(root, ".s.PGSQL.5432");
+let child: NodeChildProcess.ChildProcess | undefined;
+
+async function start() {
+  const server = NodeChildProcess.spawn(
+    NodePath.join(bin!, "postgres"),
+    ["-D", data, "-k", root, "-c", "listen_addresses=", "-c", "fsync=on"],
+    { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, LC_ALL: "C" } },
+  );
+  child = server;
+  await new Promise<void>((resolve, reject) => {
+    let output = "";
+    server.once("error", reject);
+    server.once("exit", (code) =>
+      reject(new Error(`Isolated PostgreSQL exited before readiness (${code}). ${output}`)),
+    );
+    server.stderr!.on("data", (chunk: Buffer) => {
+      output = (output + chunk.toString()).slice(-4000);
+      if (output.includes("database system is ready to accept connections")) resolve();
+    });
+  });
+}
+async function stop() {
+  if (!child || child.exitCode !== null) return;
+  const server = child;
+  const exited = new Promise<void>((resolve) => server.once("exit", () => resolve()));
+  server.kill("SIGQUIT");
+  await exited;
+  child = undefined;
+}
+
+const db = (username: string) => Database.layer({ path, username, database: "postgres" });
+const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
+const query = (statement: string, username = "fixture_admin") =>
+  run(
+    Effect.gen(function* () {
+      const sql = yield* Database.AutomationDatabase;
+      return yield* sql.unsafe<Record<string, unknown>>(statement);
+    }).pipe(Effect.provide(db(username))),
+  );
+const migration = Migrations.AutomationMigrations.pipe(
+  Effect.flatMap((s) => s.migrate("automation_runtime")),
+  Effect.provide(Migrations.layer.pipe(Layer.provide(db("automation_migrator")))),
+);
+const call = <A, E>(f: (s: Factories.Factories["Service"]) => Effect.Effect<A, E>) =>
+  run(
+    Factories.Factories.pipe(
+      Effect.flatMap(f),
+      Effect.provide(Factories.layer.pipe(Layer.provide(db("automation_runtime")))),
+    ),
+  );
+const failure = async (promise: Promise<unknown>, reason: string) => {
+  await NodeAssert.rejects(
+    promise,
+    (error: unknown) =>
+      typeof error === "object" && error !== null && "reason" in error && error.reason === reason,
+  );
+};
+try {
+  const initialized = NodeChildProcess.spawnSync(
+    NodePath.join(bin, "initdb"),
+    ["-D", data, "-U", "fixture_admin", "--auth=trust", "--no-locale"],
+    { encoding: "utf8" },
+  );
+  NodeAssert.equal(initialized.status, 0, initialized.stderr);
+  await start();
+  for (const statement of [
+    "CREATE ROLE automation_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+    "CREATE ROLE automation_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+    "REVOKE ALL ON DATABASE postgres FROM PUBLIC",
+    "GRANT CONNECT,CREATE ON DATABASE postgres TO automation_migrator",
+    "GRANT CONNECT ON DATABASE postgres TO automation_runtime",
+    "REVOKE ALL ON SCHEMA public FROM PUBLIC",
+    "CREATE SCHEMA foundry_instance",
+    "CREATE TABLE foundry_instance.fixture(id text PRIMARY KEY, version integer)",
+    "INSERT INTO foundry_instance.fixture VALUES('existing-instance',5)",
+  ])
+    await query(statement);
+  const instanceBefore = await query("SELECT * FROM foundry_instance.fixture");
+  await run(Effect.all([migration, migration], { concurrency: "unbounded" }));
+  await run(migration);
+  const factory = { commandId: "create-a", id: "a", name: "Factory A" };
+  const factories = await Promise.all(
+    Array.from({ length: 8 }, () => call((s) => s.createFactory(factory))),
+  );
+  NodeAssert.equal(new Set(factories.map((f) => f.id)).size, 1);
+  await call((s) => s.createFactory({ commandId: "create-b", id: "b", name: "Factory B" }));
+  await call((s) =>
+    s.createVersion({
+      commandId: "version-a1",
+      id: "a1",
+      factoryId: "a",
+      repositories: ["repo-a"],
+    }),
+  );
+  await call((s) =>
+    s.createVersion({
+      commandId: "version-b1",
+      id: "b1",
+      factoryId: "b",
+      repositories: ["repo-b"],
+    }),
+  );
+  const work = {
+    commandId: "work-1",
+    id: "w1",
+    factoryId: "a",
+    versionId: "a1",
+    repository: "repo-a",
+    title: "Do work",
+    source: { kind: "manual" as const, reference: "local-request" },
+  };
+  const items = await Promise.all(
+    Array.from({ length: 12 }, () => call((s) => s.createWorkItem(work))),
+  );
+  NodeAssert.equal(new Set(items.map((w) => w.id)).size, 1);
+  NodeAssert.equal((await query("SELECT * FROM foundry_automation.work_items")).length, 1);
+  await failure(
+    call((s) => s.createWorkItem({ ...work, title: "changed" })),
+    "command_conflict",
+  );
+  await failure(
+    call((s) => s.createFactory({ ...factory, id: "other" })),
+    "command_conflict",
+  );
+  await failure(
+    call((s) =>
+      s.createWorkItem({ ...work, commandId: "foreign-version", id: "foreign", versionId: "b1" }),
+    ),
+    "not_found",
+  );
+  await failure(
+    call((s) =>
+      s.createWorkItem({ ...work, commandId: "foreign-repo", id: "foreign", repository: "repo-b" }),
+    ),
+    "scope_mismatch",
+  );
+  NodeAssert.equal(
+    (
+      await query(
+        "SELECT * FROM foundry_automation.commands WHERE id IN ('foreign-version','foreign-repo')",
+      )
+    ).length,
+    0,
+  );
+  await failure(
+    call((s) => s.readWorkItem("b", "w1")),
+    "not_found",
+  );
+  await call((s) =>
+    s.createVersion({
+      commandId: "version-a2",
+      id: "a2",
+      factoryId: "a",
+      repositories: ["repo-new"],
+    }),
+  );
+  NodeAssert.deepEqual((await call((s) => s.readVersion("a", "a1"))).repositories, ["repo-a"]);
+  NodeAssert.equal((await call((s) => s.readWorkItem("a", "w1"))).versionId, "a1");
+  await call((s) => s.setArchived("a", true));
+  await failure(
+    call((s) => s.withStartEligibility("a", "w1", Effect.void)),
+    "archived",
+  );
+  NodeAssert.equal((await call((s) => s.readFactory("b"))).archived, false);
+  await call((s) =>
+    s.createWorkItem({
+      ...work,
+      commandId: "work-b",
+      id: "wb",
+      factoryId: "b",
+      versionId: "b1",
+      repository: "repo-b",
+    }),
+  );
+  await call((s) => s.withStartEligibility("b", "wb", Effect.void));
+  await call((s) => s.setWorkItemState("a", "w1", "completed"));
+  NodeAssert.equal((await call((s) => s.createWorkItem(work))).state, "completed");
+  await stop();
+  await start();
+  await failure(
+    call((s) => s.withStartEligibility("a", "w1", Effect.void)),
+    "archived",
+  );
+  NodeAssert.equal((await call((s) => s.readWorkItem("a", "w1"))).state, "completed");
+  NodeAssert.equal((await call((s) => s.createWorkItem(work))).id, "w1");
+  await call((s) => s.setArchived("a", false));
+  await call((s) => s.withStartEligibility("a", "w1", Effect.void));
+  await NodeAssert.rejects(
+    call((s) =>
+      s.withStartEligibility(
+        "a",
+        "w1",
+        s
+          .createWorkItem({ ...work, commandId: "rolled-back", id: "rollback" })
+          .pipe(
+            Effect.andThen(Effect.fail(new Factories.AutomationError({ reason: "invalid_input" }))),
+          ),
+      ),
+    ),
+  );
+  await failure(
+    call((s) => s.readWorkItem("a", "rollback")),
+    "not_found",
+  );
+  NodeAssert.equal(
+    (await query("SELECT * FROM foundry_automation.commands WHERE id='rolled-back'")).length,
+    0,
+  );
+  for (const statement of [
+    "UPDATE foundry_automation.versions SET repositories=ARRAY['evil']",
+    "UPDATE foundry_automation.work_items SET version_id='a2'",
+    "DELETE FROM foundry_automation.work_items",
+    "DELETE FROM foundry_automation.factories",
+    "UPDATE foundry_automation.commands SET payload='{}'",
+    "UPDATE foundry_automation.schema_version SET version=2",
+    "UPDATE foundry_instance.fixture SET version=99",
+    "CREATE TABLE foundry_automation.forbidden(id int)",
+  ])
+    await NodeAssert.rejects(query(statement, "automation_runtime"));
+  await NodeAssert.rejects(
+    query("UPDATE foundry_instance.fixture SET version=99", "automation_migrator"),
+  );
+  NodeAssert.deepEqual(await query("SELECT * FROM foundry_instance.fixture"), instanceBefore);
+  await query("UPDATE foundry_automation.schema_version SET version=99", "automation_migrator");
+  await NodeAssert.rejects(run(migration));
+  NodeAssert.equal(
+    (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
+    99,
+  );
+  await query("UPDATE foundry_automation.schema_version SET version=1", "automation_migrator");
+  await run(migration);
+  await run(
+    Console.log(
+      "PASS P18a isolated PostgreSQL: concurrent idempotent creates; conflict and scope rejection; immutable history; archive/restore and independent factories; business completion without runs; PostgreSQL restart; transactional rollback; separate instance ownership and restricted runtime. No runtime activation or G3 acceptance.",
+    ),
+  );
+} finally {
+  await stop();
+  await NodeFSP.rm(root, { recursive: true, force: true });
+}

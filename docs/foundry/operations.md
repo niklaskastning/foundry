@@ -669,3 +669,35 @@ unveränderlich. Bei älteren Aufträgen ohne Ausführungsdatensatz wird kein Na
 nachträglich erfunden. Workspace-Reservierung und Wiederbelegung über verschiedene
 Aufträge hinweg benötigen P17; dieser Mechanismus ersetzt sie nicht. Reale G3-Abnahme
 und Aktivierung bleiben gesonderte Schritte in Issue #13.
+
+## Inaktive Automation-Persistenz (P18a)
+
+`apps/server/src/automation/` stellt eine noch nicht in Main/Worker eingebundene
+Service-Schicht bereit. Keine Startup-Migration, CLI-Aktivierung, RPCs oder Runs.
+Sie verwendet einen eigenen `AutomationDatabase`-Pool und den schemaqualifizierten
+Namespace `foundry_automation` mit eigenem Migrationsmarker. Für spätere Aktivierung
+ist eine separate Automation-Datenbank mit eigenen Migrator-/Runtime-Rollen
+vorzusehen; weder Instanz-Migrator noch lokales T3-SQLite werden dafür verwendet.
+Die Automation-Migration verändert keine Instanzobjekte. Sie verlangt eine Runtime
+ohne DDL-/Owner-Rechte und vergibt keine UPDATE-/DELETE-Rechte auf Versionen oder
+Command-Receipts. Der Migrator bleibt außerhalb des späteren Runtime-Prozesses.
+
+Repository-Schlüssel sind hier opake Bindings einer unveränderlichen Version,
+keine Dateipfade oder Zugriffsrechte. P47 liefert das gemeinsame Definitionsformat;
+P18a speichert noch keine Workflow-DSL, Credentials oder Grants. Ein Create-Retry
+muss dieselbe globale Command-ID und denselben Inhalt verwenden. Er liest die
+vorhandene Entität einschließlich ihres aktuellen fachlichen Zustands.
+
+Archivieren sperrt neue Starts, erhält Aufträge/Versionen und beendet keine Runs.
+P18b muss `Factories.withStartEligibility` und das persistente Anlegen seines Starts
+in derselben Automation-Transaktion ausführen; ein anschließender separater Start
+würde die Sperre umgehen. Externe Ausführung darf erst nach dem Commit folgen.
+WorkItem-Abschluss wird ausdrücklich fachlich gesetzt, unabhängig von Run-Erfolg.
+G3, P18b-Anschluss und integrierte P18a-Abnahme bleiben offen.
+
+Der isolierte Nachweis verwendet ausschließlich einen temporären PostgreSQL-Cluster,
+keine vorhandenen Datenbanken oder persönlichen Provider-Zugänge:
+
+```sh
+FOUNDRY_TEST_PG_BIN=/path/to/postgresql/bin vp run --filter t3 test:automation-postgres
+```
