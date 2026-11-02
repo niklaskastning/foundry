@@ -1,3 +1,4 @@
+import * as Fiber from "effect/Fiber";
 import * as EventSink from "./EventSink.ts";
 import {
   EventId,
@@ -3029,3 +3030,43 @@ it.effect("running worker cancel remains uncertain until confirmed writing end",
     assert.deepInclude(stopped.lifecycle?.manifest, { outcome: "stopped", checkpointId: null });
   }).pipe(Effect.provide(workerLayer().pipe(Layer.provideMerge(harness.layer))));
 });
+
+it.effect(
+  "worker watchdog interrupts only its original run after the controller stops renewing",
+  () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const worker = yield* WorkerLaunch.WorkerLaunch;
+      const store = yield* ExecutionStore.ExecutionStore;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const receipt = yield* worker.launch(workerInput);
+      const original = yield* worker.read({ commandId: workerInput.commandId });
+      const row = yield* store.read(workerInput.commandId);
+      yield* store.starting({
+        threadId: receipt.threadId,
+        providerThreadId: ProviderThreadId.make("partitioned-worker"),
+        runOrdinal: 1,
+      });
+      const stopped = yield* threads
+        .streamStoredEventsFrom({ threadId: receipt.threadId, afterSequence: receipt.sequence })
+        .pipe(
+          Stream.filter(
+            (stored) =>
+              stored.event.type === "run.updated" &&
+              stored.event.payload.id === original.run.id &&
+              stored.event.payload.status === "interrupted",
+          ),
+          Stream.runHead,
+          Effect.forkChild,
+        );
+      yield* TestClock.adjust("60 seconds");
+      assert.isTrue(Option.isSome(yield* Fiber.join(stopped)));
+      const result = yield* worker.read({ commandId: workerInput.commandId });
+      assert.isFalse(result.lifecycle?.writerEnded);
+      assert.isNull(result.lifecycle?.manifest);
+      assert.isFalse(yield* store.renew(workerInput.commandId, row!.generation));
+      assert.deepEqual(yield* worker.launch(workerInput), receipt);
+      assert.lengthOf((yield* threads.getThreadRecords(receipt.threadId, ["runs"])).runs, 1);
+    }).pipe(Effect.provide(workerLayer().pipe(Layer.provideMerge(harness.layer))));
+  },
+);
