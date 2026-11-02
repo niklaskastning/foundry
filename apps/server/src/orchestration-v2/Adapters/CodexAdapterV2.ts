@@ -6902,6 +6902,49 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           providerSessionId: input.providerSessionId,
           providerSession: session,
           events: Stream.fromEffectRepeat(Queue.take(events)),
+          confirmWriterEnded: Effect.fn("CodexAdapterV2.confirmWriterEnded")(
+            function* (probe) {
+              const nativeThreadId = yield* getNativeThreadId(probe.providerThread);
+              if (yield* runtime.hasPendingBackgroundWorkForThread!(probe.providerThread))
+                return false;
+              // Native history survives synthetic interrupt terminalization in the app projection.
+              const ids = new Set([nativeThreadId]);
+              for (const [id, child] of yield* Ref.get(subagentThreads)) {
+                if (approvalOwnerCodexTurn(child.parentContext).owner.input.runId === probe.runId)
+                  ids.add(id);
+              }
+              for (const threadId of ids) {
+                const { thread } = yield* client.request("thread/read", {
+                  threadId,
+                  includeTurns: true,
+                });
+                if (
+                  thread.status.type !== "idle" ||
+                  thread.turns.some((turn) => turn.status === "inProgress")
+                )
+                  return false;
+                if (
+                  threadId === nativeThreadId &&
+                  !thread.turns.some(
+                    (turn) => turn.id === probe.nativeTurnId && turn.status !== "inProgress",
+                  )
+                )
+                  return false;
+                if (
+                  thread.turns.some(
+                    (turn) =>
+                      turn.itemsView !== "full" ||
+                      turn.items.some(
+                        (item) => item.type === "commandExecution" && item.status === "inProgress",
+                      ),
+                  )
+                )
+                  return false;
+              }
+              return true;
+            },
+            Effect.orElseSucceed(() => false),
+          ),
           canReuseContextUsage: canReuseCodexContextUsage,
           // Idle release can beat delayed subagent resumes: Codex reports them completed between turns with no resume-expected signal.
           hasPendingBackgroundWork: Effect.gen(function* () {

@@ -69,9 +69,36 @@ export class FoundryWorkerLaunchError extends Schema.TaggedError<FoundryWorkerLa
   },
 ) {}
 
+export const FoundryWorkerManifest = Schema.Struct({
+  generation: NonNegativeInt,
+  runId: RunId,
+  checkpointId: Schema.NullOr(CheckpointId),
+  checkpointRef: Schema.NullOr(Schema.String),
+  outcome: Schema.Literals(["completed", "stopped"]),
+});
+export type FoundryWorkerManifest = typeof FoundryWorkerManifest.Type;
+export const FoundryWorkerLifecycle = Schema.Struct({
+  generation: NonNegativeInt,
+  expiresAt: Schema.Number,
+  state: Schema.Literals(["active", "stopping", "uncertain", "finalizing", "completed", "stopped"]),
+  writerEnded: Schema.Boolean,
+  manifest: Schema.NullOr(FoundryWorkerManifest),
+});
+export const FoundryWorkerRenewInput = Schema.Struct({
+  commandId: CommandId,
+  generation: NonNegativeInt,
+});
+export type FoundryWorkerRenewInput = typeof FoundryWorkerRenewInput.Type;
+export class FoundryWorkerRenewError extends Schema.TaggedError<FoundryWorkerRenewError>()(
+  "FoundryWorkerRenewError",
+  {
+    code: Schema.Literals(["not_enabled", "stale_lease", "renew_failed"]),
+  },
+) {}
 export const FoundryWorkerReadInput = Schema.Struct({ commandId: CommandId });
 export type FoundryWorkerReadInput = typeof FoundryWorkerReadInput.Type;
 export const FoundryWorkerExecution = Schema.Struct({
+  lifecycle: Schema.optional(FoundryWorkerLifecycle),
   receipt: FoundryWorkerLaunchReceipt,
   // Run completion alone does not confirm checkpoint/manifest finalization.
   run: Schema.Struct({

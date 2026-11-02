@@ -1,0 +1,96 @@
+import { assert, it } from "@effect/vitest";
+import { CommandId, ThreadId, ProviderThreadId, RunId, CheckpointId } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
+import * as Sqlite from "../persistence/Sqlite.ts";
+import * as ExecutionStore from "./ExecutionStore.ts";
+
+const commandId = CommandId.make("lease-test");
+const threadId = ThreadId.make("foundry-launch:lease-test");
+const start = { threadId, providerThreadId: ProviderThreadId.make("native-thread"), runOrdinal: 1 };
+const testLayer = ExecutionStore.layer.pipe(Layer.provideMerge(Sqlite.layerMemory));
+
+it.effect(
+  "persists admission, renewal and monotone generations without reviving expired writers",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* ExecutionStore.ExecutionStore;
+      const first = yield* store.reserve(commandId, threadId);
+      assert.deepEqual(yield* store.reserve(commandId, threadId), first);
+      assert.isTrue(yield* store.starting(start));
+      assert.isFalse(yield* store.starting(start));
+      assert.isTrue(yield* store.renew(commandId, first.generation));
+      assert.isFalse(yield* store.renew(commandId, first.generation + 1));
+      yield* TestClock.adjust("60 seconds");
+      const expired = yield* store.sweep;
+      assert.deepInclude(expired[0], { state: "stopping", writerEnded: 0 });
+      assert.isFalse(yield* store.renew(commandId, first.generation));
+      assert.isFalse(yield* store.starting(start));
+      const second = yield* store.reserve(
+        CommandId.make("another"),
+        ThreadId.make("foundry-launch:another"),
+      );
+      assert.isAbove(second.generation, first.generation);
+      assert.isTrue(
+        yield* store.starting({ ...start, threadId: ThreadId.make("ordinary-interactive") }),
+      );
+      assert.isFalse(
+        yield* store.starting({ ...start, threadId: ThreadId.make("foundry-launch:missing") }),
+      );
+    }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("cancel before start fences future invocation and proves the writer never entered", () =>
+  Effect.gen(function* () {
+    const store = yield* ExecutionStore.ExecutionStore;
+    yield* store.reserve(commandId, threadId);
+    yield* store.stop(commandId);
+    assert.deepInclude(yield* store.read(commandId), { state: "finalizing", writerEnded: 1 });
+    assert.isFalse(yield* store.starting(start));
+    assert.deepInclude(yield* store.read(commandId), { state: "finalizing", writerEnded: 1 });
+  }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect(
+  "restart keeps the original generation uncertain and rejects late proofs and manifests",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* ExecutionStore.ExecutionStore;
+      const first = yield* store.reserve(commandId, threadId);
+      assert.isTrue(yield* store.starting(start));
+      yield* Effect.gen(function* () {
+        const recovered = yield* ExecutionStore.ExecutionStore;
+        const row = yield* recovered.reserve(commandId, threadId);
+        assert.deepInclude(row, {
+          generation: first.generation,
+          state: "uncertain",
+          writerEnded: 0,
+        });
+        assert.isFalse(yield* recovered.renew(commandId, first.generation));
+        assert.isFalse(yield* recovered.starting(start));
+        yield* recovered.confirm(commandId, first.generation + 1);
+        assert.equal((yield* recovered.read(commandId))?.writerEnded, 0);
+        const manifest = {
+          generation: first.generation,
+          runId: RunId.make("run"),
+          checkpointId: CheckpointId.make("checkpoint"),
+          checkpointRef: "refs/checkpoints/result",
+          outcome: "completed" as const,
+        };
+        yield* recovered.finish(commandId, first.generation, manifest);
+        assert.isNull((yield* recovered.read(commandId))?.manifest);
+        yield* recovered.confirm(commandId, first.generation);
+        yield* recovered.finish(commandId, first.generation, manifest);
+        assert.isNull((yield* recovered.read(commandId))?.manifest);
+        yield* recovered.finish(commandId, first.generation, { ...manifest, outcome: "stopped" });
+        const finished = yield* recovered.read(commandId);
+        assert.equal(finished?.state, "stopped");
+        yield* recovered.finish(commandId, first.generation + 1, {
+          ...manifest,
+          generation: first.generation + 1,
+        });
+        assert.deepEqual(yield* recovered.read(commandId), finished);
+      }).pipe(Effect.provide(Layer.fresh(ExecutionStore.layer)));
+    }).pipe(Effect.provide(testLayer)),
+);

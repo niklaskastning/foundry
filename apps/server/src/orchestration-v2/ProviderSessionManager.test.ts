@@ -1,3 +1,4 @@
+import * as ExecutionObserver from "../foundry/ExecutionObserver.ts";
 import * as NetAddress from "effect/net/NetAddress";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -3818,4 +3819,77 @@ it.effect("ProviderSessionManagerV2 gives a delegated child its project's device
     });
     assert.isTrue(child?.capabilities?.has("device"));
   }),
+);
+
+it.effect.each([false, true])(
+  "checks the Foundry start fence before invoking the provider: allowed=%s",
+  (allowed) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const invoked = yield* Ref.make(0);
+      yield* Effect.gen(function* () {
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const ids = yield* IdAllocator.IdAllocatorV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("foundry-launch:start-fence");
+        const providerSessionId = ids.derive.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+        });
+        yield* sink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator: ids, threadId, now })],
+        });
+        const runtime = yield* manager.open({
+          threadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const runId = ids.derive.run({ threadId, ordinal: 1 });
+        const exit = yield* runtime
+          .startTurn({
+            appThread: (yield* projections.getThreadProjection(threadId)).thread,
+            threadId,
+            runId,
+            runOrdinal: 1,
+            providerTurnOrdinal: 1,
+            attemptId: ids.derive.runAttempt({ runId, attemptOrdinal: 1 }),
+            rootNodeId: ids.derive.rootNode({ runId }),
+            providerThread: makeProviderThread({
+              idAllocator: ids,
+              threadId,
+              providerSessionId,
+              now,
+              nativeThreadId: "fenced-native",
+            }),
+            message: {
+              createdBy: "system",
+              creationSource: "server",
+              messageId: yield* ids.allocate.message({ threadId, ordinal: 1 }),
+              text: "fixture",
+              attachments: [],
+            },
+            modelSelection,
+            runtimePolicy,
+          })
+          .pipe(Effect.exit);
+        assert.equal(Exit.isSuccess(exit), allowed);
+        assert.equal(yield* Ref.get(invoked), allowed ? 1 : 0);
+      }).pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            idleTimeoutMs: 60000,
+            startTurn: Ref.update(invoked, (n) => n + 1),
+          }).pipe(
+            Layer.provide(
+              Layer.succeed(ExecutionObserver.ExecutionObserver, {
+                starting: () => Effect.succeed(allowed),
+              }),
+            ),
+          ),
+        ),
+      );
+    }),
 );

@@ -1,3 +1,12 @@
+import * as ProviderSessions from "../orchestration-v2/ProviderSessionManager.ts";
+import * as ExecutionStore from "./ExecutionStore.ts";
+import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
+import * as Schedule from "effect/Schedule";
+import {
+  FoundryWorkerRenewError,
+  FoundryWorkerManifest,
+  type FoundryWorkerRenewInput,
+} from "@t3tools/contracts";
 // @effect-diagnostics nodeBuiltinImport:off -- Stable digests isolate worker command keys from ordinary T3 commands.
 import * as NodeCrypto from "node:crypto";
 import {
@@ -27,7 +36,6 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as Result from "effect/Result";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as CommandReceipts from "../orchestration-v2/CommandReceiptStore.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
@@ -36,6 +44,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import { WorkerReadiness } from "./WorkerReadiness.ts";
 
+const decodeManifest = Schema.decodeEffect(Schema.fromJsonString(FoundryWorkerManifest));
 const decodeRoots = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
 const isCancelError = Schema.is(FoundryWorkerCancelError);
 const isFollowError = Schema.is(FoundryWorkerFollowError);
@@ -56,6 +65,9 @@ const failure = (code: FoundryWorkerLaunchError["code"]) => new FoundryWorkerLau
 export class WorkerLaunch extends Context.Service<
   WorkerLaunch,
   {
+    readonly renew: (
+      input: FoundryWorkerRenewInput,
+    ) => Effect.Effect<void, FoundryWorkerRenewError>;
     readonly cancel: (
       input: FoundryWorkerCancelInput,
     ) => Effect.Effect<FoundryWorkerCancellation, FoundryWorkerCancelError>;
@@ -90,6 +102,22 @@ export const layer = Layer.effect(
     const eventsStore = yield* EventStore.EventStoreV2;
     const receipts = yield* CommandReceipts.CommandReceiptStoreV2;
     const readiness = yield* WorkerReadiness;
+    const sessions = yield* ProviderSessions.ProviderSessionManagerV2;
+    const executions = yield* ExecutionStore.ExecutionStore;
+    const checkpoints = yield* CheckpointStore.CheckpointStore;
+    const renew = Effect.fn("WorkerLaunch.renew")(
+      function* (input: FoundryWorkerRenewInput) {
+        if (!enabled) return yield* new FoundryWorkerRenewError({ code: "not_enabled" });
+        if (!(yield* executions.renew(input.commandId, input.generation)))
+          return yield* new FoundryWorkerRenewError({ code: "stale_lease" });
+      },
+      Effect.mapError((error) =>
+        error._tag === "FoundryWorkerRenewError"
+          ? error
+          : new FoundryWorkerRenewError({ code: "renew_failed" }),
+      ),
+    );
+
     const read = Effect.fn("WorkerLaunch.read")(
       function* (input: FoundryWorkerReadInput) {
         if (!enabled) return yield* readFailure("not_enabled");
@@ -121,12 +149,107 @@ export const layer = Layer.effect(
         );
         const event = events.length === 1 ? events[0]?.event : undefined;
         if (event?.type !== "run.created") return yield* readFailure("read_failed");
-        const records = yield* threads.getThreadRecords(receipt.threadId, ["runs"], {
-          runIds: [event.payload.id],
-        });
+        const records = yield* threads.getThreadRecords(
+          receipt.threadId,
+          ["runs", "checkpoints", "checkpointScopes", "providerThreads", "providerTurns"],
+          {
+            runIds: [event.payload.id],
+          },
+        );
         const run = records.runs.find((candidate) => candidate.id === event.payload.id);
         if (!run) return yield* readFailure("read_failed");
+        let row = yield* executions.read(input.commandId);
+        if (
+          row &&
+          row.writerEnded === 0 &&
+          !["queued", "preparing", "starting", "running", "waiting"].includes(run.status)
+        ) {
+          const providerThread = records.providerThreads.find(
+            (candidate) => candidate.id === run.providerThreadId,
+          );
+          const turns = records.providerTurns.filter(
+            (candidate) => candidate.runAttemptId === run.activeAttemptId,
+          );
+          const turn = turns.at(-1);
+          if (
+            run.activeAttemptId &&
+            providerThread?.providerSessionId &&
+            turn?.nativeTurnRef?.nativeId
+          ) {
+            const runtime = yield* sessions.get(providerThread.providerSessionId);
+            if (
+              Option.isSome(runtime) &&
+              runtime.value.confirmWriterEnded &&
+              (yield* runtime.value
+                .confirmWriterEnded({
+                  runId: run.id,
+                  providerThread,
+                  nativeTurnId: turn.nativeTurnRef.nativeId,
+                })
+                .pipe(
+                  Effect.timeoutOption("2 seconds"),
+                  Effect.map((result) => Option.isSome(result) && result.value),
+                ))
+            ) {
+              yield* executions.confirm(input.commandId, row.generation);
+              row = yield* executions.read(input.commandId);
+            }
+          }
+        }
+        if (
+          row?.writerEnded === 1 &&
+          row.manifest === null &&
+          ["completed", "failed", "cancelled", "interrupted", "rolled_back"].includes(run.status)
+        ) {
+          const checkpoint = records.checkpoints.find(
+            (candidate) =>
+              candidate.id === run.checkpointId &&
+              candidate.runId === run.id &&
+              candidate.threadId === receipt.threadId &&
+              candidate.status === "ready",
+          );
+          const scope = records.checkpointScopes.find(
+            (candidate) =>
+              candidate.id === checkpoint?.scopeId &&
+              candidate.threadId === receipt.threadId &&
+              candidate.runId === run.id &&
+              candidate.nodeId === checkpoint?.nodeId,
+          );
+          const ready =
+            checkpoint &&
+            scope &&
+            (yield* checkpoints
+              .hasCheckpointRef({ cwd: scope.cwd, checkpointRef: checkpoint.ref })
+              .pipe(Effect.orElseSucceed(() => false)));
+          const stopped = row.stopRequested === 1 || run.status !== "completed";
+          if (ready || stopped) {
+            yield* executions.finish(input.commandId, row.generation, {
+              generation: row.generation,
+              runId: run.id,
+              checkpointId: ready ? checkpoint.id : null,
+              checkpointRef: ready ? checkpoint.ref : null,
+              outcome: stopped ? "stopped" : "completed",
+            });
+            row = yield* executions.read(input.commandId);
+          }
+        }
+        const lifecycle = row
+          ? {
+              generation: row.generation,
+              expiresAt: row.expiresAt,
+              state: row.state,
+              writerEnded: row.writerEnded === 1,
+              manifest: row.manifest === null ? null : yield* decodeManifest(row.manifest),
+            }
+          : {
+              generation: 0,
+              expiresAt: 0,
+              state: "uncertain" as const,
+              writerEnded: false,
+              manifest: null,
+            };
         return {
+          lifecycle,
           receipt: {
             commandId: input.commandId,
             threadId: receipt.threadId,
@@ -152,25 +275,17 @@ export const layer = Layer.effect(
               afterSequence,
             })
             .pipe(
-              Stream.filterMap((stored) => {
-                const event = stored.event;
-                if (
-                  (event.type !== "run.created" && event.type !== "run.updated") ||
-                  event.payload.id !== execution.run.id
-                )
-                  return Result.failVoid;
-                return Result.succeed({
-                  sequence: stored.sequence,
-                  execution: {
-                    receipt: execution.receipt,
-                    run: {
-                      id: event.payload.id,
-                      status: event.payload.status,
-                      checkpointId: event.payload.checkpointId,
-                    },
-                  },
-                });
-              }),
+              Stream.filter((stored) =>
+                stored.event.type === "run.created" || stored.event.type === "run.updated"
+                  ? stored.event.payload.id === execution.run.id
+                  : stored.event.type === "checkpoint.captured" &&
+                    stored.event.payload.runId === execution.run.id,
+              ),
+              Stream.mapEffect((stored) =>
+                read(input).pipe(
+                  Effect.map((execution) => ({ sequence: stored.sequence, execution })),
+                ),
+              ),
             );
         }),
       ).pipe(
@@ -218,6 +333,7 @@ export const layer = Layer.effect(
         });
         const previous = yield* acceptedCancellation();
         if (Option.isSome(previous)) return previous.value;
+        yield* executions.stop(input.launchCommandId);
         const { thread } = yield* threads.getThreadRecords(execution.receipt.threadId, []);
         const result = yield* threads.interruptThread({
           commandId,
@@ -249,7 +365,37 @@ export const layer = Layer.effect(
         });
       }),
     );
+    if (enabled) {
+      yield* Effect.gen(function* () {
+        const pending = yield* executions.sweep;
+        yield* Effect.forEach(
+          pending,
+          (row) =>
+            Effect.gen(function* () {
+              const execution = yield* read({ commandId: row.commandId });
+              if (row.state !== "stopping" && row.state !== "uncertain") return;
+              const { thread } = yield* threads.getThreadRecords(row.threadId, []);
+              yield* threads
+                .interruptThread({
+                  commandId: CommandId.make(`foundry-lease-stop:${row.generation}`),
+                  projectId: thread.projectId,
+                  threadId: row.threadId,
+                  runId: execution.run.id,
+                })
+                .pipe(Effect.ensuring(executions.uncertain(row.commandId).pipe(Effect.ignore)));
+            }).pipe(Effect.ignore),
+          { discard: true },
+        );
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Foundry lease watchdog failed closed", { cause }),
+        ),
+        Effect.repeat(Schedule.spaced("1 second")),
+        Effect.forkScoped,
+      );
+    }
     return {
+      renew,
       read,
       follow,
       cancel,
@@ -322,6 +468,7 @@ export const layer = Layer.effect(
           const status = yield* readiness.read();
           if (!status.providerReady || status.providerInstanceId !== binding)
             return yield* failure("provider_not_ready");
+          yield* executions.reserve(input.commandId, ids.threadId);
           yield* launches.launch({
             ...ids,
             projectId: input.projectId,

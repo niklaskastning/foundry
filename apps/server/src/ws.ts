@@ -2872,6 +2872,7 @@ export const layerWsRpc = (
                 Effect.fail(new FoundryWorkerCancelError({ code: "cancel_failed" })),
             }),
           ),
+        [WS_METHODS.foundryWorkerRenew]: (input) => workerLaunch.renew(input),
         [WS_METHODS.foundryWorkerFollow]: (input) => workerLaunch.follow(input),
         [WS_METHODS.foundryWorkerRead]: (input) => workerLaunch.read(input),
         [WS_METHODS.foundryWorkerStatus]: () => workerReadiness.read(),

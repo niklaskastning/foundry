@@ -1,3 +1,14 @@
+import * as EventSink from "./EventSink.ts";
+import {
+  EventId,
+  CheckpointId,
+  CheckpointRef,
+  CheckpointScopeId,
+  NodeId,
+  ProviderThreadId,
+} from "@t3tools/contracts";
+import * as ExecutionStore from "../foundry/ExecutionStore.ts";
+import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as EventStore from "./EventStore.ts";
 import * as WorkerLaunch from "../foundry/WorkerLaunch.ts";
 import { WorkerReadiness } from "../foundry/WorkerReadiness.ts";
@@ -271,6 +282,7 @@ function makeHarness(options: HarnessOptions = {}) {
   return {
     layer: Layer.mergeAll(
       layerLaunch,
+      layerOrchestrator,
       layerReceipts,
       layerRegistry,
       layerThreadManagement,
@@ -2395,8 +2407,25 @@ it.effect("replays an accepted send after the project disables the instance", ()
   }).pipe(Effect.provide(Layer.mergeAll(harness.layer, layerFiles)));
 });
 
-function workerLayer(roots = ["/repo"], providerReady = true, enabled = true) {
+function workerLayer(
+  roots = ["/repo"],
+  providerReady = true,
+  enabled = true,
+  checkpointExists = false,
+) {
   return WorkerLaunch.layer.pipe(
+    Layer.provideMerge(ExecutionStore.layer),
+    Layer.provide(
+      Layer.succeed(CheckpointStore.CheckpointStore, {
+        isGitRepository: () => Effect.succeed(true),
+        hasCheckpointRef: () => Effect.succeed(checkpointExists),
+        captureCheckpoint: () => Effect.void,
+        restoreCheckpoint: () => Effect.succeed(false),
+        diffCheckpoints: () => Effect.succeed(""),
+        listAuthoredPaths: () => Effect.succeed(new Set<string>()),
+        deleteCheckpointRefs: () => Effect.void,
+      }),
+    ),
     Layer.provide(EventStore.layer),
     Layer.provide(
       Layer.mergeAll(
@@ -2844,3 +2873,159 @@ it.effect(
     }).pipe(Effect.provide(workerLayer().pipe(Layer.provideMerge(harness.layer))));
   },
 );
+
+it.effect.each(["absent", "missing", "error", "stale", "missing-object", "ready"] as const)(
+  "worker completion waits for writer evidence and a ready checkpoint with Git object: %s",
+  (checkpointState) => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const worker = yield* WorkerLaunch.WorkerLaunch;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const sink = yield* EventSink.EventSinkV2;
+      const store = yield* ExecutionStore.ExecutionStore;
+      const receipt = yield* worker.launch(workerInput);
+      const { runs } = yield* threads.getThreadRecords(receipt.threadId, ["runs"]);
+      const run = runs[0]!;
+      const now = yield* DateTime.now;
+      const scopeId = CheckpointScopeId.make("worker-result-scope");
+      const checkpointId = CheckpointId.make("worker-result-checkpoint");
+      const nodeId = NodeId.make("worker-result-root");
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("worker-done"),
+            type: "run.updated",
+            threadId: receipt.threadId,
+            occurredAt: now,
+            payload: {
+              ...run,
+              status: "completed",
+              completedAt: now,
+              checkpointId: checkpointState === "absent" ? null : checkpointId,
+            },
+          },
+        ],
+      });
+      let result = yield* worker.read({ commandId: workerInput.commandId });
+      assert.isFalse(result.lifecycle?.writerEnded);
+      assert.isNull(result.lifecycle?.manifest);
+      const row = yield* store.read(workerInput.commandId);
+      yield* store.confirm(workerInput.commandId, row!.generation);
+      result = yield* worker.read({ commandId: workerInput.commandId });
+      assert.equal(result.lifecycle?.state, "finalizing");
+      assert.isNull(result.lifecycle?.manifest);
+      if (checkpointState !== "absent") {
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make("worker-result-scope"),
+              type: "checkpoint-scope.created",
+              threadId: receipt.threadId,
+              occurredAt: now,
+              payload: {
+                id: scopeId,
+                threadId: receipt.threadId,
+                runId: run.id,
+                nodeId,
+                parentScopeId: null,
+                providerThreadId: null,
+                kind: "root_run",
+                ordinalWithinParent: 0,
+                advancesAppRunCount: true,
+                cwd: "/repo",
+                createdAt: now,
+              },
+            },
+            {
+              id: EventId.make("worker-result-captured"),
+              type: "checkpoint.captured",
+              threadId: receipt.threadId,
+              occurredAt: now,
+              payload: {
+                id: checkpointId,
+                threadId: receipt.threadId,
+                scopeId,
+                runId: run.id,
+                nodeId,
+                parentCheckpointId: null,
+                ordinalWithinScope: 1,
+                appRunOrdinal: 1,
+                ref: CheckpointRef.make("refs/checkpoints/worker-result"),
+                status: checkpointState === "missing-object" ? "ready" : checkpointState,
+                files: [],
+                capturedAt: now,
+              },
+            },
+          ],
+        });
+      }
+      result = yield* worker.read({ commandId: workerInput.commandId });
+      if (checkpointState === "ready") {
+        assert.equal(result.lifecycle?.state, "completed");
+        assert.deepInclude(result.lifecycle?.manifest, {
+          checkpointId,
+          runId: run.id,
+          outcome: "completed",
+        });
+        assert.deepEqual(yield* worker.read({ commandId: workerInput.commandId }), result);
+      } else {
+        assert.equal(result.lifecycle?.state, "finalizing");
+        assert.isNull(result.lifecycle?.manifest);
+      }
+    }).pipe(
+      Effect.provide(
+        workerLayer(["/repo"], true, true, checkpointState !== "missing-object").pipe(
+          Layer.provideMerge(harness.layer),
+        ),
+      ),
+    );
+  },
+);
+
+it.effect("running worker cancel remains uncertain until confirmed writing end", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const worker = yield* WorkerLaunch.WorkerLaunch;
+    const store = yield* ExecutionStore.ExecutionStore;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const sink = yield* EventSink.EventSinkV2;
+    const receipt = yield* worker.launch(workerInput);
+    const execution = yield* worker.read({ commandId: workerInput.commandId });
+    const row = yield* store.read(workerInput.commandId);
+    assert.isTrue(
+      yield* store.starting({
+        threadId: receipt.threadId,
+        providerThreadId: ProviderThreadId.make("running-worker"),
+        runOrdinal: 1,
+      }),
+    );
+    yield* worker.cancel({
+      commandId: CommandId.make("stop-running-worker"),
+      launchCommandId: workerInput.commandId,
+    });
+    let stopped = yield* worker.read({ commandId: workerInput.commandId });
+    assert.isFalse(stopped.lifecycle?.writerEnded);
+    assert.isNull(stopped.lifecycle?.manifest);
+    yield* store.confirm(workerInput.commandId, row!.generation);
+    const { runs } = yield* threads.getThreadRecords(receipt.threadId, ["runs"]);
+    const now = yield* DateTime.now;
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make("worker-stop-confirmed"),
+          type: "run.updated",
+          threadId: receipt.threadId,
+          occurredAt: now,
+          payload: {
+            ...runs.find((run) => run.id === execution.run.id)!,
+            status: "interrupted",
+            completedAt: now,
+          },
+        },
+      ],
+    });
+    stopped = yield* worker.read({ commandId: workerInput.commandId });
+    assert.equal(stopped.lifecycle?.state, "stopped");
+    assert.deepInclude(stopped.lifecycle?.manifest, { outcome: "stopped", checkpointId: null });
+  }).pipe(Effect.provide(workerLayer().pipe(Layer.provideMerge(harness.layer))));
+});

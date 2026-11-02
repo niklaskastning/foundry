@@ -638,3 +638,34 @@ Die Liste erfordert `orchestration:read`, Verwaltung zusätzlich `access:write`.
 Vor einem Instanzwechsel führt `Manage instance sign-in` den lokalen Disconnect samt Registry-Aufräumen aus. Andere Clients behalten ihre eigene Auswahl, verlieren aber bei serverseitigem Entzug gemäß P11 den Zugriff. Die sichtbare Liste wird ausdrücklich aktualisiert; der Connection-Supervisor bleibt die einzige Reconnect-Steuerung.
 
 Der Cookie-Adapter setzt weiterhin die Main-Origin voraus: Web und das remote geladene P04-Desktopfenster verwenden dieselbe Oberfläche. Eine normale lokale Desktop-Shell erhält dadurch noch keinen Auth-Adapter für fremde Origins. Die reale Zwei-Client-/Windows-Abnahme und UI-Aufnahmen stehen weiterhin aus; siehe [Issue #13](https://github.com/niklaskastning/foundry/issues/13).
+
+### Worker-Ausführungs-Lease und Ergebnis (P16)
+
+Worker mit `foundryWorkerLifecycle` erfassen vor dem Provider-Start eine lokale,
+dauerhafte Ausführung in ihrer eigenen T3-SQLite-Datenbank. Nach `workerLaunch`
+liefert `workerRead` unter `lifecycle` Generation, Ablauf, Writer-Nachweis und
+Ergebnismanifest. Der Auftraggeber erneuert die 60-Sekunden-Lease mit
+`foundry.workerRenew` und genau dieser Generation rechtzeitig vor Ablauf;
+Read/Follow und eine offene Gateway-Verbindung erneuern sie nicht. Erneuerung
+benötigt wie Start/Cancel `orchestration:operate`. Eine abgelaufene Lease lässt
+sich nicht wiederbeleben. Die Device-Kanal-Generation ist davon unabhängig.
+
+Der lokale Watchdog fordert bei Ablauf den Abbruch ausschließlich des ursprünglichen
+Runs an. Nach Neustart bleiben nicht bestätigte Ausführungen `uncertain`; ein Retry
+findet denselben Auftrag und eröffnet keinen Ersatz-Writer. Auch ein bestätigter
+Cancel-Request oder ein terminaler T3-Run ist kein Writer-Nachweis. Vor dem Eintritt
+in den Provider verhindert eine dauerhafte Startsperre die Ausführung; danach prüft
+der Codex-Adapter den nativen Zustand samt bekannten Unteragenten und vollständigen
+Befehlsdaten. Fehlende/unerreichbare Nachweise halten die Ausführung gesperrt.
+Ein untätiger Provider-Server darf weiterleben. Andere Adapter liefern derzeit
+keinen positiven Abschlussnachweis für diesen Worker-Pfad.
+
+Ein erfolgreiches Manifest verlangt zusätzlich den passenden `ready`-Checkpoint
+und dessen vorhandene Git-Referenz. Ein fertiger Agent mit offenem oder ungültigem
+Checkpoint bleibt `finalizing`; normale T3-Finalisierung/Capture bleiben zuständig.
+Ein bestätigter Abbruch kann ein `stopped`-Manifest ohne Checkpoint liefern; dieses
+ist kein erfolgreiches Arbeitsergebnis. Bereits gespeicherte Manifeste sind
+unveränderlich. Bei älteren Aufträgen ohne Ausführungsdatensatz wird kein Nachweis
+nachträglich erfunden. Workspace-Reservierung und Wiederbelegung über verschiedene
+Aufträge hinweg benötigen P17; dieser Mechanismus ersetzt sie nicht. Reale G3-Abnahme
+und Aktivierung bleiben gesonderte Schritte in Issue #13.
