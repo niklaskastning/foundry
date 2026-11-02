@@ -139,6 +139,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   projectOrganization: Schema.optionalKey(Schema.Boolean),
   /** Server answers projects.listIgnoredFiles. */
   ignoredFileListing: Schema.optionalKey(Schema.Boolean),
+  foundryWorkerCancel: Schema.optionalKey(Schema.Boolean),
   foundryWorkerFollow: Schema.optionalKey(Schema.Boolean),
   foundryWorkerRead: Schema.optionalKey(Schema.Boolean),
   foundryWorkerLaunch: Schema.optionalKey(Schema.Boolean),

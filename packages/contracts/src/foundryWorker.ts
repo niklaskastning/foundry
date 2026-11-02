@@ -100,3 +100,39 @@ export class FoundryWorkerFollowError extends Schema.TaggedError<FoundryWorkerFo
   "FoundryWorkerFollowError",
   { code: Schema.Literals(["not_enabled", "not_found", "invalid_cursor", "follow_failed"]) },
 ) {}
+
+export const FoundryWorkerCancelInput = Schema.Struct({
+  commandId: CommandId,
+  launchCommandId: CommandId,
+});
+export type FoundryWorkerCancelInput = typeof FoundryWorkerCancelInput.Type;
+const workerCancellationFields = {
+  commandId: CommandId,
+  launch: FoundryWorkerLaunchReceipt,
+  runId: RunId,
+};
+export const FoundryWorkerCancellation = Schema.Union([
+  Schema.Struct({
+    ...workerCancellationFields,
+    status: Schema.Literal("requested"),
+    sequence: NonNegativeInt,
+  }),
+  Schema.Struct({
+    ...workerCancellationFields,
+    status: Schema.Literal("already_terminal"),
+    runStatus: Schema.Literals(["completed", "failed", "cancelled", "interrupted", "rolled_back"]),
+  }),
+]);
+export type FoundryWorkerCancellation = typeof FoundryWorkerCancellation.Type;
+export class FoundryWorkerCancelError extends Schema.TaggedError<FoundryWorkerCancelError>()(
+  "FoundryWorkerCancelError",
+  {
+    code: Schema.Literals([
+      "not_enabled",
+      "not_found",
+      "command_conflict",
+      "not_interruptible",
+      "cancel_failed",
+    ]),
+  },
+) {}
