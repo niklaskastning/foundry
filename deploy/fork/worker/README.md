@@ -144,6 +144,58 @@ und Modus `0600` zurücklegen, den Installer erneut ausführen und erst danach
 `daemon-reload` und `start foundry-host.target` ausführen. Das ist eine
 Konfigurationsrücknahme, kein Daten-Restore und kein Codex-Logout.
 
+### Begrenzter echter G3-Auftrag
+
+Nach bestätigter Bereitschaft kann der Administrator dem lokalen Prüfer einen
+30 Minuten gültigen Worker-Zugang mit `orchestration:read` und
+`orchestration:operate` geben. Keine allgemeinen sudo-/Docker-Rechte:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py acceptance-access /srv/foundry-worker/workspaces/g2/g3-acceptance-<konkrete-fixture>
+```
+
+Das prüft erneut die eigene saubere Git-Fixture ohne Remotes und fehlende offene
+Arbeit. Anfrage und Command-ID werden zusammen mit der lokalen T3-Session in
+`~niklas/.cache/foundry-g3-acceptance/worker-access.json` gespeichert, Modus `0600`.
+Die Datei enthält ein Secret; nicht anzeigen oder ins Issue kopieren. Die Scopes
+gelten für den Worker, die zusätzliche Begrenzung auf genau die Fixture und Anfrage
+setzt der geprüfte Runner durch. Ein vorhandener Auftrag wird nicht überschrieben.
+
+Ohne Modellaufruf Projekt und Verbindung vorbereiten:
+
+```sh
+node deploy/fork/worker/g3-acceptance.mjs /home/niklas/.cache/foundry-g3-acceptance/worker-access.json prepare
+```
+
+Nur nach ausdrücklicher Freigabe des einen Luna-Turns:
+
+```sh
+node deploy/fork/worker/g3-acceptance.mjs /home/niklas/.cache/foundry-g3-acceptance/worker-access.json run-one-luna-turn
+```
+
+Der Runner speichert vor dem Start eine exklusive Startsperre. Er verwirft die
+committete Launch-Antwort an seiner RPC-Eingangsgrenze und schließt die Verbindung;
+Wiederverbindung und Retry verwenden exakt die gespeicherte Anfrage. Read, aktive
+Lease-Erneuerung und zwei sequenzierte Follow-Streams prüfen den ursprünglichen Run,
+einer davon ab bestätigtem `afterSequence`. Ein fertiges Manifest muss Writer-Ende,
+Generation, Run und Checkpoint enthalten und bei erneutem Read/Launch-Retry gleich
+bleiben. Nach 120 Sekunden wird Cancel angefordert; bei Fehlern ebenfalls. Ein
+Cancel-Ack beweist keinen Stop. Kein Ersatzstart; eine vorhandene Startsperre bleibt
+auch nach Fehler erhalten. Diese Zeitgrenze ist kein messbares Euro-Limit für eine
+Subscription und kann einen unklaren Writer nicht als beendet erklären.
+
+Die `.result.json` neben der Zugangsdatei enthält nur Prüfergebnisse. Der zusätzliche
+Administratorlauf bestätigt gegen die echte SQLite genau einen Thread/Run/Attempt,
+Manifest-/Checkpoint-Bindung, Git-Objekt und Dateiinhalt unter Dienstkonto und
+widerruft die kurzlebige Prüfersession:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py verify-acceptance
+```
+
+Diese Teilprobe schließt G3 nicht allein: Cancel während Ausführung, Lease-Verlust,
+Restart, Writer-Konflikte und Wiederverbindung der Clients bleiben eigene Nachweise.
+
 ## Idempotenter Worker-Launch
 
 Worker mit Capability `foundryWorkerLaunch` nehmen `foundry.workerLaunch` über die vorhandene authentifizierte RPC-Verbindung an. Der gemeinsame Client-Command `serverEnvironment.launchFoundryWorker` benötigt `orchestration:operate` auf dem Ziel. Der Aufrufer speichert **vor dem Senden** seine Command-ID und wiederholt nach verlorener Antwort exakt dieselbe Anfrage: `commandId`, `projectId`, `title`, `model`, `prompt`. Das Receipt enthält Thread-ID, Annahmezeit und Sequenz des dauerhaft akzeptierten ersten Messages. Es bestätigt die Annahme, weder erfolgreichen Provider-Start noch Task-Abschluss.

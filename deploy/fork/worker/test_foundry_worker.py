@@ -202,6 +202,10 @@ class WorkerInstallationTest(unittest.TestCase):
                 connection.execute("UPDATE reservations SET state='released'")
             binding.quiet_database(database)
 
+    def test_acceptance_transport_retries_and_rejects_wrong_generation(self):
+        result = subprocess.run(["node", "deploy/fork/worker/test-g3-transport.mjs"], cwd=Path(__file__).resolve().parents[3], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_systemd_accepts_units_with_shared_budget_and_explicit_runtime_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             installation = worker.Installation(directory)

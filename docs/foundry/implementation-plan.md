@@ -41,8 +41,16 @@ Der [Bindungshelfer](../../deploy/fork/worker/README.md#headless-codex-für-den-
 ist vorbereitet; sein Settings-/Status-RPC samt kurzlebiger Session und Widerruf
 wurde gegen einen eigenen echten Worker-Prozess mit isoliertem Home geprüft.
 SQLite-Fixtures prüfen die Sperre bei aktiven/unaufgelösten Ausführungen und
-Writer-Reservierungen. Kein bezahlter Turn; G3 bleibt bis zum realen Launch-,
-Stop- und Ergebnisnachweis offen.
+Writer-Reservierungen. Reale Bindung am 2. November bestätigt: `codexG3`, `providerReady=true`,
+Version `0.156.1`, `activeRuns=0`, Luna im angebotenen Modellkatalog.
+Recovery `/var/lib/foundry-deploy/worker-codex-g3-t3eq97qt`, eigene Git-Fixture
+`/srv/foundry-worker/workspaces/g2/g3-acceptance-5e75qro4`.
+Der Maintainer hat einen minimalen Luna-Turn (eine Datei, keine externen Aktionen
+oder Unteragenten, Cancel-Anforderung spätestens nach 120 Sekunden) ausdrücklich
+freigegeben. Der Prüfer ist vorbereitet; tatsächlicher Start erst nach dem
+kurzlebigen lokalen Worker-Zugang. Kostenlose Transport-Fixtures prüfen verworfene
+Antwort/identischen Retry, Follow-Cursor und Abweisung falscher Generation.
+Noch kein bezahlter Turn; G3 bleibt bis zum realen Launch-, Stop- und Ergebnisnachweis offen.
 
 G1/G2 sind damit für die Entwicklungsfortsetzung ausreichend praktisch geprüft, aber nicht vollständig abgenommen. Die Restabnahmen bleiben sichtbar; keine Freigabe für Betrieb ohne Access, neue Infrastruktur oder bezahlte Turns ableiten. Nach G3 darf die isoliert vorgezogene P18a-Grundlage integriert weitergenutzt werden. Änderungen und neue Nachweise in ihren jeweiligen PRs belegen und die betroffenen Häkchen hier aktualisieren; Issue #13 dient als Nachweisarchiv.
 
