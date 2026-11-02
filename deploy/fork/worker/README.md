@@ -66,7 +66,35 @@ Entfernung: zuerst `systemctl disable --now foundry-host.target`, Slice stoppen,
 python3 -m unittest discover -s deploy/fork/worker -p 'test_*.py' -v
 ```
 
-Dies ersetzt **nicht** Start/Neustart, Ressourcenbegrenzung und Erreichbarkeitsprüfung unter dem echten Dienstkonto. Offene G1/G2/P13-Nachweise stehen in [Issue #13](https://github.com/niklaskastning/foundry/issues/13).
+Dies ersetzt **nicht** Start/Neustart, Ressourcenbegrenzung und Erreichbarkeitsprüfung unter dem echten Dienstkonto. Offene G1/G2/P13-Nachweise stehen im [Umsetzungsplan](../../../docs/foundry/implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen); Issue #13 bleibt Nachweisarchiv.
+
+## G3-Bestandsaufnahme vor der Provider-Einrichtung
+
+Aus dem geprüften Checkout kann der Administrator ausschließlich lesend prüfen:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/worker/inspect-g3.py
+sudo /usr/bin/python3 -I deploy/fork/updater/activate-access.py status
+```
+
+Der Worker-Prüfer gleicht Installer-Manifest und Units ab, prüft private Datenwurzeln,
+Release-Metadaten, tatsächliche Prozess-UID/cgroup und aktive gemeinsame Kernel-Limits.
+Er startet nur `--version` des installierten T3-Einstiegs als `foundry-worker` mit dessen
+Home und Arbeitsverzeichnis. Er liest keine Credentials, startet keinen Provider und
+ändert oder stoppt keine Dienste. Abweichungen liefern einen Fehler ohne private
+Unterprozessausgaben. `--root /offline/fixture` prüft nur Dateien, ohne Prozesse oder
+Netzwerk. Das ist keine Lastprüfung und kein positiver Provider-/G3-Nachweis;
+`providerReady` bleibt unbekannt. Den gebundenen Provider anschließend über
+`foundry.workerStatus` frisch prüfen, etwa mit **Check selected worker**.
+
+Für eine noch leere Bindung zuerst die folgende dedizierte Anmeldung abschließen;
+keine vorhandenen Replay-Projekte oder persönlichen Checkouts für den G3-Auftrag
+verwenden. Danach innerhalb einer bereits erlaubten Wurzel ein eigenes neues
+Git-Repository mit initialem Commit anlegen. Command-ID und unveränderte Anfrage
+vor dem ersten Worker-Launch privat speichern. Die konkrete Modell-/Turn-Freigabe
+folgt erst nach bestätigter Provider-Bereitschaft; Anmeldung und `--version` sind
+keine kostenpflichtigen Turns. Aktuelle Restabnahmen besitzt der
+[Umsetzungsplan](../../../docs/foundry/implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen).
 
 ## Codex im Worker einrichten und prüfen
 

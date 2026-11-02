@@ -26,6 +26,11 @@ def release(installation, settings):
     (directory / "foundry-build.json").write_text(json.dumps({"repository": "niklaskastning/foundry", "revision": settings["revision"], "dirty": False}))
 
 
+inspection_spec = importlib.util.spec_from_file_location("foundry_g3_inspection", Path(__file__).with_name("inspect-g3.py"))
+inspection = importlib.util.module_from_spec(inspection_spec)
+inspection_spec.loader.exec_module(inspection)
+
+
 class WorkerInstallationTest(unittest.TestCase):
     def test_install_upgrade_remove_preserve_identity_credentials_and_other_service(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -121,6 +126,44 @@ class WorkerInstallationTest(unittest.TestCase):
             run.return_value.stdout = "inactive\n"
             installation.stopped()
             self.assertEqual(run.call_args.args[0][:2], ["systemctl", "show"])
+
+    def test_g3_inventory_is_offline_read_only_and_never_claims_provider_readiness(self):
+        with tempfile.TemporaryDirectory() as directory:
+            installation = worker.Installation(directory)
+            settings = config()
+            release(installation, settings)
+            node = installation.path(settings["node"])
+            node.parent.mkdir(parents=True)
+            node.write_text("fixture")
+            for path in (node, installation.path(worker.release(settings) + "/dist/bin.mjs")):
+                path.chmod(0o644)
+            for path in (installation.path(worker.release(settings)), installation.path(worker.release(settings) + "/dist")):
+                path.chmod(0o755)
+            installation.install(settings)
+            secret = installation.path(worker.STATE + "/device-key.json")
+            secret.write_text("private-must-not-appear")
+            before = {p: p.read_bytes() for p in Path(directory).rglob("*") if p.is_file()}
+            with patch.object(inspection, "command", side_effect=AssertionError("No command offline")), patch.object(inspection.urllib.request, "build_opener", side_effect=AssertionError("No HTTP offline")):
+                report = inspection.inventory(directory)
+            self.assertIsNone(report["providerReady"])
+            self.assertIsNone(report["providerInstanceId"])
+            self.assertFalse(report["g3Accepted"])
+            self.assertFalse(report["runtimeVerifiedAsWorker"])
+            self.assertTrue(report["offlineOnly"])
+            self.assertNotIn("private-must-not-appear", json.dumps(report))
+            self.assertEqual(before, {p: p.read_bytes() for p in Path(directory).rglob("*") if p.is_file()})
+            settings["providerInstanceId"] = "codex-worker"
+            installation.install(settings)
+            self.assertIsNone(inspection.inventory(directory)["providerReady"])
+            entry = installation.path(worker.release(settings) + "/dist/bin.mjs")
+            entry.chmod(0o666)
+            with self.assertRaises(RuntimeError):
+                inspection.inventory(directory)
+            entry.chmod(0o644)
+            unit = installation.path(worker.UNITS + "/foundry-host.service")
+            unit.write_text("external drift")
+            with self.assertRaises(RuntimeError):
+                inspection.inventory(directory)
 
     def test_systemd_accepts_units_with_shared_budget_and_explicit_runtime_paths(self):
         with tempfile.TemporaryDirectory() as directory:

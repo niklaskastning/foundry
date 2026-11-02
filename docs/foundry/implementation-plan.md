@@ -19,6 +19,18 @@ Die Häkchen bezeichnen den jeweils genannten Umfang. Offene Teilnachweise werde
 - [ ] **Produktlücken:** P03N/G1-Nativ, automatischer Katalog-Erstabruf und Einstieg ohne getrenntes T3-Pairing noch nicht umgesetzt. Windows-Downloads im Foundry-Einstieg sind durch dessen `will-download`-Sperre blockiert und bleiben gesonderte begrenzte Produktarbeit, kein behaupteter Upstream-Fehler. Native Mobile-Abnahme bleibt verschoben.
 - [ ] **Nächste Entwicklung nach G3:** P18b → P47 → P38a → P38b → P19 → P20 → P21 → P49 → P22 → P23 → P24 → G4; danach die unten beschriebene Reihenfolge. Zentrale Threads/Anhänge sind noch nicht implementiert und müssen vor erstem Workflow-Dispatch geräteunabhängig gesichert werden.
 
+G3-Vorbereitung am 2. November erneut geprüft: Worktree und Remote-main `d457f63f`,
+beide Worker-Dienste aktiv unter `foundry-worker`, erlaubte Wurzel
+`/srv/foundry-worker/workspaces/g2`, unveränderte öffentliche Main-/Worker-Identitäten.
+Tatsächliche Dienstprozesse gehören zur gemeinsamen `foundry-host.slice`; Kernelwerte
+`cpu.max=100000 100000`, `memory.max=2147483648`, `pids.max=256`.
+Bindung weiterhin leer, `foundryManagedWorkspaces=false`; das vorgesehene
+`/opt/foundry-worker/providers/bin` fehlt. Keine Aussage über Provider-Readiness aus
+Launch-Capabilities ableiten. Der [lesende Betreiberprüfer](../../deploy/fork/worker/README.md#g3-bestandsaufnahme-vor-der-provider-einrichtung)
+ist vorbereitet und offline geprüft; seine reale Dienstkonto-Prüfung und der private
+Main-Status benötigen interaktives sudo. Kein Turn, Dienstwechsel oder erneuter
+Login-Test ausgeführt. G3 bleibt vor dedizierter Anmeldung und realem Nachweis offen.
+
 G1/G2 sind damit für die Entwicklungsfortsetzung ausreichend praktisch geprüft, aber nicht vollständig abgenommen. Die Restabnahmen bleiben sichtbar; keine Freigabe für Betrieb ohne Access, neue Infrastruktur oder bezahlte Turns ableiten. Nach G3 darf die isoliert vorgezogene P18a-Grundlage integriert weitergenutzt werden. Änderungen und neue Nachweise in ihren jeweiligen PRs belegen und die betroffenen Häkchen hier aktualisieren; Issue #13 dient als Nachweisarchiv.
 
 ## Regeln für ein Arbeitspaket
