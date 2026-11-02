@@ -1,3 +1,12 @@
+import { AuthSessionState } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+
+const decodeAuthState = Schema.decodeUnknownSync(Schema.toCodecJson(AuthSessionState));
+
+export function readInstanceSessionCookieName(value: unknown): string {
+  return decodeAuthState(value).auth.sessionCookieName;
+}
+
 export function isInstanceRequest(origin: string, address: string): boolean {
   try {
     const url = new URL(address);

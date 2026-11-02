@@ -7,15 +7,14 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import {
-  AuthSessionState,
-  FoundryDescriptor,
-  FoundryInstanceId,
-  FoundrySession,
-} from "@t3tools/contracts";
+import { FoundryDescriptor, FoundryInstanceId, FoundrySession } from "@t3tools/contracts";
 import { AccessOAuthError, createAccessOAuth, type AccessOAuthGrant } from "./AccessOAuth.ts";
 import { accessProbeFailure } from "./AccessProbeDiagnostics.ts";
-import { authorizeInstanceRequest, isInstanceRequest } from "./AccessTransportPolicy.ts";
+import {
+  authorizeInstanceRequest,
+  isInstanceRequest,
+  readInstanceSessionCookieName,
+} from "./AccessTransportPolicy.ts";
 
 const StoredGrant = Schema.Struct({
   origin: Schema.String,
@@ -31,7 +30,6 @@ const decodeBinding = Schema.decodeUnknownSync(FoundryOnboarding.InstanceBinding
 const decodeInstanceId = Schema.decodeSync(FoundryInstanceId);
 const decodeStoredGrant = Schema.decodeUnknownSync(StoredGrant);
 const decodeDescriptor = Schema.decodeUnknownSync(FoundryDescriptor);
-const decodeAuthState = Schema.decodeUnknownSync(AuthSessionState);
 const decodeSession = Schema.decodeUnknownSync(FoundrySession);
 
 export async function runAccessProbe(
@@ -223,10 +221,10 @@ export async function runAccessProbe(
     stage = "Read T3 authentication state";
     const authValue = await response("/api/auth/session");
     stage = "Decode T3 authentication state";
-    const auth = decodeAuthState(authValue).auth;
-    if (!/^t3_session_[a-z0-9_]+$/.test(auth.sessionCookieName))
+    const cookieName = readInstanceSessionCookieName(authValue);
+    if (!/^t3_session_[a-z0-9_]+$/.test(cookieName))
       throw new AccessOAuthError("The instance did not advertise a supported T3 session cookie.");
-    sessionCookieName = auth.sessionCookieName;
+    sessionCookieName = cookieName;
     return descriptor;
   }
 
