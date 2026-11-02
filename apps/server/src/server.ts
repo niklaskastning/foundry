@@ -1,3 +1,5 @@
+import * as WorkspaceGate from "./foundry/workspaces/WorkspaceGate.ts";
+import * as WorkspaceReconciler from "./foundry/workspaces/WorkspaceReconciler.ts";
 import * as ExecutionStore from "./foundry/ExecutionStore.ts";
 import * as CommandReceiptStore from "./orchestration-v2/CommandReceiptStore.ts";
 import * as WorkerLaunch from "./foundry/WorkerLaunch.ts";
@@ -528,7 +530,10 @@ const layerScheduledTaskWebhookOrigin = Layer.effect(
   }),
 );
 
+const layerWorkspaceGate = WorkspaceGate.layerConfigured.pipe(Layer.provide(GitVcsDriver.layer));
+
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
+  Layer.provide(layerWorkspaceGate),
   Layer.provide(ExecutionStore.layerObserver.pipe(Layer.provide(ExecutionStore.layer))),
   Layer.provide(layerScheduledTaskWebhookOrigin),
   Layer.provide(ProviderEventIngestor.layerAnalytics),
@@ -593,7 +598,12 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
+  WorkspaceReconciler.layerWatchdog.pipe(
+    Layer.provide(layerWorkspaceGate),
+    Layer.provide(ExecutionStore.layer),
+  ),
   WorkerLaunch.layer.pipe(
+    Layer.provide(layerWorkspaceGate),
     Layer.provide(ExecutionStore.layer),
     Layer.provide(layerCheckpointStore),
     Layer.provide(EventStoreV2.layerFromOrchestrationEventStore),
