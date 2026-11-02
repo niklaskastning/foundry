@@ -6,6 +6,10 @@ This is the isolated base deployment, not the planned instance gateway, Automati
 
 ## Experimental device enrollment (P06)
 
+Für einen realen Device-/Gateway-Versuch zuerst den [begrenzten G2-Aktivierungsablauf](g2-activation.md)
+lesen: Machine-Access, Worker-Isolation und der noch erforderliche Main-Konfigurationsübergang
+sind eigene Voraussetzungen. Die folgenden Einzelbefehle erteilen keine Aktivierungsfreigabe.
+
 Der separate Linux-Host-Dienst hat einen [eigenen Installer und Betriebsweg](../../deploy/fork/worker/README.md). Er wird nicht durch Main-Deployment oder Device-Enrollment installiert; seine reale Dienstkonto-/G2-Abnahme bleibt offen.
 
 This opt-in backend registers a device key and its first local environment. It does

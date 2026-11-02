@@ -15,6 +15,8 @@ import {
   FoundryGatewayGrant,
   FoundryGatewaySocketTicket,
   FoundryDeviceCatalog,
+  FoundryDevice,
+  FoundryEnrollment,
   FoundryDeviceGrant,
   ORCHESTRATION_PROTOCOL_VERSION,
   WsRpcGroup,
@@ -50,6 +52,7 @@ import * as DeviceConnector from "../src/foundry/DeviceConnector.ts";
 import * as DeviceHttpAdapter from "../src/foundry/DeviceHttpAdapter.ts";
 import * as GatewayGrants from "../src/foundry/GatewayGrants.ts";
 import * as GatewayHttp from "../src/foundry/gatewayHttp.ts";
+import * as DeviceHttp from "../src/foundry/deviceHttp.ts";
 import * as DeviceChannelHttp from "../src/foundry/deviceChannelHttp.ts";
 import * as StreamSocket from "../src/foundry/StreamSocket.ts";
 import * as StreamBridge from "../src/foundry/StreamBridge.ts";
@@ -233,9 +236,12 @@ export async function verifyGateway(options: {
       Effect.gen(function* () {
         const main = yield* Layer.build(mainLayer);
         const server = yield* Layer.build(
-          HttpRouter.serve(Layer.merge(GatewayHttp.layer, DeviceChannelHttp.layer), {
-            disableListenLog: true,
-          }).pipe(
+          HttpRouter.serve(
+            Layer.mergeAll(GatewayHttp.layer, DeviceChannelHttp.layer, DeviceHttp.layer),
+            {
+              disableListenLog: true,
+            },
+          ).pipe(
             Layer.provide(Layer.succeedContext(main)),
             Layer.provideMerge(NodeHttpServer.layerTest),
           ),
@@ -258,41 +264,6 @@ export async function verifyGateway(options: {
           workerServices,
           ServerEnvironment.ServerEnvironmentIdentity,
         ).getEnvironmentId;
-        const key = generateDeviceKey();
-        const registry = Context.get(main, DeviceRegistry.DeviceRegistry);
-        const invitation = yield* registry.approve({ environmentId, publicKey: key.publicKey });
-        const device = yield* registry.enroll(signEnrollment(invitation, key.privateKey));
-        const adapter = yield* DeviceHttpAdapter.make({
-          device,
-          origin: accessConfig.origin,
-          localOrigin,
-          localEnvironmentId: Effect.succeed(environmentId),
-        }).pipe(Effect.provide(workerServices));
-        const connected = yield* Deferred.make<void>();
-        const connector = yield* DeviceConnector.runOnce(
-          yield* StreamSocket.connect(`${socketOrigin}/api/foundry/devices/channel`),
-          {
-            device,
-            origin: accessConfig.origin,
-            privateKey: Redacted.make(key.privateKey),
-            localEnvironmentId: Effect.succeed(environmentId),
-            connected: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
-            projects: adapter.projects,
-            stream: Effect.fn("verification.workerStream")(
-              function* (grant, generation, ticket) {
-                const local = yield* adapter.openStream(grant, generation);
-                const remote = yield* StreamSocket.connect(
-                  `${socketOrigin}/api/foundry/devices/stream`,
-                  { "x-foundry-stream-ticket": ticket },
-                );
-                return yield* StreamBridge.bridge(local, remote, Effect.void);
-              },
-              Effect.scoped,
-              Effect.orDie,
-            ),
-          },
-        ).pipe(Effect.forkScoped);
-        yield* Deferred.await(connected);
         const clients: Array<Record<string, string>> = [];
         for (const subject of ["client-a", "client-b"]) {
           const foundry = yield* Context.get(main, FoundrySessions.FoundrySessions).login(
@@ -324,13 +295,15 @@ export async function verifyGateway(options: {
           index: number,
           operation: string,
           input: unknown,
+          status = 200,
+          headers = clients[index]!,
         ) {
           const response = yield* Effect.promise(
             () =>
               new Promise<{ status: number; body: string }>((resolve, reject) => {
                 const request = NodeHttp.request(
-                  `${mainOrigin}/api/foundry/gateway/${operation}`,
-                  { method: "POST", headers: clients[index]! },
+                  `${mainOrigin}${operation.startsWith("/") ? operation : `/api/foundry/gateway/${operation}`}`,
+                  { method: "POST", headers },
                   (response) => {
                     const chunks: Buffer[] = [];
                     response.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -350,9 +323,79 @@ export async function verifyGateway(options: {
                 request.end(JSON.stringify(input));
               }),
           );
-          NodeAssert.equal(response.status, 200, operation);
+          NodeAssert.equal(response.status, status, operation);
+          if (status === 204) return undefined;
           return yield* decodeJson(response.body);
         });
+        const key = generateDeviceKey();
+        const invitation = yield* post(0, "grants/approveDevice", {
+          environmentId,
+          publicKey: key.publicKey,
+        }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(FoundryEnrollment)));
+        const enrollment = signEnrollment(invitation, key.privateKey);
+        const enrollmentHeaders = { "content-type": "application/json" };
+        yield* post(
+          0,
+          "/api/foundry/devices/enroll",
+          { ...enrollment, signature: Buffer.alloc(64).toString("base64url") },
+          403,
+          enrollmentHeaders,
+        );
+        const device = yield* post(
+          0,
+          "/api/foundry/devices/enroll",
+          enrollment,
+          200,
+          enrollmentHeaders,
+        ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(FoundryDevice)));
+        NodeAssert.deepEqual(
+          yield* post(0, "/api/foundry/devices/enroll", enrollment, 200, enrollmentHeaders),
+          device,
+          "lost enrollment response preserves the registration",
+        );
+        for (const index of [0, 1]) {
+          const catalog = yield* post(index, "grants/catalog", {}).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(FoundryDeviceCatalog)),
+          );
+          const registered = catalog.devices.find((entry) => entry.deviceId === device.deviceId);
+          NodeAssert.equal(
+            registered?.online,
+            false,
+            "registered device is visible before connecting",
+          );
+          NodeAssert.equal(registered?.rpcReady, false);
+        }
+        const adapter = yield* DeviceHttpAdapter.make({
+          device,
+          origin: accessConfig.origin,
+          localOrigin,
+          localEnvironmentId: Effect.succeed(environmentId),
+        }).pipe(Effect.provide(workerServices));
+        const connected = yield* Deferred.make<void>();
+        const connector = yield* DeviceConnector.runOnce(
+          yield* StreamSocket.connect(`${socketOrigin}/api/foundry/devices/channel`),
+          {
+            device,
+            origin: accessConfig.origin,
+            privateKey: Redacted.make(key.privateKey),
+            localEnvironmentId: Effect.succeed(environmentId),
+            connected: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
+            projects: adapter.projects,
+            stream: Effect.fn("verification.workerStream")(
+              function* (grant, generation, ticket) {
+                const local = yield* adapter.openStream(grant, generation);
+                const remote = yield* StreamSocket.connect(
+                  `${socketOrigin}/api/foundry/devices/stream`,
+                  { "x-foundry-stream-ticket": ticket },
+                );
+                return yield* StreamBridge.bridge(local, remote, Effect.void);
+              },
+              Effect.scoped,
+              Effect.orDie,
+            ),
+          },
+        ).pipe(Effect.forkScoped);
+        yield* Deferred.await(connected);
         const target = { deviceId: device.deviceId, environmentId };
         const scopes = [
           "orchestration:read",
@@ -361,6 +404,22 @@ export async function verifyGateway(options: {
           "terminal:read",
           "terminal:operate",
         ];
+        for (const missing of ["cookie", "authorization", "x-foundry-csrf"]) {
+          const headers = { ...clients[0]! };
+          delete headers[missing];
+          yield* post(0, "grants/catalog", {}, 403, headers);
+        }
+        yield* post(0, "grants/catalog", {}, 403, {
+          ...clients[0]!,
+          origin: "https://other.example.test",
+        });
+        yield* post(
+          0,
+          "grants/create",
+          { ...target, environmentId: "wrong-environment", scopes },
+          403,
+        );
+        yield* post(0, "grants/create", { ...target, scopes, url: localOrigin }, 400);
         const sockets = [];
         for (const index of [0, 1]) {
           const catalog = yield* post(index, "grants/catalog", {}).pipe(
@@ -371,6 +430,7 @@ export async function verifyGateway(options: {
             Effect.flatMap(Schema.decodeUnknownEffect(FoundryGatewayGrant)),
           );
           const lookup = { ...target, grantId: grant.grantId };
+          yield* post(1 - index, "projects", lookup, 403);
           const projects = yield* post(index, "projects", lookup);
           NodeAssert.ok(
             JSON.stringify(projects).includes(projectId),
@@ -402,6 +462,26 @@ export async function verifyGateway(options: {
           NodeCrypto.createHash("sha256").update(data).digest("hex");
         const first = sockets[0]!.rpc;
         const second = sockets[1]!.rpc;
+        const fileContents = "G2 worker file through Main\n";
+        yield* Effect.promise(() =>
+          NodeFSP.writeFile(NodePath.join(project, "g2.txt"), fileContents),
+        );
+        for (const rpc of [first, second]) {
+          const file = yield* rpc["projects.readFile"]({ cwd: project, relativePath: "g2.txt" });
+          NodeAssert.equal(file.contents, fileContents);
+          NodeAssert.equal(file.truncated, false);
+          const diff = yield* rpc["review.getDiffFileContents"]({
+            cwd: project,
+            sourceKind: "working-tree",
+            changeType: "new",
+            baseRef: null,
+            headRef: null,
+            oldPath: "g2.txt",
+            newPath: "g2.txt",
+          });
+          NodeAssert.equal(diff.oldContents, "");
+          NodeAssert.equal(diff.newContents, fileContents);
+        }
         const threadId = ThreadId.make(NodeCrypto.randomUUID());
         const launch = {
           commandId: CommandId.make(NodeCrypto.randomUUID()),
@@ -561,6 +641,49 @@ export async function verifyGateway(options: {
           fetch(`${localOrigin}/api/projects`, { headers: directHeaders }),
         );
         NodeAssert.equal(direct.status, 200, "independent direct T3 credential survives");
+        for (const index of [0, 1]) {
+          const catalog = yield* post(index, "grants/catalog", {}).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(FoundryDeviceCatalog)),
+          );
+          NodeAssert.equal(
+            catalog.devices.find((entry) => entry.deviceId === device.deviceId)?.clientAccess
+              .enabled,
+            false,
+          );
+          yield* post(index, "grants/create", { ...target, scopes }, 403);
+        }
+        const disabled = yield* post(0, "grants/readAccess", { deviceId: device.deviceId }).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(FoundryDeviceGrant))),
+        );
+        yield* post(0, "grants/updateAccess", {
+          deviceId: device.deviceId,
+          kind: "clientAccess",
+          enabled: true,
+          generation: disabled.find((grant) => grant.kind === "clientAccess")!.generation,
+        });
+        for (const index of [0, 1]) {
+          yield* post(index, "projects", sockets[index]!.lookup, 403);
+          const renewed = yield* post(index, "grants/create", { ...target, scopes }).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(FoundryGatewayGrant)),
+          );
+          NodeAssert.ok(
+            JSON.stringify(
+              yield* post(index, "projects", { ...target, grantId: renewed.grantId }),
+            ).includes(projectId),
+          );
+        }
+        yield* post(0, "grants/revokeDevice", { deviceId: device.deviceId }, 204);
+        yield* post(0, "/api/foundry/devices/enroll", enrollment, 403, enrollmentHeaders);
+        for (const index of [0, 1]) {
+          const catalog = yield* post(index, "grants/catalog", {}).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(FoundryDeviceCatalog)),
+          );
+          NodeAssert.equal(
+            catalog.devices.find((entry) => entry.deviceId === device.deviceId)?.revoked,
+            true,
+          );
+          yield* post(index, "grants/create", { ...target, scopes }, 403);
+        }
         yield* Fiber.interrupt(connector);
       }).pipe(Effect.scoped),
     );
