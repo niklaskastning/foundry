@@ -14,9 +14,10 @@ import { FoundryConnectionTarget, BearerConnectionTarget } from "./model.ts";
 import * as FoundryGateway from "./foundryGateway.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import { layerRemoteHttpClient } from "../rpc/http.ts";
+import { fetchEnvironmentSessionState } from "../state/session.ts";
 import { connectionRoutes, mergeLearnedRoutes } from "./routes.ts";
 
-const target = new FoundryConnectionTarget({
+const baseTarget = new FoundryConnectionTarget({
   environmentId: EnvironmentId.make("worker"),
   label: "Worker",
   binding: {
@@ -43,9 +44,14 @@ it.effect.each([
   "capability",
 ] as const)("prepares a pinned gateway connection and rejects %s", (mode) =>
   Effect.gen(function* () {
+    const target = new FoundryConnectionTarget({
+      ...baseTarget,
+      scopes: mode === "ok" ? [...baseTarget.scopes, "orchestration:operate"] : baseTarget.scopes,
+    });
     const now = yield* Clock.currentTimeMillis;
     let grants = 0;
     let tickets = 0;
+    let inspectFailure: "revoked" | "scope" | "target" | "expired" | undefined;
     const http = layerRemoteHttpClient((async (input, init) => {
       const path = new URL(String(input)).pathname;
       expect(new URL(String(input)).origin).toBe(target.binding.origin);
@@ -92,8 +98,10 @@ it.effect.each([
           accessToken: "fixture-token",
         });
       }
-      if (path.endsWith("/create")) {
-        grants++;
+      if (path.endsWith("/create") || path.endsWith("/inspect")) {
+        if (path.endsWith("/inspect") && inspectFailure === "revoked")
+          return new Response(null, { status: 403 });
+        if (path.endsWith("/create")) grants++;
         return Response.json({
           protocolVersion: "2",
           grantKind: "clientAccess",
@@ -102,14 +110,16 @@ it.effect.each([
           instanceId: target.binding.instanceId,
           origin: target.binding.origin,
           deviceId: target.deviceId,
-          environmentId: mode === "target" ? "other" : target.environmentId,
-          scopes: mode === "scope" ? ["orchestration:read"] : target.scopes,
+          environmentId:
+            mode === "target" || inspectFailure === "target" ? "other" : target.environmentId,
+          scopes:
+            mode === "scope" || inspectFailure === "scope" ? ["orchestration:read"] : target.scopes,
           operatorId: "operator",
           clientSessionId: AuthSessionId.make("client"),
           subject: "client",
           generation: 1,
           channelGeneration: 1,
-          expiresAt: now + 60000,
+          expiresAt: inspectFailure === "expired" ? now : now + 60000,
         });
       }
       tickets++;
@@ -164,6 +174,34 @@ it.effect.each([
         accessToken: "ticket-2",
       });
     expect(second.httpBaseUrl).toContain(`/api/foundry/gateway/devices/${target.deviceId}/`);
+    const sessionInput = {
+      prepared: second,
+      signer: Option.none(),
+      auth: {
+        policy: "remote-reachable" as const,
+        sessionCookieName: "t3_session",
+        bootstrapMethods: ["one-time-token" as const],
+        sessionMethods: ["dpop-access-token" as const],
+        serverUpdateScope: "environment:maintain" as const,
+      },
+    };
+    const permissions = yield* fetchEnvironmentSessionState(sessionInput).pipe(
+      Effect.provide(http),
+    );
+    expect(permissions.authenticated).toBe(true);
+    expect(permissions.permissions).toEqual(target.scopes);
+    expect(permissions.permissions?.includes("orchestration:operate")).toBe(mode === "ok");
+    expect(permissions.auth).toEqual(sessionInput.auth);
+    for (const failure of ["revoked", "scope", "target", "expired"] as const) {
+      inspectFailure = failure;
+      expect(
+        (yield* fetchEnvironmentSessionState(sessionInput).pipe(
+          Effect.provide(http),
+          Effect.result,
+        ))._tag,
+      ).toBe("Failure");
+    }
+    expect(grants).toBe(2);
     const entry = {
       target,
       profile: Option.none(),

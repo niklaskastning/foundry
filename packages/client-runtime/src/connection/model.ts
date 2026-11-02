@@ -1,5 +1,12 @@
-import { EnvironmentId, FoundryDeviceId, FoundryGatewayGrantRequest } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  FoundryDeviceId,
+  FoundryGatewayGrantRequest,
+  type AuthSessionState,
+  type ServerAuthDescriptor,
+} from "@t3tools/contracts";
 import { RelayEnvironmentEndpointFailure } from "@t3tools/contracts/relay";
+import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { InstanceBinding } from "./foundry.ts";
@@ -167,6 +174,9 @@ export interface PreparedConnection {
   readonly socketUrl: string;
   readonly httpAuthorization: PreparedHttpAuthorization | null;
   readonly target: ConnectionTarget;
+  readonly readSessionState?: (
+    auth: ServerAuthDescriptor,
+  ) => Effect.Effect<AuthSessionState, ConnectionAttemptError>;
 }
 
 export type SupervisorConnectionPhase =
