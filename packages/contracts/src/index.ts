@@ -76,3 +76,4 @@ export * from "./foundry.ts";
 export * from "./foundryDevices.ts";
 export * from "./foundryDeviceChannel.ts";
 export * from "./foundryGateway.ts";
+export * from "./automation/factory.ts";
