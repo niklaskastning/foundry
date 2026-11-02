@@ -2,6 +2,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -29,6 +30,11 @@ def release(installation, settings):
 inspection_spec = importlib.util.spec_from_file_location("foundry_g3_inspection", Path(__file__).with_name("inspect-g3.py"))
 inspection = importlib.util.module_from_spec(inspection_spec)
 inspection_spec.loader.exec_module(inspection)
+
+
+binding_spec = importlib.util.spec_from_file_location("foundry_g3_binding", Path(__file__).with_name("bind-codex-g3.py"))
+binding = importlib.util.module_from_spec(binding_spec)
+binding_spec.loader.exec_module(binding)
 
 
 class WorkerInstallationTest(unittest.TestCase):
@@ -164,6 +170,37 @@ class WorkerInstallationTest(unittest.TestCase):
             unit.write_text("external drift")
             with self.assertRaises(RuntimeError):
                 inspection.inventory(directory)
+
+    def test_codex_binding_refuses_active_unresolved_and_reserved_writers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "statev2.sqlite"
+            with self.assertRaises(RuntimeError):
+                binding.quiet_database(database)
+            with sqlite3.connect(database) as connection:
+                connection.executescript("CREATE TABLE orchestration_v2_projection_runs(status TEXT); CREATE TABLE foundry_executions(manifest TEXT);")
+                connection.execute("INSERT INTO orchestration_v2_projection_runs VALUES ('completed')")
+            binding.quiet_database(database)
+            for status in ("queued", "preparing", "running", "finalizing", "unknown"):
+                with sqlite3.connect(database) as connection:
+                    connection.execute("UPDATE orchestration_v2_projection_runs SET status=?", (status,))
+                with self.subTest(status=status), self.assertRaises(RuntimeError):
+                    binding.quiet_database(database)
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE orchestration_v2_projection_runs SET status='completed'")
+                connection.execute("INSERT INTO foundry_executions VALUES (NULL)")
+            with self.assertRaises(RuntimeError):
+                binding.quiet_database(database)
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE foundry_executions SET manifest='confirmed'")
+            journal = database.with_name("foundry-workspaces.sqlite")
+            with sqlite3.connect(journal) as connection:
+                connection.execute("CREATE TABLE reservations(state TEXT)")
+                connection.execute("INSERT INTO reservations VALUES ('ready')")
+            with self.assertRaises(RuntimeError):
+                binding.quiet_database(database)
+            with sqlite3.connect(journal) as connection:
+                connection.execute("UPDATE reservations SET state='released'")
+            binding.quiet_database(database)
 
     def test_systemd_accepts_units_with_shared_budget_and_explicit_runtime_paths(self):
         with tempfile.TemporaryDirectory() as directory:

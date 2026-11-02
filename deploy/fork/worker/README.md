@@ -106,6 +106,44 @@ Nach Auswahl des Devices in Connections prüft **Check selected worker** über d
 
 Die Kapazität ist vorerst ein Snapshot: kein unvollendeter T3-Run auf diesem Worker, unabhängig von Archivierung und Provider. Abfragefehler ergeben unbekannt. Sie reserviert keine Ressourcen und ersetzt weder Launch-Berechtigungen noch die spätere Workspace-Zuteilung. Hintergrundprozesse außerhalb eines Runs sind damit nicht inventarisiert. Live-Status nach Verbindungsverlust erneut abfragen. Die integrierte Prüfung unter dem tatsächlichen Dienstkonto und ein autorisierter echter Codex-Turn bleiben eigene Abnahmen; Replay-/Service-Fixtures sind kein Codex-Login-Nachweis.
 
+### Headless-Codex für den begrenzten G3-Versuch binden
+
+Nach abgeschlossener Gerätecode-Anmeldung mit der separat unter
+`/var/lib/foundry-worker/home/tools/codex-cli` installierten CLI `0.156.1` kann der
+Administrator aus dem geprüften Checkout ausführen:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py bind
+# Nach abgeschlossenem Worker-Start:
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py status
+```
+
+`bind` prüft Version und Login unter dem Dienstkonto, verweigert offene Runs,
+Ausführungen und Writer-Reservierungen und legt eine private Konfigurationskopie
+unter dem ausgegebenen `/var/lib/foundry-deploy/worker-codex-g3-*` an. Es registriert
+`codexG3` über den bestehenden Settings-Service als vorhandene CLI mit eigenem Home;
+ein Wrapper verwendet den absoluten Node-Pfad unabhängig vom Dienst-PATH. Anschließend
+stoppt es ausschließlich Worker-Target und gemeinsame Slice, prüft erneut offene
+Arbeit und bindet die Instanz über den vorhandenen Installer vor dem Neustart.
+Eine neue private Git-Fixture innerhalb der erlaubten Wurzel wird ausgegeben.
+Kein Projekt-/Thread-Start, kein Modellaufruf und kein Main-Update erfolgen.
+
+`status` fragt `foundry.workerStatus` über einen frischen authentifizierten RPC ab.
+Dafür erzeugte lokale T3-Sessions sind kurzlebig und werden nach jedem RPC widerrufen;
+Tokens werden weder ausgegeben noch in Argumenten übergeben. `providerReady=true`
+beweist die aktuelle Provider-Prüfung, noch keinen erfolgreichen G3-Auftrag.
+Nach der Bindung gilt die gemeinsame Writer-Grenze auch für manuelle Starts;
+Replay auf diesen verwalteten Checkouts ohne positiven Stop-Nachweis nicht weiterbenutzen.
+
+Bei fehlgeschlagener Installation/Start bleibt der Worker gestoppt. Vor Rücknahme
+offene Arbeit abgleichen; Reservierungsjournal und Ausführungsdaten nie löschen.
+Die ausgegebene Recovery enthält `installation.json` und die vorherige `settings.json`.
+Der Administrator kann bei gestopptem Target/Slice deren `config` als private
+Installer-Konfiguration verwenden, die Settings mit Eigentümer `foundry-worker`
+und Modus `0600` zurücklegen, den Installer erneut ausführen und erst danach
+`daemon-reload` und `start foundry-host.target` ausführen. Das ist eine
+Konfigurationsrücknahme, kein Daten-Restore und kein Codex-Logout.
+
 ## Idempotenter Worker-Launch
 
 Worker mit Capability `foundryWorkerLaunch` nehmen `foundry.workerLaunch` über die vorhandene authentifizierte RPC-Verbindung an. Der gemeinsame Client-Command `serverEnvironment.launchFoundryWorker` benötigt `orchestration:operate` auf dem Ziel. Der Aufrufer speichert **vor dem Senden** seine Command-ID und wiederholt nach verlorener Antwort exakt dieselbe Anfrage: `commandId`, `projectId`, `title`, `model`, `prompt`. Das Receipt enthält Thread-ID, Annahmezeit und Sequenz des dauerhaft akzeptierten ersten Messages. Es bestätigt die Annahme, weder erfolgreichen Provider-Start noch Task-Abschluss.

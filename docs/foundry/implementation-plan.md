@@ -34,7 +34,15 @@ Der separate Main-Status bestätigt Source `8ab7001b8`, das bestehende Image
 `sha256:e0a36d209e78db06c3d5bdede7f71a11e4ff6a515862604e113a69c7c7e4304a`,
 Schema 5, Gateway/Readiness/Betreiberbindung/Konfigurationsabgleich und Migrator NOLOGIN.
 Lastdurchsetzung bleibt ungeprüft. Kein Turn, Dienstwechsel oder erneuter
-Login-Test ausgeführt. G3 bleibt vor dedizierter Anmeldung und realem Nachweis offen.
+Login-Test ausgeführt. Anschließend hat der Maintainer Codex `0.156.1` separat im
+Worker-Home installiert und die Gerätecode-Anmeldung als abgeschlossen bestätigt.
+Die frische T3-Provider-Readiness und Bindung sind damit noch nicht geprüft.
+Der [Bindungshelfer](../../deploy/fork/worker/README.md#headless-codex-für-den-begrenzten-g3-versuch-binden)
+ist vorbereitet; sein Settings-/Status-RPC samt kurzlebiger Session und Widerruf
+wurde gegen einen eigenen echten Worker-Prozess mit isoliertem Home geprüft.
+SQLite-Fixtures prüfen die Sperre bei aktiven/unaufgelösten Ausführungen und
+Writer-Reservierungen. Kein bezahlter Turn; G3 bleibt bis zum realen Launch-,
+Stop- und Ergebnisnachweis offen.
 
 G1/G2 sind damit für die Entwicklungsfortsetzung ausreichend praktisch geprüft, aber nicht vollständig abgenommen. Die Restabnahmen bleiben sichtbar; keine Freigabe für Betrieb ohne Access, neue Infrastruktur oder bezahlte Turns ableiten. Nach G3 darf die isoliert vorgezogene P18a-Grundlage integriert weitergenutzt werden. Änderungen und neue Nachweise in ihren jeweiligen PRs belegen und die betroffenen Häkchen hier aktualisieren; Issue #13 dient als Nachweisarchiv.
 
