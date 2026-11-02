@@ -666,9 +666,27 @@ Checkpoint bleibt `finalizing`; normale T3-Finalisierung/Capture bleiben zustän
 Ein bestätigter Abbruch kann ein `stopped`-Manifest ohne Checkpoint liefern; dieses
 ist kein erfolgreiches Arbeitsergebnis. Bereits gespeicherte Manifeste sind
 unveränderlich. Bei älteren Aufträgen ohne Ausführungsdatensatz wird kein Nachweis
-nachträglich erfunden. Workspace-Reservierung und Wiederbelegung über verschiedene
-Aufträge hinweg benötigen P17; dieser Mechanismus ersetzt sie nicht. Reale G3-Abnahme
-und Aktivierung bleiben gesonderte Schritte in Issue #13.
+nachträglich erfunden.
+
+Auf aktivierten Workern schützt `foundry-workspaces.sqlite` im Worker-State die
+verwalteten Checkout-Pfade. Worker-Launch reserviert vor Thread-Anlage und bindet
+Command, Thread und Ausführungs-Generation dauerhaft. Manuelle Turns in denselben
+Wurzeln reservieren vor Setup-Skripten und Provider-Eintritt denselben Writer-Platz.
+Ein konkurrierender Start wird abgewiesen; ein Neustart beseitigt die Sperre nicht.
+Die Freigabe verlangt das generationgebundene P16-Manifest beziehungsweise bei
+manuellen Turns einen terminalen Run mit positivem nativem Writer-Nachweis. Fehlt
+bei einem Adapter dieser Nachweis, bleibt sein Checkout reserviert. Unklare
+abgebrochene Vorbereitungen bleiben ebenfalls gesperrt; Journaldateien nicht zur
+Freigabe löschen. Das schützt verwaltete Agentenstarts, keine beliebigen Host-Prozesse
+oder manuell ausgeführten Terminalbefehle.
+
+Worker mit Capability `foundryManagedWorkspaces` unterstützen die Reservierungsbindung.
+`foundry.workerLaunch` akzeptiert dort optional `workspaceMode: "worktree"` für einen
+eigenen verwalteten Worktree. Dafür muss eine erlaubte Wurzel das Quellrepository
+enthalten; Worktrees werden nicht innerhalb ihres Quell-Checkouts erzeugt. Ohne
+Option bleibt der Checkout-Modus erhalten. Beide Modi benutzen dasselbe dauerhafte
+Journal pro Worker. Reale G3-Abnahme und Aktivierung bleiben gesonderte Schritte
+in Issue #13.
 
 ## Inaktive Automation-Persistenz (P18a)
 

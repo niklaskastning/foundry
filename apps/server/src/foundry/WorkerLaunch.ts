@@ -1,3 +1,4 @@
+import { WorkspaceGate } from "./workspaces/WorkspaceGate.ts";
 import * as ProviderSessions from "../orchestration-v2/ProviderSessionManager.ts";
 import * as ExecutionStore from "./ExecutionStore.ts";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
@@ -57,7 +58,7 @@ export function workerLaunchIds(input: FoundryWorkerLaunchInput, binding: string
   return {
     commandId: CommandId.make(`foundry-launch:${key}`),
     threadId: ThreadId.make(
-      `foundry-launch:${digest(JSON.stringify([1, key, binding, input.projectId, input.title, input.model, input.prompt]))}`,
+      `foundry-launch:${digest(JSON.stringify([1, key, binding, input.projectId, input.title, input.model, input.prompt, ...(input.workspaceMode === "worktree" ? ["worktree"] : [])]))}`,
     ),
   };
 }
@@ -102,6 +103,7 @@ export const layer = Layer.effect(
     const eventsStore = yield* EventStore.EventStoreV2;
     const receipts = yield* CommandReceipts.CommandReceiptStoreV2;
     const readiness = yield* WorkerReadiness;
+    const workspaceGate = yield* WorkspaceGate;
     const sessions = yield* ProviderSessions.ProviderSessionManagerV2;
     const executions = yield* ExecutionStore.ExecutionStore;
     const checkpoints = yield* CheckpointStore.CheckpointStore;
@@ -468,7 +470,14 @@ export const layer = Layer.effect(
           const status = yield* readiness.read();
           if (!status.providerReady || status.providerInstanceId !== binding)
             return yield* failure("provider_not_ready");
-          yield* executions.reserve(input.commandId, ids.threadId);
+          const execution = yield* executions.reserve(input.commandId, ids.threadId);
+          const reservation = yield* workspaceGate.reserve({
+            commandId: input.commandId,
+            threadId: ids.threadId,
+            generation: execution.generation,
+            repositoryPath: workspace,
+            mode: input.workspaceMode ?? "checkout",
+          });
           yield* launches.launch({
             ...ids,
             projectId: input.projectId,
@@ -476,7 +485,14 @@ export const layer = Layer.effect(
             modelSelection: { instanceId: ProviderInstanceId.make(binding), model: input.model },
             runtimeMode: "approval-required",
             interactionMode: "default",
-            workspaceStrategy: { type: "root" },
+            workspaceStrategy:
+              reservation?.mode === "worktree"
+                ? {
+                    type: "existing_worktree",
+                    worktreePath: reservation.workspacePath,
+                    ...(reservation.branch ? { branch: reservation.branch } : {}),
+                  }
+                : { type: "root" },
             initialMessage: { text: input.prompt, attachments: [] },
             createdBy: "system",
             creationSource: "server",

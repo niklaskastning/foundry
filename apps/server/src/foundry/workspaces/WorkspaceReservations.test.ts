@@ -1,3 +1,12 @@
+import type { ProviderAdapterV2SessionRuntime } from "@t3tools/provider-core/server/ProviderAdapter";
+import * as Reconciler from "./WorkspaceReconciler.ts";
+import * as Executions from "../ExecutionStore.ts";
+import * as Sqlite from "../../persistence/Sqlite.ts";
+import * as Threads from "../../orchestration-v2/ThreadManagementService.ts";
+import * as Sessions from "../../orchestration-v2/ProviderSessionManager.ts";
+import { CommandId, ThreadId, RunId } from "@t3tools/contracts";
+import { WorkspaceGate } from "./WorkspaceGate.ts";
+import * as Gate from "./WorkspaceGate.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { FoundryWorkspaceError, type FoundryWorkspaceRequest } from "@t3tools/contracts";
@@ -250,5 +259,274 @@ it.live("enforces writer exclusion across independent journal connections", () =
     );
     assert.strictEqual(results.filter(Result.isSuccess).length, 1);
     assert.strictEqual(results.find(Result.isFailure)!.failure.code, "writer_busy");
+  }).pipe(Effect.provide(infrastructure), Effect.scoped),
+);
+
+it.live("binds provider admission to a durable reservation and never reopens an ended writer", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture();
+    const journal = ReservationStore.layer(`${f.temp}/bound.sqlite`);
+    const gateLayer = Gate.layer([f.root]).pipe(
+      Layer.provide(
+        WorkspaceReservations.layer([f.root]).pipe(
+          Layer.provide(WriterStopVerifier.layerBound.pipe(Layer.provide(journal))),
+          Layer.provide(journal),
+        ),
+      ),
+      Layer.provideMerge(journal),
+    );
+    const worker = {
+      commandId: "execution-one",
+      threadId: "foundry-launch:one",
+      generation: 7,
+      repositoryPath: f.repositoryPath,
+      mode: "checkout" as const,
+    };
+    yield* Effect.gen(function* () {
+      const gate = yield* WorkspaceGate;
+      const store = yield* ReservationStore.ReservationStore;
+      const reserved = yield* gate.reserve(worker);
+      assert.equal(reserved?.workspacePath, f.repositoryPath);
+      assert.deepEqual(yield* gate.reserve(worker), reserved);
+      assert.isFalse(
+        yield* gate.starting({ threadId: "manual", runId: "manual-1", cwd: f.repositoryPath }),
+      );
+      assert.isFalse(
+        yield* gate.starting({ threadId: worker.threadId, runId: "run-one", cwd: f.root }),
+      );
+      assert.isTrue(
+        yield* gate.starting({
+          threadId: worker.threadId,
+          runId: "run-one",
+          cwd: f.repositoryPath,
+        }),
+      );
+      assert.isFalse(
+        yield* gate.starting({
+          threadId: worker.threadId,
+          runId: "run-one",
+          cwd: f.repositoryPath,
+        }),
+      );
+      assert.equal((yield* store.bindings)[0]?.generation, 7);
+      assert.equal((yield* store.bindings)[0]?.runId, "run-one");
+    }).pipe(Effect.provide(gateLayer), Effect.scoped);
+    yield* Effect.gen(function* () {
+      const gate = yield* WorkspaceGate;
+      assert.isFalse(
+        yield* gate.starting({ threadId: "manual", runId: "manual-2", cwd: f.repositoryPath }),
+      );
+      const blocked = yield* gate
+        .reserve({
+          ...worker,
+          commandId: "execution-two",
+          threadId: "foundry-launch:two",
+          generation: 8,
+        })
+        .pipe(Effect.flip);
+      assert.equal(blocked.code, "writer_busy");
+      const binding = (yield* gate.bindings)[0]!;
+      yield* gate.confirm(binding.requestId);
+      assert.isFalse(
+        yield* gate.starting({
+          threadId: worker.threadId,
+          runId: "late-run",
+          cwd: f.repositoryPath,
+        }),
+      );
+      assert.isTrue(
+        yield* gate.starting({ threadId: "manual", runId: "manual-3", cwd: f.repositoryPath }),
+      );
+      assert.isFalse(
+        yield* gate.starting({
+          threadId: "another-manual",
+          runId: "manual-4",
+          cwd: f.repositoryPath,
+        }),
+      );
+      assert.isTrue(yield* f.fs.exists(`${f.repositoryPath}/user.txt`));
+    }).pipe(Effect.provide(gateLayer), Effect.scoped);
+  }).pipe(Effect.provide(infrastructure), Effect.scoped),
+);
+
+it.live(
+  "releases only the matching finished execution and retains reservations across lease loss",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const journal = ReservationStore.layer(`${f.temp}/reconcile.sqlite`);
+      const gateLayer = Gate.layer([f.root]).pipe(
+        Layer.provide(
+          WorkspaceReservations.layer([f.root]).pipe(
+            Layer.provide(WriterStopVerifier.layerBound.pipe(Layer.provide(journal))),
+            Layer.provide(journal),
+          ),
+        ),
+        Layer.provide(journal),
+      );
+      const runtime = Reconciler.layer.pipe(
+        Layer.provideMerge(gateLayer),
+        Layer.provideMerge(Executions.layer.pipe(Layer.provideMerge(Sqlite.layerMemory))),
+        Layer.provide(Layer.mock(Threads.ThreadManagementService)({})),
+        Layer.provide(Layer.mock(Sessions.ProviderSessionManagerV2)({})),
+      );
+      yield* Effect.gen(function* () {
+        const gate = yield* WorkspaceGate;
+        const executions = yield* Executions.ExecutionStore;
+        const reconciler = yield* Reconciler.WorkspaceReconciler;
+        const commandId = CommandId.make("bound-worker");
+        const threadId = ThreadId.make("foundry-launch:bound-worker");
+        const row = yield* executions.reserve(commandId, threadId);
+        yield* gate.reserve({
+          commandId,
+          threadId,
+          generation: row.generation,
+          repositoryPath: f.repositoryPath,
+          mode: "checkout",
+        });
+        yield* executions.uncertain(commandId);
+        yield* reconciler.reconcile;
+        assert.lengthOf(yield* gate.bindings, 1);
+        assert.isFalse(
+          yield* gate.starting({
+            threadId: "manual",
+            runId: "manual-conflict",
+            cwd: f.repositoryPath,
+          }),
+        );
+        yield* executions.stop(commandId);
+        yield* reconciler.reconcile;
+        assert.lengthOf(yield* gate.bindings, 1);
+        yield* executions.finish(commandId, row.generation + 1, {
+          generation: row.generation + 1,
+          runId: RunId.make("bound-run"),
+          outcome: "stopped",
+          checkpointId: null,
+          checkpointRef: null,
+        });
+        yield* reconciler.reconcile;
+        assert.lengthOf(yield* gate.bindings, 1);
+        yield* executions.finish(commandId, row.generation, {
+          generation: row.generation,
+          runId: RunId.make("bound-run"),
+          outcome: "stopped",
+          checkpointId: null,
+          checkpointRef: null,
+        });
+        yield* reconciler.reconcile;
+        assert.lengthOf(yield* gate.bindings, 0);
+        assert.isFalse(yield* gate.starting({ threadId, runId: "late", cwd: f.repositoryPath }));
+        assert.isTrue(
+          yield* gate.starting({ threadId: "manual", runId: "manual-next", cwd: f.repositoryPath }),
+        );
+        yield* reconciler.reconcile;
+        assert.lengthOf(yield* gate.bindings, 1);
+      }).pipe(Effect.provide(runtime), Effect.scoped);
+    }).pipe(Effect.provide(infrastructure), Effect.scoped),
+);
+
+it.live("keeps manual writers reserved until their terminal run has positive native evidence", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture();
+    const journal = ReservationStore.layer(`${f.temp}/manual-proof.sqlite`);
+    const gateLayer = Gate.layer([f.root]).pipe(
+      Layer.provide(
+        WorkspaceReservations.layer([f.root]).pipe(
+          Layer.provide(WriterStopVerifier.layerBound.pipe(Layer.provide(journal))),
+          Layer.provide(journal),
+        ),
+      ),
+      Layer.provide(journal),
+    );
+    let nativeEnded = false;
+    let runStatus = "running";
+    let attemptStatus = "running";
+    const records = () => ({
+      attempts: [{ id: "attempt", status: attemptStatus, providerThreadId: "provider-thread" }],
+      runs: [
+        {
+          id: "manual-run",
+          status: runStatus,
+          activeAttemptId: "attempt",
+          providerThreadId: "provider-thread",
+        },
+      ],
+      providerThreads: [{ id: "provider-thread", providerSessionId: "session" }],
+      providerTurns: [{ runAttemptId: "attempt", nativeTurnRef: { nativeId: "native-turn" } }],
+    });
+    const threads = Layer.mock(Threads.ThreadManagementService)({
+      getThreadRecords: (() =>
+        Effect.succeed(
+          records(),
+        )) as Threads.ThreadManagementService["Service"]["getThreadRecords"],
+    });
+    const sessions = Layer.mock(Sessions.ProviderSessionManagerV2)({
+      get: () =>
+        Effect.succeedSome({
+          confirmWriterEnded: () => Effect.succeed(nativeEnded),
+        } as unknown as ProviderAdapterV2SessionRuntime),
+    });
+    const runtime = Reconciler.layer.pipe(
+      Layer.provideMerge(gateLayer),
+      Layer.provide(Executions.layer.pipe(Layer.provide(Sqlite.layerMemory))),
+      Layer.provide(threads),
+      Layer.provide(sessions),
+    );
+    yield* Effect.gen(function* () {
+      const gate = yield* WorkspaceGate;
+      const reconciler = yield* Reconciler.WorkspaceReconciler;
+      yield* gate.installReconciler(reconciler.reconcile);
+      assert.isTrue(
+        yield* gate.prepare({
+          threadId: "manual",
+          runId: "manual-run",
+          attemptId: "attempt",
+          cwd: f.repositoryPath,
+        }),
+      );
+      assert.isFalse(
+        yield* gate.starting({ threadId: "other", runId: "other-run", cwd: f.repositoryPath }),
+      );
+      assert.isTrue(
+        yield* gate.starting({
+          threadId: "manual",
+          runId: "manual-run",
+          attemptId: "attempt",
+          cwd: f.repositoryPath,
+        }),
+      );
+      nativeEnded = true;
+      yield* reconciler.reconcile;
+      assert.lengthOf(yield* gate.bindings, 1);
+      nativeEnded = false;
+      runStatus = "completed";
+      attemptStatus = "completed";
+      assert.isFalse(
+        yield* gate.starting({ threadId: "other", runId: "other-run", cwd: f.repositoryPath }),
+      );
+      nativeEnded = true;
+      runStatus = "starting";
+      attemptStatus = "superseded";
+      assert.isTrue(
+        yield* gate.starting({
+          threadId: "manual",
+          runId: "manual-run",
+          attemptId: "retry-attempt",
+          cwd: f.repositoryPath,
+        }),
+      );
+      assert.isFalse(
+        yield* gate.starting({ threadId: "other", runId: "other-run", cwd: f.repositoryPath }),
+      );
+      assert.isFalse(
+        yield* gate.starting({
+          threadId: "manual",
+          runId: "manual-run",
+          attemptId: "attempt",
+          cwd: f.repositoryPath,
+        }),
+      );
+      assert.isTrue(yield* f.fs.exists(`${f.repositoryPath}/user.txt`));
+    }).pipe(Effect.provide(runtime), Effect.scoped);
   }).pipe(Effect.provide(infrastructure), Effect.scoped),
 );

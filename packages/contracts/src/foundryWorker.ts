@@ -41,6 +41,7 @@ export class FoundryWorkerError extends Schema.TaggedError<FoundryWorkerError>()
 ) {}
 
 export const FoundryWorkerLaunchInput = Schema.Struct({
+  workspaceMode: Schema.optional(Schema.Literals(["checkout", "worktree"])),
   commandId: CommandId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),

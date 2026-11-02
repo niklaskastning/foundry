@@ -90,13 +90,13 @@ export const layer = (allowedRoots: ReadonlyArray<string>) =>
         if (
           source !== reservation.repositoryPath ||
           !roots.includes(root) ||
-          !roots.some((allowed) => within(allowed, source))
+          !roots.some((allowed) => allowed === source || within(allowed, source))
         )
           return yield* new FoundryWorkspaceError({ code: "path_denied" });
         const sourceMetadata = yield* checkRepository(source);
         const workspace = yield* real(reservation.workspacePath);
         if (
-          !roots.some((allowed) => within(allowed, workspace)) ||
+          !roots.some((allowed) => allowed === workspace || within(allowed, workspace)) ||
           workspace !== reservation.workspacePath
         )
           return yield* new FoundryWorkspaceError({ code: "path_denied" });
@@ -137,7 +137,12 @@ export const layer = (allowedRoots: ReadonlyArray<string>) =>
           );
           const repositoryPath = yield* real(decoded.repositoryPath);
           const managedRoot = yield* real(decoded.managedRoot);
-          if (!roots.includes(managedRoot) || !roots.some((root) => within(root, repositoryPath)))
+          if (
+            !roots.includes(managedRoot) ||
+            !roots.some((root) => root === repositoryPath || within(root, repositoryPath))
+          )
+            return yield* new FoundryWorkspaceError({ code: "path_denied" });
+          if (input.mode === "worktree" && repositoryPath === managedRoot)
             return yield* new FoundryWorkspaceError({ code: "path_denied" });
           yield* checkRepository(repositoryPath);
           const existing = yield* store.read(input.requestId).pipe(

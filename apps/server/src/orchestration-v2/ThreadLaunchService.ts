@@ -1,3 +1,4 @@
+import { WorkspaceGate } from "../foundry/workspaces/WorkspaceGate.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
@@ -208,6 +209,7 @@ const make = Effect.gen(function* () {
   const terminals = yield* TerminalManager.TerminalManager;
   const git = yield* GitWorkflow.GitWorkflowService;
   const setupScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+  const workspaceGate = yield* WorkspaceGate;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const textGeneration = yield* TextGeneration.TextGeneration;
@@ -564,6 +566,23 @@ const make = Effect.gen(function* () {
             phase: "setup",
           })
           .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+      }
+      if (runId !== null) {
+        const { runs } = yield* threads.getThreadRecords(threadId, ["runs"], { runIds: [runId] });
+        const attemptId = runs.find((run) => run.id === runId)?.activeAttemptId;
+        if (
+          !(yield* workspaceGate.prepare({
+            threadId,
+            runId,
+            ...(attemptId ? { attemptId } : {}),
+            cwd: worktreePath ?? project.workspaceRoot,
+          }))
+        )
+          return yield* mapError(
+            input,
+            "update-thread",
+            threadId,
+          )("Workspace writer reservation is unavailable.");
       }
       yield* setupTracker.stageStatus(threadId, "setup-script", "running");
       const setup =

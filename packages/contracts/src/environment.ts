@@ -143,6 +143,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   foundryWorkerCancel: Schema.optionalKey(Schema.Boolean),
   foundryWorkerFollow: Schema.optionalKey(Schema.Boolean),
   foundryWorkerRead: Schema.optionalKey(Schema.Boolean),
+  foundryManagedWorkspaces: Schema.optionalKey(Schema.Boolean),
   foundryWorkerLaunch: Schema.optionalKey(Schema.Boolean),
   foundryWorkerReadiness: Schema.optionalKey(Schema.Boolean),
   assetChunkTransfer: Schema.optionalKey(Schema.Boolean),

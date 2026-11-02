@@ -1,3 +1,4 @@
+import { WorkspaceGate } from "../foundry/workspaces/WorkspaceGate.ts";
 import * as ExecutionObserver from "../foundry/ExecutionObserver.ts";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -347,6 +348,7 @@ export const layerWithOptions = (
       const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const executionObserver = yield* ExecutionObserver.ExecutionObserver;
+      const workspaceGate = yield* WorkspaceGate;
       const agentScope = yield* AgentScope;
       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
         function* (threadId: ThreadId) {
@@ -1861,13 +1863,23 @@ export const layerWithOptions = (
                     ),
                   ),
                   () =>
-                    executionObserver
+                    workspaceGate
                       .starting({
                         threadId: input.threadId,
-                        providerThreadId: input.providerThread.id,
-                        runOrdinal: input.runOrdinal,
+                        runId: input.runId,
+                        attemptId: input.attemptId,
+                        cwd: input.runtimePolicy.cwd,
                       })
                       .pipe(
+                        Effect.flatMap((admitted) =>
+                          admitted
+                            ? executionObserver.starting({
+                                threadId: input.threadId,
+                                providerThreadId: input.providerThread.id,
+                                runOrdinal: input.runOrdinal,
+                              })
+                            : Effect.succeed(false),
+                        ),
                         Effect.flatMap((allowed) =>
                           allowed
                             ? runtime.startTurn(input)
