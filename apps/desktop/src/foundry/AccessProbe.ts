@@ -14,7 +14,7 @@ import {
   FoundrySession,
 } from "@t3tools/contracts";
 import { AccessOAuthError, createAccessOAuth, type AccessOAuthGrant } from "./AccessOAuth.ts";
-
+import { accessProbeFailure } from "./AccessProbeDiagnostics.ts";
 import { authorizeInstanceRequest, isInstanceRequest } from "./AccessTransportPolicy.ts";
 
 const StoredGrant = Schema.Struct({
@@ -82,6 +82,7 @@ export async function runAccessProbe(
   let grant: AccessOAuthGrant | undefined;
   let sessionCookieName: string | undefined;
   let expiresAt = 0;
+  let stage = "Restore stored sign-in";
   let timer: ReturnType<typeof setTimeout> | undefined;
   const windows = new Set<Electron.BrowserWindow>();
   const controller = new AbortController();
@@ -120,6 +121,7 @@ export async function runAccessProbe(
   });
 
   async function save(next: AccessOAuthGrant) {
+    stage = "Store encrypted OAuth grant";
     grant = next;
     expiresAt = Date.now() + next.tokens.expiresIn * 1000;
     if (timer) clearTimeout(timer);
@@ -170,6 +172,7 @@ export async function runAccessProbe(
         ...(value.refreshToken ? { refreshToken: Redacted.make(value.refreshToken) } : {}),
       },
     };
+    stage = "Restore OAuth grant";
     await save(await oauth.refresh(previous, controller.signal));
   }
 
@@ -198,7 +201,10 @@ export async function runAccessProbe(
 
   async function verify() {
     sessionCookieName = undefined;
-    const descriptor = decodeDescriptor(await response("/.well-known/foundry?protocolVersion=1"));
+    stage = "Read instance descriptor";
+    const descriptorValue = await response("/.well-known/foundry?protocolVersion=1");
+    stage = "Decode instance descriptor";
+    const descriptor = decodeDescriptor(descriptorValue);
     if (onboardingRoot) {
       const verified = FoundryOnboarding.verifyDescriptor(
         descriptor,
@@ -214,23 +220,39 @@ export async function runAccessProbe(
       throw new AccessOAuthError(
         "Access transport reached the correct instance, but Foundry Access sessions are not enabled on Main.",
       );
-    const auth = decodeAuthState(await response("/api/auth/session")).auth;
+    stage = "Read T3 authentication state";
+    const authValue = await response("/api/auth/session");
+    stage = "Decode T3 authentication state";
+    const auth = decodeAuthState(authValue).auth;
     if (!/^t3_session_[a-z0-9_]+$/.test(auth.sessionCookieName))
       throw new AccessOAuthError("The instance did not advertise a supported T3 session cookie.");
     sessionCookieName = auth.sessionCookieName;
     return descriptor;
   }
 
+  async function readSession() {
+    stage = "Read Foundry session";
+    const value = await response("/api/foundry/auth/session");
+    stage = "Decode Foundry session";
+    return decodeSession(value);
+  }
+
   async function authenticate(refresh: boolean) {
     await verify();
     let value: unknown;
     if (refresh) {
-      const current = decodeSession(await response("/api/foundry/auth/session"));
+      const current = await readSession();
+      stage = "Refresh Foundry session";
       value = await response("/api/foundry/auth/refresh", current.csrfToken);
-    } else value = await response("/api/foundry/auth/login");
+    } else {
+      stage = "Create Foundry session";
+      value = await response("/api/foundry/auth/login");
+    }
+    stage = "Decode Foundry session";
     const session = decodeSession(value);
     if (session.instanceId !== instanceId)
       throw new AccessOAuthError("Session belongs to another instance.");
+    stage = "Persist session cookies";
     await partition.cookies.flushStore();
   }
 
@@ -273,8 +295,8 @@ export async function runAccessProbe(
       await verify();
       status = "Stored OAuth grant refreshed. Check the Foundry session or open the instance.";
     }
-  } catch {
-    status = "Stored sign-in could not be restored. Sign in again or log out.";
+  } catch (error) {
+    status = `${accessProbeFailure(stage, error)} Sign in again.`;
     grant = undefined;
   }
   try {
@@ -301,6 +323,7 @@ export async function runAccessProbe(
       try {
         if (choice.response === 0) {
           closeWindows();
+          stage = "System-browser OAuth sign-in";
           await save(
             await oauth.login(async (url) => {
               await Electron.shell.openExternal(url);
@@ -311,9 +334,11 @@ export async function runAccessProbe(
           status = "System-browser login and Foundry session succeeded.";
         } else if (choice.response === 1) {
           await verify();
+          stage = "Open instance window";
           await openWindow();
           status = "Instance window closed. Refresh, check the session, or reopen to reconnect.";
         } else if (choice.response === 2) {
+          stage = "Refresh OAuth grant";
           if (!grant) throw new AccessOAuthError("Sign in first.");
           closeWindows();
           await save(await oauth.refresh(grant, controller.signal));
@@ -321,7 +346,7 @@ export async function runAccessProbe(
           status = "OAuth and Foundry sessions refreshed; reopen the instance to reconnect.";
         } else if (choice.response === 3) {
           await verify();
-          const session = decodeSession(await response("/api/foundry/auth/session"));
+          const session = await readSession();
           if (session.instanceId !== instanceId)
             throw new AccessOAuthError("Session belongs to another instance.");
           status = "Foundry session verified.";
@@ -329,7 +354,7 @@ export async function runAccessProbe(
           closeWindows();
           let failed = false;
           try {
-            const session = decodeSession(await response("/api/foundry/auth/session"));
+            const session = await readSession();
             await response("/api/foundry/auth/logout", session.csrfToken);
           } catch {
             failed = true;
@@ -362,10 +387,10 @@ export async function runAccessProbe(
       } catch (error) {
         status =
           error instanceof AccessOAuthError
-            ? error.message
+            ? `${stage}: ${error.message}`
             : onboardingRoot
               ? FoundryOnboarding.errorMessage(error)
-              : "Probe operation failed. No credentials are included in this report.";
+              : accessProbeFailure(stage, error);
       }
     }
   } finally {
