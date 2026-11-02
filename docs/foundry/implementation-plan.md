@@ -17,6 +17,7 @@ Die Häkchen bezeichnen den jeweils genannten Umfang. Offene Teilnachweise werde
 - [ ] **G3 – nächster Pflichtblock vor echter Automation:** dedizierte Codex-Anmeldung/Provider-Bindung unter dem Worker-Dienstkonto; ein minimaler autorisierter Auftrag über `foundry.workerLaunch`, identischer Command-ID-Retry ohne Doppelstart, Read/Follow, bestätigtes Writer-Ende, passender Checkpoint und unveränderliches Manifest. Zusätzlich Cancel, Lease-/Verbindungsverlust, Worker-Restart und Workspace-Konflikt mit genau einem aktiven Attempt prüfen. Bei unklarem Stop keine Wiederbelegung. Replay und native Protokoll-Fixtures ersetzen den realen Provider-Nachweis nicht; kostenpflichtige Turns benötigen eine ausdrückliche begrenzte Freigabe.
 - [ ] **Betriebsnachweise:** aktive Kernel-Limits (1 CPU, 2 GiB, 256 Tasks) sind geprüft; Last-/Kindprozess-Durchsetzung und gezielte Recovery sind offen. Vor breiter automatisierter Last die für G3 nötigen Grenzen prüfen; vollständiger Backup-/Restore-/Upgrade-Nachweis gehört zu G5. Dauerhafte Entscheidung zum für das Testfenster deaktivierten zonenweiten Cloudflare Bot Fight Mode offen, keine eigenständige Policy-Änderung.
 - [ ] **Produktlücken:** P03N/G1-Nativ, automatischer Katalog-Erstabruf und Einstieg ohne getrenntes T3-Pairing noch nicht umgesetzt. Windows-Downloads im Foundry-Einstieg sind durch dessen `will-download`-Sperre blockiert und bleiben gesonderte begrenzte Produktarbeit, kein behaupteter Upstream-Fehler. Native Mobile-Abnahme bleibt verschoben.
+- [ ] **Zentrale Verbindungen und Autorisierungsweitergabe:** noch nicht implementiert. Provider-, Source-Control- und später MCP-Zugänge einmal in Foundry einrichten; dauerhafte Devices und Sandboxes erhalten daraus ausdrücklich autorisierte Laufzeitbindungen. P14Z ergänzt die zentrale Grundlage; P23/P41/P37/P52 integrieren die jeweiligen Zugangsarten. Die lokale Anmeldung für G3 ist ein Übergangsweg, kein erfüllter zentraler Login.
 - [ ] **Nächste Entwicklung nach G3:** P18b → P47 → P38a → P38b → P19 → P20 → P21 → P49 → P22 → P23 → P24 → G4; danach die unten beschriebene Reihenfolge. Zentrale Threads/Anhänge sind noch nicht implementiert und müssen vor erstem Workflow-Dispatch geräteunabhängig gesichert werden.
 
 G3-Vorbereitung am 2. November erneut geprüft: Worktree und Remote-main `d457f63f`,
@@ -27,8 +28,12 @@ Tatsächliche Dienstprozesse gehören zur gemeinsamen `foundry-host.slice`; Kern
 Bindung weiterhin leer, `foundryManagedWorkspaces=false`; das vorgesehene
 `/opt/foundry-worker/providers/bin` fehlt. Keine Aussage über Provider-Readiness aus
 Launch-Capabilities ableiten. Der [lesende Betreiberprüfer](../../deploy/fork/worker/README.md#g3-bestandsaufnahme-vor-der-provider-einrichtung)
-ist vorbereitet und offline geprüft; seine reale Dienstkonto-Prüfung und der private
-Main-Status benötigen interaktives sudo. Kein Turn, Dienstwechsel oder erneuter
+ist offline geprüft und vom Maintainer unter interaktivem sudo erfolgreich ausgeführt:
+`runtimeVerifiedAsWorker=true`, T3 `0.1.6`, Worker-Release `b4e0b6709`.
+Der separate Main-Status bestätigt Source `8ab7001b8`, das bestehende Image
+`sha256:e0a36d209e78db06c3d5bdede7f71a11e4ff6a515862604e113a69c7c7e4304a`,
+Schema 5, Gateway/Readiness/Betreiberbindung/Konfigurationsabgleich und Migrator NOLOGIN.
+Lastdurchsetzung bleibt ungeprüft. Kein Turn, Dienstwechsel oder erneuter
 Login-Test ausgeführt. G3 bleibt vor dedizierter Anmeldung und realem Nachweis offen.
 
 G1/G2 sind damit für die Entwicklungsfortsetzung ausreichend praktisch geprüft, aber nicht vollständig abgenommen. Die Restabnahmen bleiben sichtbar; keine Freigabe für Betrieb ohne Access, neue Infrastruktur oder bezahlte Turns ableiten. Nach G3 darf die isoliert vorgezogene P18a-Grundlage integriert weitergenutzt werden. Änderungen und neue Nachweise in ihren jeweiligen PRs belegen und die betroffenen Häkchen hier aktualisieren; Issue #13 dient als Nachweisarchiv.
@@ -272,6 +277,18 @@ G1 wird pro Betriebsart abgenommen: zunächst **G1-Access** für unser Deploymen
 
 **Gate P17 – Nachweis:** Zwei Writer auf demselben verwalteten Checkout werden serialisiert oder getrennten Worktrees zugeordnet. Restart verliert aktive Reservierung nicht; Cancel gibt erst nach Stop frei; Nutzerdateien außerhalb verwalteter Wurzeln bleiben unberührt.
 
+### P14Z · Zentrale Verbindungen und delegierte Provider-Autorisierung
+
+**Voraussetzungen und Einordnung:** G3 für die Integration mit realen Ausführungen; vorhandene Secret-/Provider-Adapter wiederverwenden. Die G4-Reihenfolge P18b → P47 → P38a/P38b → P19 ff. bleibt erhalten. P14Z ist vor zentral autorisierten zusätzlichen dauerhaften Workern (P32) umzusetzen; P37 und P52 bauen darauf auf. P23 liefert zuvor den zentralen GitHub-App-Teilzugang für Publishing, ohne vollständige Provider-Delegation zu behaupten.
+
+**Ergebnis und Umfang:** Verbindungen einmal über Foundry einrichten, prüfen, erneuern, trennen und erneut anmelden. Main besitzt Verbindungsidentität, Kontobindung und Freigaben; ein Credential-Service liefert autorisierten dauerhaften Devices und kurzlebigen Sandboxes nur die benötigte Laufzeitberechtigung. Neue Environments übernehmen freigegebene Bindings ohne erneute manuelle Anmeldung je Environment. Gerät, Factory/Agent und Auftrag begrenzen die Nutzung; Enrollment allein erteilt keinen Zugang. Zentrale Auswahl und fehlende Anmeldung sind auch für manuelle Threads sichtbar. Ein Refresh-Owner je erneuerbarem Konto, Ablauf, Rotation, Entzug und Wiederverbindung gehören zum Vertrag.
+
+**Teilpakete:** P14Za implementiert zentrale Verbindungsverwaltung und genau einen nachgewiesenen Codex-Delegationspfad für dauerhafte Worker. Weitere Adapter einzeln als P14Zb-Teilpakete integrieren: Claude sowie weitere Modellprovider/OpenAI-Zugangsarten; GitHub über P23, Azure DevOps über P41. Jeder Adapter besitzt eigenes Auth-/Delegationsgate. P37 verwendet dieselben Verbindungen für Sandboxes; P52 ergänzt zentral konfigurierte MCP-Server/Tools mit denselben Secret- und Grant-Bindings, einschließlich OAuth-Erneuerung soweit unterstützt. Das gemeinsame Verbindungsmodell ist verbindlich; nicht jeder Adapter muss zum ersten Teilpaket verfügbar sein.
+
+**Abgrenzung:** Keine Kopie persönlicher Providerprofile oder vollständiger Homes; keine unkoordinierte Verteilung erneuerbarer Login-Caches. Provider-spezifisch unterstützte Delegation nachweisen, statt universelle Token-Weitergabe vorauszusetzen. Fehlende Unterstützung sichtbar sperren und zentral als Handlungsbedarf melden. Kein automatischer Wechsel von Subscription zu API-Abrechnung. Foundry-Login und externe Kontoverbindungen bleiben getrennte Identitäten; zentrale Bedienung führt keine Agent-Turns auf Main ein.
+
+**Gate P14Z je Adapter – Nachweis:** Einmal zentral verbinden, zwei getrennte dauerhafte Testdevices ohne eigene Anmeldung autorisieren; nur freigegebene Bindings nutzbar. Refresh-Rennen, Ablauf, Rotation, Entzug, Offline-Device und Main-/Worker-Neustart prüfen. Widerruf verhindert neue Credential-Ausgabe; bereits ausgegebene Berechtigungen erhalten eine nachgewiesene begrenzte Gültigkeit beziehungsweise wirksamen Upstream-Widerruf, keine Fernlöschungsbehauptung für Offline-Caches. Fremde Instanz/Device/Factory und unzulässiger Scope scheitern; keine Secrets in Logs, Definitionen oder Archiven. Sandbox-Wiederverwendung wird in P37 und MCP-Zugriff in P52 separat abgenommen.
+
 ## Factory-MVP · G4
 
 ### P18a · Factory und beständiger Auftrag
@@ -460,7 +477,7 @@ G1 wird pro Betriebsart abgenommen: zunächst **G1-Access** für unser Deploymen
 
 ### P52 · Agentenressourcen und Ausführungseinstellungen
 
-**Voraussetzungen:** P28, P49; Pool-/Sandbox-Einstellungen erst nach P32/P34.
+**Voraussetzungen:** P28, P49; zentrale MCP-/Credential-Bindings benötigen P14Z, Pool-/Sandbox-Einstellungen erst nach P32/P34.
 
 **Ergebnis und Umfang:** P52a liefert das Agentendetail mit Instruktionen, Automationen, Version und Einstellungen; globale MCP-/Secret-/Connector-Ressourcen an Factory und Rolle binden. Provider, Modell und unterstützte Optionen aus Worker-Capabilities beziehen; wirksame Defaults/Overrides anzeigen. P52b ergänzt deklarative Modell-Routingregeln nach Aufgabenklasse und ausdrücklich erlaubter Kandidatenliste; die aufgelöste Wahl samt Regelversion wird vor Dispatch festgehalten.
 
@@ -564,7 +581,7 @@ G1 wird pro Betriebsart abgenommen: zunächst **G1-Access** für unser Deploymen
 
 ### P32 · Kapazitäten und explizite Zielauswahl
 
-**Voraussetzungen:** G5, P11, P16.
+**Voraussetzungen:** G5, P11, P16, P14Za für zentral autorisierte Worker.
 
 **Ergebnis und Umfang:** Atomare Worker-Reservierungen, provider-/kontobezogene Limits, feste Ziele und freigegebene Pools sowie draining bereitstellen.
 
@@ -614,7 +631,7 @@ G1 wird pro Betriebsart abgenommen: zunächst **G1-Access** für unser Deploymen
 
 ### P37 · Unterstützter Codex-Credential-Bootstrap für Sandboxes
 
-**Voraussetzungen:** P36, P14.
+**Voraussetzungen:** P36, P14, P14Za.
 
 **Ergebnis und Umfang:** Genau einen verifizierten Provider-Pfad mit Kontobindung, Refresh-Owner, Ablauf und Widerruf integrieren; capability-gesteuerte Freigabe.
 
