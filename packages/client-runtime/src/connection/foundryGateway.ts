@@ -1,5 +1,12 @@
-import { FoundryGatewayGrant, FoundryGatewaySocketTicket } from "@t3tools/contracts";
+import {
+  authScopeResponse,
+  type ServerAuthDescriptor,
+  type AuthSessionState,
+  FoundryGatewayGrant,
+  FoundryGatewaySocketTicket,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -180,7 +187,45 @@ export const make = Effect.fn("FoundryGateway.make")(function* () {
         yield* proof(`${origin}/api/foundry/gateway/stream`, issued.wsTicket, "GET"),
       );
     url.protocol = "wss:";
+    const readSessionState = Effect.fn("FoundryGateway.readSessionState")(function* (
+      auth: ServerAuthDescriptor,
+    ) {
+      const current = yield* request("/api/foundry/gateway/grants/inspect", {
+        grantId: grant.grantId,
+        deviceId: target.deviceId,
+        environmentId: target.environmentId,
+      }).pipe(Effect.flatMap(decodeGrant), Effect.mapError(blocked));
+      const fields = [
+        "grantId",
+        "instanceId",
+        "origin",
+        "deviceId",
+        "environmentId",
+        "clientSessionId",
+        "operatorId",
+        "subject",
+        "generation",
+        "channelGeneration",
+        "accessGeneration",
+        "expiresAt",
+      ] as const;
+      if (
+        fields.some((field) => current[field] !== grant[field]) ||
+        current.scopes.length !== grant.scopes.length ||
+        !current.scopes.every((scope) => grant.scopes.includes(scope)) ||
+        current.expiresAt <= (yield* Clock.currentTimeMillis)
+      )
+        return yield* blocked();
+      return {
+        authenticated: true,
+        auth,
+        ...authScopeResponse(current.scopes),
+        sessionMethod: "dpop-access-token",
+        expiresAt: DateTime.makeUnsafe(current.expiresAt),
+      } satisfies AuthSessionState;
+    });
     return {
+      readSessionState,
       target,
       environmentId: target.environmentId,
       label: target.label,

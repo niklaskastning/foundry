@@ -1,5 +1,10 @@
 import { pipe } from "effect/Function";
-import type { AuthSessionState, EnvironmentId, ServerConfig } from "@t3tools/contracts";
+import type {
+  AuthSessionState,
+  EnvironmentId,
+  ServerConfig,
+  ServerAuthDescriptor,
+} from "@t3tools/contracts";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -13,7 +18,10 @@ import * as EnvironmentRegistry from "../connection/registry.ts";
 import type { PreparedConnection } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as ManagedRelay from "../relay/managedRelay.ts";
-import type { RemoteEnvironmentRequestError } from "../rpc/http.ts";
+import {
+  RemoteEnvironmentAuthFetchError,
+  type RemoteEnvironmentRequestError,
+} from "../rpc/http.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
@@ -47,12 +55,28 @@ export const fetchEnvironmentSessionState = Effect.fn(
   "clientRuntime.state.fetchEnvironmentSessionState",
 )(function* (input: {
   readonly prepared: PreparedConnection;
+  readonly auth?: ServerAuthDescriptor;
   readonly signer: Option.Option<ManagedRelay.ManagedRelayDpopSigner["Service"]>;
   readonly remoteAuthorization?: Option.Option<
     RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]
   >;
   readonly timeoutMs?: number;
 }) {
+  if (
+    input.prepared.target._tag === "FoundryConnectionTarget" &&
+    input.prepared.readSessionState &&
+    input.auth
+  ) {
+    return yield* input.prepared.readSessionState(input.auth).pipe(
+      Effect.mapError(
+        (cause) =>
+          new RemoteEnvironmentAuthFetchError({
+            message: "Could not verify Foundry gateway permissions.",
+            cause,
+          }),
+      ),
+    );
+  }
   const request = (
     timeoutMs: number,
   ): Effect.Effect<AuthSessionState, RemoteEnvironmentRequestError, HttpClient.HttpClient> =>
@@ -180,6 +204,9 @@ function makeEnvironmentSessionAtoms<R, E>(
           if (Option.isNone(client)) return yield* new SessionHttpClientUnavailable();
           return yield* fetchEnvironmentSessionState({
             prepared,
+            ...(prepared.target._tag === "FoundryConnectionTarget"
+              ? { auth: (yield* connection.value.initialConfig).auth }
+              : {}),
             signer,
             remoteAuthorization,
           }).pipe(Effect.provideService(HttpClient.HttpClient, client.value));
