@@ -3,12 +3,14 @@ import * as NodeAssert from "node:assert/strict";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeHttp from "node:http";
+import * as NodeHttps from "node:https";
 import * as NodePath from "node:path";
 import * as NodeCrypto from "node:crypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import {
   CommandId,
+  EnvironmentId,
   ThreadId,
   ProjectId,
   ProviderInstanceId,
@@ -26,11 +28,12 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
+import * as Scope from "effect/Scope";
+import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Socket from "effect/socket/Socket";
-import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
+import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import * as ServerConfig from "../src/config.ts";
@@ -48,18 +51,28 @@ import * as DeviceRegistry from "../src/foundry/DeviceRegistry.ts";
 import * as DeviceConfig from "../src/foundry/DeviceConfig.ts";
 import * as DeviceGrants from "../src/foundry/DeviceGrants.ts";
 import * as DeviceChannel from "../src/foundry/DeviceChannel.ts";
-import * as DeviceConnector from "../src/foundry/DeviceConnector.ts";
-import * as DeviceHttpAdapter from "../src/foundry/DeviceHttpAdapter.ts";
 import * as GatewayGrants from "../src/foundry/GatewayGrants.ts";
 import * as GatewayHttp from "../src/foundry/gatewayHttp.ts";
 import * as DeviceHttp from "../src/foundry/deviceHttp.ts";
 import * as DeviceChannelHttp from "../src/foundry/deviceChannelHttp.ts";
 import * as StreamSocket from "../src/foundry/StreamSocket.ts";
-import * as StreamBridge from "../src/foundry/StreamBridge.ts";
 import { generateDeviceKey, signEnrollment } from "../src/foundry/DeviceProof.ts";
 
 const decodeToken = Schema.decodeUnknownSync(Schema.Struct({ access_token: Schema.String }));
+const decodeEnvironmentId = Schema.decodeEffect(EnvironmentId);
 const decodeJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
+
+async function stopChild(child: NodeChildProcess.ChildProcess) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  child.kill("SIGTERM");
+  const force = setTimeout(() => child.kill("SIGKILL"), 5000);
+  try {
+    await exited;
+  } finally {
+    clearTimeout(force);
+  }
+}
 
 export async function verifyGateway(options: {
   root: string;
@@ -178,10 +191,46 @@ export async function verifyGateway(options: {
       }),
     });
     NodeAssert.equal(created.status, 200, "worker project creation");
+    const certificatePath = NodePath.join(root, "machine-cert.pem");
+    const tlsKeyPath = NodePath.join(root, "machine-key.pem");
+    NodeChildProcess.execFileSync(
+      "openssl",
+      [
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        tlsKeyPath,
+        "-out",
+        certificatePath,
+        "-days",
+        "1",
+        "-subj",
+        "/CN=127.0.0.1",
+        "-addext",
+        "subjectAltName=IP:127.0.0.1",
+      ],
+      { stdio: "ignore" },
+    );
+    const certificate = await NodeFSP.readFile(certificatePath);
+    const tlsKey = await NodeFSP.readFile(tlsKeyPath);
+    const machineReservation = NodeHttp.createServer();
+    machineReservation.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => machineReservation.once("listening", resolve));
+    const machineAddress = machineReservation.address();
+    NodeAssert.ok(machineAddress && typeof machineAddress !== "string");
+    const machinePort = machineAddress.port;
+    await new Promise<void>((resolve) => machineReservation.close(() => resolve()));
+    const machineHeaders = {
+      "CF-Access-Client-Id": NodeCrypto.randomUUID(),
+      "CF-Access-Client-Secret": NodeCrypto.randomUUID(),
+    };
     const accessConfig = {
       issuer: "https://fixture.cloudflareaccess.com",
       audience: "fixture-app",
-      origin: "https://foundry.example.test",
+      origin: `https://127.0.0.1:${machinePort}`,
     };
     const keys = await generateKeyPair("RS256");
     const jwk = await exportJWK(keys.publicKey);
@@ -222,7 +271,7 @@ export async function verifyGateway(options: {
         Layer.mergeAll(
           DeviceRegistry.layer,
           AccessVerifier.layer,
-          SqlitePersistence.layerMemory,
+          SqlitePersistence.layerConfig,
           ServerSecretStore.layer,
         ),
       ),
@@ -234,36 +283,70 @@ export async function verifyGateway(options: {
     );
     await Effect.runPromise(
       Effect.gen(function* () {
-        const main = yield* Layer.build(mainLayer);
-        const server = yield* Layer.build(
-          HttpRouter.serve(
-            Layer.mergeAll(GatewayHttp.layer, DeviceChannelHttp.layer, DeviceHttp.layer),
-            {
-              disableListenLog: true,
-            },
-          ).pipe(
-            Layer.provide(Layer.succeedContext(main)),
-            Layer.provideMerge(NodeHttpServer.layerTest),
-          ),
+        const machineRequests = new Set<string>();
+        const machineAuth = HttpRouter.middleware((handler) =>
+          Effect.gen(function* () {
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            if (
+              request.headers["cf-access-client-id"] !== machineHeaders["CF-Access-Client-Id"] ||
+              request.headers["cf-access-client-secret"] !==
+                machineHeaders["CF-Access-Client-Secret"]
+            )
+              return HttpServerResponse.empty({ status: 403 });
+            machineRequests.add(request.url);
+            return yield* handler;
+          }),
+        ).layer;
+        let mainScope = yield* Scope.make();
+        yield* Effect.addFinalizer(() => Scope.close(mainScope, Exit.void));
+        const startMain = Effect.fn("verification.startMain")(function* () {
+          const main = yield* Layer.buildWithScope(mainLayer, mainScope);
+          const server = yield* Layer.buildWithScope(
+            HttpRouter.serve(
+              Layer.mergeAll(GatewayHttp.layer, DeviceChannelHttp.layer, DeviceHttp.layer),
+              {
+                disableListenLog: true,
+              },
+            ).pipe(
+              Layer.provide(Layer.succeedContext(main)),
+              Layer.provideMerge(
+                NodeHttpServer.layer(NodeHttp.createServer, { port: 0, host: "127.0.0.1" }),
+              ),
+            ),
+            mainScope,
+          );
+          const mainOrigin = HttpServer.formatAddress(
+            Context.get(server, HttpServer.HttpServer).address,
+          ).replace("0.0.0.0", "127.0.0.1");
+          const socketOrigin = mainOrigin.replace(/^http/, "ws");
+          const tlsServer = NodeHttps.createServer({ key: tlsKey, cert: certificate });
+          const machineSockets = new Set<import("node:tls").TLSSocket>();
+          tlsServer.on("secureConnection", (socket) => {
+            machineSockets.add(socket);
+            socket.once("close", () => machineSockets.delete(socket));
+          });
+          yield* Layer.buildWithScope(
+            HttpRouter.serve(
+              Layer.merge(DeviceChannelHttp.layer, DeviceHttp.layer).pipe(
+                Layer.provide(machineAuth),
+              ),
+              { disableListenLog: true },
+            ).pipe(
+              Layer.provide(Layer.succeedContext(main)),
+              Layer.provide(
+                NodeHttpServer.layer(() => tlsServer, { port: machinePort, host: "127.0.0.1" }),
+              ),
+            ),
+            mainScope,
+          );
+          return { main, mainOrigin, socketOrigin, machineSockets };
+        });
+        let { main, mainOrigin, socketOrigin, machineSockets } = yield* startMain();
+        const environmentId = yield* decodeEnvironmentId(
+          (yield* Effect.promise(() =>
+            NodeFSP.readFile(NodePath.join(workerHome, "userdata", "environment-id"), "utf8"),
+          )).trim(),
         );
-        const mainOrigin = HttpServer.formatAddress(
-          Context.get(server, HttpServer.HttpServer).address,
-        ).replace("0.0.0.0", "127.0.0.1");
-        const socketOrigin = mainOrigin.replace(/^http/, "ws");
-        const workerServices = yield* Layer.build(
-          SessionStore.layer.pipe(
-            Layer.provideMerge(SqlitePersistence.layerConfig),
-            Layer.provideMerge(ServerSecretStore.layer),
-            Layer.provideMerge(ServerEnvironment.layerIdentity),
-            Layer.provideMerge(FetchHttpClient.layer),
-            Layer.provideMerge(ServerConfig.layerTest(root, workerHome)),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        );
-        const environmentId = yield* Context.get(
-          workerServices,
-          ServerEnvironment.ServerEnvironmentIdentity,
-        ).getEnvironmentId;
         const clients: Array<Record<string, string>> = [];
         for (const subject of ["client-a", "client-b"]) {
           const foundry = yield* Context.get(main, FoundrySessions.FoundrySessions).login(
@@ -283,7 +366,7 @@ export async function verifyGateway(options: {
           });
           clients.push({
             origin: accessConfig.origin,
-            host: "foundry.example.test",
+            host: new URL(accessConfig.origin).host,
             "x-forwarded-proto": "https",
             "content-type": "application/json",
             cookie: `${FoundrySessions.FOUNDRY_SESSION_COOKIE}=${foundry.token}`,
@@ -301,9 +384,10 @@ export async function verifyGateway(options: {
           const response = yield* Effect.promise(
             () =>
               new Promise<{ status: number; body: string }>((resolve, reject) => {
-                const request = NodeHttp.request(
-                  `${mainOrigin}${operation.startsWith("/") ? operation : `/api/foundry/gateway/${operation}`}`,
-                  { method: "POST", headers },
+                const machine = operation.startsWith("/api/foundry/devices/");
+                const request = (machine ? NodeHttps : NodeHttp).request(
+                  `${machine ? accessConfig.origin : mainOrigin}${operation.startsWith("/") ? operation : `/api/foundry/gateway/${operation}`}`,
+                  { method: "POST", headers, ca: certificate },
                   (response) => {
                     const chunks: Buffer[] = [];
                     response.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -333,7 +417,28 @@ export async function verifyGateway(options: {
           publicKey: key.publicKey,
         }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(FoundryEnrollment)));
         const enrollment = signEnrollment(invitation, key.privateKey);
-        const enrollmentHeaders = { "content-type": "application/json" };
+        const enrollmentHeaders = { "content-type": "application/json", ...machineHeaders };
+        // The TLS fixture models only the outer header gate, not Cloudflare policy evaluation.
+        const rejectedMachine = yield* Effect.promise(
+          () =>
+            new Promise<number>((resolve, reject) => {
+              const request = NodeHttps.request(
+                `${accessConfig.origin}/api/foundry/devices/enroll`,
+                {
+                  method: "POST",
+                  ca: certificate,
+                  headers: { "content-type": "application/json" },
+                },
+                (response) => {
+                  response.resume();
+                  response.once("end", () => resolve(response.statusCode ?? 0));
+                },
+              );
+              request.once("error", reject);
+              request.end(JSON.stringify(enrollment));
+            }),
+        );
+        NodeAssert.equal(rejectedMachine, 403);
         yield* post(
           0,
           "/api/foundry/devices/enroll",
@@ -365,37 +470,75 @@ export async function verifyGateway(options: {
           );
           NodeAssert.equal(registered?.rpcReady, false);
         }
-        const adapter = yield* DeviceHttpAdapter.make({
-          device,
-          origin: accessConfig.origin,
-          localOrigin,
-          localEnvironmentId: Effect.succeed(environmentId),
-        }).pipe(Effect.provide(workerServices));
-        const connected = yield* Deferred.make<void>();
-        const connector = yield* DeviceConnector.runOnce(
-          yield* StreamSocket.connect(`${socketOrigin}/api/foundry/devices/channel`),
-          {
-            device,
-            origin: accessConfig.origin,
-            privateKey: Redacted.make(key.privateKey),
-            localEnvironmentId: Effect.succeed(environmentId),
-            connected: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
-            projects: adapter.projects,
-            stream: Effect.fn("verification.workerStream")(
-              function* (grant, generation, ticket) {
-                const local = yield* adapter.openStream(grant, generation);
-                const remote = yield* StreamSocket.connect(
-                  `${socketOrigin}/api/foundry/devices/stream`,
-                  { "x-foundry-stream-ticket": ticket },
-                );
-                return yield* StreamBridge.bridge(local, remote, Effect.void);
+        const registrationPath = NodePath.join(root, "registration.json");
+        const deviceKeyPath = NodePath.join(root, "device-key.json");
+        const accessPath = NodePath.join(root, "access.json");
+        yield* Effect.promise(async () => {
+          await NodeFSP.writeFile(registrationPath, JSON.stringify(device), { mode: 0o600 });
+          await NodeFSP.writeFile(deviceKeyPath, JSON.stringify(key), { mode: 0o600 });
+          await NodeFSP.writeFile(
+            accessPath,
+            JSON.stringify({
+              origin: accessConfig.origin,
+              clientId: machineHeaders["CF-Access-Client-Id"],
+              clientSecret: machineHeaders["CF-Access-Client-Secret"],
+            }),
+            { mode: 0o600 },
+          );
+        });
+        let connected = Promise.withResolvers<void>();
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            const child = NodeChildProcess.spawn(
+              process.execPath,
+              [
+                "apps/server/src/bin.ts",
+                "foundry",
+                "connect-device",
+                "--base-dir",
+                workerHome,
+                "--origin",
+                accessConfig.origin,
+                "--registration",
+                registrationPath,
+                "--key-file",
+                deviceKeyPath,
+                "--access-file",
+                accessPath,
+                "--gateway-origin",
+                localOrigin,
+                "--streams",
+              ],
+              {
+                cwd: NodePath.resolve(import.meta.dirname, "../../.."),
+                env: {
+                  PATH: process.env.PATH,
+                  HOME: root,
+                  LANG: "C.UTF-8",
+                  NODE_ENV: "test",
+                  NODE_EXTRA_CA_CERTS: certificatePath,
+                },
+                stdio: ["ignore", "pipe", "pipe"],
               },
-              Effect.scoped,
-              Effect.orDie,
-            ),
-          },
-        ).pipe(Effect.forkScoped);
-        yield* Deferred.await(connected);
+            );
+            let output = "";
+            child.stdout.on("data", (chunk: Buffer) => {
+              output = (output + chunk.toString()).slice(-4000);
+              if (output.includes(`Foundry device ${device.deviceId} connected;`)) {
+                connected.resolve();
+                output = "";
+              }
+            });
+            child.stderr.resume();
+            child.once("error", () => connected.reject(new Error("Connector spawn failed")));
+            child.once("exit", () =>
+              connected.reject(new Error("Connector exited before connection")),
+            );
+            return child;
+          }),
+          (child) => Effect.promise(() => stopChild(child)),
+        );
+        yield* Effect.promise(() => connected.promise).pipe(Effect.timeout("20 seconds"));
         const target = { deviceId: device.deviceId, environmentId };
         const scopes = [
           "orchestration:read",
@@ -652,6 +795,7 @@ export async function verifyGateway(options: {
           );
           yield* post(index, "grants/create", { ...target, scopes }, 403);
         }
+        const regranted = [];
         const disabled = yield* post(0, "grants/readAccess", { deviceId: device.deviceId }).pipe(
           Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(FoundryDeviceGrant))),
         );
@@ -666,9 +810,55 @@ export async function verifyGateway(options: {
           const renewed = yield* post(index, "grants/create", { ...target, scopes }).pipe(
             Effect.flatMap(Schema.decodeUnknownEffect(FoundryGatewayGrant)),
           );
+          regranted.push({ ...target, grantId: renewed.grantId });
           NodeAssert.ok(
             JSON.stringify(
               yield* post(index, "projects", { ...target, grantId: renewed.grantId }),
+            ).includes(projectId),
+          );
+        }
+        const previousGeneration = (yield* Context.get(main, DeviceChannel.DeviceChannel).current(
+          device.deviceId,
+        )).channelGeneration;
+        connected = Promise.withResolvers<void>();
+        for (const socket of machineSockets) socket.destroy();
+        yield* Effect.promise(() => connected.promise).pipe(Effect.timeout("20 seconds"));
+        const currentGeneration = (yield* Context.get(main, DeviceChannel.DeviceChannel).current(
+          device.deviceId,
+        )).channelGeneration;
+        NodeAssert.ok(
+          currentGeneration > previousGeneration,
+          "CLI reconnect advances durable channel generation",
+        );
+        for (const index of [0, 1]) {
+          yield* post(index, "projects", regranted[index]!, 403);
+        }
+        const beforeRestart = [];
+        for (const index of [0, 1]) {
+          const fresh = yield* post(index, "grants/create", { ...target, scopes }).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(FoundryGatewayGrant)),
+          );
+          beforeRestart.push({ ...target, grantId: fresh.grantId });
+          NodeAssert.ok(
+            JSON.stringify(
+              yield* post(index, "projects", { ...target, grantId: fresh.grantId }),
+            ).includes(projectId),
+          );
+        }
+        connected = Promise.withResolvers<void>();
+        for (const socket of machineSockets) socket.destroy();
+        yield* Scope.close(mainScope, Exit.void);
+        mainScope = yield* Scope.make();
+        ({ main, mainOrigin, socketOrigin, machineSockets } = yield* startMain());
+        yield* Effect.promise(() => connected.promise).pipe(Effect.timeout("20 seconds"));
+        for (const index of [0, 1]) {
+          yield* post(index, "projects", beforeRestart[index]!, 403);
+          const fresh = yield* post(index, "grants/create", { ...target, scopes }).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(FoundryGatewayGrant)),
+          );
+          NodeAssert.ok(
+            JSON.stringify(
+              yield* post(index, "projects", { ...target, grantId: fresh.grantId }),
             ).includes(projectId),
           );
         }
@@ -684,21 +874,16 @@ export async function verifyGateway(options: {
           );
           yield* post(index, "grants/create", { ...target, scopes }, 403);
         }
-        yield* Fiber.interrupt(connector);
+        NodeAssert.deepEqual([...machineRequests].sort(), [
+          "/api/foundry/devices/channel",
+          "/api/foundry/devices/enroll",
+          "/api/foundry/devices/stream",
+        ]);
       }).pipe(Effect.scoped),
     );
   } finally {
     clearTimeout(deadline);
-    if (worker.exitCode === null && worker.signalCode === null) {
-      const exited = new Promise<void>((resolve) => worker.once("exit", () => resolve()));
-      worker.kill("SIGTERM");
-      const force = setTimeout(() => worker.kill("SIGKILL"), 5000);
-      try {
-        await exited;
-      } finally {
-        clearTimeout(force);
-      }
-    }
+    await stopChild(worker);
     await NodeFSP.writeFile(NodePath.join(root, "worker.log"), log, { mode: 0o600 });
   }
 }

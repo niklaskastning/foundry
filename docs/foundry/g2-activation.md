@@ -26,15 +26,27 @@ Katalog-Schalter. Er begrenzt außerdem direkte T3-WebSocket-Nachrichten desselb
 Main-Prozesses auf 256 KiB. Die Aktivierung betrifft deshalb auch dessen bestehende
 Clients; große Snapshots müssen in der Abnahme berücksichtigt werden.
 
-**Vor produktiver Änderung ist ein eigener Konfigurationsübergang erforderlich:**
-`activate-access.py status/update` akzeptiert aktuell exakt die sechs bisherigen
-Access-/PostgreSQL-Variablen. Zusätzliche Flags werden als Drift abgewiesen.
-Der alte `foundry-deploy` unterstützt bereits die Access-Grundkonfiguration nicht.
-Keinen dieser Prüfer umgehen oder die private Runtime-Datei einfach ergänzen.
-Ein Folge-PR muss den begrenzten Übergang samt Inventarisierung, koordiniertem
-Backup, Rücknahme und Fehlertests ergänzen. Auch danach startet erst der Betreiber
-den freigegebenen Versuch. Keine Migration, kein neues Image allein wegen eines
-Mergecommits, kein `--remove-orphans`.
+Der geprüfte Betreiberhelfer schaltet dieses vollständige Profil auf Schema 5
+mit dem bereits laufenden Image um. Aus dem geprüften Checkout:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/updater/activate-access.py gateway enable
+sudo /usr/bin/python3 -I deploy/fork/updater/activate-access.py status
+# Nach dem Versuch zurücknehmen:
+sudo /usr/bin/python3 -I deploy/fork/updater/activate-access.py gateway disable
+```
+
+`gatewayEnabled` bestätigt Konfiguration und beworbene Capabilities. Wiederholte
+Aufrufe mit demselben Ziel ändern nichts. Der Helfer sichert nur die vorherige
+private Konfiguration unter `/var/lib/foundry-deploy/gateway-*`, stoppt Main,
+ersetzt die Runtime-Datei und prüft nach dem Start Image, Identität, Schema und
+Readiness. Keine Migration, kein Imagewechsel, kein vollständiges Datenbackup
+für diesen Entwicklungsversuch. Start-/Prüffehler und ein einzelnes Ctrl+C lösen
+die Rücknahme mit erneutem Start aus. Scheitert auch diese, bleibt Main gestoppt.
+Ein Prozesskill oder Stromausfall kann keine automatische Rücknahme garantieren.
+
+Der alte `foundry-deploy` unterstützt die Access-Grundkonfiguration nicht.
+Keine sudoers-Erweiterung, kein `--remove-orphans`; PostgreSQL bleibt bestehen.
 
 ## Maschinenzugang durch Cloudflare
 
@@ -107,11 +119,11 @@ Codex-gebundenen `foundry.workerLaunch` aus P15.
 
 ## Durchführung nach gesonderter Freigabe
 
-1. Wartungsfenster, konkrete Main-/Worker-SHAs, Ressourcen, Backup-Ziel und
-   Rücknahmeweg bestätigen. Main-State, Workspaces, `fork_connect` und private
-   Konfiguration koordiniert sichern; vorherigen kompatiblen Build behalten.
-   Worker-State, Schlüssel, Units und Konfiguration separat sichern.
-2. Nach geprüftem Konfigurationsübergang Main starten: Readiness, Schema 5,
+1. Konkrete Main-/Worker-SHAs und Ressourcen festhalten; laufende Test-Turns
+   beenden. Die Entwicklungsdaten dürfen verworfen werden. Für diesen reinen
+   Konfigurationswechsel reicht die automatische Konfigurationskopie; ein
+   vollständiges Backup ist keine G2-Voraussetzung.
+2. `gateway enable` ausführen und mit `status` kontrollieren: Readiness, Schema 5,
    beide bisherigen IDs, Betreiberbindung und Migrator NOLOGIN bestätigen.
    Erwartete Capabilities zusätzlich: `foundry.device-enrollment`,
    `foundry.device-channel`, `foundry.http-gateway`, `foundry.rpc-streams`,
@@ -145,24 +157,40 @@ Codex-gebundenen `foundry.workerLaunch` aus P15.
    erneut prüfen. Stop allein ist kein Widerruf. Ergebnis mit Builds und
    Fehlerkategorien in Issue/PR erfassen, keine Tokens oder privaten Logs anhängen.
 
-Bei Fehler keine weiteren Flags aktivieren. Neue Zugriffe sperren, eigene Worker-
-Dienste stoppen und nach dem geprüften Übergangsverfahren zur vorherigen
-Konfiguration mit demselben kompatiblen Image zurückkehren. Keine Registrierung
-oder SQLite zur Fehlerbehebung löschen. Ein Restore ist eine gesonderte,
-koordinierte Operation gemäß [Recovery](access-activation.md#recover-this-upgrade-or-update):
-alte Backups können widerrufene Zugänge wiederherstellen; vor Wiederöffnung
-Sessions invalidieren und Device-/Machine-Zugänge abgleichen. Persönliches T3,
-Kubernetes und PostgreSQL-Nachbardatenbanken bleiben unangetastet.
+Bei Fehler eigene Worker-Dienste stoppen und `gateway disable` verwenden.
+Falls Main nach unterbrochener oder fehlgeschlagener Rücknahme nicht startet,
+als Administrator die `access-runtime.env` aus dem **ausgegebenen**
+`gateway-*`-Verzeichnis nach `/etc/foundry-deploy/access-runtime.env` zurückkopieren
+(root:root, 0600). Danach nur Main mit der vorhandenen Compose-Datei starten:
+
+```sh
+sudo env DOCKER_HOST=unix:///var/run/docker.sock DOCKER_CONFIG=/etc/foundry-deploy/docker \
+  docker compose --project-name foundry --env-file /dev/null \
+  --file /etc/foundry-deploy/access-compose.json up --detach --no-deps \
+  --no-build --pull never --wait --wait-timeout 180 main
+sudo /usr/bin/python3 -I deploy/fork/updater/activate-access.py status
+```
+
+Die Konfigurationskopie ist kein Daten-Restore. Ein späterer Daten-Restore folgt
+[Recovery](access-activation.md#recover-this-upgrade-or-update); alte Backups können
+widerrufene Zugänge wiederherstellen. Persönliches T3, Kubernetes und
+PostgreSQL-Nachbardatenbanken bleiben unangetastet.
 
 ## Isolierter Vorlauf
 
 ```sh
 FOUNDRY_TEST_PG_BIN=/path/to/postgresql/bin vp run --filter t3 test:foundry-postgres
 python3 -m unittest discover -s deploy/fork/worker -p 'test_*.py' -v
+python3 -m unittest discover -s deploy/fork/updater -p 'test_*.py' -v
 ```
 
-Der PostgreSQL-Prüfer erzeugt eigenen Cluster, Main-Zustand und Worker-Kindprozess.
-Er prüft echte HTTP-/RPC-Grenzen mit zwei getrennten Sessions und kostenlosem Replay.
-Access-JWT/JWKS sind lokale Fixtures, der Connector läuft im Harness. Das ersetzt
-weder reale TLS-/Cloudflare-Machine-Authentifizierung und CLI-Prozessintegration
-noch Main-Prozessneustart, zwei sichtbare Clients oder systemd-Ressourcendurchsetzung.
+Der PostgreSQL-Prüfer erzeugt eigenen Cluster und Main-Zustand sowie echte Worker-
+und Connector-CLI-Kindprozesse. Er prüft HTTP/RPC mit zwei getrennten Sessions,
+kostenlosem Replay und lokal vertrauenswürdigem TLS (benötigt `openssl`). Ein
+lokaler Header-Prüfer verlangt Maschinencredentials auf allen drei Device-Pfaden.
+Nach Kanalabbruch und vollständigem Neuaufbau der Main-Dienste mit persistenten
+Datenbanken verbindet der Connector erneut; alte Grants scheitern, beide Clients
+erhalten mit ihren bestehenden Sessions neue Grants. Access-JWT/JWKS und der
+Maschinenzugang bleiben lokale Fixtures. Das ersetzt weder reale Cloudflare-
+Authentifizierung noch einen Main-OS-Prozessneustart, zwei sichtbare Clients oder
+systemd-Ressourcendurchsetzung.

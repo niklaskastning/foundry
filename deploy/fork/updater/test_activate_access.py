@@ -29,7 +29,7 @@ def main_container():
 
 class ActivationTest(unittest.TestCase):
     def test_active_status_is_read_only_and_rejects_drift_without_disclosing_secrets(self):
-        for drift in [None, 'environment', 'compose', 'schema', 'identity', 'migrator', 'permissions']:
+        for drift in [None, 'environment', 'compose', 'schema', 'identity', 'migrator', 'permissions', 'gateway-on', 'gateway-capability', 'gateway-schema']:
             with self.subTest(drift=drift), tempfile.TemporaryDirectory() as directory:
                 config = Path(directory)
                 runtime = config / 'access-runtime.env'
@@ -40,6 +40,8 @@ class ActivationTest(unittest.TestCase):
                     'FOUNDRY_ACCESS_ISSUER': activate.ISSUER, 'FOUNDRY_ACCESS_AUDIENCE': secret,
                     'FOUNDRY_PUBLIC_ORIGIN': activate.ORIGIN,
                 }
+                if drift in ['gateway-on', 'gateway-capability', 'gateway-schema']:
+                    values.update(dict.fromkeys(activate.GATEWAY_FLAGS, 'true'))
                 runtime.write_text(''.join(f'{key}={value}\n' for key, value in values.items()))
                 runtime.chmod(0o644 if drift == 'permissions' else 0o600)
                 configured = activate.composition(activate.REGISTRY + '@' + DIGEST, runtime)
@@ -70,7 +72,7 @@ class ActivationTest(unittest.TestCase):
 
                 def sql(statement):
                     self.assertTrue(statement.startswith('BEGIN READ ONLY;'))
-                    return json.dumps({'version': 7 if drift == 'schema' else 2,
+                    return json.dumps({'version': 7 if drift == 'schema' else 5 if drift in ['gateway-on', 'gateway-capability'] else 2,
                         'instanceId': 'wrong' if drift == 'identity' else activate.INSTANCE,
                         'environmentId': activate.ENVIRONMENT, 'operatorBound': True,
                         'runtimeLogin': True, 'migratorLogin': drift == 'migrator'})
@@ -78,7 +80,7 @@ class ActivationTest(unittest.TestCase):
                 def metadata(path):
                     return {'instanceId': activate.INSTANCE, 'mainEnvironmentId': activate.ENVIRONMENT,
                             'environmentId': activate.ENVIRONMENT, 'ready': True,
-                            'capabilities': ['foundry.access-sessions']}
+                            'capabilities': ['foundry.access-sessions'] + (sorted(activate.GATEWAY_CAPABILITIES) if drift in ['gateway-on', 'gateway-schema'] else [])}
 
                 lstat = Path.lstat
 
@@ -90,7 +92,7 @@ class ActivationTest(unittest.TestCase):
                 with patch.object(activate, 'CONFIG', config), patch.object(activate, 'docker', docker), \
                      patch.object(activate, 'sql', sql), patch.object(activate, 'metadata', metadata), \
                      patch.object(Path, 'lstat', owned):
-                    if drift:
+                    if drift and drift != 'gateway-on':
                         with self.assertRaises(RuntimeError) as error:
                             activate.active_status()
                         self.assertNotIn(secret, str(error.exception))
@@ -98,8 +100,88 @@ class ActivationTest(unittest.TestCase):
                         report = activate.active_status()
                         self.assertEqual(report['revision'], REVISION)
                         self.assertFalse(report['upgradePerformed'])
+                        self.assertEqual(report['gatewayEnabled'], drift == 'gateway-on')
                         self.assertNotIn(secret, json.dumps(report).replace(DIGEST, 'digest'))
                 self.assertTrue(calls)
+
+    def test_gateway_configuration_requires_the_complete_flag_set(self):
+        base = {
+            'FOUNDRY_INSTANCE_STORE': 'postgres', 'FOUNDRY_ACCESS_ENABLED': 'true',
+            'FOUNDRY_INSTANCE_DATABASE_URL': 'postgresql://foundry_instance_runtime:' + 'a' * 64 + '@postgres:5432/fork_connect',
+            'FOUNDRY_ACCESS_ISSUER': activate.ISSUER, 'FOUNDRY_ACCESS_AUDIENCE': 'b' * 64,
+            'FOUNDRY_PUBLIC_ORIGIN': activate.ORIGIN,
+        }
+        render = lambda values: ''.join(f'{key}={value}\n' for key, value in values.items())
+        self.assertEqual(activate.parse_runtime(render(base)), base)
+        enabled = {**base, **dict.fromkeys(activate.GATEWAY_FLAGS, 'true')}
+        self.assertEqual(activate.parse_runtime(render(enabled)), enabled)
+        for invalid in [
+            {**base, activate.GATEWAY_FLAGS[0]: 'true'},
+            {**enabled, activate.GATEWAY_FLAGS[-1]: 'false'},
+            {**enabled, 'FOUNDRY_UNKNOWN': 'true'},
+            {**base, 'FOUNDRY_ACCESS_ENABLED': 'false'},
+        ]:
+            with self.subTest(invalid=list(invalid)), self.assertRaises(RuntimeError):
+                activate.parse_runtime(render(invalid))
+        with self.assertRaises(RuntimeError):
+            activate.parse_runtime(render(base) + 'FOUNDRY_ACCESS_ENABLED=true\n')
+
+    def test_gateway_switch_is_config_only_idempotent_and_rolls_back_failure(self):
+        for enabled, failure in [(True, None), (False, None), (True, 'start'), (True, 'verify'), (True, 'interrupt'), (True, 'rollback')]:
+            with self.subTest(enabled=enabled, failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                config, state = root / 'config', root / 'state'
+                config.mkdir()
+                state.mkdir()
+                runtime = config / 'access-runtime.env'
+                original = 'BASE=unchanged\n' + (''.join(f'{key}=true\n' for key in activate.GATEWAY_FLAGS) if not enabled else '')
+                runtime.write_text(original)
+                runtime.chmod(0o600)
+                calls = []
+                starts = 0
+                statuses = 0
+
+                def status(expected_schema=None):
+                    nonlocal statuses
+                    statuses += 1
+                    self.assertEqual(expected_schema, 5)
+                    if failure == 'verify' and statuses == 2:
+                        raise RuntimeError('verification failed')
+                    return {'gatewayEnabled': all(f'{key}=true\n' in runtime.read_text() for key in activate.GATEWAY_FLAGS),
+                            'image': activate.REGISTRY + '@' + DIGEST, 'revision': REVISION}
+
+                def docker(*args, **kwargs):
+                    nonlocal starts
+                    calls.append(args)
+                    self.assertIn(args[0], ['stop', 'compose'])
+                    if args[0] == 'compose':
+                        starts += 1
+                        self.assertIn('--no-deps', args)
+                        self.assertNotIn('--remove-orphans', args)
+                        self.assertEqual(args[-1], 'main')
+                        if failure == 'rollback' or (starts == 1 and failure in ['start', 'interrupt']):
+                            raise KeyboardInterrupt() if failure == 'interrupt' else RuntimeError('start failed')
+                    return ''
+
+                with patch.object(activate, 'CONFIG', config), patch.object(activate, 'STATE', state), \
+                     patch.object(activate, 'active_status', status), patch.object(activate, 'docker', docker), \
+                     patch('sys.stdout', new=io.StringIO()), patch('sys.stderr', new=io.StringIO()):
+                    if failure:
+                        with self.assertRaises((RuntimeError, KeyboardInterrupt)):
+                            activate.gateway(enabled)
+                        self.assertEqual(runtime.read_text(), original)
+                        self.assertEqual(starts, 2)
+                        self.assertFalse(list(state.glob('gateway-*/success')))
+                        if failure == 'rollback':
+                            self.assertEqual(calls[-1], ('stop', '--time', '60', activate.MAIN))
+                    else:
+                        activate.gateway(enabled)
+                        self.assertEqual('BASE=unchanged\n', ''.join(line + '\n' for line in runtime.read_text().splitlines() if not line.startswith('FOUNDRY_')))
+                        self.assertEqual(status(expected_schema=5)['gatewayEnabled'], enabled)
+                        self.assertEqual(runtime.stat().st_mode & 0o777, 0o600)
+                        before = list(calls)
+                        activate.gateway(enabled)
+                        self.assertEqual(calls, before, 'same desired state must not restart Main')
 
     def test_upgrade_keeps_the_current_backup_and_disables_migration_login_on_failure(self):
         for same_schema, failure in ([(False, f) for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]

@@ -1016,7 +1016,7 @@ try {
   }
   await verifyGateway({ root, mainHome: home, databaseSocket: path });
   await report(
-    "PASS integrated gateway: HTTP enrollment/retry/proof rejection, offline catalog, separate session/CSRF/origin/target checks; two clients, real worker HTTP/RPC, idempotent Replay launch, file/diff, attachment hash/resume, terminal, access revoke/regrant and registration revoke; direct T3 access preserved",
+    "PASS integrated gateway: real connector CLI with local TLS/machine headers, channel reconnect and Main service restart invalidate old grants; HTTP enrollment/retry/proof rejection, offline catalog, separate session/CSRF/origin/target checks; two clients, real worker HTTP/RPC, idempotent Replay launch, file/diff, attachment hash/resume, terminal, access revoke/regrant and registration revoke; direct T3 access preserved",
   );
   await report(
     "PASS production runtime composition: opt-in auth routes and descriptor capability, no JWKS request without an assertion",

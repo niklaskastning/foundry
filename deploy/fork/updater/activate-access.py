@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Operator-run activation, inventory, upgrade and schema-5 update of Docker Foundry."""
+"""Operator-run activation, inventory, updates and gateway toggle of Docker Foundry."""
 
 import fcntl
 import json
@@ -22,6 +22,15 @@ INSTANCE = 'defd6cac-b437-407a-8a68-069161c9c1e4'
 ENVIRONMENT = '5aa1c74c-6ff2-4e24-b17f-d5c073c3c19f'
 ISSUER = 'https://testenvnka.cloudflareaccess.com'
 ORIGIN = 'https://foundry.heavenforgeprod.com'
+GATEWAY_FLAGS = (
+    'FOUNDRY_DEVICE_ENROLLMENT_ENABLED', 'FOUNDRY_DEVICE_CHANNEL_ENABLED',
+    'FOUNDRY_GATEWAY_GRANTS_ENABLED', 'FOUNDRY_HTTP_GATEWAY_ENABLED',
+    'FOUNDRY_STREAM_GATEWAY_ENABLED',
+)
+GATEWAY_CAPABILITIES = {
+    'foundry.device-enrollment', 'foundry.device-channel', 'foundry.http-gateway',
+    'foundry.rpc-streams', 'foundry.device-catalog',
+}
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': '/root'}
 
 
@@ -74,6 +83,27 @@ def check_main(current, baseline=True):
         raise RuntimeError('Only the baseline file-store deployment can be activated once.')
 
 
+def parse_runtime(text):
+    runtime = text.splitlines()
+    entries = [line.split('=', 1) for line in runtime if line]
+    expected = {'FOUNDRY_INSTANCE_STORE', 'FOUNDRY_ACCESS_ENABLED', 'FOUNDRY_INSTANCE_DATABASE_URL',
+                'FOUNDRY_ACCESS_ISSUER', 'FOUNDRY_ACCESS_AUDIENCE', 'FOUNDRY_PUBLIC_ORIGIN'}
+    if any(len(entry) != 2 for entry in entries) or len(dict(entries)) != len(entries):
+        raise RuntimeError('Unexpected active runtime configuration.')
+    values = dict(entries)
+    extra = set(values) - expected
+    if extra and (extra != set(GATEWAY_FLAGS) or any(values[key] != 'true' for key in GATEWAY_FLAGS)):
+        raise RuntimeError('Supply either no gateway flags or the complete enabled gateway profile.')
+    if (not expected.issubset(values) or values['FOUNDRY_INSTANCE_STORE'] != 'postgres'
+            or values['FOUNDRY_ACCESS_ENABLED'] != 'true' or values['FOUNDRY_ACCESS_ISSUER'] != ISSUER
+            or values['FOUNDRY_PUBLIC_ORIGIN'] != ORIGIN
+            or not re.fullmatch(r'[a-f0-9]{64}', values['FOUNDRY_ACCESS_AUDIENCE'])
+            or not re.fullmatch(r'postgresql://foundry_instance_runtime:[a-f0-9]{64}@postgres:5432/fork_connect',
+                                values['FOUNDRY_INSTANCE_DATABASE_URL'])):
+        raise RuntimeError('Active runtime configuration differs from the one-time activation format.')
+    return values
+
+
 def active_status(expected_schema=None):
     current = inspect(MAIN)
     check_main(current, baseline=False)
@@ -88,20 +118,7 @@ def active_status(expected_schema=None):
         stat = path.lstat()
         if path.is_symlink() or not path.is_file() or stat.st_uid != 0 or stat.st_mode & 0o077:
             raise RuntimeError('Active configuration must be root-owned and private.')
-    runtime = runtime_file.read_text().splitlines()
-    entries = [line.split('=', 1) for line in runtime if line]
-    expected = {'FOUNDRY_INSTANCE_STORE', 'FOUNDRY_ACCESS_ENABLED', 'FOUNDRY_INSTANCE_DATABASE_URL',
-                'FOUNDRY_ACCESS_ISSUER', 'FOUNDRY_ACCESS_AUDIENCE', 'FOUNDRY_PUBLIC_ORIGIN'}
-    if any(len(entry) != 2 for entry in entries) or len(entries) != len(expected):
-        raise RuntimeError('Unexpected active runtime configuration.')
-    values = dict(entries)
-    if (set(values) != expected or values['FOUNDRY_INSTANCE_STORE'] != 'postgres'
-            or values['FOUNDRY_ACCESS_ENABLED'] != 'true' or values['FOUNDRY_ACCESS_ISSUER'] != ISSUER
-            or values['FOUNDRY_PUBLIC_ORIGIN'] != ORIGIN
-            or not re.fullmatch(r'[a-f0-9]{64}', values['FOUNDRY_ACCESS_AUDIENCE'])
-            or not re.fullmatch(r'postgresql://foundry_instance_runtime:[a-f0-9]{64}@postgres:5432/fork_connect',
-                                values['FOUNDRY_INSTANCE_DATABASE_URL'])):
-        raise RuntimeError('Active runtime configuration differs from the one-time activation format.')
+    values = parse_runtime(runtime_file.read_text())
     configured = json.loads((CONFIG / 'access-compose.json').read_text())
     configured_image = configured.get('services', {}).get('main', {}).get('image', '')
     if (not re.fullmatch(re.escape(REGISTRY) + r'@sha256:[a-f0-9]{64}', configured_image)
@@ -130,10 +147,64 @@ def active_status(expected_schema=None):
             or database['environmentId'] != ENVIRONMENT or database['operatorBound'] is not True
             or database['runtimeLogin'] is not True or database['migratorLogin'] is not False):
         raise RuntimeError('Unexpected instance schema, identity, operator binding or login state.')
-    return {'revision': revision, 'image': configured_image, 'schemaVersion': database['version'],
+    gateway_enabled = all(values.get(key) == 'true' for key in GATEWAY_FLAGS)
+    advertised = GATEWAY_CAPABILITIES.intersection(descriptor.get('capabilities', []))
+    if (advertised != (GATEWAY_CAPABILITIES if gateway_enabled else set())
+            or (gateway_enabled and database['version'] != 5)):
+        raise RuntimeError('Gateway capabilities or schema differ from the configured profile.')
+    return {'gatewayEnabled': gateway_enabled, 'revision': revision, 'image': configured_image, 'schemaVersion': database['version'],
             'instanceId': INSTANCE, 'environmentId': ENVIRONMENT, 'ready': True,
             'operatorBound': True, 'migratorLogin': False, 'configurationMatches': True,
             'upgradePerformed': False}
+
+
+def start_main():
+    docker('compose', '--project-name', 'foundry', '--env-file', '/dev/null',
+           '--file', str(CONFIG / 'access-compose.json'), 'up', '--detach', '--no-deps',
+           '--no-build', '--pull', 'never', '--wait', '--wait-timeout', '180', 'main')
+
+
+def gateway(enabled):
+    previous = active_status(expected_schema=5)
+    if previous['gatewayEnabled'] == enabled:
+        print(json.dumps({**previous, 'configurationChanged': False}, indent=2))
+        return
+    runtime = CONFIG / 'access-runtime.env'
+    original = runtime.read_text()
+    lines = [line for line in original.splitlines() if line.split('=', 1)[0] not in GATEWAY_FLAGS]
+    if enabled:
+        lines.extend(f'{key}=true' for key in GATEWAY_FLAGS)
+    recovery = Path(tempfile.mkdtemp(prefix='gateway-', dir=STATE))
+    write_private(recovery / 'access-runtime.env', original)
+    write_private(recovery / 'manifest.json', json.dumps(previous, indent=2) + '\n')
+    replacement = recovery / 'candidate-runtime.env'
+    write_private(replacement, '\n'.join(lines) + '\n')
+    print(f'Configuration recovery directory: {recovery}', flush=True)
+    try:
+        docker('stop', '--time', '60', MAIN)
+        os.replace(replacement, runtime)
+        start_main()
+        result = active_status(expected_schema=5)
+        if (result['gatewayEnabled'] != enabled or result['image'] != previous['image']
+                or result['revision'] != previous['revision']):
+            raise RuntimeError('Gateway configuration verification failed.')
+    except BaseException:
+        try:
+            docker('stop', '--time', '60', MAIN)
+            rollback = recovery / 'rollback-runtime.env'
+            write_private(rollback, original)
+            os.replace(rollback, runtime)
+            start_main()
+            restored = active_status(expected_schema=5)
+            if any(restored[key] != previous[key] for key in ['gatewayEnabled', 'image', 'revision']):
+                raise RuntimeError('Previous configuration could not be verified.')
+        except BaseException:
+            docker('stop', '--time', '60', MAIN)
+            raise RuntimeError(f'Main stays stopped. Restore the runtime configuration from {recovery}.') from None
+        print('Previous Main configuration restored; gateway change failed.', file=sys.stderr)
+        raise
+    write_private(recovery / 'success', 'enabled\n' if enabled else 'disabled\n')
+    print(json.dumps({**result, 'configurationChanged': True, 'configurationRecovery': str(recovery)}, indent=2))
 
 
 def upgrade(digest, revision, *, same_schema=False):
@@ -264,7 +335,7 @@ def private_json(path):
 
 
 def write_private(path, value):
-    with path.open('x', encoding='utf-8') as output:
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w', encoding='utf-8') as output:
         output.write(value)
         output.flush()
         os.fsync(output.fileno())
@@ -388,8 +459,8 @@ def activate(digest, revision):
 
 
 def main(args):
-    if args not in [['preflight'], ['status']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade', 'update']):
-        raise ValueError('Usage: foundry-activate-access status | preflight | activate|upgrade|update sha256:<digest> <source-sha>')
+    if args not in [['preflight'], ['status'], ['gateway', 'enable'], ['gateway', 'disable']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade', 'update']):
+        raise ValueError('Usage: foundry-activate-access status | preflight | gateway enable|disable | activate|upgrade|update sha256:<digest> <source-sha>')
     if os.geteuid() != 0:
         raise RuntimeError('This operation requires the administrator; no sudo grant is installed.')
     os.umask(0o077)
@@ -397,6 +468,8 @@ def main(args):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if args == ['status']:
             print(json.dumps(active_status(), indent=2))
+        elif args[0] == 'gateway':
+            gateway(args[1] == 'enable')
         elif args == ['preflight']:
             preflight()
             print('PASS pinned Docker Main, private PostgreSQL, empty fork_connect, absent login roles, stable IDs.')
