@@ -2865,6 +2865,7 @@ export const layerWsRpc = (
                 Effect.fail(new FoundryWorkerLaunchError({ code: "launch_failed" })),
             }),
           ),
+        [WS_METHODS.foundryWorkerFollow]: (input) => workerLaunch.follow(input),
         [WS_METHODS.foundryWorkerRead]: (input) => workerLaunch.read(input),
         [WS_METHODS.foundryWorkerStatus]: () => workerReadiness.read(),
         [WS_METHODS.assetsReadChunk]: (input) => assetTransfer.read(input),
