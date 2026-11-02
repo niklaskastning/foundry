@@ -72,6 +72,17 @@ but never enables the migration login or runs migrations. It does not enable
 devices or gateways. A failure after the backup boundary leaves Main stopped for
 recovery from that update's bundle; do not reuse an older upgrade backup.
 
+### Toggle the schema-5 development gateway
+
+From the reviewed checkout, `gateway enable` and `gateway disable` switch the five
+G2 flags together using the current image. `status` reports `gatewayEnabled` and
+checks the matching capabilities. This configuration-only operation saves the
+previous private runtime file, restarts Main and rolls back on start or verification
+failure, including a single Ctrl+C. It does not migrate or back up application data.
+See the [G2 procedure](g2-activation.md) for commands, interrupted-run recovery,
+machine authentication and the separate worker setup. Existing `update` preserves
+this profile; it does not enable it implicitly.
+
 ### Recover this upgrade or update
 
 This discards work accepted after the upgrade backup. Stop Main and ensure no other
