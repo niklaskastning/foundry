@@ -20,14 +20,14 @@ Architektur und Deployment erklären **was und warum**; der Umsetzungsplan besit
 
 ## Vorhandener Stand und nächster Schritt
 
-Vorhanden sind das isolierte Linux-Main-Deployment, Web und Browser-Pairing, eigene Build-Einstiege sowie inzwischen Instanz-Descriptor, PostgreSQL-Anbindung und Access-Session-Bausteine. Instanz-Gateway, automatische Device-Discovery, Workflow-Engine und Sandbox-Verwaltung sind noch geplant. Windows-Build-Konfiguration bedeutet noch keine bestandene Windows-Laufzeitabnahme.
+Main, Instanz-PostgreSQL/Access, registrierter Linux-Worker und Gateway sind integriert. Windows/Electron und Firefox greifen auf denselben Worker zu. Windows-Login, Refresh, App-Neustart und Wiederanmeldung mit erhaltener T3-Kopplung sind praktisch bestätigt. Native Foundry-Anmeldung, zentrale Thread-/Attachment-Archive, Workflow-Engine und Sandboxes bleiben geplant.
 
-Der nächste Entwicklungsabschnitt ist **G1: Instanzeinstieg und Anmeldung**. Die vorhandenen Identitäts-/Persistenz-/Access-Bausteine werden bis zum praktisch nachgewiesenen Web-/Windows-Anmeldeweg integriert; ihr Vorhandensein allein schließt G1 nicht ab. G2 prüft anschließend den ausgehenden Device-Transport. Keine vorsorgliche Codex-Installation im Main-Container und kein separates Connect-/Clerk-Deployment.
+Nächster Pflichtblock ist **G3: reale Worker-Ausführung** einschließlich Codex-Bindung, idempotentem Launch, bestätigtem Ergebnis/Stop und Workspace-Recovery. Danach folgt der Factory-MVP mit P18b, P47 und zentraler Persistenz P38a/P38b vor dem ersten Dispatch. Der [Umsetzungsplan](implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen) trennt erledigten Code von offenen G1-/G2-/G3-Abnahmen. Keine vorsorgliche Codex-Installation im Main-Container; Agenten laufen auf dem dedizierten Worker.
 
 ## Arbeitsweise
 
-Jedes Arbeitspaket erhält einen eigenen Branch, fokussierte Commits und einen PR zum Fork. Die IDs P01–P60 sind Planungsschlüssel, keine GitHub-PR-Nummern. Konkreter Status, Entscheidungen und Nachweise leben im zugehörigen Issue/PR; dieser Ordner ist kein zweites Fortschrittsboard. Ein Gate wird mit den tatsächlich geprüften Commit-/Build-Ständen belegt.
+Jedes Arbeitspaket erhält einen eigenen Branch, fokussierte Commits und einen PR zum Fork. Die IDs P01–P60 sind Planungsschlüssel, keine GitHub-PR-Nummern. Erledigter Umfang und offene Abnahmen stehen auf Maintainerwunsch im Umsetzungsplan; konkrete Entscheidungen und Nachweise bleiben im zugehörigen Issue/PR. Ein Gate wird mit den tatsächlich geprüften Commit-/Build-Ständen belegt.
 
 Die Maintainer-Vorgaben stehen in [AGENTS.md](../../AGENTS.md). Ein automatischer PR-Check, manuelle Artefakt-Builds bei Bedarf; keine zusätzliche CI-Matrix. Implementierungsnotizen und temporäre Versuchsergebnisse bleiben außerhalb des Repositories. Die ausdrücklich angeforderten Architektur-, Deployment- und Umsetzungsdokumente sind versionierte Ausnahmen davon.
 
-Die ausdrücklich vorgezogene Entwicklung von P06–P12 und die später nachzuholenden Windows-/G1-/Integrationsnachweise werden in [Tracking-Issue #13](https://github.com/niklaskastning/foundry/issues/13) geführt. Vor Weiterarbeit dieses Issue und seine Paket-PRs lesen; Entwicklungsfreigabe ist keine Gate-Abnahme oder Deployment-Freigabe.
+Das abgeschlossene [Issue #13](https://github.com/niklaskastning/foundry/issues/13) archiviert die bisherigen Integrations- und Windows-Nachweise. Offene Punkte wurden in den Umsetzungsplan übernommen. Entwicklungsfreigabe ist keine Gate-Abnahme oder Deployment-Freigabe.
