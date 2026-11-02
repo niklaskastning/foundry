@@ -1,4 +1,4 @@
-import { useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   type AssetUrlState as RuntimeAssetUrlState,
   assetUrlStateFromResult,
@@ -10,6 +10,7 @@ import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime"
 import { AssetResource, type AssetCreateUrlResult, EnvironmentId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
+import { useContext, useEffect } from "react";
 
 import { assetEnvironment } from "~/state/assets";
 import { useFilesystemReadAccess } from "~/state/filesystem";
@@ -116,18 +117,43 @@ export function useAssetUrlState(
   };
 }
 
+function createAssetUrlLifetime(
+  registry: AtomRegistry.AtomRegistry,
+  query: ReturnType<typeof assetEnvironment.createUrl> | null,
+) {
+  let unmount: (() => void) | undefined;
+  return {
+    retain: () => {
+      if (query && !unmount) unmount = registry.mount(query);
+    },
+    release: () => {
+      unmount?.();
+      unmount = undefined;
+    },
+  };
+}
+
 export function useAssetUrlRefresh(
   environmentId: EnvironmentId | null,
   resource: AssetResource | null,
 ): () => Promise<string | null> {
+  const registry = useContext(RegistryContext);
   const connection = usePreparedConnection(environmentId);
   const httpBaseUrl = connection._tag === "Some" ? connection.value.httpBaseUrl : null;
+  const query =
+    environmentId === null || resource === null
+      ? null
+      : assetEnvironment.createUrl({ environmentId, input: { resource } });
+  const lifetime = createAssetUrlLifetime(registry, query);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- releases imperatively acquired blob URLs when their preview closes or changes resource
+  useEffect(() => lifetime.release, [lifetime]);
   const refresh = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
     refresh: true,
   });
   return async () => {
     if (environmentId === null || resource === null || httpBaseUrl === null) return null;
+    lifetime.retain();
     const result = await refresh({ environmentId, input: { resource } });
     if (result._tag === "Failure") throw squashAtomCommandFailure(result);
     return resolveAssetUrl(httpBaseUrl, result.value.relativeUrl);

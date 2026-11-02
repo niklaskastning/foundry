@@ -170,9 +170,11 @@ Der Preis dieser Entscheidung ist zusätzlicher Startaufwand und ein neuer Archi
 
 ### 4.4 Persistenz und Transport
 
-Die Main Node besitzt Definitionen, Trigger-Inbox, Run-/Step-Zustände, Dispatch-Outbox und Artefaktverweise. Dauerhafte Worker besitzen ihre Thread-Ereignisse. Bei kurzlebigen Umgebungen werden diese Ereignisse zusätzlich fortlaufend zur Main Node übertragen und dort als Archiv gespeichert.
+Die Main Node besitzt Definitionen, Trigger-Inbox, Run-/Step-Zustände, Dispatch-Outbox sowie beständige Thread-Archive und Artefakte. Für alle über Foundry verwalteten Threads auf dauerhaften Workern und kurzlebigen Sandboxes werden Ereignisse fortlaufend mit bestätigtem Cursor zentral gesichert. Das lokale T3-Environment bleibt Owner der laufenden Ausführung und seiner SQLite-Daten; die zentrale Archivkopie erhält dessen Herkunft und Sequenz. Unabhängige persönliche T3-Threads werden nicht automatisch übernommen.
 
 Zunächst läuft PostgreSQL auf der VPS mit persistentem Volume und zwei logischen Datenbanken: `fork_automation` und `fork_connect`. Letzterer bestehender Name wird für Instanzverwaltung beibehalten, ohne Upstreams Relay-Schema zu übernehmen. Die Automation-Steuerung greift über einen begrenzten lokalen Connection-Pool zu; der Instanz-Service über einen eigenen lokalen Pool. Ausführungsmaschinen verwenden authentifizierte APIs und erhalten keine zentrale Datenbankverbindung. Große Transkripte, Anhänge, Git-Bundles und Testergebnisse liegen in einem getrennten Blob-Speicher: anfangs ein dauerhaftes Verzeichnis, später bei Bedarf Object Storage.
+
+Die zentrale Sicherung entsteht vor dem ersten Workflow-MVP mit P38a/P38b, nicht erst beim Sandbox-Cleanup. Thread- und Attachment-Referenzen bleiben unabhängig von einer aktiven Device-Verbindung lesbar. Gerätepfade, Gateway-Tickets und Browser-Blob-URLs sind keine dauerhaften Referenzen. Ausfälle und noch nicht bestätigte Übertragung werden sichtbar ausgewiesen; bereits zentral bestätigte Daten dürfen beim Entfernen eines Devices nicht verschwinden.
 
 Innerhalb der Automation-Datenbank werden Run-Zustand und Dispatch-Outbox atomar gespeichert. Zwischen Automation und T3 gibt es bewusst keine gemeinsame Datenbanktransaktion: Eine Outbox liefert den Auftrag mit stabilem Command-Schlüssel an den T3-Adapter; dieser bestätigt beziehungsweise gleicht den vorhandenen Thread ab. Dieses Protokoll gilt lokal ebenso wie auf entfernten Workern. Es verhindert, dass der Fork direkt in Upstream-Projektionstabellen schreiben muss.
 
@@ -467,7 +469,11 @@ Agenten schlagen neue Einträge vor. Veröffentlichung kann je Workflow automati
 
 ### Historie nach Sandbox-Löschung
 
-Solange eine Sandbox lebt, ist ihr T3-Thread die Quelle der Ausführungshistorie. Die Main Node hält eine eindeutig als solche behandelte Archivkopie mit Herkunfts-ID und bestätigter Sequenznummer. Übertragung ist wiederholbar und lückenprüfbar; Reconnect setzt am Cursor fort. Anhänge und Artefakte bekommen eigene bestätigte Transfers.
+Solange ein Worker oder eine Sandbox lebt, ist sein T3-Thread die Quelle der Ausführungshistorie. Die Main Node hält für manuelle und Workflow-Threads innerhalb Foundrys eine eindeutig als solche behandelte Archivkopie mit Herkunfts-ID und bestätigter Sequenznummer. Manuelle Threads benötigen dafür keinen künstlichen Workflow-Run. Übertragung ist wiederholbar und lückenprüfbar; Reconnect setzt am dauerhaft bestätigten Cursor fort. Anhänge und Artefakte bekommen eigene bestätigte Transfers mit Größen- und Hashprüfung.
+
+Benutzeruploads werden zuerst unter einer beständigen Instanzreferenz in Main gespeichert, bevor eine Nachricht sie verbindlich verwendet. Der ausführende Worker erhält einen begrenzten Zugriff beziehungsweise eine lokale Arbeitskopie. Vom Worker erzeugte Ergebnisse werden vor ihrer erfolgreichen Finalisierung zentral bestätigt. Zwei Clients beziehen bestätigte Anhänge über Main; die Originalmaschine und der Browser des Uploaders müssen dafür nicht online bleiben. Beliebige Dateien im Workspace werden dadurch nicht automatisch archiviert.
+
+Der zentrale Leseweg prüft aktuelle Benutzer-/Objektrechte unabhängig vom Live-Device-Grant. Ein Device-Widerruf beendet dessen Livezugriff und weitere Übertragung, löscht aber keine bestätigte Historie des berechtigten Instanzbenutzers. Archiv- und Blob-Aufbewahrung richten sich nach ihren fachlichen Besitzern und einer expliziten Löschregel, nicht nach der Lebensdauer eines Containers. Tokens und Provider-Credentials gehören nicht in diese Archive.
 
 Vor normalem Cleanup müssen das finale Thread-Archiv, erforderliche Checkpoints/Patches, Git-Objekte, Testergebnisse und ein Abschlussmanifest bestätigt sein. Ein lokaler Git-SHA allein reicht nicht: nach Sandbox-Löschung muss auch das referenzierte Objekt verfügbar sein, etwa über einen autorisierten Remote-Ref oder ein gespeichertes Git-Bundle.
 
