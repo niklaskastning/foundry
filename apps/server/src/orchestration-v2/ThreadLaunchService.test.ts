@@ -2579,6 +2579,11 @@ it.effect("worker rejects outside projects and disabled providers before committ
       disabledWorker.read({ commandId: workerInput.commandId }),
     ).pipe(Effect.provide(workerLayer(["/repo"], true, false)), Effect.flip);
     assert.deepInclude(disabledRead, { code: "not_enabled" });
+    const disabledFollow = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+      worker.follow({ commandId: workerInput.commandId }).pipe(Stream.runHead),
+    ).pipe(Effect.provide(workerLayer(["/repo"], true, false)), Effect.flip);
+    assert.deepInclude(disabledFollow, { code: "not_enabled" });
+
     for (const roots of [[], ["/other"], ["/rep"], ["relative"]]) {
       const denied = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
         worker.launch(workerInput),
@@ -2685,6 +2690,75 @@ it.effect("worker reads the accepted initial run, never a later turn or an unkno
         .read({ commandId: workerInput.commandId })
         .pipe(Effect.flip);
       assert.equal(inconsistent.code, "read_failed");
+      const failedFollow = yield* worker
+        .follow({ commandId: workerInput.commandId })
+        .pipe(Stream.runHead, Effect.flip);
+      assert.equal(failedFollow.code, "follow_failed");
     }
+  }).pipe(Effect.provide(workerLayer().pipe(Layer.provideMerge(harness.layer))));
+});
+
+it.effect("worker follows its run across replay/live and resumes without later turns", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const worker = yield* WorkerLaunch.WorkerLaunch;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const missing = yield* worker
+      .follow({ commandId: workerInput.commandId })
+      .pipe(Stream.runHead, Effect.flip);
+    assert.equal(missing.code, "not_found");
+    const receipt = yield* worker.launch(workerInput);
+    const original = yield* worker.read({ commandId: workerInput.commandId });
+    const invalid = yield* worker
+      .follow({ commandId: workerInput.commandId, afterSequence: Number.MAX_SAFE_INTEGER })
+      .pipe(Stream.runHead, Effect.flip);
+    assert.equal(invalid.code, "invalid_cursor");
+    const first = yield* worker.follow({ commandId: workerInput.commandId }).pipe(Stream.runHead);
+    assert.isTrue(Option.isSome(first));
+    if (Option.isNone(first)) return;
+    const firstSequence = first.value.sequence;
+    const progress = yield* worker.follow({ commandId: workerInput.commandId }).pipe(
+      Stream.tap((value) =>
+        value.sequence !== firstSequence
+          ? Effect.void
+          : Effect.gen(function* () {
+              yield* threads.dispatch({
+                type: "message.dispatch",
+                commandId: CommandId.make("follow-later-command"),
+                threadId: receipt.threadId,
+                messageId: MessageId.make("follow-later-message"),
+                text: "Independent later turn",
+                attachments: [],
+                modelSelection,
+                dispatchMode: { type: "defer_start", workspaceStrategy: { type: "root" } },
+                createdBy: "user",
+                creationSource: "web",
+              });
+              yield* threads.dispatch({
+                type: "run.interrupt",
+                commandId: CommandId.make("follow-interrupt"),
+                threadId: receipt.threadId,
+                runId: original.run.id,
+              });
+            }),
+      ),
+      Stream.takeUntil((value) => value.execution.run.status === "interrupted"),
+      Stream.runCollect,
+    );
+    assert.isAtLeast(progress.length, 2);
+    assert.equal(progress[0]!.sequence, firstSequence);
+    assert.equal(progress.at(-1)!.execution.run.status, "interrupted");
+    assert.isTrue(progress.every((value) => value.execution.run.id === original.run.id));
+    assert.isTrue(
+      progress.every(
+        (value, index) => index === 0 || value.sequence > progress[index - 1]!.sequence,
+      ),
+    );
+    assert.deepEqual(progress[0]!.execution.receipt, receipt);
+    assert.equal((yield* threads.getThreadProjection(receipt.threadId)).runs.length, 2);
+    const resumed = yield* worker
+      .follow({ commandId: workerInput.commandId, afterSequence: firstSequence })
+      .pipe(Stream.take(progress.length - 1), Stream.runCollect);
+    assert.deepEqual(resumed, progress.slice(1));
   }).pipe(Effect.provide(workerLayer().pipe(Layer.provideMerge(harness.layer))));
 });

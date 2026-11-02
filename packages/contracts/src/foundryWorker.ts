@@ -85,3 +85,18 @@ export class FoundryWorkerReadError extends Schema.TaggedError<FoundryWorkerRead
   "FoundryWorkerReadError",
   { code: Schema.Literals(["not_enabled", "not_found", "read_failed"]) },
 ) {}
+
+export const FoundryWorkerFollowInput = Schema.Struct({
+  commandId: CommandId,
+  afterSequence: Schema.optional(NonNegativeInt),
+});
+export type FoundryWorkerFollowInput = typeof FoundryWorkerFollowInput.Type;
+export const FoundryWorkerProgress = Schema.Struct({
+  sequence: NonNegativeInt,
+  execution: FoundryWorkerExecution,
+});
+export type FoundryWorkerProgress = typeof FoundryWorkerProgress.Type;
+export class FoundryWorkerFollowError extends Schema.TaggedError<FoundryWorkerFollowError>()(
+  "FoundryWorkerFollowError",
+  { code: Schema.Literals(["not_enabled", "not_found", "invalid_cursor", "follow_failed"]) },
+) {}

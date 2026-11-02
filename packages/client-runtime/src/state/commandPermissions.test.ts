@@ -7,6 +7,7 @@ import type { RpcSession } from "../rpc/session.ts";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
+  CommandId,
   AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
@@ -528,33 +529,43 @@ it.effect("rejects protected unary and streamed RPCs outside a guarded command",
       action: "commit",
     }).pipe(Stream.runDrain, Effect.provideService(EnvironmentSupervisor, supervisor), Effect.flip);
     expect(streamed._tag).toBe("EnvironmentAuthorizationError");
+    const workerProgress = yield* runStreamGuarded(WS_METHODS.foundryWorkerFollow, {
+      commandId: CommandId.make("worker-follow"),
+    }).pipe(Stream.runDrain, Effect.provideService(EnvironmentSupervisor, supervisor), Effect.flip);
+    expect(workerProgress).toMatchObject({
+      _tag: "EnvironmentAuthorizationError",
+      requiredPermission: AuthOrchestrationReadScope,
+    });
+
     expect(writes).toBe(0);
   }),
 );
 
-it.effect.each([WS_METHODS.foundryWorkerStatus, WS_METHODS.foundryWorkerRead])(
-  "%s requires read permission on its destination",
-  (method) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* setup;
-        const command = createCommandPermissions(runtime, method);
-        registry.set(sessions(env), AsyncResult.success(grant(false)));
-        expect(registry.get(command.permissionAtom(env))).toBe(false);
-        expect(yield* command.authorize(registry, env).pipe(Effect.flip)).toMatchObject({
-          requiredPermission: AuthOrchestrationReadScope,
-        });
-        registry.set(
-          sessions(env),
-          AsyncResult.success({
-            ...grant(false),
-            scopes: [AuthOrchestrationReadScope],
-            permissions: [AuthOrchestrationReadScope],
-          }),
-        );
-        expect(registry.get(command.permissionAtom(env))).toBe(true);
-        yield* command.authorize(registry, env);
-        expect(registry.get(command.permissionAtom(other))).toBe(false);
-      }),
-    ),
+it.effect.each([
+  WS_METHODS.foundryWorkerStatus,
+  WS_METHODS.foundryWorkerRead,
+  WS_METHODS.foundryWorkerFollow,
+])("%s requires read permission on its destination", (method) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      const command = createCommandPermissions(runtime, method);
+      registry.set(sessions(env), AsyncResult.success(grant(false)));
+      expect(registry.get(command.permissionAtom(env))).toBe(false);
+      expect(yield* command.authorize(registry, env).pipe(Effect.flip)).toMatchObject({
+        requiredPermission: AuthOrchestrationReadScope,
+      });
+      registry.set(
+        sessions(env),
+        AsyncResult.success({
+          ...grant(false),
+          scopes: [AuthOrchestrationReadScope],
+          permissions: [AuthOrchestrationReadScope],
+        }),
+      );
+      expect(registry.get(command.permissionAtom(env))).toBe(true);
+      yield* command.authorize(registry, env);
+      expect(registry.get(command.permissionAtom(other))).toBe(false);
+    }),
+  ),
 );
