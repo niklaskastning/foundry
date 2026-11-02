@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 
 import {
   BearerConnectionTarget,
+  FoundryConnectionTarget,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
@@ -107,22 +108,33 @@ export const ConnectionRegistration = Schema.Union([
 ]);
 export type ConnectionRegistration = typeof ConnectionRegistration.Type;
 
+export class FoundryConnectionRegistration extends Schema.TaggedClass<FoundryConnectionRegistration>()(
+  "FoundryConnectionRegistration",
+  { target: FoundryConnectionTarget },
+) {}
+
 /**
  * The primary stays on same-origin cookie auth
  * (`PrimaryConnectionRegistration`); secondary local backends live on a
  * separate loopback origin and authenticate with a bearer token minted from
  * their bootstrap credential (`BearerConnectionRegistration`).
  */
+
 export const PlatformConnectionRegistration = Schema.Union([
+  FoundryConnectionRegistration,
   PrimaryConnectionRegistration,
   BearerConnectionRegistration,
 ]);
 export type PlatformConnectionRegistration = typeof PlatformConnectionRegistration.Type;
 
 export function connectionRegistrationCatalogEntry(
-  registration: ConnectionRegistration | PrimaryConnectionRegistration,
+  registration:
+    | ConnectionRegistration
+    | PrimaryConnectionRegistration
+    | FoundryConnectionRegistration,
 ): ConnectionCatalogEntry {
   switch (registration._tag) {
+    case "FoundryConnectionRegistration":
     case "PrimaryConnectionRegistration":
     case "RelayConnectionRegistration":
       return {

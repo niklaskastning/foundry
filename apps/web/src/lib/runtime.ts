@@ -1,3 +1,4 @@
+import { Atom } from "effect/reactivity";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import type * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -75,3 +76,8 @@ export const layer: Layer.Layer<
   Layer.Success<RuntimeLayerSource>,
   Layer.Error<RuntimeLayerSource>
 > = Layer.effectContext(runtime.contextEffect);
+
+export const appAtomRuntime: Atom.AtomRuntime<
+  Layer.Success<RuntimeLayerSource>,
+  Layer.Error<RuntimeLayerSource>
+> = Atom.runtime(layer);

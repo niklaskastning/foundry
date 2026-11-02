@@ -1,6 +1,8 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, FoundryDeviceId, FoundryGatewayGrantRequest } from "@t3tools/contracts";
 import { RelayEnvironmentEndpointFailure } from "@t3tools/contracts/relay";
 import * as Schema from "effect/Schema";
+
+import { InstanceBinding } from "./foundry.ts";
 
 const ConnectionTargetBase = {
   environmentId: EnvironmentId,
@@ -39,7 +41,18 @@ export class SshConnectionTarget extends Schema.TaggedClass<SshConnectionTarget>
   },
 ) {}
 
+export class FoundryConnectionTarget extends Schema.TaggedClass<FoundryConnectionTarget>()(
+  "FoundryConnectionTarget",
+  {
+    ...ConnectionTargetBase,
+    binding: InstanceBinding,
+    deviceId: FoundryDeviceId,
+    scopes: FoundryGatewayGrantRequest.fields.scopes,
+  },
+) {}
+
 export const ConnectionTarget = Schema.Union([
+  FoundryConnectionTarget,
   PrimaryConnectionTarget,
   BearerConnectionTarget,
   RelayConnectionTarget,

@@ -133,6 +133,11 @@ const executeEnvironmentRequest = Effect.fnUntraced(function* <
   RemoteEnvironmentRequestError,
   Effect.Services<ReturnType<typeof makeEnvironmentHttpApiGroupClient<Group>>> | R
 > {
+  if (input.prepared.target._tag === "FoundryConnectionTarget")
+    return yield* new RemoteEnvironmentAuthFetchError({
+      message: "File and media HTTP transport through this Foundry gateway is not available yet.",
+      cause: "foundry-http-unsupported",
+    });
   let httpBaseUrl = input.prepared.httpBaseUrl;
   const requestUrlFor = (baseUrl: string) =>
     input.url(makeEnvironmentHttpApiUrlBuilder(baseUrl)[input.group]);

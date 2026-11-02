@@ -403,7 +403,11 @@ export const make = Effect.gen(function* () {
             });
           }
 
-          const bytesToRead = Math.min(stat.size, PROJECT_READ_FILE_MAX_BYTES);
+          const maxBytes = Math.min(
+            input.maxBytes ?? PROJECT_READ_FILE_MAX_BYTES,
+            PROJECT_READ_FILE_MAX_BYTES,
+          );
+          const bytesToRead = Math.min(stat.size, maxBytes);
           const buffer = Buffer.alloc(bytesToRead);
           const { bytesRead } = yield* Effect.tryPromise({
             try: () => handle.read(buffer, 0, bytesToRead, 0),
@@ -426,7 +430,7 @@ export const make = Effect.gen(function* () {
             });
           }
 
-          const truncated = stat.size > PROJECT_READ_FILE_MAX_BYTES;
+          const truncated = stat.size > maxBytes;
           return {
             relativePath: target.relativePath,
             // Streaming decode drops a character the byte limit split, instead of ending in U+FFFD.

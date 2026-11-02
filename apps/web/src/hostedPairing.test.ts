@@ -3,12 +3,28 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   buildHostedPairingUrl,
   hasHostedPairingRequest,
+  isHostedStaticApp,
   readHostedPairingRequest,
 } from "./hostedPairing";
 
 describe("hostedPairing", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("discovers Main on the Foundry hosted origin while retaining explicit static hosting", () => {
+    vi.stubEnv("VITE_HTTP_URL", "");
+    vi.stubEnv("VITE_WS_URL", "");
+    vi.stubEnv("VITE_HOSTED_APP_CHANNEL", "");
+    vi.stubEnv("VITE_HOSTED_APP_URL", "https://foundry.example.com");
+    const origin = new URL("https://foundry.example.com/settings/access");
+    vi.stubGlobal("__T3CODE_FOUNDRY_BUILD__", false);
+    expect(isHostedStaticApp(origin)).toBe(true);
+    vi.stubGlobal("__T3CODE_FOUNDRY_BUILD__", true);
+    expect(isHostedStaticApp(origin)).toBe(false);
+    vi.stubEnv("VITE_HOSTED_APP_CHANNEL", "latest");
+    expect(isHostedStaticApp(origin)).toBe(true);
   });
 
   it("reads hosted pairing host and query token parameters", () => {

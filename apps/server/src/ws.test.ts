@@ -1,3 +1,7 @@
+import { FoundryWorkerError } from "@t3tools/contracts";
+import * as WorkerLaunch from "./foundry/WorkerLaunch.ts";
+import * as WorkerReadiness from "./foundry/WorkerReadiness.ts";
+import * as AssetTransfer from "./assets/AssetTransfer.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -551,6 +555,11 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({}),
   Layer.mock(WorkspaceEntries.WorkspaceEntries)({}),
   Layer.mock(WorkspaceFileSystem.WorkspaceFileSystem)({}),
+  Layer.mock(WorkerLaunch.WorkerLaunch)({}),
+  Layer.succeed(WorkerReadiness.WorkerReadiness, {
+    read: () => Effect.fail(new FoundryWorkerError({ code: "not_enabled" })),
+  }),
+  Layer.mock(AssetTransfer.AssetTransfer)({}),
   Layer.mock(WorktreeSetupTracker.WorktreeSetupTracker)({}),
 );
 

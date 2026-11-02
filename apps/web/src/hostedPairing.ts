@@ -1,4 +1,5 @@
 import { DEFAULT_HOSTED_APP_URL } from "@t3tools/shared/connectAuth";
+import { isFoundryBuild } from "@t3tools/shared/foundryBuild";
 
 import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "@t3tools/shared/remote";
 
@@ -38,6 +39,11 @@ export function isHostedStaticApp(url?: URL): boolean {
 
   if (configuredHostedAppChannel()) {
     return true;
+  }
+
+  // Foundry's hosted URL points to Main, which also serves the same-origin backend.
+  if (isFoundryBuild()) {
+    return false;
   }
 
   if (url === undefined && (typeof window === "undefined" || window.location === undefined)) {

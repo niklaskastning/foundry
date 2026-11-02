@@ -12,10 +12,39 @@ import * as InstancePersistence from "./InstancePersistence.ts";
 import * as InstancePostgres from "./InstancePostgres.ts";
 import * as FoundryHttp from "./http.ts";
 import * as AuthHttp from "./authHttp.ts";
+import * as DeviceConfig from "./DeviceConfig.ts";
+import * as DeviceRegistry from "./DeviceRegistry.ts";
+import * as DeviceHttp from "./deviceHttp.ts";
+import * as DeviceChannel from "./DeviceChannel.ts";
+import * as DeviceChannelHttp from "./deviceChannelHttp.ts";
+import * as DeviceGrants from "./DeviceGrants.ts";
+import * as GatewayGrants from "./GatewayGrants.ts";
+import * as GatewayHttp from "./gatewayHttp.ts";
+import { FoundryDeviceError } from "@t3tools/contracts";
 
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const enabled = yield* Config.Boolean("FOUNDRY_ACCESS_ENABLED").pipe(Config.withDefault(false));
+    const enrollment = yield* Config.Boolean("FOUNDRY_DEVICE_ENROLLMENT_ENABLED").pipe(
+      Config.withDefault(false),
+    );
+    if (enrollment && !enabled) return yield* new FoundryDeviceError({ code: "configuration" });
+    const channel = yield* Config.Boolean("FOUNDRY_DEVICE_CHANNEL_ENABLED").pipe(
+      Config.withDefault(false),
+    );
+    if (channel && !enrollment) return yield* new FoundryDeviceError({ code: "configuration" });
+    const grants = yield* Config.Boolean("FOUNDRY_GATEWAY_GRANTS_ENABLED").pipe(
+      Config.withDefault(false),
+    );
+    const gateway = yield* Config.Boolean("FOUNDRY_HTTP_GATEWAY_ENABLED").pipe(
+      Config.withDefault(false),
+    );
+    const streams = yield* Config.Boolean("FOUNDRY_STREAM_GATEWAY_ENABLED").pipe(
+      Config.withDefault(false),
+    );
+    if (streams && !gateway) return yield* new FoundryDeviceError({ code: "configuration" });
+    if (gateway && !grants) return yield* new FoundryDeviceError({ code: "configuration" });
+    if (grants && !channel) return yield* new FoundryDeviceError({ code: "configuration" });
     if (!enabled)
       return FoundryHttp.layer.pipe(
         Layer.provide(InstanceDescriptor.layer),
@@ -25,12 +54,31 @@ export const layer = Layer.unwrap(
     const store = yield* Config.String("FOUNDRY_INSTANCE_STORE");
     if (store !== "postgres") return yield* new AccessConfig.AccessConfigurationError({});
     const url = yield* Config.Redacted("FOUNDRY_INSTANCE_DATABASE_URL");
-    return Layer.merge(FoundryHttp.layer, AuthHttp.layer).pipe(
+    const deviceRoutes = enrollment
+      ? Layer.merge(
+          DeviceHttp.layer,
+          channel
+            ? Layer.merge(
+                DeviceChannelHttp.layer,
+                grants
+                  ? GatewayHttp.layer.pipe(
+                      Layer.provide(GatewayGrants.layer.pipe(Layer.provide(DeviceGrants.layer))),
+                    )
+                  : Layer.empty,
+              ).pipe(Layer.provide(DeviceChannel.layer))
+            : Layer.empty,
+        ).pipe(Layer.provide(DeviceRegistry.layer), Layer.provide(DeviceConfig.layer))
+      : Layer.empty;
+    return Layer.mergeAll(FoundryHttp.layer, AuthHttp.layer, deviceRoutes).pipe(
       Layer.provide(Layer.merge(InstanceDescriptor.layer, FoundrySessions.layer)),
       Layer.provide(AccessVerifier.layer),
       Layer.provide(AccessVerifier.layerRemoteKeys),
       Layer.provide(AccessConfig.layer),
       Layer.provide(Layer.succeed(AccessConfig.AccessEnabled, true)),
+      Layer.provide(Layer.succeed(DeviceConfig.DeviceEnrollmentEnabled, enrollment)),
+      Layer.provide(Layer.succeed(DeviceConfig.DeviceChannelEnabled, channel)),
+      Layer.provide(Layer.succeed(DeviceConfig.HttpGatewayEnabled, gateway)),
+      Layer.provide(Layer.succeed(DeviceConfig.StreamGatewayEnabled, streams)),
       Layer.provide(InstancePostgres.layerIdentity),
       Layer.provide(InstancePostgres.layer),
       Layer.provide(InstanceDatabase.layer({ url })),

@@ -1,4 +1,5 @@
 import * as AccessConfig from "./AccessConfig.ts";
+import * as DeviceConfig from "./DeviceConfig.ts";
 import {
   FOUNDRY_CAPABILITIES,
   FOUNDRY_PROTOCOL_VERSION,
@@ -8,6 +9,7 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as EnvironmentAuthPolicy from "../auth/EnvironmentAuthPolicy.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as InstanceIdentityStore from "./InstanceIdentityStore.ts";
@@ -28,8 +30,21 @@ export class InstanceDescriptor extends Context.Service<
 
 const make = Effect.gen(function* () {
   const enabled = yield* AccessConfig.AccessEnabled;
+  const enrollment = yield* DeviceConfig.DeviceEnrollmentEnabled;
+  const channel = yield* DeviceConfig.DeviceChannelEnabled;
+  const gateway = yield* DeviceConfig.HttpGatewayEnabled;
+  const streams = yield* DeviceConfig.StreamGatewayEnabled;
+  const access = yield* Effect.serviceOption(AccessConfig.AccessConfig);
+  if (enabled && Option.isNone(access))
+    return yield* Effect.die(new AccessConfig.AccessConfigurationError({}));
   const capabilities = FOUNDRY_CAPABILITIES.filter(
-    (capability) => enabled || capability !== "foundry.access-sessions",
+    (capability) =>
+      (enabled || capability !== "foundry.access-sessions") &&
+      (enrollment || capability !== "foundry.device-enrollment") &&
+      (channel || capability !== "foundry.device-channel") &&
+      (gateway || capability !== "foundry.http-gateway") &&
+      (streams || capability !== "foundry.rpc-streams") &&
+      (streams || capability !== "foundry.device-catalog"),
   );
   const identity = yield* InstanceIdentityStore.InstanceIdentityStore;
   const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;
@@ -65,6 +80,8 @@ const make = Effect.gen(function* () {
       ...(enabled
         ? {
             instanceAuth: {
+              publicOrigin: Option.getOrThrow(access).origin,
+              issuer: Option.getOrThrow(access).issuer,
               bootstrapMethods: ["cloudflare-access-jwt"] as const,
               sessionMethods: ["foundry-session-cookie"] as const,
             },

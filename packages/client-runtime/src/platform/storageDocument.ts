@@ -60,6 +60,7 @@ export function removeCatalogValue<A>(
 
 function connectionIdOf(target: ConnectionTarget): string | null {
   switch (target._tag) {
+    case "FoundryConnectionTarget":
     case "PrimaryConnectionTarget":
     case "RelayConnectionTarget":
       return null;

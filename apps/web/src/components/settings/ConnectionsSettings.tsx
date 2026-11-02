@@ -1,3 +1,5 @@
+import { isFoundryBuild } from "@t3tools/shared/foundryBuild";
+import { DeviceCatalog } from "../../foundry/DeviceCatalog";
 import { SessionPermissions } from "./SessionPermissions";
 import { ChevronRightIcon, EllipsisIcon } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
@@ -1464,6 +1466,11 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
 
   return (
     <SettingsPageContainer>
+      {isFoundryBuild() && (!desktopBridge || window.location.protocol === "https:") ? (
+        <SettingsSection title="Foundry instance">
+          <DeviceCatalog />
+        </SettingsSection>
+      ) : null}
       {desktopBridge ? (
         <SettingsSection id="this-app" title="This app">
           <LocalEnvironmentSetting />

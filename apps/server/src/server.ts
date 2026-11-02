@@ -1,3 +1,7 @@
+import * as CommandReceiptStore from "./orchestration-v2/CommandReceiptStore.ts";
+import * as WorkerLaunch from "./foundry/WorkerLaunch.ts";
+import * as WorkerReadiness from "./foundry/WorkerReadiness.ts";
+import * as AssetTransfer from "./assets/AssetTransfer.ts";
 import * as FoundryRuntime from "./foundry/Runtime.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
@@ -18,6 +22,7 @@ import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Config from "effect/Config";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
@@ -306,6 +311,9 @@ const layerRelayClient = Layer.unwrap(
 const layerHttpServer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    const foundryStreams = yield* Config.Boolean("FOUNDRY_STREAM_GATEWAY_ENABLED").pipe(
+      Config.withDefault(false),
+    );
     return NodeHttpServer.layer(
       () => {
         const server = rejectRequestsUntilServing(
@@ -328,7 +336,7 @@ const layerHttpServer = Layer.unwrap(
         // window is shared across frames — that also makes small frames cheap
         // to compress, so no size threshold is set (ws only honors
         // `threshold` when context takeover is disabled).
-        websocket: { perMessageDeflate: true },
+        websocket: { perMessageDeflate: true, ...(foundryStreams ? { maxPayload: 262144 } : {}) },
       },
     );
   }),
@@ -583,6 +591,12 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
+  WorkerLaunch.layer.pipe(
+    Layer.provide(CommandReceiptStore.layer),
+    Layer.provide(WorkerReadiness.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
+  ),
+  WorkerReadiness.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
+  AssetTransfer.layer.pipe(Layer.provide(NativeAppIconResolver.layer)),
   AgentAwarenessRelay.layer,
   HeldHooksWaker.layer,
   layerThreadSettlementWorker,

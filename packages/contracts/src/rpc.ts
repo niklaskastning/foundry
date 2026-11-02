@@ -1,4 +1,19 @@
 import {
+  FoundryWorkerLaunchInput,
+  FoundryWorkerLaunchReceipt,
+  FoundryWorkerLaunchError,
+  FoundryWorkerStatus,
+  FoundryWorkerError,
+} from "./foundryWorker.ts";
+import {
+  AssetReadChunkInput,
+  AssetReadChunkResult,
+  AttachmentChunkStatusInput,
+  AttachmentChunkStatus,
+  AttachmentWriteChunkInput,
+  AssetTransferError,
+} from "./assetTransfer.ts";
+import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
@@ -423,6 +438,11 @@ export const WS_METHODS = {
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
   assetsCreateUrl: "assets.createUrl",
+  foundryWorkerLaunch: "foundry.workerLaunch",
+  foundryWorkerStatus: "foundry.workerStatus",
+  assetsReadChunk: "assets.readChunk",
+  attachmentsWriteChunk: "attachments.writeChunk",
+  attachmentsChunkStatus: "attachments.chunkStatus",
   assetsPersistChatAttachments: "assets.persistChatAttachments",
   attachmentsCreateUploadUrl: "attachments.createUploadUrl",
   attachmentsDelete: "attachments.delete",
@@ -1381,6 +1401,32 @@ const WsAgentSessionsImportRpc = Rpc.make(WS_METHODS.agentSessionsImport, {
   ]),
 });
 
+const WsFoundryWorkerLaunchRpc = Rpc.make(WS_METHODS.foundryWorkerLaunch, {
+  payload: FoundryWorkerLaunchInput,
+  success: FoundryWorkerLaunchReceipt,
+  error: Schema.Union([FoundryWorkerLaunchError, EnvironmentAuthorizationError]),
+});
+const WsFoundryWorkerStatusRpc = Rpc.make(WS_METHODS.foundryWorkerStatus, {
+  payload: Schema.Struct({}),
+  success: FoundryWorkerStatus,
+  error: Schema.Union([FoundryWorkerError, EnvironmentAuthorizationError]),
+});
+const WsAssetsReadChunkRpc = Rpc.make(WS_METHODS.assetsReadChunk, {
+  payload: AssetReadChunkInput,
+  success: AssetReadChunkResult,
+  error: Schema.Union([AssetTransferError, EnvironmentAuthorizationError]),
+});
+const WsAttachmentsWriteChunkRpc = Rpc.make(WS_METHODS.attachmentsWriteChunk, {
+  payload: AttachmentWriteChunkInput,
+  success: AttachmentChunkStatus,
+  error: Schema.Union([AssetTransferError, EnvironmentAuthorizationError]),
+});
+const WsAttachmentsChunkStatusRpc = Rpc.make(WS_METHODS.attachmentsChunkStatus, {
+  payload: AttachmentChunkStatusInput,
+  success: AttachmentChunkStatus,
+  error: Schema.Union([AssetTransferError, EnvironmentAuthorizationError]),
+});
+
 const WsAssetsCreateUrlRpc = Rpc.make(WS_METHODS.assetsCreateUrl, {
   payload: AssetCreateUrlInput,
   success: AssetCreateUrlResult,
@@ -2100,6 +2146,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
   WsAssetsCreateUrlRpc,
+  WsFoundryWorkerLaunchRpc,
+  WsFoundryWorkerStatusRpc,
+  WsAssetsReadChunkRpc,
+  WsAttachmentsWriteChunkRpc,
+  WsAttachmentsChunkStatusRpc,
   WsAssetsPersistChatAttachmentsRpc,
   WsAttachmentsCreateUploadUrlRpc,
   WsAttachmentsDeleteRpc,

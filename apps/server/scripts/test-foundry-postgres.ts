@@ -1,3 +1,4 @@
+import { verifyGateway } from "./foundry-gateway-integration.ts";
 import * as Schema from "effect/Schema";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as FoundryRuntime from "../src/foundry/Runtime.ts";
@@ -32,6 +33,16 @@ import * as FoundryHttp from "../src/foundry/http.ts";
 import * as ServerConfig from "../src/config.ts";
 import * as ServerEnvironment from "../src/environment/ServerEnvironment.ts";
 import * as EnvironmentAuthPolicy from "../src/auth/EnvironmentAuthPolicy.ts";
+import * as EnvironmentAuth from "../src/auth/EnvironmentAuth.ts";
+import * as ServerSecretStore from "../src/auth/ServerSecretStore.ts";
+import * as SqlitePersistence from "../src/persistence/Sqlite.ts";
+import * as DeviceGrants from "../src/foundry/DeviceGrants.ts";
+import * as DeviceRegistry from "../src/foundry/DeviceRegistry.ts";
+import * as DeviceConfig from "../src/foundry/DeviceConfig.ts";
+import * as DeviceHttp from "../src/foundry/deviceHttp.ts";
+import { generateDeviceKey, signEnrollment } from "../src/foundry/DeviceProof.ts";
+import { FoundryDevice, FoundryEnrollmentRequest } from "@t3tools/contracts";
+import * as FoundryOnboarding from "../../../packages/client-runtime/src/connection/foundry.ts";
 
 const decodeDescriptor = Schema.decodeUnknownSync(FoundryDescriptor);
 const decodeSession = Schema.decodeUnknownSync(FoundrySession);
@@ -246,7 +257,7 @@ try {
     await query("UPDATE foundry_instance.schema_version SET version=99", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 503);
     await expectFailure(migrate());
-    await query("UPDATE foundry_instance.schema_version SET version=2", "foundry_migrate");
+    await query("UPDATE foundry_instance.schema_version SET version=5", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 200);
     await query("GRANT CREATE ON SCHEMA public TO foundry_runtime");
     NodeAssert.equal((await ready()).status, 503);
@@ -296,6 +307,7 @@ try {
   const clock = await run(Clock.Clock);
   const testContext = Context.make(Clock.Clock, {
     ...clock,
+    sleep: clock.sleep.bind(clock),
     currentTimeMillis: Effect.sync(() => now),
     currentTimeMillisUnsafe: () => now,
     currentTimeNanos: Effect.sync(() => BigInt(now) * 1_000_000n),
@@ -356,6 +368,10 @@ try {
     await run(bind());
     await expectFailure(bind("foreign-operator"));
     const operatorBefore = await query("SELECT * FROM foundry_instance.operator_binding");
+    await query(
+      "DROP TABLE foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
+      "foundry_migrate",
+    );
     await query("DROP TABLE foundry_instance.sessions", "foundry_migrate");
     await query("UPDATE foundry_instance.schema_version SET version=1", "foundry_migrate");
     await expectFailure(readIdentity);
@@ -503,12 +519,412 @@ try {
     await report(
       "PASS P03: v1 upgrade preserves identity/operator; signed login, origin/CSRF, header spoofing, atomic refresh, durable logout, expiry, generations and DB outage",
     );
+    const descriptorHandler = HttpRouter.toWebHandler(
+      routes.pipe(
+        Layer.provide(Layer.succeed(AccessConfig.AccessEnabled, true)),
+        Layer.provide(Layer.succeed(AccessConfig.AccessConfig, accessConfig)),
+      ),
+      { disableLogger: true },
+    );
+    try {
+      const values = new Map<string, string>([["unrelated-profile", "preserved"]]);
+      let cookie = "";
+      const client = FoundryOnboarding.createInstanceClient({
+        origin: accessConfig.origin,
+        now: () => now,
+        storage: {
+          getItem: (key) => values.get(key) ?? null,
+          setItem: (key, value) => {
+            values.set(key, value);
+          },
+          removeItem: (key) => {
+            values.delete(key);
+          },
+        },
+        request: async (path, csrf) => {
+          const response = path.startsWith("/.well-known/")
+            ? await descriptorHandler.handler(new Request(`${accessConfig.origin}${path}`))
+            : await post(path.slice("/api/foundry/auth/".length), {
+                "cf-access-jwt-assertion": await sign(),
+                cookie,
+                ...(csrf ? { "x-foundry-csrf": csrf } : {}),
+              });
+          const issuedCookie = response.headers.get("set-cookie");
+          if (issuedCookie) cookie = issuedCookie.split(";", 1)[0]!;
+          return FoundryOnboarding.readResponse(response);
+        },
+      });
+      const inspected = await client.execute("inspect");
+      NodeAssert.equal(inspected.confirmed, false);
+      NodeAssert.ok(inspected.binding);
+      NodeAssert.equal(inspected.binding.instanceId, instanceId);
+      NodeAssert.equal(inspected.binding.mainEnvironmentId, mainEnvironmentId);
+      await client.execute("confirm", inspected.binding);
+      NodeAssert.equal((await client.execute("login")).session?.instanceId, instanceId);
+      const beforeRefresh = cookie;
+      await client.execute("refresh");
+      NodeAssert.notEqual(cookie, beforeRefresh);
+      NodeAssert.equal((await post("session", { cookie: beforeRefresh })).status, 401);
+      await authHandler.dispose();
+      authHandler = HttpRouter.toWebHandler(authRoutes, { disableLogger: true });
+      NodeAssert.equal((await client.execute("session")).session?.instanceId, instanceId);
+      const beforeLogout = cookie;
+      await client.execute("remove");
+      NodeAssert.deepEqual([...values], [["unrelated-profile", "preserved"]]);
+      await authHandler.dispose();
+      authHandler = HttpRouter.toWebHandler(authRoutes, { disableLogger: true });
+      NodeAssert.equal((await post("session", { cookie: beforeLogout })).status, 401);
+      await client.execute("confirm", inspected.binding);
+      await client.execute("login");
+      await query(
+        "UPDATE foundry_instance.instance SET access_generation=access_generation+1",
+        "foundry_runtime",
+      );
+      await NodeAssert.rejects(client.execute("session"), { code: "invalid_session" });
+      await client.execute("remove");
+      NodeAssert.deepEqual([...values], [["unrelated-profile", "preserved"]]);
+      await report(
+        "PASS P05 client with real HTTP handlers/PostgreSQL: descriptor, confirmed login, cookie rotation, handler restart, durable logout, remote revocation and scoped removal",
+      );
+    } finally {
+      await descriptorHandler.dispose();
+    }
   } finally {
     await authHandler.dispose();
   }
+  const sessionsBeforeUpgrade = await query(
+    "SELECT * FROM foundry_instance.sessions ORDER BY token_hash",
+  );
+  await query(
+    "DROP TABLE foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
+    "foundry_migrate",
+  );
+  await query("UPDATE foundry_instance.schema_version SET version=2", "foundry_migrate");
+  await expectFailure(readIdentity);
+  await run(Effect.all([migrate(), migrate()], { concurrency: "unbounded" }));
+  NodeAssert.equal(await run(readIdentity), instanceId);
+  NodeAssert.deepEqual(
+    await query("SELECT * FROM foundry_instance.sessions ORDER BY token_hash"),
+    sessionsBeforeUpgrade,
+  );
+  const registryLayer = DeviceRegistry.layer.pipe(
+    Layer.provide(Layer.succeed(DeviceConfig.DeviceOrigin, { origin: accessConfig.origin })),
+    Layer.provide(identityLayer),
+    Layer.provide(db("foundry_runtime")),
+    Layer.provide(NodeServices.layer),
+  );
+  const deviceHandler = HttpRouter.toWebHandler(
+    DeviceHttp.layer.pipe(Layer.provide(registryLayer)),
+    { disableLogger: true },
+  );
+  try {
+    const deviceCall = <A>(
+      f: (
+        registry: DeviceRegistry.DeviceRegistry["Service"],
+      ) => Effect.Effect<A, import("@t3tools/contracts").FoundryDeviceError>,
+    ) =>
+      run(
+        DeviceRegistry.DeviceRegistry.pipe(
+          Effect.flatMap(f),
+          Effect.provide(registryLayer),
+          Effect.provide(testContext),
+        ),
+      );
+    const enroll = (input: FoundryEnrollmentRequest) =>
+      deviceHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/devices/enroll`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(input),
+        }),
+        testContext,
+      );
+    const keyFile = NodePath.join(root, "device-key.json");
+    const invitationFile = NodePath.join(root, "invitation.json");
+    const requestFile = NodePath.join(root, "request.json");
+    const cli = (...args: string[]) =>
+      NodeChildProcess.spawnSync(
+        process.execPath,
+        [NodePath.join(import.meta.dirname, "../src/bin.ts"), "foundry", ...args],
+        { encoding: "utf8" },
+      );
+    NodeAssert.equal(cli("device-keygen", "--output", keyFile).status, 0, "device-keygen failed");
+    const keyContent = await NodeFSP.readFile(keyFile, "utf8");
+    const key = Schema.decodeUnknownSync(
+      Schema.Struct({ publicKey: Schema.String, privateKey: Schema.String }),
+    )(JSON.parse(keyContent));
+    NodeAssert.equal((await NodeFSP.stat(keyFile)).mode & 0o777, 0o600);
+    NodeAssert.notEqual(cli("device-keygen", "--output", keyFile).status, 0);
+    NodeAssert.equal((await NodeFSP.readFile(keyFile, "utf8")) === keyContent, true);
+    const invitation = await deviceCall((registry) =>
+      registry.approve({
+        environmentId: EnvironmentId.make("p06-worker"),
+        publicKey: key.publicKey,
+      }),
+    );
+    await NodeFSP.writeFile(invitationFile, JSON.stringify(invitation), { mode: 0o600 });
+    NodeAssert.equal(
+      cli(
+        "sign-enrollment",
+        "--invitation",
+        invitationFile,
+        "--key-file",
+        keyFile,
+        "--output",
+        requestFile,
+      ).status,
+      0,
+      "sign-enrollment failed",
+    );
+    const proof = Schema.decodeUnknownSync(FoundryEnrollmentRequest)(
+      JSON.parse(await NodeFSP.readFile(requestFile, "utf8")),
+    );
+    NodeAssert.equal((await NodeFSP.stat(requestFile)).mode & 0o777, 0o600);
+    const initial = await Promise.all(Array.from({ length: 8 }, () => enroll(proof)));
+    const devices: FoundryDevice[] = [];
+    for (const response of initial) {
+      NodeAssert.equal(response.status, 200);
+      devices.push(Schema.decodeUnknownSync(FoundryDevice)(await response.json()));
+    }
+    for (const device of devices) NodeAssert.deepEqual(device, devices[0]);
+    const oversized = await deviceHandler.handler(
+      new Request(`${accessConfig.origin}/api/foundry/devices/enroll`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: `${JSON.stringify(proof)}${" ".repeat(8192)}`,
+      }),
+      testContext,
+    );
+    NodeAssert.equal(oversized.status, 403);
+    const registered = devices[0]!;
+    await query(
+      "ALTER TABLE foundry_instance.devices DROP COLUMN channel_generation",
+      "foundry_migrate",
+    );
+    await query("DROP TABLE foundry_instance.device_grants", "foundry_migrate");
+    await query("UPDATE foundry_instance.schema_version SET version=3", "foundry_migrate");
+    await expectFailure(readIdentity);
+    await run(Effect.all([migrate(), migrate()], { concurrency: "unbounded" }));
+    NodeAssert.deepEqual(
+      await deviceCall((registry) => registry.get(registered.deviceId)),
+      registered,
+    );
+    const operatorId = String(
+      (await query("SELECT operator_id FROM foundry_instance.operator_binding"))[0]!.operator_id,
+    );
+    const grantLayer = DeviceGrants.layer.pipe(
+      Layer.provide(identityLayer),
+      Layer.provide(db("foundry_runtime")),
+    );
+    NodeAssert.deepEqual(await deviceCall((registry) => registry.list(operatorId)), [
+      {
+        deviceId: registered.deviceId,
+        environmentId: registered.environmentId,
+        revoked: false,
+        clientAccess: { enabled: true, generation: 1 },
+      },
+    ]);
+    NodeAssert.deepEqual(
+      await deviceCall((registry) => registry.list("33333333-3333-4333-8333-333333333333")),
+      [],
+    );
+    const grantCall = <A>(
+      f: (
+        service: DeviceGrants.DeviceGrants["Service"],
+      ) => Effect.Effect<A, import("@t3tools/contracts").FoundryGatewayError>,
+    ) => run(DeviceGrants.DeviceGrants.pipe(Effect.flatMap(f), Effect.provide(grantLayer)));
+    const initialGrants = await grantCall((service) =>
+      service.read(registered.deviceId, operatorId),
+    );
+    NodeAssert.deepEqual(initialGrants.map((g) => [g.kind, g.enabled]).sort(), [
+      ["automationExecution", false],
+      ["clientAccess", true],
+      ["sandboxProvisioning", false],
+    ]);
+    const access = initialGrants.find((g) => g.kind === "clientAccess")!;
+    const disabled = await grantCall((service) =>
+      service.update({ ...access, enabled: false }, operatorId),
+    );
+    NodeAssert.equal(disabled.generation, access.generation + 1);
+    NodeAssert.equal((await enroll(proof)).status, 200);
+    await NodeAssert.rejects(
+      grantCall((service) => service.check(registered.deviceId, operatorId)),
+    );
+    await NodeAssert.rejects(
+      grantCall((service) => service.update({ ...access, enabled: true }, operatorId)),
+    );
+    for (const kind of ["automationExecution", "sandboxProvisioning"]) {
+      await NodeAssert.rejects(
+        grantCall((service) => service.update({ ...access, kind, enabled: true }, operatorId)),
+      );
+    }
+    const restored = await grantCall((service) =>
+      service.update({ ...disabled, enabled: true }, operatorId),
+    );
+    await NodeAssert.rejects(
+      grantCall((service) => service.check(registered.deviceId, operatorId, access.generation)),
+    );
+    NodeAssert.equal(
+      await grantCall((service) =>
+        service.check(registered.deviceId, operatorId, restored.generation),
+      ),
+      restored.generation,
+    );
+    await NodeAssert.rejects(
+      grantCall((service) =>
+        service.read(registered.deviceId, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+      ),
+    );
+    await run(migrate());
+    NodeAssert.equal(
+      await grantCall((service) => service.check(registered.deviceId, operatorId)),
+      restored.generation,
+    );
+    NodeAssert.deepEqual(
+      (await grantCall((service) => service.read(registered.deviceId, operatorId))).filter(
+        (g) => g.kind !== "clientAccess",
+      ),
+      initialGrants.filter((g) => g.kind !== "clientAccess"),
+    );
+    await report(
+      "PASS P11 PostgreSQL: separated grant kinds, durable revoke/regrant generations, stale update rejection, operator isolation and idempotent migration",
+    );
+    const epochs = await Promise.all(
+      Array.from({ length: 4 }, () => deviceCall((registry) => registry.claimChannel(registered))),
+    );
+    NodeAssert.equal(new Set(epochs).size, 4);
+    const currentEpoch = Math.max(...epochs);
+    await deviceCall((registry) => registry.checkChannel(registered, currentEpoch));
+    for (const epoch of epochs.filter((value) => value !== currentEpoch)) {
+      await NodeAssert.rejects(deviceCall((registry) => registry.checkChannel(registered, epoch)));
+    }
+    NodeAssert.equal((await query("SELECT * FROM foundry_instance.devices")).length, 1);
+    const independentKey = generateDeviceKey();
+    const independentInvitation = await deviceCall((registry) =>
+      registry.approve({
+        environmentId: EnvironmentId.make("p11-independent-worker"),
+        publicKey: independentKey.publicKey,
+      }),
+    );
+    const independentDevice = await deviceCall((registry) =>
+      registry.enroll(signEnrollment(independentInvitation, independentKey.privateKey)),
+    );
+    const independentGrants = await grantCall((service) =>
+      service.read(independentDevice.deviceId, operatorId),
+    );
+    await grantCall((service) => service.update({ ...restored, enabled: false }, operatorId));
+    await NodeAssert.rejects(
+      grantCall((service) => service.check(registered.deviceId, operatorId)),
+    );
+    NodeAssert.equal(
+      await grantCall((service) => service.check(independentDevice.deviceId, operatorId)),
+      1,
+    );
+    NodeAssert.deepEqual(
+      await grantCall((service) => service.read(independentDevice.deviceId, operatorId)),
+      independentGrants,
+    );
+    await report(
+      "PASS P11 device isolation: revoking one device's client access preserves every grant of another device",
+    );
+    NodeAssert.equal(
+      JSON.stringify(
+        await query("SELECT token_hash FROM foundry_instance.device_enrollments"),
+      ).includes(invitation.token),
+      false,
+    );
+    NodeAssert.deepEqual(await (await enroll(proof)).json(), registered);
+    const otherKey = generateDeviceKey();
+    for (const changed of [
+      { ...invitation, instanceId: FoundryInstanceId.make("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa") },
+      { ...invitation, origin: "https://foreign.example.test" },
+      { ...invitation, environmentId: EnvironmentId.make("foreign-environment") },
+      { ...invitation, expiresAt: invitation.expiresAt + 1000 },
+    ])
+      NodeAssert.equal((await enroll(signEnrollment(changed, key.privateKey))).status, 403);
+    NodeAssert.equal(
+      (
+        await enroll(
+          signEnrollment({ ...invitation, publicKey: otherKey.publicKey }, otherKey.privateKey),
+        )
+      ).status,
+      403,
+    );
+    NodeAssert.equal((await enroll({ ...proof, signature: "A".repeat(86) })).status, 403);
+    const duplicate = await deviceCall((registry) =>
+      registry.approve({ environmentId: invitation.environmentId, publicKey: otherKey.publicKey }),
+    );
+    NodeAssert.equal((await enroll(signEnrollment(duplicate, otherKey.privateKey))).status, 409);
+    const expired = await deviceCall((registry) =>
+      registry.approve({
+        environmentId: EnvironmentId.make("expired-worker"),
+        publicKey: otherKey.publicKey,
+      }),
+    );
+    const beforeExpiry = now;
+    now = expired.expiresAt;
+    const denied = await enroll(signEnrollment(expired, otherKey.privateKey));
+    NodeAssert.equal(denied.status, 403);
+    NodeAssert.equal(
+      Schema.decodeUnknownSync(Schema.Struct({ code: Schema.String }))(await denied.json()).code,
+      "expired_enrollment",
+    );
+    now = beforeExpiry;
+    await deviceCall((registry) => registry.revoke(registered.deviceId));
+    await deviceCall((registry) => registry.revoke(registered.deviceId));
+    await stop();
+    await start();
+    const revoked = await deviceCall((registry) => registry.get(registered.deviceId));
+    NodeAssert.equal(revoked.revoked, true);
+    NodeAssert.equal(revoked.generation, 2);
+    NodeAssert.equal(
+      (await deviceCall((registry) => registry.list(operatorId))).find(
+        (device) => device.deviceId === registered.deviceId,
+      )?.clientAccess.enabled,
+      false,
+    );
+    await NodeAssert.rejects(
+      deviceCall((registry) => registry.checkChannel(registered, currentEpoch)),
+    );
+    await NodeAssert.rejects(deviceCall((registry) => registry.claimChannel(registered)));
+    NodeAssert.equal((await enroll(proof)).status, 403);
+    for (const statement of [
+      "UPDATE foundry_instance.devices SET public_key='replacement'",
+      "DELETE FROM foundry_instance.devices",
+      "UPDATE foundry_instance.device_enrollments SET expires_at=9999999999999",
+    ])
+      await NodeAssert.rejects(query(statement, "foundry_runtime"));
+    await report(
+      "PASS P06: v2 upgrade preserves sessions/identity; concurrent key-bound enrollment and lost-answer retry; foreign proof, identity, expiry and duplicate rejection; revocation survives PostgreSQL restart; runtime grants restricted",
+    );
+  } finally {
+    await deviceHandler.dispose();
+  }
   await NodeFSP.writeFile(NodePath.join(home, "userdata", "environment-id"), mainEnvironmentId);
-  for (const enabled of [false, true]) {
+  for (const [
+    enabled,
+    enrollmentEnabled,
+    channelEnabled,
+    grantsEnabled,
+    gatewayEnabled,
+    streamsEnabled,
+  ] of [
+    [false, false, false, false, false, false],
+    [true, false, false, false, false, false],
+    [true, true, false, false, false, false],
+    [true, true, true, false, false, false],
+    [true, true, true, true, false, false],
+    [true, true, true, true, true, false],
+    [true, true, true, true, true, true],
+  ] as const) {
     const runtimeRoutes = FoundryRuntime.layer.pipe(
+      Layer.provide(
+        EnvironmentAuth.layer.pipe(
+          Layer.provide(SqlitePersistence.layerMemory),
+          Layer.provide(ServerSecretStore.layer),
+          Layer.provide(ServerEnvironment.layerIdentity),
+        ),
+      ),
       Layer.provide(environment),
       Layer.provide(ServerConfig.layerTest(root, home)),
       Layer.provide(NodeServices.layer),
@@ -517,6 +933,11 @@ try {
           ConfigProvider.ConfigProvider,
           ConfigProvider.fromUnknown({
             FOUNDRY_ACCESS_ENABLED: String(enabled),
+            FOUNDRY_DEVICE_ENROLLMENT_ENABLED: String(enrollmentEnabled),
+            FOUNDRY_DEVICE_CHANNEL_ENABLED: String(channelEnabled),
+            FOUNDRY_GATEWAY_GRANTS_ENABLED: String(grantsEnabled),
+            FOUNDRY_HTTP_GATEWAY_ENABLED: String(gatewayEnabled),
+            FOUNDRY_STREAM_GATEWAY_ENABLED: String(streamsEnabled),
             FOUNDRY_INSTANCE_STORE: "postgres",
             FOUNDRY_INSTANCE_DATABASE_URL: `postgresql://foundry_runtime@localhost/fork_connect?host=${encodeURIComponent(root)}`,
             FOUNDRY_ACCESS_ISSUER: accessConfig.issuer,
@@ -532,10 +953,56 @@ try {
         new Request(`${accessConfig.origin}/.well-known/foundry?protocolVersion=1`),
       );
       NodeAssert.equal(metadata.status, 200);
-      NodeAssert.equal(
-        Object.hasOwn(decodeDescriptor(await metadata.json()), "instanceAuth"),
-        enabled,
+      const grant = await runtimeHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/gateway/grants/create`, {
+          method: "POST",
+          headers: { origin: accessConfig.origin, "content-type": "application/json" },
+          body: "{}",
+        }),
       );
+      NodeAssert.equal(grant.status, grantsEnabled ? 403 : 404);
+      const projectRead = await runtimeHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/gateway/projects`, {
+          method: "POST",
+          headers: { origin: accessConfig.origin, "content-type": "application/json" },
+          body: "{}",
+        }),
+      );
+      NodeAssert.equal(projectRead.status, gatewayEnabled ? 400 : 404);
+      const streamTicket = await runtimeHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/gateway/grants/ticket`, {
+          method: "POST",
+          headers: { origin: accessConfig.origin, "content-type": "application/json" },
+          body: "{}",
+        }),
+      );
+      NodeAssert.equal(streamTicket.status, streamsEnabled ? 400 : 404);
+      const descriptor = decodeDescriptor(await metadata.json());
+      NodeAssert.equal(descriptor.capabilities.includes("foundry.http-gateway"), gatewayEnabled);
+      NodeAssert.equal(descriptor.capabilities.includes("foundry.rpc-streams"), streamsEnabled);
+      NodeAssert.equal(descriptor.capabilities.includes("foundry.device-catalog"), streamsEnabled);
+      NodeAssert.equal(Object.hasOwn(descriptor, "instanceAuth"), enabled);
+      if (enabled) {
+        const verified = FoundryOnboarding.verifyDescriptor(descriptor, accessConfig.origin, {
+          instanceId,
+          mainEnvironmentId,
+          issuer: accessConfig.issuer,
+        });
+        NodeAssert.equal(verified.binding.origin, accessConfig.origin);
+      }
+      NodeAssert.equal(descriptor.capabilities.includes("foundry.device-channel"), channelEnabled);
+      NodeAssert.equal(
+        descriptor.capabilities.includes("foundry.device-enrollment"),
+        enrollmentEnabled,
+      );
+      const enrollment = await runtimeHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/devices/enroll`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      );
+      NodeAssert.equal(enrollment.status, enrollmentEnabled ? 403 : 404);
       const login = await runtimeHandler.handler(
         new Request(`${accessConfig.origin}/api/foundry/auth/login`, {
           method: "POST",
@@ -547,6 +1014,10 @@ try {
       await runtimeHandler.dispose();
     }
   }
+  await verifyGateway({ root, mainHome: home, databaseSocket: path });
+  await report(
+    "PASS integrated gateway: two clients, real worker HTTP/RPC, idempotent Replay launch, attachment hash/resume, terminal and persistent revocation; direct T3 access preserved",
+  );
   await report(
     "PASS production runtime composition: opt-in auth routes and descriptor capability, no JWKS request without an assertion",
   );

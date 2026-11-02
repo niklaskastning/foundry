@@ -319,6 +319,16 @@ it.effect("truncates a storage-cut UTF-8 character without replacement text", ()
     const result = yield* query.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 2 });
     assert.isAtMost(Buffer.byteLength(result.diff), 10_000_000);
     assert.isTrue(result.diff === `${prefix}\n\n[truncated]`);
+    const limited = yield* query.getTurnDiff({
+      threadId,
+      fromTurnCount: 0,
+      toTurnCount: 2,
+      maxBytes: 16 * 1024,
+    });
+    assert.strictEqual(Buffer.byteLength(limited.diff), 16 * 1024);
+    assert.isTrue(limited.diff.endsWith("\n\n[truncated]"));
+    const full = yield* query.getFullThreadDiff({ threadId, toTurnCount: 2, maxBytes: 16 * 1024 });
+    assert.strictEqual(full.diff, limited.diff);
   }).pipe(Effect.provide(layer));
 });
 

@@ -23,7 +23,8 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as ManagedRelayDpopSigner from "../relay/managedRelay.ts";
-import { EnvironmentRpcUnavailableError } from "../rpc/client.ts";
+import { withFoundryReadLimit } from "./assetTransfer.ts";
+import { request, EnvironmentRpcUnavailableError } from "../rpc/client.ts";
 import { fetchEnvironmentThreadTranscript } from "./threadTranscriptHttp.ts";
 
 export function createOrchestrationEnvironmentAtoms<R, E>(
@@ -95,6 +96,10 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
     turnDiff: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:turn-diff",
       tag: ORCHESTRATION_V2_WS_METHODS.getTurnDiff,
+      execute: (input) =>
+        withFoundryReadLimit(input).pipe(
+          Effect.flatMap((bounded) => request(ORCHESTRATION_V2_WS_METHODS.getTurnDiff, bounded)),
+        ),
       ...onCheckpointDiffAnswer,
     }),
     workflowScript: createEnvironmentRpcQueryAtomFamily(runtime, {
@@ -120,6 +125,12 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
     fullThreadDiff: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:full-thread-diff",
       tag: ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff,
+      execute: (input) =>
+        withFoundryReadLimit(input).pipe(
+          Effect.flatMap((bounded) =>
+            request(ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff, bounded),
+          ),
+        ),
       ...onCheckpointDiffAnswer,
     }),
     threadFind: createEnvironmentRpcQueryAtomFamily(runtime, {

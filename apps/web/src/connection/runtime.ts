@@ -1,4 +1,4 @@
-import { Connection } from "@t3tools/client-runtime/connection";
+import { Connection, ConnectionBlockedError } from "@t3tools/client-runtime/connection";
 import { ShellSnapshotLoader } from "@t3tools/client-runtime/state/shell";
 import {
   BoundedThreadSnapshotLoader,
@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { Atom } from "effect/reactivity";
 
+import { verifySavedInstance } from "../foundry/onboarding";
 import { isGuestPage } from "../guestPage";
 
 import * as Runtime from "../lib/runtime";
@@ -53,16 +54,20 @@ const layerConnection = BackgroundActivityReporter.layer.pipe(
   Layer.provideMerge(layerProvidedClientConnection),
 );
 
-/**
- * A guest has no session here. Building the connection would open the page origin's environment
- * with whatever cookie this browser holds, plus every environment saved in it, so on the guest
- * page the runtime fails to build and every atom on it keeps its empty value.
- */
+// Guest viewing and Foundry sign-in must not open the origin or saved T3 environments.
 const layerForPage = Layer.unwrap(
-  Effect.suspend((): Effect.Effect<typeof layerConnection> =>
-    isGuestPage()
-      ? Effect.die(new Error("The guest page has no environment connection."))
-      : Effect.succeed(layerConnection),
+  Effect.suspend(() =>
+    isGuestPage() || window.location.pathname === "/foundry"
+      ? Effect.die(new Error("This standalone page has no environment connection."))
+      : Effect.tryPromise({
+          try: verifySavedInstance,
+          catch: () =>
+            new ConnectionBlockedError({
+              reason: "configuration",
+              detail:
+                "Saved Foundry identity could not be verified. Open /foundry to inspect the binding.",
+            }),
+        }).pipe(Effect.as(layerConnection)),
   ),
 );
 

@@ -6839,3 +6839,28 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     }),
   );
 });
+
+it.effect("counts unfinished runs independently of thread visibility", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const sql = yield* SqlClient.SqlClient;
+    assert.strictEqual(yield* store.countActiveRuns(), 0);
+    for (const status of [
+      "queued",
+      "preparing",
+      "starting",
+      "running",
+      "waiting",
+      "completed",
+      "failed",
+      "cancelled",
+      "interrupted",
+      "rolled_back",
+    ]) {
+      yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, payload_json) VALUES (${status}, ${status}, 0, 'codex', ${status}, '2026-01-01T00:00:00Z', '{}')`;
+    }
+    assert.strictEqual(yield* store.countActiveRuns(), 5);
+    yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed'`;
+    assert.strictEqual(yield* store.countActiveRuns(), 0);
+  }).pipe(Effect.provide(layerTest)),
+);

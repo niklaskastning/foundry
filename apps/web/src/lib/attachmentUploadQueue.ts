@@ -2,6 +2,7 @@ import {
   AuthOrchestrationOperateScope,
   PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPES,
   type ChatAttachment,
+  type AttachmentCreateUploadUrlResult,
   type EnvironmentId,
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
@@ -9,9 +10,11 @@ import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
 import {
   deletePendingAttachmentUpload,
   runAttachmentUploadCycle,
+  writeAttachmentChunks,
   verifyPersistedAttachmentUpload,
   type PersistedAttachmentVerification,
 } from "@t3tools/client-runtime/state/attachments";
+import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { create } from "zustand";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
@@ -46,12 +49,14 @@ interface UploadJob {
   readonly environmentId: EnvironmentId;
   /** Original owner; completion resolves the current owner because uploads can outlive draft moves. */
   readonly draftTarget?: ComposerThreadTarget;
-  readonly previous?: ReadyAttachmentUpload;
+  previous?: ReadyAttachmentUpload;
   /** Draft-owned; delete only through releasePersistedAttachmentUpload, never queue cancel/retry. */
   readonly persistedAttachmentId?: string;
   readonly settled: Promise<void>;
   resolveSettled: () => void;
   attachmentId: string | null;
+  chunkUpload?: AttachmentCreateUploadUrlResult;
+  chunkTarget?: string;
   cancelled: boolean;
   abort: (() => void) | null;
   stopWatchingConnection: () => void;
@@ -177,7 +182,7 @@ async function runUpload(job: UploadJob): Promise<void> {
   if (job.persistedAttachmentId) {
     const verification = await verifyPersistedAttachmentUpload({
       registry: appAtomRegistry,
-      createAssetUrl: assetEnvironment.createUrl,
+      createAssetUrl: assetEnvironment.createSignedUrl,
       environmentId: job.environmentId,
       attachmentId: job.persistedAttachmentId,
     });
@@ -261,7 +266,27 @@ async function runUpload(job: UploadJob): Promise<void> {
     });
     return;
   }
+  const foundry =
+    readPreparedConnection(job.environmentId)?.target._tag === "FoundryConnectionTarget";
+  const onProgress = (progress: number) => {
+    const step = Math.floor(progress * 20);
+    if (step === lastStep || job.cancelled) return;
+    lastStep = step;
+    setUploadState(job.image.id, {
+      status: "uploading",
+      environmentId: job.environmentId,
+      progress,
+      ...(job.previous ? { previous: job.previous } : {}),
+    });
+  };
   const result = await runAttachmentUploadCycle({
+    ...(foundry && job.chunkUpload ? { resume: job.chunkUpload } : {}),
+    onUploadUrl: (upload) => {
+      if (foundry) {
+        job.chunkUpload = upload;
+        job.chunkTarget = JSON.stringify(readPreparedConnection(job.environmentId)?.target);
+      }
+    },
     registry: appAtomRegistry,
     createUploadUrl: attachmentEnvironment.createUploadUrl,
     remove: attachmentEnvironment.remove,
@@ -280,27 +305,45 @@ async function runUpload(job: UploadJob): Promise<void> {
         return null;
       }
       const connection = readPreparedConnection(job.environmentId);
-      return connection ? resolveAssetUrl(connection.httpBaseUrl, relativeUrl) : null;
+      return connection
+        ? foundry
+          ? relativeUrl
+          : resolveAssetUrl(connection.httpBaseUrl, relativeUrl)
+        : null;
     },
-    transport: (url) =>
-      uploadBytes({
-        url,
-        file,
-        mimeType,
-        onProgress: (progress) => {
-          const step = Math.floor(progress * 20);
-          if (step === lastStep || job.cancelled) {
-            return;
-          }
-          lastStep = step;
-          setUploadState(job.image.id, {
-            status: "uploading",
-            environmentId: job.environmentId,
-            progress,
-            ...(job.previous ? { previous: job.previous } : {}),
-          });
-        },
-      }),
+    transport: (url) => {
+      if (!foundry) return uploadBytes({ url, file, mimeType, onProgress });
+      const controller = new AbortController();
+      return {
+        abort: () => controller.abort(),
+        done: writeAttachmentChunks({
+          url,
+          file,
+          signal: controller.signal,
+          onProgress,
+          status: async () => {
+            const result = await runAtomCommand(
+              appAtomRegistry,
+              attachmentEnvironment.chunkStatus,
+              { environmentId: job.environmentId, input: { url } },
+              { reportFailure: false },
+            );
+            if (result._tag !== "Success") throw squashAtomCommandFailure(result);
+            return result.value;
+          },
+          write: async (input) => {
+            const result = await runAtomCommand(
+              appAtomRegistry,
+              attachmentEnvironment.writeChunk,
+              { environmentId: job.environmentId, input },
+              { reportFailure: false },
+            );
+            if (result._tag !== "Success") throw squashAtomCommandFailure(result);
+            return result.value;
+          },
+        }),
+      };
+    },
     onMinted: (attachmentId) => {
       if (job.cancelled && readEnvironmentScope(job.environmentId, AuthOrchestrationOperateScope)) {
         return "cancel";
@@ -392,6 +435,7 @@ function pumpUploads(): void {
 }
 
 export function startAttachmentUpload(input: {
+  readonly resume?: AttachmentCreateUploadUrlResult;
   readonly environmentId: EnvironmentId;
   readonly image: ComposerImageAttachment | ComposerFileAttachment;
   readonly draftTarget?: ComposerThreadTarget;
@@ -445,7 +489,8 @@ export function startAttachmentUpload(input: {
       : {}),
     settled,
     resolveSettled,
-    attachmentId: null,
+    attachmentId: input.resume?.attachmentId ?? null,
+    ...(input.resume ? { chunkUpload: input.resume } : {}),
     cancelled: false,
     abort: null,
     stopWatchingConnection: () => {},
@@ -463,6 +508,7 @@ export function startAttachmentUpload(input: {
     const connected = isConnected();
     const reconnected = connected && !wasConnected;
     wasConnected = connected;
+    if (!connected) job.abort?.();
     if (!reconnected) return;
     // HTTP failures can follow reconnection; await the attempt and retry only if this job still owns the file.
     void job.settled.then(() => {
@@ -551,6 +597,21 @@ export function retryAttachmentUpload(input: {
 }): void {
   if (!readEnvironmentScope(input.environmentId, AuthOrchestrationOperateScope)) return;
   const previous = readAttachmentUpload(input.image.id);
+  const job = jobsByImageId.get(input.image.id);
+  if (
+    job?.environmentId === input.environmentId &&
+    job.chunkUpload &&
+    job.chunkUpload.expiresAt > Date.now() &&
+    job.chunkTarget === JSON.stringify(readPreparedConnection(input.environmentId)?.target) &&
+    previous?.status === "failed"
+  ) {
+    job.stopWatchingConnection();
+    jobsByImageId.delete(input.image.id);
+    if (previous.previous) setUploadState(input.image.id, previous.previous);
+    else clearUploadState(input.image.id);
+    startAttachmentUpload({ ...input, resume: job.chunkUpload });
+    return;
+  }
   cancelAttachmentUpload(input.image.id);
   if (previous?.status === "failed" && previous.attachmentId) {
     deletePendingUpload(previous.environmentId, previous.attachmentId);
@@ -570,7 +631,7 @@ export function verifyStashedAttachmentUpload(input: {
 }): Promise<PersistedAttachmentVerification> {
   return verifyPersistedAttachmentUpload({
     registry: appAtomRegistry,
-    createAssetUrl: assetEnvironment.createUrl,
+    createAssetUrl: assetEnvironment.createSignedUrl,
     environmentId: input.environmentId,
     attachmentId: input.attachmentId,
   });
@@ -629,5 +690,26 @@ export function releaseDraftAttachments(
 ): void {
   for (const attachment of attachments) {
     releaseDraftAttachment(attachment);
+  }
+}
+
+export function clearAttachmentUploadsEnvironment(environmentId: EnvironmentId): void {
+  for (const [id, job] of jobsByImageId) {
+    if (job.environmentId === environmentId) cancelAttachmentUpload(id);
+    else if (job.previous?.environmentId === environmentId) delete job.previous;
+  }
+  for (const [id, upload] of Object.entries(useAttachmentUploadStore.getState().uploadsByImageId)) {
+    if (upload.environmentId === environmentId) {
+      if (
+        "previous" in upload &&
+        upload.previous &&
+        upload.previous.environmentId !== environmentId
+      )
+        setUploadState(id, upload.previous);
+      else clearUploadState(id);
+    } else if ("previous" in upload && upload.previous?.environmentId === environmentId) {
+      const { previous: _previous, ...retained } = upload;
+      setUploadState(id, retained);
+    }
   }
 }

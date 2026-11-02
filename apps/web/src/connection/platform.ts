@@ -4,6 +4,7 @@ import {
   Persistence,
 } from "@t3tools/client-runtime/platform";
 import {
+  FoundryInstanceSession,
   BearerConnectionCredential,
   BearerConnectionProfile,
   BearerConnectionRegistration,
@@ -42,6 +43,8 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { FetchHttpClient } from "effect/http";
 
+import { executeInstanceOperation } from "../foundry/onboarding";
+import { readDeviceSelection } from "../foundry/selection";
 import { APP_VERSION } from "../branding";
 import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
 import * as PrimaryEnvironmentHttpLayer from "../environments/primary/httpLayer";
@@ -633,6 +636,8 @@ const layerPlatformConnectionSource = Layer.effect(
     const rejectedRef = yield* Ref.make(new Map<string, RejectedSecondaryBootstrap>());
 
     const buildPlatformRegistrations = Effect.gen(function* () {
+      const selected = readDeviceSelection();
+      if (selected !== undefined) return selected;
       const previous = yield* Ref.get(cacheRef);
       const nowEpochMs = yield* Clock.currentTimeMillis;
       const next = new Map<string, CachedPlatformRegistration>();
@@ -777,7 +782,9 @@ const layerPlatformConnectionSource = Layer.effect(
       }
 
       yield* Ref.set(cacheRef, next);
-      return registrations as ReadonlyArray<PlatformConnectionRegistration>;
+      return (
+        readDeviceSelection() ?? (registrations as ReadonlyArray<PlatformConnectionRegistration>)
+      );
     }).pipe(Effect.provide(FetchHttpClient.layer));
 
     return PlatformConnectionSource.PlatformConnectionSource.of({
@@ -791,10 +798,12 @@ const layerPlatformConnectionSource = Layer.effect(
 const layerEnvironmentOwnedDataCleanup = Layer.succeed(
   Persistence.EnvironmentOwnedDataCleanup,
   Persistence.EnvironmentOwnedDataCleanup.of({
-    clear: Effect.fn("Persistence.EnvironmentOwnedDataCleanup.clear")(function (environmentId) {
-      return Effect.sync(() => {
-        clearComposerDraftsEnvironment(environmentId);
-      });
+    clear: Effect.fn("Persistence.EnvironmentOwnedDataCleanup.clear")(function* (environmentId) {
+      const { clearAttachmentUploadsEnvironment } = yield* Effect.promise(
+        () => import("../lib/attachmentUploadQueue"),
+      );
+      clearAttachmentUploadsEnvironment(environmentId);
+      clearComposerDraftsEnvironment(environmentId);
     }),
   }),
 );
@@ -816,7 +825,31 @@ const layerRpcRequestObserver = Layer.succeed(
   }),
 );
 
+const layerFoundryInstanceSession = Layer.succeed(FoundryInstanceSession, {
+  current: Effect.fn("FoundryInstanceSession.current")((binding) =>
+    Effect.tryPromise({
+      try: async () => {
+        if (window.location.origin !== binding.origin) throw new Error("Origin mismatch");
+        const result = await executeInstanceOperation({ operation: "session" });
+        if (!result.confirmed || !result.binding || !result.session)
+          throw new Error("Session required");
+        return {
+          binding: result.binding,
+          csrfToken: result.session.csrfToken,
+          authorization: null,
+        };
+      },
+      catch: () =>
+        new ConnectionBlockedError({
+          reason: "authentication",
+          detail: "Open /foundry on this instance to verify its identity and sign in.",
+        }),
+    }),
+  ),
+});
+
 type ConnectionPlatformLayerSource =
+  | typeof layerFoundryInstanceSession
   | typeof ConnectionStorage.layer
   | typeof layerConnectivity
   | typeof layerWakeups
@@ -830,6 +863,7 @@ export const layer: Layer.Layer<
   Layer.Error<ConnectionPlatformLayerSource>,
   Layer.Services<ConnectionPlatformLayerSource>
 > = Layer.mergeAll(
+  layerFoundryInstanceSession,
   ConnectionStorage.layer,
   layerConnectivity,
   layerWakeups,

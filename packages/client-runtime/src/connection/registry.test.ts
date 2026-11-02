@@ -1,6 +1,8 @@
 import {
   type DesktopSshEnvironmentTarget,
   EnvironmentId,
+  FoundryInstanceId,
+  FoundryDeviceId,
   type OrchestrationV2ShellSnapshot,
   ORCHESTRATION_PROTOCOL_VERSION,
   type ExecutionEnvironmentDescriptor,
@@ -32,6 +34,7 @@ import {
   type ConnectionRegistration,
   type ConnectionRoute,
   PrimaryConnectionRegistration,
+  FoundryConnectionRegistration,
   RelayConnectionRegistration,
   SshConnectionProfile,
   SshConnectionRegistration,
@@ -48,6 +51,7 @@ import {
   ConnectionBlockedError,
   BearerConnectionTarget,
   PrimaryConnectionTarget,
+  FoundryConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
   type ConnectionTarget,
@@ -1563,6 +1567,49 @@ describe("EnvironmentRegistry", () => {
         expect(yield* Ref.get(attempts)).toBeGreaterThanOrEqual(2);
       }).pipe(Effect.provide(harness.layer), Effect.scoped);
     }),
+  );
+
+  it.effect(
+    "preserves a personal connection when a Foundry device has the same environment id",
+    () =>
+      Effect.gen(function* () {
+        const credential = new BearerConnectionCredential({ token: "personal-fixture" });
+        const harness = yield* makeHarness(
+          [BEARER_TARGET],
+          [BEARER_PROFILE],
+          [[BEARER_TARGET.connectionId, credential]],
+        );
+        yield* Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+          const registration = new FoundryConnectionRegistration({
+            target: new FoundryConnectionTarget({
+              environmentId: BEARER_TARGET.environmentId,
+              label: "Gateway device",
+              binding: {
+                origin: "https://main.test",
+                issuer: "https://team.cloudflareaccess.com",
+                instanceId: FoundryInstanceId.make("11111111-1111-4111-8111-111111111111"),
+                mainEnvironmentId: EnvironmentId.make("main"),
+              },
+              deviceId: FoundryDeviceId.make("22222222-2222-4222-8222-222222222222"),
+              scopes: ["orchestration:read"],
+            }),
+          });
+          yield* registry.reconcilePlatform([registration]);
+          yield* registry.reconcilePlatform([]);
+          expect(
+            (yield* SubscriptionRef.get(registry.entries)).get(BEARER_TARGET.environmentId)?.target,
+          ).toEqual(BEARER_TARGET);
+          expect(
+            (yield* Ref.get(harness.storedCredentials)).get(BEARER_TARGET.connectionId),
+          ).toEqual(credential);
+          expect((yield* Ref.get(harness.storedProfiles)).get(BEARER_TARGET.connectionId)).toEqual(
+            BEARER_PROFILE,
+          );
+          expect(yield* Ref.get(harness.cacheClears)).toEqual([]);
+          expect(yield* Ref.get(harness.ownedDataClears)).toEqual([]);
+        }).pipe(Effect.provide(harness.layer));
+      }),
   );
 
   it.effect("starts platform environments without persisting or removing them", () =>

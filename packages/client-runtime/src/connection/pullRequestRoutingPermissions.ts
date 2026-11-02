@@ -42,6 +42,14 @@ function routeConnectionKey(
   routeProfile: ConnectionCatalogEntry["profile"],
 ): string | null {
   const entry = { profile: routeProfile };
+  if (target._tag === "FoundryConnectionTarget")
+    return JSON.stringify([
+      target._tag,
+      target.binding,
+      target.deviceId,
+      target.environmentId,
+      target.scopes,
+    ]);
   if (target._tag === "RelayConnectionTarget")
     return JSON.stringify([target._tag, target.environmentId]);
   const profile = Option.getOrNull(entry.profile);

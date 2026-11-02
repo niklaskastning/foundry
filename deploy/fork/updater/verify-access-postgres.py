@@ -49,6 +49,32 @@ def verify():
                 raise AssertionError('Runtime DDL unexpectedly succeeded')
             query('ALTER ROLE foundry_instance_migrator NOLOGIN;')
             assert query("SELECT rolcanlogin FROM pg_roles WHERE rolname='foundry_instance_migrator';") == 'f'
+            query('CREATE DATABASE fork_automation OWNER foundry_connect_owner;', 'postgres')
+            query('CREATE TABLE untouched(value text); INSERT INTO untouched VALUES (\'automation fixture\');', 'fork_automation')
+            query("""CREATE TABLE foundry_instance.schema_version(version integer);
+                INSERT INTO foundry_instance.schema_version VALUES (2);
+                CREATE TABLE foundry_instance.instance(instance_id text, main_environment_id text, access_generation bigint);
+                INSERT INTO foundry_instance.instance VALUES ('preserved-instance', 'preserved-environment', 7);
+                CREATE TABLE foundry_instance.operator_binding(subject text);
+                INSERT INTO foundry_instance.operator_binding VALUES ('private-fixture-subject');
+                CREATE TABLE foundry_instance.sessions(token_hash text);
+                INSERT INTO foundry_instance.sessions VALUES ('fixture-session');""")
+            active_backup = pg('pg_dump', '-U', 'foundry_admin', '-Fc', 'fork_connect')
+            query("""UPDATE foundry_instance.schema_version SET version=5;
+                CREATE TABLE foundry_instance.devices(device_id text);
+                DELETE FROM foundry_instance.sessions;""")
+            pg('pg_restore', '-U', 'foundry_admin', '--exit-on-error', '--clean', '--if-exists', '--create',
+               '-d', 'postgres', input=active_backup)
+            assert query('SELECT version FROM foundry_instance.schema_version;') == '2'
+            assert query("SELECT to_regclass('foundry_instance.devices') IS NULL;") == 't'
+            assert query('SELECT count(*) FROM foundry_instance.sessions;') == '1'
+            query('BEGIN; UPDATE foundry_instance.instance SET access_generation=access_generation+1; DELETE FROM foundry_instance.sessions; COMMIT;')
+            assert query('SELECT instance_id, main_environment_id, access_generation FROM foundry_instance.instance;') == 'preserved-instance|preserved-environment|8'
+            assert query('SELECT subject FROM foundry_instance.operator_binding;') == 'private-fixture-subject'
+            assert query('SELECT count(*) FROM foundry_instance.sessions;') == '0'
+            assert query('SELECT value FROM untouched;', 'fork_automation') == 'automation fixture'
+            assert query("SELECT rolcanlogin FROM pg_roles WHERE rolname='foundry_instance_migrator';") == 'f'
+            print('PASS isolated active-database restore: schema-2 fixture, identities/operator retained, restored sessions invalidated, unrelated automation database unchanged.')
             pg('pg_restore', '-U', 'foundry_admin', '--exit-on-error', '--clean', '--if-exists', '--create', '-d', 'postgres', input=backup)
             query('DROP ROLE foundry_instance_runtime; DROP ROLE foundry_instance_migrator;')
             activation.check_empty_database()

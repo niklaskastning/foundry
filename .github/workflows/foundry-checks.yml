@@ -21,6 +21,13 @@ jobs:
             !/.repos/
           sparse-checkout-cone-mode: false
       - uses: ./.github/actions/setup-ci-deps
+      - name: Prepare browser for changed Web tests
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+        run: |
+          if ! git diff --quiet "$BASE_REF" HEAD -- apps/web; then
+            node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
+          fi
       - name: Check changed files
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha || 'origin/main' }}

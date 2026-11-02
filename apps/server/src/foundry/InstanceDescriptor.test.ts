@@ -113,12 +113,22 @@ it.layer(NodeServices.layer)("Foundry descriptor", (it) => {
           Effect.provide(
             Layer.fresh(descriptorLayer).pipe(
               Layer.provide(Layer.succeed(AccessConfig.AccessEnabled, true)),
+              Layer.provide(
+                Layer.succeed(AccessConfig.AccessConfig, {
+                  origin: "https://foundry.example",
+                  issuer: "https://team.cloudflareaccess.com",
+                  audience: "private-audience",
+                }),
+              ),
               Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "foundry-enabled-" })),
             ),
           ),
         );
+        expect(JSON.stringify(enabled)).not.toContain("private-audience");
         expect(enabled.capabilities).toContain("foundry.access-sessions");
         expect(enabled.instanceAuth).toEqual({
+          publicOrigin: "https://foundry.example",
+          issuer: "https://team.cloudflareaccess.com",
           bootstrapMethods: ["cloudflare-access-jwt"],
           sessionMethods: ["foundry-session-cookie"],
         });

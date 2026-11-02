@@ -1,5 +1,8 @@
 import {
   EnvironmentId,
+  ThreadId,
+  FoundryDeviceId,
+  FoundryInstanceId,
   type RelayClientInstallProgressEvent,
   type ServerLifecycleStreamEvent,
   WS_METHODS,
@@ -20,13 +23,20 @@ import { RpcClientError } from "effect/rpc";
 import {
   AVAILABLE_CONNECTION_STATE,
   PrimaryConnectionTarget,
+  FoundryConnectionTarget,
   type PreparedConnection,
   type SupervisorConnectionState,
 } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
-import { runStream, subscribe, subscribeDynamicWithSession } from "./client.ts";
+import {
+  runStream,
+  subscribe,
+  subscribeDynamicWithSession,
+  requestGuarded,
+  RpcPermissionGuard,
+} from "./client.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -80,6 +90,64 @@ const makeHarness = Effect.fn("TestEnvironmentRpc.makeHarness")(function* () {
 });
 
 describe("environment RPC", () => {
+  it.effect(
+    "marks a lost gateway terminal acknowledgement uncertain without replaying the write",
+    () =>
+      Effect.gen(function* () {
+        const { activeSession, supervisor } = yield* makeHarness();
+        const writes = yield* Ref.make(0);
+        const client = {
+          [WS_METHODS.terminalWrite]: () =>
+            Ref.update(writes, (n) => n + 1).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new RpcClientError.RpcClientError({
+                    reason: new RpcClientError.RpcClientDefect({
+                      message: "closed",
+                      cause: "closed",
+                    }),
+                  }),
+                ),
+              ),
+            ),
+        } as unknown as WsRpcProtocolClient;
+        yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+        const target = new FoundryConnectionTarget({
+          environmentId: TARGET.environmentId,
+          label: "Worker",
+          binding: {
+            origin: "https://main.test",
+            issuer: "https://team.cloudflareaccess.com",
+            instanceId: FoundryInstanceId.make("11111111-1111-4111-8111-111111111111"),
+            mainEnvironmentId: EnvironmentId.make("main"),
+          },
+          deviceId: FoundryDeviceId.make("22222222-2222-4222-8222-222222222222"),
+          scopes: ["terminal:operate"],
+        });
+        const result = yield* requestGuarded(WS_METHODS.terminalWrite, {
+          threadId: ThreadId.make("thread"),
+          terminalId: "terminal",
+          data: "echo once\n",
+        }).pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, {
+            ...supervisor,
+            target,
+          }),
+          Effect.provideService(RpcPermissionGuard, { authorize: () => Effect.void }),
+          Effect.result,
+        );
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: {
+            _tag: "EnvironmentRpcUnavailableError",
+            message: expect.stringContaining("may have reached the shell"),
+          },
+        });
+        yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+        expect(yield* Ref.get(writes)).toBe(1);
+      }),
+  );
+
   it.effect("binds finite streaming commands to one active session", () =>
     Effect.gen(function* () {
       const firstEvents = yield* Queue.unbounded<RelayClientInstallProgressEvent>();

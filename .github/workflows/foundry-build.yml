@@ -65,7 +65,8 @@ jobs:
             echo "### Foundry VPS image"
             echo "Commit: \`$REVISION\`"
             echo "Image: \`$digest\`"
-            echo "Deploy on the VPS: \`sudo /usr/local/sbin/foundry-deploy deploy ${digest##*@}\`"
+            echo "Candidate only; not deployed. Use the reviewed update and recovery procedure for the running storage/schema."
+            echo "The baseline foundry-deploy helper does not support an activated PostgreSQL/Access Main."
           } >> "$GITHUB_STEP_SUMMARY"
           docker logout ghcr.io
       - uses: ./.github/actions/setup-ci-deps

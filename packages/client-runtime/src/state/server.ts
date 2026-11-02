@@ -1174,6 +1174,10 @@ export function createServerEnvironmentAtoms<R, E>(
   });
 
   return {
+    launchFoundryWorker: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:foundry:worker-launch",
+      tag: WS_METHODS.foundryWorkerLaunch,
+    }),
     configValueAtom,
     runStorageCleanup: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:run-storage-cleanup",

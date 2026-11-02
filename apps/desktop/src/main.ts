@@ -77,6 +77,7 @@ import * as DesktopWindow from "./window/DesktopWindow.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
+import { runInstanceOnboarding } from "./foundry/InstanceOnboarding.ts";
 import { runAccessProbe } from "./foundry/AccessProbe.ts";
 
 if (process.argv.includes("--version")) {
@@ -243,7 +244,15 @@ const layerDesktopRuntime = layerDesktopClerk.pipe(
 );
 
 const foundryProbeIndex = process.argv.indexOf("--foundry-access-probe");
-if (isFoundryBuild() && foundryProbeIndex !== -1) {
+if (isFoundryBuild() && process.argv.includes("--foundry-instance")) {
+  void runInstanceOnboarding(Effect.runSync(HostProcess.Platform)).catch(() => {
+    Electron.dialog.showErrorBox(
+      "Foundry instance",
+      "Could not open the isolated instance client. Check saved identity and OS credential storage.",
+    );
+    Electron.app.exit(1);
+  });
+} else if (isFoundryBuild() && foundryProbeIndex !== -1) {
   void runAccessProbe(
     process.argv.slice(foundryProbeIndex + 1),
     Effect.runSync(HostProcess.Platform),

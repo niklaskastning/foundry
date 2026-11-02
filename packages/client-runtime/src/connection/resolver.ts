@@ -3,6 +3,7 @@ import type {
   ExecutionEnvironmentDescriptor,
 } from "@t3tools/contracts";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
+import * as FoundryGateway from "./foundryGateway.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -265,6 +266,7 @@ const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(funct
 
 /** @public */
 export const make = Effect.gen(function* () {
+  const foundry = yield* FoundryGateway.make();
   const primary = yield* makePrimaryBroker();
   const bearer = yield* makeBearerBroker();
   const relay = yield* makeRelayBroker();
@@ -283,6 +285,13 @@ export const make = Effect.gen(function* () {
       readonly descriptor?: ExecutionEnvironmentDescriptor;
     } = yield* (() => {
       switch (target._tag) {
+        case "FoundryConnectionTarget":
+          return Effect.fail(
+            new ConnectionBlockedError({
+              reason: "unsupported",
+              detail: "Updating a worker through the Foundry gateway is not supported.",
+            }),
+          );
         case "PrimaryConnectionTarget":
           return primary(target);
         case "BearerConnectionTarget":
@@ -314,6 +323,10 @@ export const make = Effect.gen(function* () {
   const prepare = Effect.fn("clientRuntime.connection.broker.prepare")(function* (
     entry: ConnectionCatalogEntry,
   ) {
+    if (entry.target._tag === "FoundryConnectionTarget") {
+      const prepared = yield* foundry.prepare(entry.target);
+      return { ...prepared, socketUrl: appendOrchestrationProtocol(prepared.socketUrl) };
+    }
     const { prepared, descriptor } = yield* authorize(entry);
     const compatibilityError = orchestrationProtocolCompatibilityError(descriptor);
     if (compatibilityError !== null) {

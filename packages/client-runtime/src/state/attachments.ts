@@ -6,7 +6,7 @@ import {
   type AttachmentDeleteInput,
   type EnvironmentId,
 } from "@t3tools/contracts";
-import type { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
+import { AsyncResult, type Atom, type AtomRegistry } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import {
@@ -21,6 +21,14 @@ export function createAttachmentEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
   return {
+    writeChunk: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:attachments:write-chunk",
+      tag: WS_METHODS.attachmentsWriteChunk,
+    }),
+    chunkStatus: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:attachments:chunk-status",
+      tag: WS_METHODS.attachmentsChunkStatus,
+    }),
     createUploadUrl: createEnvironmentRpcCommand(runtime, {
       label: "environment-command:attachments:create-upload-url",
       tag: WS_METHODS.attachmentsCreateUploadUrl,
@@ -137,15 +145,19 @@ export async function runAttachmentUploadCycle<E, RE>(input: {
   readonly upload: AttachmentCreateUploadUrlInput;
   readonly resolveUploadUrl: (relativeUrl: string) => string | null;
   readonly transport: (url: string) => AttachmentByteUpload;
+  readonly resume?: AttachmentCreateUploadUrlResult;
+  readonly onUploadUrl?: (upload: AttachmentCreateUploadUrlResult) => void;
   readonly onMinted?: (attachmentId: string) => "continue" | "cancel";
   readonly onTransferStart?: (abort: () => void) => void;
 }): Promise<AttachmentUploadCycleResult> {
-  const minted = await runAtomCommand(
-    input.registry,
-    input.createUploadUrl,
-    { environmentId: input.environmentId, input: input.upload },
-    { reportFailure: false },
-  );
+  const minted = input.resume
+    ? AsyncResult.success(input.resume)
+    : await runAtomCommand(
+        input.registry,
+        input.createUploadUrl,
+        { environmentId: input.environmentId, input: input.upload },
+        { reportFailure: false },
+      );
   if (minted._tag !== "Success") {
     return {
       status: "failed",
@@ -155,6 +167,7 @@ export async function runAttachmentUploadCycle<E, RE>(input: {
     };
   }
   const attachmentId = minted.value.attachmentId;
+  input.onUploadUrl?.(minted.value);
   if (input.onMinted?.(attachmentId) === "cancel") {
     deletePendingAttachmentUpload({
       registry: input.registry,
@@ -208,3 +221,5 @@ export function fileAttachmentTooLargeMessage(name: string, maxUploadBytes: numb
         : `${maxUploadBytes} ${maxUploadBytes === 1 ? "byte" : "bytes"}`;
   return `'${name}' exceeds the ${maxUploadSize} attachment limit.`;
 }
+
+export { writeAttachmentChunks } from "./assetTransfer.ts";

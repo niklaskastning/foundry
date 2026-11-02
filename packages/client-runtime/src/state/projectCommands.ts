@@ -28,6 +28,7 @@ import {
 } from "./runtime.ts";
 import { createProject, deleteProject, updateProject } from "../operations/commands.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+import { withFoundryReadLimit } from "./assetTransfer.ts";
 import { createFileMetadataAtoms } from "./fileMetadata.ts";
 import { resolveWorkspaceFilePath } from "@t3tools/shared/path";
 
@@ -140,7 +141,9 @@ export function createProjectEnvironmentAtoms<R, E>(
       idleTtlMs: 5 * 60_000,
       execute: (input) =>
         fileMetadata.seedAfterRead(
-          request(WS_METHODS.projectsReadFile, input),
+          withFoundryReadLimit(input).pipe(
+            Effect.flatMap((bounded) => request(WS_METHODS.projectsReadFile, bounded)),
+          ),
           (result, isCurrent) =>
             result.exists === false
               ? Effect.void

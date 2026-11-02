@@ -1,6 +1,7 @@
 import * as NodeFS from "node:fs";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeURL from "node:url";
+import { foundryBuildMetadata } from "./lib/foundry-build-metadata.ts";
 
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Build bootstrap selects the Vite+ executable before launching any application runtime.
 const platform = process.platform;
@@ -43,6 +44,14 @@ for (const name of Object.keys(env)) {
 }
 const args =
   target === "server" ? ["run", "--filter", "t3", "build"] : ["run", "dist:desktop:win:x64"];
+const metadata =
+  target === "server"
+    ? foundryBuildMetadata(root, process.env.FOUNDRY_ARCHIVE_REVISION)
+    : undefined;
+if (target === "server")
+  NodeFS.rmSync(new URL("../apps/server/dist/foundry-build.json", import.meta.url), {
+    force: true,
+  });
 const result = NodeChildProcess.spawnSync(platform === "win32" ? "vp.cmd" : "vp", args, {
   cwd: root,
   env,
@@ -50,4 +59,10 @@ const result = NodeChildProcess.spawnSync(platform === "win32" ? "vp.cmd" : "vp"
   shell: platform === "win32",
 });
 if (result.error) throw result.error;
+if (result.status === 0 && target === "server") {
+  NodeFS.writeFileSync(
+    new URL("../apps/server/dist/foundry-build.json", import.meta.url),
+    JSON.stringify({ repository: profile.repository, ...metadata }) + "\n",
+  );
+}
 process.exit(result.status ?? 1);
