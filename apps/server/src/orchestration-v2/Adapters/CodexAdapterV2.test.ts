@@ -7810,6 +7810,15 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.deepEqual(turnStatuses(), ["running"]);
         assert.lengthOf(harness.terminalEvents(), 0);
 
+        assert.isFalse(
+          yield* harness.runtime.confirmWriterEnded!({
+            providerThread: harness.providerThread,
+            nativeTurnId: "goal-turn",
+            runId: RunId.make("held-goal-run"),
+          }),
+        );
+        assert.notInclude(requests, "thread/read");
+
         yield* harness.runtime.interruptTurn({
           providerThread: harness.providerThread,
           providerTurnId,

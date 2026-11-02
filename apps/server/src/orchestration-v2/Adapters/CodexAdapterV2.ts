@@ -6914,6 +6914,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   ids.add(id);
               }
               for (const threadId of ids) {
+                if (
+                  goalsByNativeThread.get(threadId)?.status === "active" ||
+                  goalActivations.has(threadId) ||
+                  goalHolds.has(threadId)
+                )
+                  return false;
                 const { thread } = yield* client.request("thread/read", {
                   threadId,
                   includeTurns: true,
