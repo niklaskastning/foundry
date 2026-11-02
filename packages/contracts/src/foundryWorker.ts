@@ -1,5 +1,7 @@
 import {
   CommandId,
+  RunId,
+  CheckpointId,
   ProjectId,
   ThreadId,
   IsoDateTime,
@@ -7,6 +9,7 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import * as Schema from "effect/Schema";
+import { OrchestrationV2RunStatus } from "./orchestrationV2.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 export const FoundryWorkerStatus = Schema.Struct({
@@ -64,4 +67,21 @@ export class FoundryWorkerLaunchError extends Schema.TaggedError<FoundryWorkerLa
       "launch_failed",
     ]),
   },
+) {}
+
+export const FoundryWorkerReadInput = Schema.Struct({ commandId: CommandId });
+export type FoundryWorkerReadInput = typeof FoundryWorkerReadInput.Type;
+export const FoundryWorkerExecution = Schema.Struct({
+  receipt: FoundryWorkerLaunchReceipt,
+  // Run completion alone does not confirm checkpoint/manifest finalization.
+  run: Schema.Struct({
+    id: RunId,
+    status: OrchestrationV2RunStatus,
+    checkpointId: Schema.NullOr(CheckpointId),
+  }),
+});
+export type FoundryWorkerExecution = typeof FoundryWorkerExecution.Type;
+export class FoundryWorkerReadError extends Schema.TaggedError<FoundryWorkerReadError>()(
+  "FoundryWorkerReadError",
+  { code: Schema.Literals(["not_enabled", "not_found", "read_failed"]) },
 ) {}

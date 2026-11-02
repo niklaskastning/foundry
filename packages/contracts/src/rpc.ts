@@ -1,4 +1,7 @@
 import {
+  FoundryWorkerReadInput,
+  FoundryWorkerExecution,
+  FoundryWorkerReadError,
   FoundryWorkerLaunchInput,
   FoundryWorkerLaunchReceipt,
   FoundryWorkerLaunchError,
@@ -438,6 +441,7 @@ export const WS_METHODS = {
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
   assetsCreateUrl: "assets.createUrl",
+  foundryWorkerRead: "foundry.workerRead",
   foundryWorkerLaunch: "foundry.workerLaunch",
   foundryWorkerStatus: "foundry.workerStatus",
   assetsReadChunk: "assets.readChunk",
@@ -1401,6 +1405,11 @@ const WsAgentSessionsImportRpc = Rpc.make(WS_METHODS.agentSessionsImport, {
   ]),
 });
 
+const WsFoundryWorkerReadRpc = Rpc.make(WS_METHODS.foundryWorkerRead, {
+  payload: FoundryWorkerReadInput,
+  success: FoundryWorkerExecution,
+  error: Schema.Union([FoundryWorkerReadError, EnvironmentAuthorizationError]),
+});
 const WsFoundryWorkerLaunchRpc = Rpc.make(WS_METHODS.foundryWorkerLaunch, {
   payload: FoundryWorkerLaunchInput,
   success: FoundryWorkerLaunchReceipt,
@@ -2146,6 +2155,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
   WsAssetsCreateUrlRpc,
+  WsFoundryWorkerReadRpc,
   WsFoundryWorkerLaunchRpc,
   WsFoundryWorkerStatusRpc,
   WsAssetsReadChunkRpc,

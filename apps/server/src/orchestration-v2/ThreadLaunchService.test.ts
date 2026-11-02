@@ -1,3 +1,4 @@
+import * as EventStore from "./EventStore.ts";
 import * as WorkerLaunch from "../foundry/WorkerLaunch.ts";
 import { WorkerReadiness } from "../foundry/WorkerReadiness.ts";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -2394,14 +2395,15 @@ it.effect("replays an accepted send after the project disables the instance", ()
   }).pipe(Effect.provide(Layer.mergeAll(harness.layer, layerFiles)));
 });
 
-function workerLayer(roots = ["/repo"], providerReady = true) {
+function workerLayer(roots = ["/repo"], providerReady = true, enabled = true) {
   return WorkerLaunch.layer.pipe(
+    Layer.provide(EventStore.layer),
     Layer.provide(
       Layer.mergeAll(
         ConfigProvider.layer(
           ConfigProvider.fromEnv({
             env: {
-              FOUNDRY_WORKER_ENABLED: "true",
+              FOUNDRY_WORKER_ENABLED: String(enabled),
               FOUNDRY_WORKER_PROVIDER_INSTANCE_ID: "codex",
               FOUNDRY_WORKER_WORKSPACE_ROOTS: JSON.stringify(roots),
             },
@@ -2519,6 +2521,18 @@ it.effect.each([
         Effect.flip,
       );
     }
+    const recoveredRead = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+      worker.read({ commandId: workerInput.commandId }),
+    ).pipe(Effect.provide(workerLayer()), Effect.result);
+    if (failurePoint === "before-commit" || failurePoint === "after-thread-commit") {
+      assert.isTrue(Result.isFailure(recoveredRead));
+      if (Result.isFailure(recoveredRead))
+        assert.deepInclude(recoveredRead.failure, { code: "not_found" });
+    } else {
+      assert.isTrue(Result.isSuccess(recoveredRead));
+      if (Result.isSuccess(recoveredRead))
+        assert.equal(recoveredRead.success.receipt.threadId, ids.threadId);
+    }
     const first = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
       worker.launch(workerInput),
     ).pipe(Effect.provide(workerLayer()));
@@ -2536,6 +2550,15 @@ it.effect.each([
     const projection = yield* threads.getThreadProjection(first.threadId);
     assert.equal(projection.messages.length, 1);
     assert.equal(projection.runs.length, 1);
+    const execution = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+      worker.read({ commandId: workerInput.commandId }),
+    ).pipe(Effect.provide(workerLayer(["/other"], false)));
+    assert.deepEqual(execution.receipt, first);
+    assert.deepEqual(execution.run, {
+      id: projection.runs[0]!.id,
+      status: projection.runs[0]!.status,
+      checkpointId: projection.runs[0]!.checkpointId,
+    });
     assert.equal(
       (yield* threads.listProjectThreads({ projectId, includeSubagents: true })).length,
       1,
@@ -2552,6 +2575,10 @@ it.effect("worker rejects outside projects and disabled providers before committ
   const harness = makeHarness();
   return Effect.gen(function* () {
     const threads = yield* ThreadManagement.ThreadManagementService;
+    const disabledRead = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (disabledWorker) =>
+      disabledWorker.read({ commandId: workerInput.commandId }),
+    ).pipe(Effect.provide(workerLayer(["/repo"], true, false)), Effect.flip);
+    assert.deepInclude(disabledRead, { code: "not_enabled" });
     for (const roots of [[], ["/other"], ["/rep"], ["relative"]]) {
       const denied = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
         worker.launch(workerInput),
@@ -2611,4 +2638,53 @@ it.effect("worker rejects outside projects and disabled providers before committ
       ),
     );
   }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("worker reads the accepted initial run, never a later turn or an unknown command", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const worker = yield* WorkerLaunch.WorkerLaunch;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const missing = yield* worker.read({ commandId: workerInput.commandId }).pipe(Effect.flip);
+    assert.equal(missing.code, "not_found");
+    const receipt = yield* worker.launch(workerInput);
+    const first = yield* worker.read({ commandId: workerInput.commandId });
+    yield* threads.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("later-command"),
+      threadId: receipt.threadId,
+      messageId: MessageId.make("later-message"),
+      text: "A later independent turn",
+      attachments: [],
+      modelSelection,
+      dispatchMode: { type: "defer_start", workspaceStrategy: { type: "root" } },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const projection = yield* threads.getThreadProjection(receipt.threadId);
+    assert.equal(projection.runs.length, 2);
+    const read = yield* worker.read({ commandId: workerInput.commandId });
+    assert.deepEqual(read.receipt, receipt);
+    assert.equal(read.run.id, first.run.id);
+    const ordinaryCommand = yield* worker
+      .read({ commandId: CommandId.make("later-command") })
+      .pipe(Effect.flip);
+    assert.equal(ordinaryCommand.code, "not_found");
+    const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+    const ids = WorkerLaunch.workerLaunchIds(workerInput, "codex");
+    const initialMessage = yield* receipts.getByCommandId(
+      CommandId.make(`${ids.commandId}:initial-message`),
+    );
+    assert.isTrue(Option.isSome(initialMessage));
+    if (Option.isSome(initialMessage)) {
+      yield* receipts.upsert({
+        ...initialMessage.value,
+        threadId: ThreadId.make("unrelated-thread"),
+      });
+      const inconsistent = yield* worker
+        .read({ commandId: workerInput.commandId })
+        .pipe(Effect.flip);
+      assert.equal(inconsistent.code, "read_failed");
+    }
+  }).pipe(Effect.provide(workerLayer().pipe(Layer.provideMerge(harness.layer))));
 });

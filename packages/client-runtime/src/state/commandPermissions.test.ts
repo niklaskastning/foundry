@@ -532,27 +532,29 @@ it.effect("rejects protected unary and streamed RPCs outside a guarded command",
   }),
 );
 
-it.effect("worker readiness requires read permission on its destination", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const registry = yield* setup;
-      const command = createCommandPermissions(runtime, WS_METHODS.foundryWorkerStatus);
-      registry.set(sessions(env), AsyncResult.success(grant(false)));
-      expect(registry.get(command.permissionAtom(env))).toBe(false);
-      expect(yield* command.authorize(registry, env, {}).pipe(Effect.flip)).toMatchObject({
-        requiredPermission: AuthOrchestrationReadScope,
-      });
-      registry.set(
-        sessions(env),
-        AsyncResult.success({
-          ...grant(false),
-          scopes: [AuthOrchestrationReadScope],
-          permissions: [AuthOrchestrationReadScope],
-        }),
-      );
-      expect(registry.get(command.permissionAtom(env))).toBe(true);
-      yield* command.authorize(registry, env, {});
-      expect(registry.get(command.permissionAtom(other))).toBe(false);
-    }),
-  ),
+it.effect.each([WS_METHODS.foundryWorkerStatus, WS_METHODS.foundryWorkerRead])(
+  "%s requires read permission on its destination",
+  (method) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const command = createCommandPermissions(runtime, method);
+        registry.set(sessions(env), AsyncResult.success(grant(false)));
+        expect(registry.get(command.permissionAtom(env))).toBe(false);
+        expect(yield* command.authorize(registry, env).pipe(Effect.flip)).toMatchObject({
+          requiredPermission: AuthOrchestrationReadScope,
+        });
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthOrchestrationReadScope],
+            permissions: [AuthOrchestrationReadScope],
+          }),
+        );
+        expect(registry.get(command.permissionAtom(env))).toBe(true);
+        yield* command.authorize(registry, env);
+        expect(registry.get(command.permissionAtom(other))).toBe(false);
+      }),
+    ),
 );

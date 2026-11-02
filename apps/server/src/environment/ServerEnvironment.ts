@@ -267,6 +267,9 @@ export const make = Effect.gen(function* () {
       projectCloneTracking: true,
       projectOrganization: true,
       ignoredFileListing: true,
+      foundryWorkerRead: yield* Config.Boolean("FOUNDRY_WORKER_ENABLED").pipe(
+        Config.withDefault(false),
+      ),
       foundryWorkerLaunch: yield* Config.Boolean("FOUNDRY_WORKER_ENABLED").pipe(
         Config.withDefault(false),
       ),
