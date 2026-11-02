@@ -1,5 +1,8 @@
 import { expect, it } from "vite-plus/test";
-import { authorizeInstanceRequest } from "./AccessTransportPolicy.ts";
+import {
+  authorizeInstanceRequest,
+  readInstanceSessionCookieName,
+} from "./AccessTransportPolicy.ts";
 
 it("shares the Access credential only with the exact HTTPS/WSS instance and preserves T3 cookies", () => {
   const origin = "https://foundry.example";
@@ -78,4 +81,28 @@ it("refuses bearer adaptation without a verified T3 cookie name or outside the i
       "t3_session_main",
     ),
   ).toEqual({ cancel: true });
+});
+
+it("reads the cookie name from anonymous and paired T3 HTTP sessions", () => {
+  const auth = {
+    policy: "remote-reachable",
+    bootstrapMethods: ["one-time-token"],
+    sessionMethods: ["browser-session-cookie", "bearer-access-token", "dpop-access-token"],
+    sessionCookieName: "t3_session_main",
+    serverUpdateScope: "environment:maintain",
+  };
+  for (const state of [
+    { authenticated: false, auth },
+    {
+      authenticated: true,
+      auth,
+      sessionMethod: "browser-session-cookie",
+      expiresAt: "2026-11-03T00:00:00.000Z",
+    },
+  ]) {
+    expect(readInstanceSessionCookieName(state)).toBe("t3_session_main");
+  }
+  expect(() =>
+    readInstanceSessionCookieName({ authenticated: true, auth, expiresAt: "invalid" }),
+  ).toThrow();
 });
