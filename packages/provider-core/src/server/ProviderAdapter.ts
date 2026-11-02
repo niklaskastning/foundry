@@ -572,6 +572,12 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly events: Stream.Stream<ProviderAdapterV2Event, ProviderAdapterV2Error>;
   /** Manager runtimes broadcast independent subscriptions; adapters may expose only a single-consumer stream. */
   readonly subscribeEvents?: Effect.Effect<ProviderAdapterV2EventSubscription>;
+  /** Positive native evidence only; app terminal states and interrupt acknowledgements are insufficient. */
+  readonly confirmWriterEnded?: (input: {
+    readonly runId: RunId;
+    readonly providerThread: OrchestrationV2ProviderThread;
+    readonly nativeTurnId: string;
+  }) => Effect.Effect<boolean>;
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
   /** Root-subscription probe; replacement checks opt in to subagents owned by the live process. */
   readonly hasPendingBackgroundWorkForThread?: (

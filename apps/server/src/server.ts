@@ -1,3 +1,4 @@
+import * as ExecutionStore from "./foundry/ExecutionStore.ts";
 import * as CommandReceiptStore from "./orchestration-v2/CommandReceiptStore.ts";
 import * as WorkerLaunch from "./foundry/WorkerLaunch.ts";
 import * as WorkerReadiness from "./foundry/WorkerReadiness.ts";
@@ -528,6 +529,7 @@ const layerScheduledTaskWebhookOrigin = Layer.effect(
 );
 
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
+  Layer.provide(ExecutionStore.layerObserver.pipe(Layer.provide(ExecutionStore.layer))),
   Layer.provide(layerScheduledTaskWebhookOrigin),
   Layer.provide(ProviderEventIngestor.layerAnalytics),
   Layer.provide(layerCheckpointStore),
@@ -592,6 +594,8 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   WorkerLaunch.layer.pipe(
+    Layer.provide(ExecutionStore.layer),
+    Layer.provide(layerCheckpointStore),
     Layer.provide(EventStoreV2.layerFromOrchestrationEventStore),
     Layer.provide(CommandReceiptStore.layer),
     Layer.provide(WorkerReadiness.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),

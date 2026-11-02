@@ -1,3 +1,4 @@
+import { FoundryWorkerRenewInput, FoundryWorkerRenewError } from "./foundryWorker.ts";
 import {
   FoundryWorkerCancelInput,
   FoundryWorkerCancellation,
@@ -447,6 +448,7 @@ export const WS_METHODS = {
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
   assetsCreateUrl: "assets.createUrl",
+  foundryWorkerRenew: "foundry.workerRenew",
   foundryWorkerCancel: "foundry.workerCancel",
   foundryWorkerFollow: "foundry.workerFollow",
   foundryWorkerRead: "foundry.workerRead",
@@ -1413,6 +1415,11 @@ const WsAgentSessionsImportRpc = Rpc.make(WS_METHODS.agentSessionsImport, {
   ]),
 });
 
+const WsFoundryWorkerRenewRpc = Rpc.make(WS_METHODS.foundryWorkerRenew, {
+  payload: FoundryWorkerRenewInput,
+  success: Schema.Void,
+  error: Schema.Union([FoundryWorkerRenewError, EnvironmentAuthorizationError]),
+});
 const WsFoundryWorkerCancelRpc = Rpc.make(WS_METHODS.foundryWorkerCancel, {
   payload: FoundryWorkerCancelInput,
   success: FoundryWorkerCancellation,
@@ -2174,6 +2181,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
   WsAssetsCreateUrlRpc,
+  WsFoundryWorkerRenewRpc,
   WsFoundryWorkerCancelRpc,
   WsFoundryWorkerFollowRpc,
   WsFoundryWorkerReadRpc,

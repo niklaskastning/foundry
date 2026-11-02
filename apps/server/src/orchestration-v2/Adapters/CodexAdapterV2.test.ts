@@ -1269,6 +1269,164 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       };
     });
 
+  it.effect.each([
+    "completed",
+    "inProgress",
+    "missing",
+    "summary",
+    "command-running",
+    "disconnected",
+    "child-running",
+    "child-completed",
+  ] as const)(
+    "confirms writing end from native full history rather than app terminal state: %s",
+    (state) =>
+      Effect.gen(function* () {
+        const nativeThreadId = "writer-evidence-thread";
+        const nativeTurnId = "writer-evidence-turn";
+        const preamble = codexReplayPreamble({
+          nativeThreadId,
+          nativeTurnId,
+          prompt: "fixture",
+        }).slice(0, 5);
+        const thread = {
+          id: nativeThreadId,
+          sessionId: nativeThreadId,
+          projectId: null,
+          forkedFromId: null,
+          preview: "",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 1782622440,
+          updatedAt: 1782622450,
+          status: { type: "idle" },
+          path: "/tmp/writer-evidence.jsonl",
+          cwd: "/workspace",
+          cliVersion: "0.156.1",
+          source: "vscode",
+          threadSource: null,
+          agentNickname: null,
+          agentRole: null,
+          gitInfo: null,
+          name: null,
+          turns:
+            state === "missing"
+              ? []
+              : [
+                  {
+                    ...makeCodexReplayTurn({
+                      id: nativeTurnId,
+                      status: state === "inProgress" ? "inProgress" : "completed",
+                    }),
+                    itemsView: state === "summary" ? "summary" : "full",
+                    items: state.startsWith("child-")
+                      ? [
+                          {
+                            type: "collabAgentToolCall",
+                            id: "spawn",
+                            tool: "spawnAgent",
+                            senderThreadId: nativeThreadId,
+                            receiverThreadIds: ["child-evidence"],
+                            status: "completed",
+                            agentsStates: {},
+                          },
+                        ]
+                      : state !== "command-running"
+                        ? []
+                        : [
+                            {
+                              type: "commandExecution",
+                              id: "background-command",
+                              command: "fixture",
+                              cwd: "/workspace",
+                              processId: "42",
+                              source: "unifiedExecStartup",
+                              status: "inProgress",
+                              commandActions: [],
+                              aggregatedOutput: null,
+                              exitCode: null,
+                              durationMs: null,
+                            },
+                          ],
+                  },
+                ],
+        };
+        const transcript = makeCodexReplayTranscript({
+          scenario: `writer-evidence-${state}`,
+          entries: [
+            ...preamble,
+            {
+              type: "expect_outbound",
+              label: "proof",
+              frame: {
+                id: 3,
+                method: "thread/read",
+                params: { threadId: nativeThreadId, includeTurns: true },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "proof",
+              frame:
+                state === "disconnected"
+                  ? { id: 3, error: { code: -32603, message: "offline fixture" } }
+                  : { id: 3, result: { thread } },
+            },
+            ...(state.startsWith("child-")
+              ? [
+                  {
+                    type: "expect_outbound" as const,
+                    label: "child-proof",
+                    frame: {
+                      id: 4,
+                      method: "thread/read",
+                      params: { threadId: "child-evidence", includeTurns: true },
+                    },
+                  },
+                  {
+                    type: "emit_inbound" as const,
+                    label: "child-proof",
+                    frame: {
+                      id: 4,
+                      result: {
+                        thread: {
+                          ...thread,
+                          id: "child-evidence",
+                          turns: [
+                            {
+                              ...makeCodexReplayTurn({
+                                id: "child-turn",
+                                status: state === "child-running" ? "inProgress" : "completed",
+                              }),
+                              itemsView: "full",
+                            },
+                          ],
+                        },
+                      },
+                    },
+                  },
+                ]
+              : []),
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript);
+        assert.isDefined(harness.runtime.confirmWriterEnded);
+        assert.equal(
+          yield* harness.runtime.confirmWriterEnded!({
+            providerThread: harness.providerThread,
+            nativeTurnId,
+            runId: RunId.make("writer-evidence-run"),
+          }),
+          state === "completed" || state === "child-completed",
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
+
   it.effect.each(["before", "after"] as const)(
     "rejects a previous run's native turn when it completes %s the new start response",
     (completionOrder) =>
@@ -7651,6 +7809,15 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
         assert.deepEqual(turnStatuses(), ["running"]);
         assert.lengthOf(harness.terminalEvents(), 0);
+
+        assert.isFalse(
+          yield* harness.runtime.confirmWriterEnded!({
+            providerThread: harness.providerThread,
+            nativeTurnId: "goal-turn",
+            runId: RunId.make("held-goal-run"),
+          }),
+        );
+        assert.notInclude(requests, "thread/read");
 
         yield* harness.runtime.interruptTurn({
           providerThread: harness.providerThread,

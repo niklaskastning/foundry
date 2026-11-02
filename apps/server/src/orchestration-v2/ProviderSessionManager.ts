@@ -1,3 +1,4 @@
+import * as ExecutionObserver from "../foundry/ExecutionObserver.ts";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
@@ -345,6 +346,7 @@ export const layerWithOptions = (
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const executionObserver = yield* ExecutionObserver.ExecutionObserver;
       const agentScope = yield* AgentScope;
       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
         function* (threadId: ThreadId) {
@@ -1859,7 +1861,27 @@ export const layerWithOptions = (
                     ),
                   ),
                   () =>
-                    runtime.startTurn(input).pipe(turnMetrics("send", input.modelSelection.model)),
+                    executionObserver
+                      .starting({
+                        threadId: input.threadId,
+                        providerThreadId: input.providerThread.id,
+                        runOrdinal: input.runOrdinal,
+                      })
+                      .pipe(
+                        Effect.flatMap((allowed) =>
+                          allowed
+                            ? runtime.startTurn(input)
+                            : Effect.fail(
+                                new ProviderAdapter.ProviderAdapterTurnStartError({
+                                  driver: runtime.driver,
+                                  threadId: input.threadId,
+                                  providerThreadId: input.providerThread.id,
+                                  runId: input.runId,
+                                }),
+                              ),
+                        ),
+                        turnMetrics("send", input.modelSelection.model),
+                      ),
                   (_, exit) =>
                     Exit.isFailure(exit)
                       ? observeActivity(

@@ -150,6 +150,7 @@ describe("command permissions", () => {
     WS_METHODS.attachmentsWriteChunk,
     WS_METHODS.attachmentsChunkStatus,
     WS_METHODS.foundryWorkerLaunch,
+    WS_METHODS.foundryWorkerRenew,
     WS_METHODS.foundryWorkerCancel,
   ])("uses the target grant for both availability and execution of %s", (method) =>
     Effect.scoped(
