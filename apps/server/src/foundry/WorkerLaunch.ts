@@ -7,6 +7,9 @@ import {
   type FoundryWorkerLaunchInput,
   type FoundryWorkerLaunchReceipt,
   FoundryWorkerLaunchError,
+  FoundryWorkerReadError,
+  type FoundryWorkerReadInput,
+  type FoundryWorkerExecution,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -17,6 +20,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as CommandReceipts from "../orchestration-v2/CommandReceiptStore.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -25,7 +30,9 @@ import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import { WorkerReadiness } from "./WorkerReadiness.ts";
 
 const decodeRoots = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
+const isReadError = Schema.is(FoundryWorkerReadError);
 const isLaunchError = Schema.is(FoundryWorkerLaunchError);
+const readFailure = (code: FoundryWorkerReadError["code"]) => new FoundryWorkerReadError({ code });
 const digest = (value: string) => NodeCrypto.createHash("sha256").update(value).digest("hex");
 export function workerLaunchIds(input: FoundryWorkerLaunchInput, binding: string) {
   const key = digest(input.commandId);
@@ -40,6 +47,9 @@ const failure = (code: FoundryWorkerLaunchError["code"]) => new FoundryWorkerLau
 export class WorkerLaunch extends Context.Service<
   WorkerLaunch,
   {
+    readonly read: (
+      input: FoundryWorkerReadInput,
+    ) => Effect.Effect<FoundryWorkerExecution, FoundryWorkerReadError>;
     readonly launch: (
       input: FoundryWorkerLaunchInput,
     ) => Effect.Effect<FoundryWorkerLaunchReceipt, FoundryWorkerLaunchError>;
@@ -62,9 +72,58 @@ export const layer = Layer.effect(
     const managed = yield* ManagedProjectFolders.ManagedProjectFolders;
     const threads = yield* ThreadManagement.ThreadManagementService;
     const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const eventsStore = yield* EventStore.EventStoreV2;
     const receipts = yield* CommandReceipts.CommandReceiptStoreV2;
     const readiness = yield* WorkerReadiness;
     return {
+      read: Effect.fn("WorkerLaunch.read")(
+        function* (input: FoundryWorkerReadInput) {
+          if (!enabled) return yield* readFailure("not_enabled");
+          const commandId = CommandId.make(`foundry-launch:${digest(input.commandId)}`);
+          const initial = yield* receipts.getByCommandId(commandId);
+          const messageKey = CommandId.make(`${commandId}:initial-message`);
+          const accepted = yield* receipts.getByCommandId(messageKey);
+          if (Option.isNone(initial) || Option.isNone(accepted))
+            return yield* readFailure("not_found");
+          if (
+            initial.value.commandType !== "thread.create" ||
+            initial.value.status !== "accepted" ||
+            accepted.value.commandType !== "message.dispatch" ||
+            accepted.value.status !== "accepted" ||
+            initial.value.threadId !== accepted.value.threadId ||
+            initial.value.resultSequence >= accepted.value.resultSequence
+          )
+            return yield* readFailure("read_failed");
+          const receipt = accepted.value;
+          const events = yield* eventsStore.readByCommandId({ commandId: messageKey }).pipe(
+            Stream.filter(
+              (stored) =>
+                stored.event.type === "run.created" &&
+                stored.event.threadId === receipt.threadId &&
+                stored.sequence > initial.value.resultSequence &&
+                stored.sequence <= receipt.resultSequence,
+            ),
+            Stream.runCollect,
+          );
+          const event = events.length === 1 ? events[0]?.event : undefined;
+          if (event?.type !== "run.created") return yield* readFailure("read_failed");
+          const records = yield* threads.getThreadRecords(receipt.threadId, ["runs"], {
+            runIds: [event.payload.id],
+          });
+          const run = records.runs.find((candidate) => candidate.id === event.payload.id);
+          if (!run) return yield* readFailure("read_failed");
+          return {
+            receipt: {
+              commandId: input.commandId,
+              threadId: receipt.threadId,
+              acceptedAt: DateTime.formatIso(receipt.acceptedAt),
+              sequence: receipt.resultSequence,
+            },
+            run: { id: run.id, status: run.status, checkpointId: run.checkpointId },
+          };
+        },
+        Effect.mapError((error) => (isReadError(error) ? error : readFailure("read_failed"))),
+      ),
       launch: Effect.fn("WorkerLaunch.launch")(
         function* (input: FoundryWorkerLaunchInput) {
           if (!enabled || !binding) return yield* failure("not_enabled");

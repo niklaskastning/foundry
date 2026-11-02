@@ -1174,6 +1174,10 @@ export function createServerEnvironmentAtoms<R, E>(
   });
 
   return {
+    readFoundryWorker: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:foundry:worker-read",
+      tag: WS_METHODS.foundryWorkerRead,
+    }),
     launchFoundryWorker: createEnvironmentRpcCommand(runtime, {
       label: "environment-command:foundry:worker-launch",
       tag: WS_METHODS.foundryWorkerLaunch,

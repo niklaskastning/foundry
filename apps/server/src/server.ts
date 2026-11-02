@@ -592,6 +592,7 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   WorkerLaunch.layer.pipe(
+    Layer.provide(EventStoreV2.layerFromOrchestrationEventStore),
     Layer.provide(CommandReceiptStore.layer),
     Layer.provide(WorkerReadiness.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
   ),
