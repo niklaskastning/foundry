@@ -1,4 +1,4 @@
-import { FoundryWorkerLaunchError } from "@t3tools/contracts";
+import { FoundryWorkerLaunchError, FoundryWorkerCancelError } from "@t3tools/contracts";
 import * as WorkerLaunch from "./foundry/WorkerLaunch.ts";
 import * as WorkerReadiness from "./foundry/WorkerReadiness.ts";
 import * as AssetTransfer from "./assets/AssetTransfer.ts";
@@ -2863,6 +2863,13 @@ export const layerWsRpc = (
             Effect.catchTags({
               ServerRuntimeStartupError: () =>
                 Effect.fail(new FoundryWorkerLaunchError({ code: "launch_failed" })),
+            }),
+          ),
+        [WS_METHODS.foundryWorkerCancel]: (input) =>
+          startup.enqueueCommand(workerLaunch.cancel(input)).pipe(
+            Effect.catchTags({
+              ServerRuntimeStartupError: () =>
+                Effect.fail(new FoundryWorkerCancelError({ code: "cancel_failed" })),
             }),
           ),
         [WS_METHODS.foundryWorkerFollow]: (input) => workerLaunch.follow(input),

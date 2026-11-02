@@ -1174,6 +1174,10 @@ export function createServerEnvironmentAtoms<R, E>(
   });
 
   return {
+    cancelFoundryWorker: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:foundry:worker-cancel",
+      tag: WS_METHODS.foundryWorkerCancel,
+    }),
     readFoundryWorker: createEnvironmentRpcCommand(runtime, {
       label: "environment-command:foundry:worker-read",
       tag: WS_METHODS.foundryWorkerRead,

@@ -1,4 +1,7 @@
 import {
+  FoundryWorkerCancelInput,
+  FoundryWorkerCancellation,
+  FoundryWorkerCancelError,
   FoundryWorkerFollowInput,
   FoundryWorkerProgress,
   FoundryWorkerFollowError,
@@ -444,6 +447,7 @@ export const WS_METHODS = {
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
   assetsCreateUrl: "assets.createUrl",
+  foundryWorkerCancel: "foundry.workerCancel",
   foundryWorkerFollow: "foundry.workerFollow",
   foundryWorkerRead: "foundry.workerRead",
   foundryWorkerLaunch: "foundry.workerLaunch",
@@ -1409,6 +1413,11 @@ const WsAgentSessionsImportRpc = Rpc.make(WS_METHODS.agentSessionsImport, {
   ]),
 });
 
+const WsFoundryWorkerCancelRpc = Rpc.make(WS_METHODS.foundryWorkerCancel, {
+  payload: FoundryWorkerCancelInput,
+  success: FoundryWorkerCancellation,
+  error: Schema.Union([FoundryWorkerCancelError, EnvironmentAuthorizationError]),
+});
 const WsFoundryWorkerFollowRpc = Rpc.make(WS_METHODS.foundryWorkerFollow, {
   payload: FoundryWorkerFollowInput,
   success: FoundryWorkerProgress,
@@ -2165,6 +2174,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
   WsAssetsCreateUrlRpc,
+  WsFoundryWorkerCancelRpc,
   WsFoundryWorkerFollowRpc,
   WsFoundryWorkerReadRpc,
   WsFoundryWorkerLaunchRpc,

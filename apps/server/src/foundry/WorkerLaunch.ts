@@ -8,6 +8,9 @@ import {
   type FoundryWorkerLaunchReceipt,
   FoundryWorkerLaunchError,
   FoundryWorkerReadError,
+  FoundryWorkerCancelError,
+  type FoundryWorkerCancelInput,
+  type FoundryWorkerCancellation,
   FoundryWorkerFollowError,
   type FoundryWorkerFollowInput,
   type FoundryWorkerProgress,
@@ -34,6 +37,7 @@ import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import { WorkerReadiness } from "./WorkerReadiness.ts";
 
 const decodeRoots = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
+const isCancelError = Schema.is(FoundryWorkerCancelError);
 const isFollowError = Schema.is(FoundryWorkerFollowError);
 const isReadError = Schema.is(FoundryWorkerReadError);
 const isLaunchError = Schema.is(FoundryWorkerLaunchError);
@@ -52,6 +56,9 @@ const failure = (code: FoundryWorkerLaunchError["code"]) => new FoundryWorkerLau
 export class WorkerLaunch extends Context.Service<
   WorkerLaunch,
   {
+    readonly cancel: (
+      input: FoundryWorkerCancelInput,
+    ) => Effect.Effect<FoundryWorkerCancellation, FoundryWorkerCancelError>;
     readonly follow: (
       input: FoundryWorkerFollowInput,
     ) => Stream.Stream<FoundryWorkerProgress, FoundryWorkerFollowError>;
@@ -177,9 +184,75 @@ export const layer = Layer.effect(
           });
         }),
       );
+    const cancel = Effect.fn("WorkerLaunch.cancel")(
+      function* (input: FoundryWorkerCancelInput) {
+        const execution = yield* read({ commandId: input.launchCommandId });
+        const commandId = CommandId.make(`foundry-cancel:${digest(input.commandId)}`);
+        const acceptedCancellation = Effect.fn("WorkerLaunch.acceptedCancellation")(function* () {
+          const stored = yield* receipts.getByCommandId(commandId);
+          if (Option.isNone(stored)) return Option.none();
+          if (
+            stored.value.status !== "accepted" ||
+            stored.value.commandType !== "run.interrupt" ||
+            stored.value.threadId !== execution.receipt.threadId
+          )
+            return yield* new FoundryWorkerCancelError({ code: "command_conflict" });
+          const request = yield* eventsStore.readByCommandId({ commandId }).pipe(
+            Stream.filter(
+              (storedEvent) =>
+                storedEvent.event.type === "turn-item.updated" &&
+                storedEvent.event.payload.type === "run_interrupt_request" &&
+                storedEvent.event.payload.runId === execution.run.id,
+            ),
+            Stream.runHead,
+          );
+          if (Option.isNone(request))
+            return yield* new FoundryWorkerCancelError({ code: "command_conflict" });
+          return Option.some({
+            commandId: input.commandId,
+            launch: execution.receipt,
+            runId: execution.run.id,
+            status: "requested" as const,
+            sequence: stored.value.resultSequence,
+          });
+        });
+        const previous = yield* acceptedCancellation();
+        if (Option.isSome(previous)) return previous.value;
+        const { thread } = yield* threads.getThreadRecords(execution.receipt.threadId, []);
+        const result = yield* threads.interruptThread({
+          commandId,
+          projectId: thread.projectId,
+          threadId: execution.receipt.threadId,
+          runId: execution.run.id,
+        });
+        const accepted = yield* acceptedCancellation();
+        if (Option.isSome(accepted)) return accepted.value;
+        if (result.type === "already_terminal")
+          return {
+            commandId: input.commandId,
+            launch: execution.receipt,
+            runId: execution.run.id,
+            status: "already_terminal" as const,
+            runStatus: result.run.status,
+          };
+        return yield* new FoundryWorkerCancelError({ code: "cancel_failed" });
+      },
+      Effect.mapError((error) => {
+        if (isCancelError(error)) return error;
+        return new FoundryWorkerCancelError({
+          code:
+            isReadError(error) && (error.code === "not_enabled" || error.code === "not_found")
+              ? error.code
+              : error._tag === "ThreadManagementThreadNotInterruptibleError"
+                ? "not_interruptible"
+                : "cancel_failed",
+        });
+      }),
+    );
     return {
       read,
       follow,
+      cancel,
       launch: Effect.fn("WorkerLaunch.launch")(
         function* (input: FoundryWorkerLaunchInput) {
           if (!enabled || !binding) return yield* failure("not_enabled");

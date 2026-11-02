@@ -2583,6 +2583,13 @@ it.effect("worker rejects outside projects and disabled providers before committ
       worker.follow({ commandId: workerInput.commandId }).pipe(Stream.runHead),
     ).pipe(Effect.provide(workerLayer(["/repo"], true, false)), Effect.flip);
     assert.deepInclude(disabledFollow, { code: "not_enabled" });
+    const disabledCancel = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+      worker.cancel({
+        commandId: CommandId.make("disabled-cancel"),
+        launchCommandId: workerInput.commandId,
+      }),
+    ).pipe(Effect.provide(workerLayer(["/repo"], true, false)), Effect.flip);
+    assert.deepInclude(disabledCancel, { code: "not_enabled" });
 
     for (const roots of [[], ["/other"], ["/rep"], ["relative"]]) {
       const denied = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
@@ -2762,3 +2769,78 @@ it.effect("worker follows its run across replay/live and resumes without later t
     assert.deepEqual(resumed, progress.slice(1));
   }).pipe(Effect.provide(workerLayer().pipe(Layer.provideMerge(harness.layer))));
 });
+
+it.effect(
+  "worker cancellation retries stay bound to the original run and acknowledge only a request",
+  () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const worker = yield* WorkerLaunch.WorkerLaunch;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const input = {
+        commandId: CommandId.make("worker-cancel"),
+        launchCommandId: workerInput.commandId,
+      };
+      const missing = yield* worker.cancel(input).pipe(Effect.flip);
+      assert.equal(missing.code, "not_found");
+      const launch = yield* worker.launch(workerInput);
+      const original = yield* worker.read({ commandId: workerInput.commandId });
+      const [first, concurrent] = yield* Effect.all([worker.cancel(input), worker.cancel(input)], {
+        concurrency: "unbounded",
+      });
+      assert.deepEqual(first, concurrent);
+      assert.equal(first.status, "requested");
+      assert.equal(first.runId, original.run.id);
+      assert.deepEqual(first.launch, launch);
+      assert.equal(
+        (yield* worker.read({ commandId: workerInput.commandId })).run.status,
+        "interrupted",
+      );
+      yield* threads.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("cancel-later-command"),
+        threadId: launch.threadId,
+        messageId: MessageId.make("cancel-later-message"),
+        text: "An independent later turn",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "defer_start", workspaceStrategy: { type: "root" } },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const beforeRetry = yield* threads.getThreadProjection(launch.threadId);
+      const retry = yield* worker.cancel(input);
+      assert.deepEqual(retry, first);
+      const terminal = yield* worker.cancel({
+        ...input,
+        commandId: CommandId.make("new-cancel-terminal"),
+      });
+      assert.deepInclude(terminal, {
+        status: "already_terminal",
+        runStatus: "interrupted",
+        runId: original.run.id,
+      });
+      const afterRetry = yield* threads.getThreadProjection(launch.threadId);
+      assert.deepEqual(afterRetry.runs, beforeRetry.runs);
+      assert.equal(
+        afterRetry.turnItems.filter((item) => item.type === "run_interrupt_request").length,
+        1,
+      );
+      const otherInput = { ...workerInput, commandId: CommandId.make("other-worker-launch") };
+      const otherLaunch = yield* worker.launch(otherInput);
+      yield* threads.streamStoredEventsFrom({ threadId: otherLaunch.threadId }).pipe(
+        Stream.filter(
+          (stored) =>
+            stored.event.type === "run.updated" && stored.event.payload.status === "starting",
+        ),
+        Stream.runHead,
+      );
+      const otherBefore = yield* worker.read({ commandId: otherInput.commandId });
+      const conflict = yield* worker
+        .cancel({ ...input, launchCommandId: otherInput.commandId })
+        .pipe(Effect.flip);
+      assert.equal(conflict.code, "command_conflict");
+      assert.deepEqual(yield* worker.read({ commandId: otherInput.commandId }), otherBefore);
+    }).pipe(Effect.provide(workerLayer().pipe(Layer.provideMerge(harness.layer))));
+  },
+);
