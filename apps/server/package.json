@@ -31,7 +31,8 @@
     "record:muse-replay": "node scripts/record-muse-msp-replay-fixture.ts",
     "generate": "graphqlgen",
     "generate:expo-schema": "node scripts/fetch-expo-schema.ts",
-    "test:foundry-postgres": "node scripts/test-foundry-postgres.ts"
+    "test:foundry-postgres": "node scripts/test-foundry-postgres.ts",
+    "test:automation-postgres": "node scripts/test-automation-postgres.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.276",
