@@ -668,7 +668,7 @@ ist kein erfolgreiches Arbeitsergebnis. Bereits gespeicherte Manifeste sind
 unveränderlich. Bei älteren Aufträgen ohne Ausführungsdatensatz wird kein Nachweis
 nachträglich erfunden.
 
-Auf aktivierten Workern schützt `foundry-workspaces.sqlite` im Worker-State die
+Auf aktivierten Workern mit Provider-Bindung schützt `foundry-workspaces.sqlite` im Worker-State die
 verwalteten Checkout-Pfade. Worker-Launch reserviert vor Thread-Anlage und bindet
 Command, Thread und Ausführungs-Generation dauerhaft. Manuelle Turns in denselben
 Wurzeln reservieren vor Setup-Skripten und Provider-Eintritt denselben Writer-Platz.
@@ -681,6 +681,8 @@ Freigabe löschen. Das schützt verwaltete Agentenstarts, keine beliebigen Host-
 oder manuell ausgeführten Terminalbefehle.
 
 Worker mit Capability `foundryManagedWorkspaces` unterstützen die Reservierungsbindung.
+Ungebundene Worker behalten ihren bisherigen interaktiven Betrieb, etwa für kostenlose
+Replay-Prüfungen; Foundry-Launch verlangt weiterhin die gesonderte Provider-Bindung.
 `foundry.workerLaunch` akzeptiert dort optional `workspaceMode: "worktree"` für einen
 eigenen verwalteten Worktree. Dafür muss eine erlaubte Wurzel das Quellrepository
 enthalten; Worktrees werden nicht innerhalb ihres Quell-Checkouts erzeugt. Ohne

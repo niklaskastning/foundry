@@ -279,9 +279,10 @@ export const make = Effect.gen(function* () {
       foundryWorkerRead: yield* Config.Boolean("FOUNDRY_WORKER_ENABLED").pipe(
         Config.withDefault(false),
       ),
-      foundryManagedWorkspaces: yield* Config.Boolean("FOUNDRY_WORKER_ENABLED").pipe(
-        Config.withDefault(false),
-      ),
+      foundryManagedWorkspaces: yield* Effect.all([
+        Config.Boolean("FOUNDRY_WORKER_ENABLED").pipe(Config.withDefault(false)),
+        Config.String("FOUNDRY_WORKER_PROVIDER_INSTANCE_ID").pipe(Config.withDefault("")),
+      ]).pipe(Effect.map(([enabled, binding]) => enabled && binding.trim().length > 0)),
       foundryWorkerLaunch: yield* Config.Boolean("FOUNDRY_WORKER_ENABLED").pipe(
         Config.withDefault(false),
       ),
