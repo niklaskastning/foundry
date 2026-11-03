@@ -4,6 +4,10 @@ Foundry serves the shared Web client and T3 backend at `http://127.0.0.1:3783`. 
 
 This is the isolated base deployment, not the planned instance gateway, Automation engine, or host worker. The backend still uses its own local SQLite state. PostgreSQL has empty `fork_automation` and `fork_connect` databases reserved for their separate future migrations. No application receives the database administrator credential. Owner roles cannot log in; runtime and migration logins are provisioned with the services that need them.
 
+## Development-VPS authorization
+
+For this VPS, [the maintainer's standing agent instructions](../../AGENTS.md#development-vps-and-agent-autonomy) authorize deployment of tested PR heads before merge or user acceptance, task-related migrations and necessary resets of disposable Foundry test data. They override older requirements for a separate development-deployment approval in this runbook and the activation guides; production acceptance gates remain separate. User `niklas` has passwordless sudo for task-related operations; use `sudo -n`. The restricted helper below remains the preferred Main image-update path, but it is not the limit of the agent's authorized privileges on this host. Credentials, personal T3 state and unrelated services are outside the test-data reset permission.
+
 ## Experimental device enrollment (P06)
 
 Für einen realen Device-/Gateway-Versuch zuerst den [begrenzten G2-Aktivierungsablauf](g2-activation.md)
@@ -265,7 +269,7 @@ sudo -n /usr/local/sbin/foundry-deploy status
 
 Installation copies the helper and fixed configuration to root-owned paths and adds
 only that helper to `/etc/sudoers.d/foundry-deploy`. It does not restart containers.
-Never grant sudo to the checkout script itself: the checkout is writable by the agent.
+For a restricted deployment account, do not grant sudo to the checkout script itself: the checkout is writable by the agent. This restriction does not describe `niklas`, whose broader development-host privileges are documented above.
 Unrestricted Docker access, including docker-group membership, effectively grants
 [root privileges](https://docs.docker.com/engine/install/linux-postinstall/).
 
@@ -289,6 +293,8 @@ health, readiness and unchanged environment/instance identities. The manifest re
 the previous image ID and candidate revision. Backups contain private state and are
 root-readable only; retention is manual. They do not include PostgreSQL or workspaces
 and are not a replacement for the complete backups described below.
+
+The updater already serializes runs with `/var/lib/foundry-deploy/lock` (an exclusive, nonblocking `flock`). Manual Foundry rollouts, worker updates and migrations use the same lock through verification. Do not acquire it again around the updater or bypass a busy lock. The manifest and `success` file provide automatic evidence; briefly report previous/target revision, healthcheck result and recovery path in the PR or handoff. Manual paths report the same fields there, without a separate file or checklist.
 
 If backup creation fails, the old container restarts. If candidate startup or identity
 verification fails, Main stays stopped and the helper reports the backup directory.
