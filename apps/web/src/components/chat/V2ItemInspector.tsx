@@ -108,7 +108,7 @@ function useFetchedTurnItem(
   skip = false,
 ) {
   const wireItem = projectedItem.item;
-  const fetches = !skip && turnItemNeedsDetailFetch(wireItem);
+  const fetches = !skip && (source?.inlineDiff === true || turnItemNeedsDetailFetch(wireItem));
   const detail = useTurnItemDetail(
     fetches
       ? {
