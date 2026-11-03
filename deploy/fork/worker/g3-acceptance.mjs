@@ -58,6 +58,14 @@ async function connect() {
       socket.send(JSON.stringify({ _tag: "Request", id: key, tag, payload, headers: [] }));
       return item.promise;
     },
+    watch(tag, payload, onValues) {
+      const ready = Promise.withResolvers();
+      const failure = Promise.withResolvers();
+      const key = String(++id);
+      pending.set(key, { onValues, ready, reject: failure.reject });
+      socket.send(JSON.stringify({ _tag: "Request", id: key, tag, payload, headers: [] }));
+      return { ready: ready.promise, failure: failure.promise };
+    },
     follow(payload) {
       const first = Promise.withResolvers();
       const terminal = Promise.withResolvers();
@@ -94,6 +102,19 @@ async function connect() {
       }
       const item = pending.get(String(message.requestId));
       if (!item) continue;
+      if (message._tag === "Chunk" && item.onValues) {
+        item.chain = (item.chain ?? Promise.resolve())
+          .then(async () => {
+            await item.onValues(message.values);
+            item.ready.resolve();
+            socket.send(JSON.stringify({ _tag: "Ack", requestId: message.requestId }));
+          })
+          .catch((error) => {
+            item.ready.reject(error);
+            item.reject(error);
+          });
+        continue;
+      }
       if (message._tag === "Chunk" && item.values) {
         for (const value of message.values) {
           const previous = item.values.at(-1)?.sequence ?? item.cursor;
@@ -127,6 +148,26 @@ async function connect() {
   return client;
 }
 
+function allowedCommand(prompt) {
+  if (typeof prompt !== "string" || prompt.includes("$") || prompt.includes("`")) return false;
+  let command = prompt.replace(/^(?:\/usr\/bin\/bash|\/bin\/bash|bash) -lc /, "");
+  if (command.startsWith('"') && command.endsWith('"'))
+    command = command.slice(1, -1).replaceAll("\\\\", "\\").replaceAll('\\"', '"');
+  else if (command.startsWith("'") && command.endsWith("'")) command = command.slice(1, -1);
+  return [
+    "pwd && git status --short && ls -la",
+    "cat G3.txt && git status --short",
+    "cat G3.txt",
+    "pwd",
+    "git status --short",
+    "ls -la",
+    "printf 'FOUNDRY_G3_OK\\n' > G3.txt",
+    "printf '%s\\n' FOUNDRY_G3_OK > G3.txt",
+    "printf '%s\\\\n' FOUNDRY_G3_OK > G3.txt",
+    "printf 'FOUNDRY_G3_OK\\n' > G3.txt",
+  ].includes(command);
+}
+
 try {
   current = await connect();
   report.readiness = await current.call("foundry.workerStatus", {});
@@ -139,7 +180,7 @@ try {
     throw new Error("Worker is not ready and idle");
   await current.call("projects.mutate", {
     type: "project.create",
-    commandId: `${request.commandId}:project`,
+    commandId: access.projectCommandId ?? `${request.commandId}:project`,
     projectId: request.projectId,
     title: "G3 acceptance",
     workspaceRoot: access.workspace,
@@ -178,6 +219,47 @@ try {
     current = await connect();
     const receipt = await current.call("foundry.workerLaunch", request);
     report.receipt = receipt;
+    const requests = new Map();
+    const approvals = new Map();
+    const answered = new Set();
+    report.approvals = [];
+    const watch = current.watch(
+      "orchestration.subscribeThread",
+      { threadId: receipt.threadId },
+      async (values) => {
+        for (const value of values) {
+          if (value.kind === "snapshot") {
+            for (const item of value.projection.runtimeRequests) requests.set(item.id, item);
+            for (const item of value.projection.turnItems)
+              if (item.type === "approval_request") approvals.set(item.requestId, item);
+          } else if (value.kind === "event") {
+            if (value.event.type === "runtime-request.updated")
+              requests.set(value.event.payload.id, value.event.payload);
+            if (
+              value.event.type === "turn-item.updated" &&
+              value.event.payload.type === "approval_request"
+            )
+              approvals.set(value.event.payload.requestId, value.event.payload);
+          }
+        }
+        for (const [id, approval] of approvals) {
+          if (answered.has(id) || requests.get(id)?.status !== "pending") continue;
+          if (requests.get(id).kind !== "command" || !allowedCommand(approval.prompt))
+            throw new Error("Approval outside G3 fixture allowlist");
+          answered.add(id);
+          await current.call("orchestration.dispatchCommand", {
+            type: "runtime-request.respond",
+            commandId: `${request.commandId}:approve:${NodeCrypto.createHash("sha256").update(id).digest("hex")}`,
+            threadId: receipt.threadId,
+            requestId: id,
+            decision: "accept",
+          });
+          report.approvals.push(approval.prompt);
+        }
+      },
+    );
+    watch.failure.catch((error) => deadline.reject(error));
+    await Promise.race([watch.ready, deadline.promise]);
     const execution = await current.call("foundry.workerRead", { commandId: request.commandId });
     const generation = execution.lifecycle?.generation;
     if (!Number.isInteger(generation)) throw new Error("No persisted generation");

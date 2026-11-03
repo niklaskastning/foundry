@@ -173,7 +173,11 @@ Nur nach ausdrücklicher Freigabe des einen Luna-Turns:
 node deploy/fork/worker/g3-acceptance.mjs /home/niklas/.cache/foundry-g3-acceptance/worker-access.json run-one-luna-turn
 ```
 
-Der Runner speichert vor dem Start eine exklusive Startsperre. Er verwirft die
+Der Runner speichert vor dem Start eine exklusive Startsperre. Für diese konkrete
+Fixture bedient er einzelne native Befehlsfreigaben über den normalen Approval-Service:
+eine feste Liste aus Repository-Inspektion, Schreiben und Lesen von `G3.txt`.
+Unbekannte Befehle brechen den Lauf ab; keine dauerhafte Session-Freigabe und keine
+Änderung des Approval-Modus. Er verwirft die
 committete Launch-Antwort an seiner RPC-Eingangsgrenze und schließt die Verbindung;
 Wiederverbindung und Retry verwenden exakt die gespeicherte Anfrage. Read, aktive
 Lease-Erneuerung und zwei sequenzierte Follow-Streams prüfen den ursprünglichen Run,
@@ -190,8 +194,25 @@ Manifest-/Checkpoint-Bindung, Git-Objekt und Dateiinhalt unter Dienstkonto und
 widerruft die kurzlebige Prüfersession:
 
 ```sh
-sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py verify-acceptance
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py verify-acceptance second-access.json
 ```
+
+Für einen gesonderten Neustartnachweis nach bestätigtem Ende aller Writer:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py restart-idle
+# Nach dem Start:
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py status
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py verify-acceptance second-access.json
+```
+
+`restart-idle` verweigert aktive/unaufgelöste Runs und Reservierungen, speichert die
+Ausführungszeilen privat, stoppt ausschließlich das Worker-Target und dessen Slice
+und bestätigt leere Dienst-cgroups. Vor dem Start müssen die Ausführungszeilen
+unverändert sein. Es startet keinen Modell-Turn und ändert keine Konfiguration.
+Die danach ausgeführte Verifikation liest den ursprünglichen Ergebnis-Checkpoint
+und die persistierten Zählungen erneut. Das ist kein Restart eines aktiven oder
+unklaren Writers und kein Daten-Restore; diese Fälle behalten ihre eigenen Nachweise.
 
 Diese Teilprobe schließt G3 nicht allein: Cancel während Ausführung, Lease-Verlust,
 Restart, Writer-Konflikte und Wiederverbindung der Clients bleiben eigene Nachweise.

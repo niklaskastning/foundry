@@ -11,7 +11,9 @@ const { NodeWS } = await import(
     NodePath.resolve("apps/server/node_modules/@effect/platform-node/dist/NodeSocket.js"),
   )
 );
-for (const invalid of [false, true]) {
+for (const scenario of ["success", "generation", "unsafe"]) {
+  const invalid = scenario === "generation";
+  const unsafe = scenario === "unsafe";
   const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "g3-transport-"));
   const http = NodeHttp.createServer((request, response) => {
     NodeAssert.equal(request.headers.authorization, "Bearer fixture-private-token");
@@ -30,6 +32,7 @@ for (const invalid of [false, true]) {
   let committed = 0;
   let cancelled = 0;
   let finished = false;
+  let approvalAccepted = false;
   const state = () => ({
     receipt,
     run: {
@@ -79,7 +82,49 @@ for (const invalid of [false, true]) {
         case "foundry.workerCancel":
           cancelled++;
           return reply({ status: "requested" });
+        case "orchestration.subscribeThread":
+          return socket.send(
+            JSON.stringify({
+              _tag: "Chunk",
+              requestId: message.id,
+              values: [
+                {
+                  kind: "snapshot",
+                  projection: {
+                    runtimeRequests: [
+                      { id: "fixture-approval", kind: "command", status: "pending" },
+                    ],
+                    turnItems: [
+                      {
+                        type: "approval_request",
+                        requestId: "fixture-approval",
+                        prompt: unsafe
+                          ? "/usr/bin/bash -lc 'cat /etc/shadow'"
+                          : "/usr/bin/bash -lc 'cat G3.txt && git status --short'",
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+          );
+        case "orchestration.dispatchCommand":
+          NodeAssert.equal(message.payload.type, "runtime-request.respond");
+          NodeAssert.equal(message.payload.decision, "accept");
+          approvalAccepted = true;
+          return reply({ sequence: 2 });
         case "foundry.workerFollow": {
+          if (!approvalAccepted)
+            return socket.send(
+              JSON.stringify({
+                _tag: "Exit",
+                requestId: message.id,
+                exit: {
+                  _tag: "Failure",
+                  cause: [{ _tag: "Fail", error: { code: "fixture_approval_missing" } }],
+                },
+              }),
+            );
           const resumed = message.payload.afterSequence === 2;
           if (resumed) finished = true;
           return socket.send(
@@ -127,17 +172,17 @@ for (const invalid of [false, true]) {
       output += bytes;
     });
     const exit = await new Promise((resolve) => child.on("exit", resolve));
-    NodeAssert.equal(exit, invalid ? 1 : 0, output);
+    NodeAssert.equal(exit, invalid || unsafe ? 1 : 0, output);
     NodeAssert.equal(committed, 1);
-    NodeAssert.equal(deliveries, invalid ? 2 : 3);
-    NodeAssert.equal(cancelled, invalid ? 1 : 0);
+    NodeAssert.equal(deliveries, invalid || unsafe ? 2 : 3);
+    NodeAssert.equal(cancelled, invalid || unsafe ? 1 : 0);
     NodeAssert.ok(!output.includes("fixture-private-token") && !output.includes("fixture-ticket"));
     const result = JSON.parse(await NodeFSP.readFile(`${access}.result.json`, "utf8"));
     NodeAssert.equal(result.replyDiscardedAtRpcBoundary, true);
-    if (!invalid) {
+    if (!invalid && !unsafe) {
       NodeAssert.deepEqual(result.resumedSequences, [3]);
       NodeAssert.equal(result.manifestUnchanged, true);
-    } else NodeAssert.match(result.failure, /confirmed completed manifest/);
+    } else NodeAssert.match(result.failure, unsafe ? /allowlist/ : /confirmed completed manifest/);
   } finally {
     for (const socket of sockets.clients) socket.terminate();
     await new Promise((resolve) => sockets.close(resolve));

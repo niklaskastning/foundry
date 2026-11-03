@@ -202,6 +202,35 @@ class WorkerInstallationTest(unittest.TestCase):
                 connection.execute("UPDATE reservations SET state='released'")
             binding.quiet_database(database)
 
+    def test_persisted_acceptance_requires_exact_attempt_and_checkpoint_binding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "statev2.sqlite"
+            manifest = {"generation": 2, "runId": "run", "checkpointId": "checkpoint", "checkpointRef": "ref", "outcome": "completed"}
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE foundry_executions(command_id TEXT,thread_id TEXT,generation INTEGER,writer_ended INTEGER,manifest TEXT)")
+                connection.execute("INSERT INTO foundry_executions VALUES ('command','thread',2,1,?)", (json.dumps(manifest),))
+                for table in ("threads", "runs", "run_attempts", "provider_turns"):
+                    connection.execute(f"CREATE TABLE orchestration_v2_projection_{table}(thread_id TEXT)")
+                    connection.execute(f"INSERT INTO orchestration_v2_projection_{table} VALUES ('thread')")
+                connection.execute("CREATE TABLE orchestration_v2_projection_checkpoints(checkpoint_id TEXT,thread_id TEXT,run_id TEXT,status TEXT)")
+                connection.execute("INSERT INTO orchestration_v2_projection_checkpoints VALUES ('checkpoint','thread','run','ready')")
+            receipt = {"threadId": "thread"}
+            self.assertEqual(binding.persisted_acceptance(database, "command", receipt, manifest), manifest)
+            with sqlite3.connect(database) as connection:
+                connection.execute("INSERT INTO orchestration_v2_projection_run_attempts VALUES ('thread')")
+            with self.assertRaises(RuntimeError):
+                binding.persisted_acceptance(database, "command", receipt, manifest)
+            with sqlite3.connect(database) as connection:
+                connection.execute("DELETE FROM orchestration_v2_projection_run_attempts WHERE rowid=2")
+                connection.execute("UPDATE orchestration_v2_projection_checkpoints SET run_id='other-run'")
+            with self.assertRaises(RuntimeError):
+                binding.persisted_acceptance(database, "command", receipt, manifest)
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE orchestration_v2_projection_checkpoints SET run_id='run'")
+                connection.execute("UPDATE foundry_executions SET writer_ended=0")
+            with self.assertRaises(RuntimeError):
+                binding.persisted_acceptance(database, "command", receipt, manifest)
+
     def test_acceptance_transport_retries_and_rejects_wrong_generation(self):
         result = subprocess.run(["node", "deploy/fork/worker/test-g3-transport.mjs"], cwd=Path(__file__).resolve().parents[3], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)

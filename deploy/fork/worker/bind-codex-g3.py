@@ -217,11 +217,32 @@ def acceptance_access(workspace_name):
                       "workspace": str(workspace), "commandId": identifier}))
 
 
-def verify_acceptance():
+def persisted_acceptance(database, command_id, receipt, expected_manifest):
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+        row = connection.execute("SELECT thread_id,generation,writer_ended,manifest FROM foundry_executions WHERE command_id=?", (command_id,)).fetchone()
+        if not row or row[2] != 1 or row[3] is None or row[0] != receipt["threadId"]:
+            raise RuntimeError("No persisted writer-end/manifest proof")
+        thread_id, generation, _, encoded = row
+        manifest = json.loads(encoded)
+        if manifest != expected_manifest or manifest["generation"] != generation:
+            raise RuntimeError("Manifest or generation differs")
+        for table, identity in (("threads", "thread_id"), ("runs", "thread_id"), ("run_attempts", "thread_id"), ("provider_turns", "thread_id")):
+            count = connection.execute(f"SELECT count(*) FROM orchestration_v2_projection_{table} WHERE {identity}=?", (thread_id,)).fetchone()[0]
+            if count != 1:
+                raise RuntimeError("Expected exactly one thread/run/attempt")
+        checkpoint = connection.execute("SELECT thread_id,run_id,status FROM orchestration_v2_projection_checkpoints WHERE checkpoint_id=?", (manifest["checkpointId"],)).fetchone()
+        if checkpoint != (thread_id, manifest["runId"], "ready"):
+            raise RuntimeError("Checkpoint ownership or ready state differs")
+    return manifest
+
+
+def verify_acceptance(access_name="worker-access.json"):
     if os.geteuid() != 0:
         raise RuntimeError("Administrator required")
     owner = pwd.getpwnam("niklas")
-    access_file = Path(owner.pw_dir) / ".cache/foundry-g3-acceptance/worker-access.json"
+    if access_name not in ("worker-access.json", "second-access.json"):
+        raise RuntimeError("Only the two prepared acceptance cases may be verified")
+    access_file = Path(owner.pw_dir) / ".cache/foundry-g3-acceptance" / access_name
     access = json.loads(access_file.read_text())
     result_file = Path(str(access_file) + ".result.json")
     report = json.loads(result_file.read_text())
@@ -229,21 +250,7 @@ def verify_acceptance():
     database = Path(worker.T3 + "/userdata/statev2.sqlite")
     if report.get("failure") or report.get("commandId") != access["launch"]["commandId"]:
         raise RuntimeError("Runner did not confirm its original execution")
-    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
-        row = connection.execute("SELECT thread_id,generation,writer_ended,manifest FROM foundry_executions WHERE command_id=?", (report["commandId"],)).fetchone()
-        if not row or row[2] != 1 or row[3] is None or row[0] != report["receipt"]["threadId"]:
-            raise RuntimeError("No persisted writer-end/manifest proof")
-        thread_id, generation, _, encoded = row
-        manifest = json.loads(encoded)
-        if manifest != report["execution"]["lifecycle"]["manifest"] or manifest["generation"] != generation:
-            raise RuntimeError("Manifest or generation differs")
-        for table, identity in (("threads", "thread_id"), ("runs", "thread_id"), ("run_attempts", "thread_id")):
-            count = connection.execute(f"SELECT count(*) FROM orchestration_v2_projection_{table} WHERE {identity}=?", (thread_id,)).fetchone()[0]
-            if count != 1:
-                raise RuntimeError("Expected exactly one thread/run/attempt")
-        checkpoint = connection.execute("SELECT thread_id,run_id,status FROM orchestration_v2_projection_checkpoints WHERE checkpoint_id=?", (manifest["checkpointId"],)).fetchone()
-        if checkpoint != (thread_id, manifest["runId"], "ready"):
-            raise RuntimeError("Checkpoint ownership or ready state differs")
+    manifest = persisted_acceptance(database, report["commandId"], report["receipt"], report["execution"]["lifecycle"]["manifest"])
     workspace = Path(access["workspace"]).resolve(strict=True)
     if workspace.parent not in [Path(root) for root in config["workspaceRoots"]] or not workspace.name.startswith("g3-acceptance-"):
         raise RuntimeError("Unexpected fixture workspace")
@@ -257,7 +264,7 @@ def verify_acceptance():
              "writerEnded": True, "manifest": manifest, "checkpointReadyAndGitObjectPresent": True,
              "fileContentsVerified": True, "acceptanceSessionRevoked": True,
              "g3FullyAccepted": False}
-    proof_file = access_file.with_name("verified-proof.json")
+    proof_file = access_file.with_name(access_name + ".verified-proof.json")
     with proof_file.open("x") as stream:
         json.dump(proof, stream, indent=2)
     proof_file.chmod(0o600)
@@ -265,11 +272,48 @@ def verify_acceptance():
     print(json.dumps(proof, indent=2))
 
 
+def restart_idle():
+    if os.geteuid() != 0:
+        raise RuntimeError("Administrator required")
+    config = worker.Installation("/").previous()["config"]
+    if config.get("providerInstanceId") != BINDING:
+        raise RuntimeError("Expected worker binding is missing")
+    database = Path(worker.T3 + "/userdata/statev2.sqlite")
+    quiet_database(database)
+    old_pid = int(run(["/usr/bin/systemctl", "show", "foundry-host.service", "--property=MainPID", "--value"]))
+    if old_pid <= 0:
+        raise RuntimeError("Worker is not running")
+    os.umask(0o077)
+    recovery = Path(tempfile.mkdtemp(prefix="worker-g3-restart-", dir="/var/lib/foundry-deploy"))
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+        rows = connection.execute("SELECT command_id,generation,state,writer_ended,manifest FROM foundry_executions ORDER BY generation").fetchall()
+    (recovery / "execution-snapshot.json").write_text(json.dumps(rows))
+    run(["/usr/bin/systemctl", "stop", "foundry-host.target", "foundry-host.slice"])
+    quiet_database(database)
+    if run(["/usr/bin/systemctl", "show", "foundry-host.service", "--property=MainPID", "--value"]) != "0":
+        raise RuntimeError("Worker did not stop")
+    for unit in ("foundry-host.service", "foundry-connector.service"):
+        group = Path("/sys/fs/cgroup/foundry.slice/foundry-host.slice") / unit / "cgroup.procs"
+        if group.exists() and group.read_text().strip():
+            raise RuntimeError("Worker cgroup still contains processes")
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+        if connection.execute("SELECT command_id,generation,state,writer_ended,manifest FROM foundry_executions ORDER BY generation").fetchall() != rows:
+            raise RuntimeError("Executions changed during stop; keep worker stopped")
+    run(["/usr/bin/systemctl", "start", "foundry-host.target"])
+    print(json.dumps({"restartRequested": True, "oldWorkerPid": old_pid, "oldWorkerCgroupsEmpty": True,
+                      "executionSnapshot": str(recovery / "execution-snapshot.json"), "paidTurns": 0,
+                      "next": "After startup run status and verify-acceptance second-access.json"}))
+
+
 def main():
     if len(sys.argv) == 3 and sys.argv[1] == "acceptance-access":
         acceptance_access(sys.argv[2])
     elif sys.argv[1:] == ["verify-acceptance"]:
         verify_acceptance()
+    elif len(sys.argv) == 3 and sys.argv[1] == "verify-acceptance":
+        verify_acceptance(sys.argv[2])
+    elif sys.argv[1:] == ["restart-idle"]:
+        restart_idle()
     elif sys.argv[1:] == ["bind"]:
         bind()
     elif sys.argv[1:] == ["status"]:
