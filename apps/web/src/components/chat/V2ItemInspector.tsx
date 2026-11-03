@@ -306,7 +306,7 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
               </Button>
             ) : null}
           </div>
-          {item.status === "failed" && item.diffStr?.trim() ? (
+          {(item.status === "failed" || props.source?.inlineDiff) && item.diffStr?.trim() ? (
             <StructuredValue value={item.diffStr} />
           ) : null}
           {item.changes !== undefined && item.changes.length > 0 ? (

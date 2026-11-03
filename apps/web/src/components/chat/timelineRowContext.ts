@@ -35,6 +35,7 @@ import { type HandoffTimelineRun } from "./V2LifecycleRow";
  * from the environment; the guest page reads them through its own routes.
  */
 export interface TurnItemSource {
+  readonly inlineDiff?: boolean;
   readonly detail: TurnItemDetailSource;
   readonly commandOutput: (target: {
     readonly threadId: ThreadId;

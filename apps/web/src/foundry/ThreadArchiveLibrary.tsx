@@ -176,6 +176,7 @@ function ArchiveTimeline({
   const listRef = useRef<LegendListRef | null>(null);
   const theme = useRenderedAppearance();
   const source: TurnItemSource = {
+    inlineDiff: true,
     detail: ({ itemId }) =>
       Atom.make(
         AsyncResult.success({

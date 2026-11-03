@@ -70,6 +70,15 @@ the coordinated restore procedure; a profile change is not a schema downgrade.
 Development builds alone may explicitly use HTTP on loopback for the artifact
 client, matching local instance verification; deployed clients require HTTPS.
 
+P38b uses instance schema 7 for central thread events, confirmed cursors and artifact
+references. Automation keeps its separate database and migrations. Upgrade an
+existing schema-6 Main with `activate-access.py upgrade-archive sha256:<digest>
+<source-sha>`; the helper holds the deployment lock through migration and
+verification and records the coordinated previous database/state/image recovery.
+An older schema-6 image alone cannot recover a schema-7 deployment. Same-schema
+`update` and profile changes retain schema 7. Worker credentials and local T3
+state remain on the worker; archive ingestion never copies an active SQLite file.
+
 From the source checkout, create a private key file on the execution machine:
 
 ```sh

@@ -101,6 +101,25 @@ keine Datenbank zurück und verändert Main nicht. Fehler lassen den Worker
 gestoppt; eine ungeklärte Ausführung bleibt gesperrt. Dies ist kein Ersatz für den
 im Implementierungsplan abgegrenzten Client-/Betriebsnachweise oder eine vollständige Restore-Abnahme.
 
+## Fortlaufendes Thread-Archiv (P38b)
+
+Mit dem P38b-Release verwendet dieselbe explizite Artefaktbindung zusätzlich das
+Main-Thread-Archiv (Instanzschema 7 und `threadArchive`-Metadaten). Neue Threads
+werden aus dem lokalen Ereignisjournal mit Main-Cursor abgeglichen. Der lokale
+Retentionsmarker verhindert die Kompaktion dieses Journals dauerhaft, auch nach
+Entfernen der Bindung. Persönliche ungebundene T3-Instanzen bleiben unverändert.
+
+Vor Aktivierung vorhandene Threads werden konservativ als unvollständig geführt:
+frühere Kompaktion kann Ereignisse entfernt haben. Ein späterer Abgleich erfindet
+diese Historie nicht. Ein neuer erfolgreicher Worker-Abschluss wartet auf das
+bestätigte erforderliche Archiv einschließlich vorhandener Blob-Referenzen;
+Archivbestätigung ersetzt keinen nativen Writer-Stop-Nachweis.
+
+Die zusätzliche lokale SQLite-Migration 78 verändert den Schema-Fingerprint.
+Ein Konfigurations-/Image-Rollback allein ist danach nicht zulässig; für einen
+älteren Worker ist der koordinierte vorherige SQLite-/Release-Stand erforderlich.
+Main-Schema und Automation-Migrationen sind davon getrennt.
+
 ## Stop, Neustart, Upgrade und Entfernung
 
 `systemctl stop foundry-host.target` stoppt beide Dienste samt Kindprozessen; `systemctl restart foundry-host.target` startet sie mit demselben Home neu. Stop kann aktive Turns unterbrechen. Keine Prozessnamen-Muster zum Töten verwenden.
