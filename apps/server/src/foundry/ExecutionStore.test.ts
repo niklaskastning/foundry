@@ -6,6 +6,10 @@ import {
   RunId,
   CheckpointId,
   FoundryArchiveError,
+  FoundryArtifactId,
+  FoundryInstanceId,
+  FoundryDeviceId,
+  EnvironmentId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -105,16 +109,49 @@ it.effect(
 
 it.effect("requires a complete central archive before recording a successful result", () => {
   let mode = "unavailable";
+  const confirmation = {
+    instanceId: FoundryInstanceId.make("11111111-1111-4111-8111-111111111111"),
+    deviceId: FoundryDeviceId.make("22222222-2222-4222-8222-222222222222"),
+    deviceGeneration: 3,
+    owner: { environmentId: EnvironmentId.make("worker"), threadId },
+    confirmedCursor: 7,
+    confirmedSourceSequence: 19,
+    sourceHead: 7,
+    sourceComplete: true,
+    missingArtifacts: [],
+    missingAttachmentCount: 0,
+  };
   const archive = {
     reconcile: () =>
       mode === "unavailable"
         ? Effect.fail(new FoundryArchiveError({ code: "unavailable" }))
-        : Effect.succeed({ complete: mode === "complete" }),
+        : Effect.succeed({
+            ...confirmation,
+            complete: mode !== "incomplete",
+            sourceComplete: mode !== "source_incomplete",
+            confirmedCursor: mode === "cursor_gap" ? 6 : confirmation.confirmedCursor,
+            confirmedSourceSequence:
+              mode === "missing_sequence" ? 0 : confirmation.confirmedSourceSequence,
+            missingAttachmentCount: mode === "missing_attachment" ? 1 : 0,
+            missingArtifacts:
+              mode === "missing_blob"
+                ? [
+                    {
+                      instanceId: confirmation.instanceId,
+                      artifactId: FoundryArtifactId.make("33333333-3333-4333-8333-333333333333"),
+                      owner: confirmation.owner,
+                    },
+                  ]
+                : [],
+            owner:
+              mode === "wrong_thread"
+                ? { ...confirmation.owner, threadId: ThreadId.make("another-thread") }
+                : confirmation.owner,
+          }),
   };
   return Effect.gen(function* () {
     const store = yield* ExecutionStore.ExecutionStore;
     const row = yield* store.reserve(commandId, threadId);
-    yield* store.confirm(commandId, row.generation);
     const manifest = {
       generation: row.generation,
       runId: RunId.make("run"),
@@ -122,7 +159,25 @@ it.effect("requires a complete central archive before recording a successful res
       checkpointRef: "refs/checkpoints/result",
       outcome: "completed" as const,
     };
-    for (const next of ["unavailable", "incomplete", "complete"]) {
+    mode = "complete";
+    yield* store.finish(commandId, row.generation, manifest);
+    assert.isNull((yield* store.read(commandId))?.manifest);
+    yield* store.confirm(commandId, row.generation);
+    yield* store.finish(commandId, row.generation, { ...manifest, checkpointId: null });
+    assert.isNull((yield* store.read(commandId))?.manifest);
+    yield* store.finish(commandId, row.generation, { ...manifest, checkpointRef: null });
+    assert.isNull((yield* store.read(commandId))?.manifest);
+    for (const next of [
+      "unavailable",
+      "incomplete",
+      "source_incomplete",
+      "cursor_gap",
+      "missing_sequence",
+      "missing_attachment",
+      "missing_blob",
+      "wrong_thread",
+      "complete",
+    ]) {
       mode = next;
       yield* store.finish(commandId, row.generation, manifest);
       assert.equal(
@@ -131,6 +186,14 @@ it.effect("requires a complete central archive before recording a successful res
       );
     }
     const finished = yield* store.read(commandId);
+    assert.deepEqual(JSON.parse(finished!.manifest!).archive, {
+      instanceId: confirmation.instanceId,
+      deviceId: confirmation.deviceId,
+      deviceGeneration: confirmation.deviceGeneration,
+      owner: confirmation.owner,
+      cursor: confirmation.confirmedCursor,
+      sourceSequence: confirmation.confirmedSourceSequence,
+    });
     mode = "unavailable";
     yield* store.finish(commandId, row.generation, manifest);
     assert.deepEqual(yield* store.read(commandId), finished);

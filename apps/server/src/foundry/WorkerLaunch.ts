@@ -13,6 +13,9 @@ import {
 import * as NodeCrypto from "node:crypto";
 import {
   CommandId,
+  CheckpointRef,
+  ChatAttachmentId,
+  ChatFileAttachment,
   ThreadId,
   ProviderInstanceId,
   type FoundryWorkerLaunchInput,
@@ -29,15 +32,18 @@ import {
   type FoundryWorkerExecution,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as Semaphore from "effect/Semaphore";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as CommandReceipts from "../orchestration-v2/CommandReceiptStore.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
@@ -45,8 +51,12 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import { WorkerReadiness } from "./WorkerReadiness.ts";
+import * as ArtifactPublication from "./ArtifactPublication.ts";
+import * as ServerConfig from "../config.ts";
+import { createDeterministicAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
 
 const decodeManifest = Schema.decodeEffect(Schema.fromJsonString(FoundryWorkerManifest));
+const decodeFileAttachment = Schema.decodeEffect(ChatFileAttachment);
 const decodeRoots = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
 const isCancelError = Schema.is(FoundryWorkerCancelError);
 const isFollowError = Schema.is(FoundryWorkerFollowError);
@@ -59,7 +69,7 @@ export function workerLaunchIds(input: FoundryWorkerLaunchInput, binding: string
   return {
     commandId: CommandId.make(`foundry-launch:${key}`),
     threadId: ThreadId.make(
-      `foundry-launch:${digest(JSON.stringify([1, key, binding, input.projectId, input.title, input.model, input.prompt, ...(input.workspaceMode === "worktree" ? ["worktree"] : [])]))}`,
+      `foundry-launch:${digest(JSON.stringify([1, key, binding, input.projectId, input.title, input.model, input.prompt, ...(input.workspaceMode === "worktree" ? ["worktree"] : []), ...(input.previousExecution ? [input.previousExecution.commandId, input.previousExecution.generation] : []), ...(input.inputArtifacts?.length ? [input.inputArtifacts.map((item) => [item.reference.instanceId, item.reference.artifactId, item.reference.owner.environmentId, item.reference.owner.threadId, item.name, item.mimeType, item.sizeBytes, item.sha256])] : [])]))}`,
     ),
   };
 }
@@ -109,6 +119,10 @@ export const layer = Layer.effect(
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
     const executions = yield* ExecutionStore.ExecutionStore;
     const checkpoints = yield* CheckpointStore.CheckpointStore;
+    const handoffs = yield* Semaphore.make(1);
+    const launchLane = yield* Semaphore.make(1);
+    const publication = yield* ArtifactPublication.ArtifactPublication;
+    const config = yield* Effect.serviceOption(ServerConfig.ServerConfig);
     const renew = Effect.fn("WorkerLaunch.renew")(
       function* (input: FoundryWorkerRenewInput) {
         if (!enabled) return yield* new FoundryWorkerRenewError({ code: "not_enabled" });
@@ -298,6 +312,179 @@ export const layer = Layer.effect(
       },
       Effect.mapError((error) => (isReadError(error) ? error : readFailure("read_failed"))),
     );
+    const verifyHandoff = Effect.fn("WorkerLaunch.verifyHandoff")(
+      function* (input: FoundryWorkerLaunchInput, cwd: string) {
+        const previous = input.previousExecution;
+        if (!previous) return;
+        if (previous.commandId === input.commandId || input.workspaceMode === "worktree")
+          return yield* failure("handoff_unavailable");
+        const execution = yield* read({ commandId: previous.commandId });
+        const lifecycle = execution.lifecycle;
+        const manifest = lifecycle?.manifest;
+        if (
+          !lifecycle?.writerEnded ||
+          lifecycle.generation !== previous.generation ||
+          lifecycle.state !== "completed" ||
+          execution.run.status !== "completed" ||
+          !manifest ||
+          manifest.generation !== previous.generation ||
+          manifest.outcome !== "completed" ||
+          manifest.runId !== execution.run.id ||
+          manifest.checkpointId !== execution.run.checkpointId ||
+          manifest.checkpointId === null ||
+          manifest.checkpointRef === null
+        )
+          return yield* failure("handoff_unavailable");
+        const records = yield* threads.getThreadRecords(execution.receipt.threadId, [
+          "checkpoints",
+          "checkpointScopes",
+        ]);
+        const checkpoint = records.checkpoints.find(
+          (candidate) =>
+            candidate.id === manifest.checkpointId &&
+            candidate.runId === manifest.runId &&
+            candidate.ref === manifest.checkpointRef &&
+            candidate.status === "ready",
+        );
+        const scope = records.checkpointScopes.find(
+          (candidate) =>
+            candidate.id === checkpoint?.scopeId &&
+            candidate.runId === manifest.runId &&
+            candidate.nodeId === checkpoint?.nodeId,
+        );
+        if (
+          !checkpoint ||
+          !scope ||
+          records.thread.projectId !== input.projectId ||
+          (yield* fs.realPath(scope.cwd)) !== cwd ||
+          !(yield* checkpoints.hasCheckpointRef({ cwd, checkpointRef: checkpoint.ref }))
+        )
+          return yield* failure("handoff_unavailable");
+        // A retry replaces and removes the same snapshot left by a crashed handoff.
+        const temporary = CheckpointRef.make(`refs/t3/foundry-handoff/${digest(input.commandId)}`);
+        yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const checked = yield* restore(
+              Effect.gen(function* () {
+                yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: temporary });
+                const diff = yield* checkpoints.diffCheckpoints({
+                  cwd,
+                  fromCheckpointRef: checkpoint.ref,
+                  toCheckpointRef: temporary,
+                  ignoreWhitespace: false,
+                  maxOutputBytes: 1024,
+                });
+                if (diff.length !== 0) return yield* failure("handoff_changed");
+              }),
+            ).pipe(Effect.exit);
+            yield* checkpoints.deleteCheckpointRefs({ cwd, checkpointRefs: [temporary] });
+            return yield* Exit.match(checked, {
+              onSuccess: Effect.succeed,
+              onFailure: Effect.failCause,
+            });
+          }),
+        );
+      },
+      Effect.mapError((error) => (isLaunchError(error) ? error : failure("handoff_unavailable"))),
+      handoffs.withPermits(1),
+    );
+    const materializeArtifacts = Effect.fn("WorkerLaunch.materializeArtifacts")(
+      function* (input: FoundryWorkerLaunchInput, threadId: ThreadId) {
+        if (!input.inputArtifacts?.length) return [];
+        if (!publication || Option.isNone(config)) return yield* failure("handoff_unavailable");
+        const attachments: ChatFileAttachment[] = [];
+        for (const expected of input.inputArtifacts) {
+          const downloaded = yield* publication.download(expected.reference);
+          if (
+            downloaded.manifest.sha256 !== expected.sha256 ||
+            downloaded.manifest.sizeBytes !== expected.sizeBytes ||
+            downloaded.manifest.name !== expected.name ||
+            downloaded.manifest.mimeType !== expected.mimeType ||
+            downloaded.manifest.reference.instanceId !== expected.reference.instanceId ||
+            downloaded.manifest.reference.artifactId !== expected.reference.artifactId ||
+            downloaded.manifest.reference.owner.environmentId !==
+              expected.reference.owner.environmentId ||
+            downloaded.manifest.reference.owner.threadId !== expected.reference.owner.threadId
+          )
+            return yield* failure("handoff_changed");
+          const id = createDeterministicAttachmentId(
+            threadId,
+            `${expected.reference.artifactId}:${expected.sha256}`,
+          );
+          if (!id) return yield* failure("handoff_unavailable");
+          const attachment = yield* decodeFileAttachment({
+            type: "file",
+            id: ChatAttachmentId.make(id),
+            name: expected.name,
+            mimeType: expected.mimeType,
+            sizeBytes: expected.sizeBytes,
+          });
+          const target = resolveAttachmentPath({
+            attachmentsDir: config.value.attachmentsDir,
+            attachment,
+          });
+          if (!target) return yield* failure("handoff_unavailable");
+          const staged = `${target}.handoff`;
+          yield* Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              yield* fs.remove(staged, { force: true });
+              const written = yield* restore(
+                fs
+                  .writeFile(staged, downloaded.bytes, { flag: "wx", mode: 0o600 })
+                  .pipe(Effect.andThen(fs.rename(staged, target))),
+              ).pipe(Effect.exit);
+              yield* fs.remove(staged, { force: true });
+              return yield* Exit.match(written, {
+                onSuccess: Effect.succeed,
+                onFailure: Effect.failCause,
+              });
+            }),
+          );
+          const published = yield* publication.publishAttachment(threadId, attachment);
+          if (
+            !published.foundryArtifact ||
+            published.foundryArtifact.sha256 !== expected.sha256 ||
+            published.foundryArtifact.reference.owner.threadId !== threadId
+          )
+            return yield* failure("handoff_changed");
+          attachments.push(published);
+        }
+        return attachments;
+      },
+      Effect.mapError((error) => (isLaunchError(error) ? error : failure("handoff_unavailable"))),
+    );
+    const releaseUnstarted = Effect.fn("WorkerLaunch.releaseUnstarted")(function* (
+      commandId: FoundryWorkerLaunchInput["commandId"],
+      threadId: ThreadId,
+      generation: number,
+    ) {
+      const row = yield* executions.read(commandId);
+      if (
+        !row ||
+        row.generation !== generation ||
+        row.threadId !== threadId ||
+        row.stopRequested !== 1 ||
+        row.writerEnded !== 1 ||
+        row.manifest !== null
+      )
+        return false;
+      const launchId = CommandId.make(`foundry-launch:${digest(commandId)}`);
+      if (
+        Option.isSome(yield* receipts.getByCommandId(launchId)) ||
+        Option.isSome(yield* receipts.getByCommandId(CommandId.make(`${launchId}:initial-message`)))
+      )
+        return false;
+      const bindings = yield* workspaceGate.bindings;
+      const binding = bindings.find(
+        (item) =>
+          item.commandId === commandId &&
+          item.threadId === threadId &&
+          item.generation === generation &&
+          item.runId === null,
+      );
+      if (binding) yield* workspaceGate.confirm(binding.requestId);
+      return true;
+    });
     const follow = (input: FoundryWorkerFollowInput) =>
       Stream.unwrap(
         Effect.gen(function* () {
@@ -409,6 +596,13 @@ export const layer = Layer.effect(
           pending,
           (row) =>
             Effect.gen(function* () {
+              if (
+                yield* releaseUnstarted(row.commandId, row.threadId, row.generation).pipe(
+                  launchLane.withPermitsIfAvailable(1),
+                  Effect.map(Option.getOrElse(() => false)),
+                )
+              )
+                return;
               const execution = yield* read({ commandId: row.commandId });
               if (row.state !== "stopping" && row.state !== "uncertain") return;
               const { thread } = yield* threads.getThreadRecords(row.threadId, []);
@@ -505,7 +699,17 @@ export const layer = Layer.effect(
           const status = yield* readiness.read();
           if (!status.providerReady || status.providerInstanceId !== binding)
             return yield* failure("provider_not_ready");
+          if (input.previousExecution && input.workspaceMode === "worktree")
+            return yield* failure("handoff_unavailable");
+          yield* verifyHandoff(input, workspace);
+          const attachments = yield* materializeArtifacts(input, ids.threadId);
           const execution = yield* executions.reserve(input.commandId, ids.threadId);
+          if (
+            execution.stopRequested !== 0 ||
+            execution.state !== "active" ||
+            execution.expiresAt <= (yield* Clock.currentTimeMillis)
+          )
+            return yield* failure("launch_failed");
           const reservation = yield* workspaceGate.reserve({
             commandId: input.commandId,
             threadId: ids.threadId,
@@ -513,6 +717,15 @@ export const layer = Layer.effect(
             repositoryPath: workspace,
             mode: input.workspaceMode ?? "checkout",
           });
+          yield* verifyHandoff(input, workspace).pipe(
+            Effect.catch((error) =>
+              Effect.gen(function* () {
+                yield* executions.stop(input.commandId);
+                yield* releaseUnstarted(input.commandId, ids.threadId, execution.generation);
+                return yield* error;
+              }),
+            ),
+          );
           yield* launches.launch({
             ...ids,
             projectId: input.projectId,
@@ -528,7 +741,7 @@ export const layer = Layer.effect(
                     ...(reservation.branch ? { branch: reservation.branch } : {}),
                   }
                 : { type: "root" },
-            initialMessage: { text: input.prompt, attachments: [] },
+            initialMessage: { text: input.prompt, attachments },
             createdBy: "system",
             creationSource: "server",
           });
@@ -543,6 +756,7 @@ export const layer = Layer.effect(
           return toReceipt(accepted.value);
         },
         Effect.mapError((error) => (isLaunchError(error) ? error : failure("launch_failed"))),
+        launchLane.withPermits(1),
       ),
     };
   }),

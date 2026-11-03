@@ -130,14 +130,38 @@ export const layer = Layer.effect(
         const row = yield* read(commandId);
         if (!row || row.generation !== generation || row.writerEnded !== 1 || row.manifest !== null)
           return;
-        if (manifest.outcome === "completed" && archive) {
-          const complete = yield* archive.reconcile(row.threadId).pipe(
-            Effect.map((status) => status.complete),
-            Effect.orElseSucceed(() => false),
-          );
-          if (!complete) return;
+        let finalized = manifest;
+        if (manifest.outcome === "completed") {
+          if (manifest.checkpointId === null || manifest.checkpointRef === null) return;
+          if (archive) {
+            const status = yield* archive
+              .reconcile(row.threadId)
+              .pipe(Effect.orElseSucceed(() => null));
+            if (
+              !status?.complete ||
+              !status.sourceComplete ||
+              status.owner.threadId !== row.threadId ||
+              status.confirmedCursor <= 0 ||
+              status.confirmedCursor !== status.sourceHead ||
+              status.confirmedSourceSequence <= 0 ||
+              status.missingArtifacts.length !== 0 ||
+              status.missingAttachmentCount !== 0
+            )
+              return;
+            finalized = {
+              ...manifest,
+              archive: {
+                instanceId: status.instanceId,
+                deviceId: status.deviceId,
+                deviceGeneration: status.deviceGeneration,
+                owner: status.owner,
+                cursor: status.confirmedCursor,
+                sourceSequence: status.confirmedSourceSequence,
+              },
+            };
+          }
         }
-        yield* sql`UPDATE foundry_executions SET manifest = ${yield* encodeManifest(manifest)},
+        yield* sql`UPDATE foundry_executions SET manifest = ${yield* encodeManifest(finalized)},
       state = ${manifest.outcome === "completed" ? "completed" : "stopped"}
       WHERE command_id = ${commandId} AND generation = ${generation} AND writer_ended = 1 AND manifest IS NULL AND (stop_requested = 0 OR ${manifest.outcome} = 'stopped')`;
       },

@@ -3310,6 +3310,19 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.isAtLeast(recoveredIndex, 0);
         assert.isAbove(resumedCommandIndex, recoveredIndex);
         assert.isAbove(terminalIndex, resumedCommandIndex);
+        const completedCommand = harness.events.findLast(
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "command_execution",
+        );
+        assert.isTrue(completedCommand?.type === "turn_item.updated");
+        if (completedCommand?.type === "turn_item.updated") {
+          assert.deepInclude(completedCommand.turnItem, {
+            input: "pwd",
+            cwd: "/workspace",
+            exitCode: 0,
+            status: "completed",
+          });
+        }
       }).pipe(
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
