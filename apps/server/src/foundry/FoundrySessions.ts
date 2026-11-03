@@ -27,6 +27,10 @@ export class FoundrySessions extends Context.Service<
     readonly inspect: (
       token: string | undefined,
     ) => Effect.Effect<FoundrySession, FoundryAuthError>;
+    readonly reference: (token: string | undefined) => Effect.Effect<string, FoundryAuthError>;
+    readonly inspectReference: (
+      tokenHash: string,
+    ) => Effect.Effect<Omit<FoundrySession, "csrfToken">, FoundryAuthError>;
     readonly refresh: (
       token: string | undefined,
       csrf: string | undefined,
@@ -72,12 +76,11 @@ const make = Effect.gen(function* () {
       return yield* new FoundryAuthError({ code: "csrf_invalid" });
     return value;
   });
-  const inspect = Effect.fn("FoundrySessions.inspect")(
-    function* (token: string | undefined) {
-      const value = yield* requireToken(token);
+  const inspectReference = Effect.fn("FoundrySessions.inspectReference")(
+    function* (digest: string) {
+      if (!isToken(digest)) return yield* new FoundryAuthError({ code: "invalid_session" });
       const instanceId = yield* identity.readIdentity;
       const now = yield* Clock.currentTimeMillis;
-      const digest = yield* hash(value);
       const rows = yield* sql<{
         operator_id: string;
         expires_at: string;
@@ -91,14 +94,24 @@ const make = Effect.gen(function* () {
         instanceId,
         operatorId: rows[0].operator_id,
         expiresAt: Number(rows[0].expires_at),
-        csrfToken: csrfFor(value),
-      } satisfies FoundrySession;
+      };
     },
     Effect.catchTags({
       InstanceDatabaseError: () => Effect.fail(new FoundryAuthError({ code: "unavailable" })),
       SqlError: () => Effect.fail(new FoundryAuthError({ code: "unavailable" })),
     }),
   );
+  const reference = Effect.fn("FoundrySessions.reference")(function* (token: string | undefined) {
+    const value = yield* requireToken(token);
+    const digest = yield* hash(value);
+    yield* inspectReference(digest);
+    return digest;
+  });
+  const inspect = Effect.fn("FoundrySessions.inspect")(function* (token: string | undefined) {
+    const value = yield* requireToken(token);
+    const session = yield* inspectReference(yield* hash(value));
+    return { ...session, csrfToken: csrfFor(value) } satisfies FoundrySession;
+  });
 
   const issue = Effect.fn("FoundrySessions.issue")(
     function* (
@@ -195,6 +208,14 @@ const make = Effect.gen(function* () {
       return yield* new FoundryAuthError({ code: "origin_forbidden" });
     }
   });
-  return FoundrySessions.of({ login, inspect, refresh, logout, checkOrigin });
+  return FoundrySessions.of({
+    login,
+    inspect,
+    reference,
+    inspectReference,
+    refresh,
+    logout,
+    checkOrigin,
+  });
 });
 export const layer = Layer.effect(FoundrySessions, make);

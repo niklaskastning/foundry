@@ -16,6 +16,12 @@ import * as Migrations from "../src/automation/AutomationMigrations.ts";
 import * as Factories from "../src/automation/Factories.ts";
 import * as Workflows from "../src/automation/Workflows.ts";
 import * as Definitions from "../src/automation/Definitions.ts";
+import * as DispatchStore from "../src/automation/DispatchStore.ts";
+import * as Scheduler from "../src/automation/Scheduler.ts";
+import * as WorkerTransport from "../src/automation/WorkerTransport.ts";
+import * as ThreadArchive from "../src/foundry/ThreadArchive.ts";
+import * as Artifacts from "../src/foundry/Artifacts.ts";
+import * as Schema from "effect/Schema";
 const bin = process.env.FOUNDRY_TEST_PG_BIN;
 NodeAssert.ok(
   bin,
@@ -81,6 +87,20 @@ const workflowCall = <A, E>(f: (s: Workflows.Workflows["Service"]) => Effect.Eff
       Effect.provide(
         Workflows.layer.pipe(
           Layer.provide(Factories.layer),
+          Layer.provide(db("automation_runtime")),
+        ),
+      ),
+    ),
+  );
+const dispatchCall = <A, E>(
+  f: (s: DispatchStore.DispatchStore["Service"]) => Effect.Effect<A, E>,
+) =>
+  run(
+    DispatchStore.DispatchStore.pipe(
+      Effect.flatMap(f),
+      Effect.provide(
+        DispatchStore.layer.pipe(
+          Layer.provide(Workflows.layer.pipe(Layer.provideMerge(Factories.layer))),
           Layer.provide(db("automation_runtime")),
         ),
       ),
@@ -256,6 +276,7 @@ try {
   const beforeUpgrade = await call((s) => s.readWorkItem("a", "w1"));
   // Reconstruct the deployed v1 schema around existing P18a data before testing its upgrade.
   for (const statement of [
+    "DROP TABLE foundry_automation.dispatch_outbox,foundry_automation.step_attempts,foundry_automation.dispatch_workers,foundry_automation.dispatch_runs",
     "DROP TABLE foundry_automation.definition_heads,foundry_automation.definition_versions,foundry_automation.outbox,foundry_automation.runs,foundry_automation.workflow_versions",
     "ALTER TABLE foundry_automation.work_items DROP CONSTRAINT work_items_factory_id_id_key",
     "UPDATE foundry_automation.schema_version SET version=1",
@@ -265,7 +286,7 @@ try {
   NodeAssert.deepEqual(await call((s) => s.readWorkItem("a", "w1")), beforeUpgrade);
   NodeAssert.equal(
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
-    3,
+    4,
   );
   const definitions = await Promise.all(
     Array.from({ length: 8 }, () => workflowCall((s) => s.createVersion(workflow))),
@@ -450,6 +471,7 @@ try {
   NodeAssert.equal((await query("SELECT * FROM foundry_automation.runs")).length, 3);
   NodeAssert.equal((await call((s) => s.readWorkItem("a", "w1"))).state, "completed");
   for (const statement of [
+    "DROP TABLE foundry_automation.dispatch_outbox,foundry_automation.step_attempts,foundry_automation.dispatch_workers,foundry_automation.dispatch_runs",
     "DROP TABLE foundry_automation.definition_heads,foundry_automation.definition_versions",
     "UPDATE foundry_automation.schema_version SET version=2",
   ])
@@ -713,14 +735,412 @@ try {
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
     99,
   );
-  await query("UPDATE foundry_automation.schema_version SET version=3", "automation_migrator");
+  await query("UPDATE foundry_automation.schema_version SET version=4", "automation_migrator");
   await run(migration);
+  const preservedQueries = [
+    "SELECT * FROM foundry_automation.definition_versions ORDER BY id",
+    "SELECT * FROM foundry_automation.definition_heads ORDER BY factory_id",
+    "SELECT * FROM foundry_automation.workflow_versions ORDER BY id",
+    "SELECT * FROM foundry_automation.runs ORDER BY id",
+    "SELECT * FROM foundry_automation.commands ORDER BY id",
+    "SELECT * FROM foundry_automation.outbox ORDER BY id",
+  ];
+  const schema3Data = await Promise.all(preservedQueries.map((statement) => query(statement)));
+  NodeAssert.ok(schema3Data.every((rows) => rows.length > 0));
+  await query(
+    "DROP TABLE foundry_automation.dispatch_outbox,foundry_automation.step_attempts,foundry_automation.dispatch_workers,foundry_automation.dispatch_runs",
+    "automation_migrator",
+  );
+  await query("UPDATE foundry_automation.schema_version SET version=3", "automation_migrator");
+  NodeAssert.equal(
+    (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
+    3,
+  );
+  await run(migration);
+  await run(migration);
+  NodeAssert.equal(
+    (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
+    4,
+  );
+  NodeAssert.deepEqual(
+    await Promise.all(preservedQueries.map((statement) => query(statement))),
+    schema3Data,
+  );
+  NodeAssert.equal((await query("SELECT * FROM foundry_automation.dispatch_runs")).length, 0);
+  await call((s) => s.createFactory({ commandId: "p19-factory", id: "p19", name: "P19 fixture" }));
+  await call((s) =>
+    s.createVersion({
+      commandId: "p19-version",
+      id: "p19-version",
+      factoryId: "p19",
+      repositories: ["fixture"],
+    }),
+  );
+  await call((s) =>
+    s.createWorkItem({
+      commandId: "p19-work",
+      id: "p19-work",
+      factoryId: "p19",
+      versionId: "p19-version",
+      repository: "fixture",
+      title: "P19 fixture",
+      source: { kind: "manual", reference: "fixture" },
+    }),
+  );
+  await workflowCall((s) =>
+    s.createVersion({
+      commandId: "p19-flow",
+      id: "p19-flow",
+      factoryId: "p19",
+      factoryVersionId: "p19-version",
+      steps: [
+        { id: "first", kind: "agent", prompt: "fixture", dependsOn: [] },
+        { id: "test", kind: "test", checkId: "fixture-check", dependsOn: ["first"] },
+      ],
+    }),
+  );
+  for (const id of [
+    "p19-run",
+    "p19-queued",
+    "p19-inactive",
+    "p19-success",
+    "p19-next",
+    "p19-network",
+  ])
+    await workflowCall((s) =>
+      s.start({
+        commandId: id,
+        id,
+        factoryId: "p19",
+        workItemId: "p19-work",
+        workflowVersionId: "p19-flow",
+        revision: "pinned",
+      }),
+    );
+  const enrollment = {
+    factoryId: "p19",
+    runId: "p19-run",
+    workerId: "fixture-worker",
+    binding: { projectId: "own-fixture", model: "replay" },
+  };
+  await Promise.all(Array.from({ length: 4 }, () => dispatchCall((s) => s.enroll(enrollment))));
+  await failure(
+    dispatchCall((s) => s.enroll({ ...enrollment, binding: { projectId: "other" } })),
+    "conflict",
+  );
+  await dispatchCall((s) => s.enroll({ ...enrollment, runId: "p19-queued" }));
+  NodeAssert.equal(
+    (await query("SELECT count(*)::int AS count FROM foundry_automation.dispatch_runs"))[0]?.count,
+    2,
+  );
+  const acquire = () =>
+    dispatchCall((s) =>
+      s.claimNext({ workerId: "fixture-worker", owner: "fixture-owner", leaseMillis: 60000 }),
+    );
+  const competing = await Promise.all(Array.from({ length: 4 }, acquire));
+  const first = competing.find((claim) => claim !== null);
+  NodeAssert.ok(first);
+  NodeAssert.equal(competing.filter((claim) => claim !== null).length, 1);
+  NodeAssert.equal(first.run.id, "p19-run");
+  NodeAssert.deepEqual(
+    first.workflow.steps.map((step) => step.id),
+    ["first", "test"],
+  );
+  // A claimed job survives a process/connection restart without creating another attempt.
+  await stop();
+  await start();
+  NodeAssert.equal(await acquire(), null);
+  await query(
+    "UPDATE foundry_automation.dispatch_workers SET lease_until='-infinity' WHERE worker_id='fixture-worker'",
+    "automation_migrator",
+  );
+  const recovered = await acquire();
+  NodeAssert.ok(recovered);
+  NodeAssert.equal(recovered.run.id, first.run.id);
+  NodeAssert.ok(recovered.generation > first.generation);
+  await failure(
+    dispatchCall((s) =>
+      s.prepare(first, { ordinal: 0, commandId: "dispatch-first", request: { prompt: "fixture" } }),
+    ),
+    "stale_claim",
+  );
+  const request = { ordinal: 0, commandId: "dispatch-first", request: { prompt: "fixture" } };
+  await query(
+    "CREATE FUNCTION foundry_automation.reject_dispatch_outbox() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected after attempt insert'; END $$",
+    "automation_migrator",
+  );
+  await query(
+    "CREATE TRIGGER reject_dispatch_outbox BEFORE INSERT ON foundry_automation.dispatch_outbox FOR EACH ROW EXECUTE FUNCTION foundry_automation.reject_dispatch_outbox()",
+    "automation_migrator",
+  );
+  await NodeAssert.rejects(dispatchCall((s) => s.prepare(recovered, request)));
+  NodeAssert.equal((await query("SELECT * FROM foundry_automation.step_attempts")).length, 0);
+  await query(
+    "DROP TRIGGER reject_dispatch_outbox ON foundry_automation.dispatch_outbox",
+    "automation_migrator",
+  );
+  await query("DROP FUNCTION foundry_automation.reject_dispatch_outbox()", "automation_migrator");
+  const attempt = await dispatchCall((s) => s.prepare(recovered, request));
+  NodeAssert.deepEqual(await dispatchCall((s) => s.prepare(recovered, request)), attempt);
+  await failure(
+    dispatchCall((s) => s.prepare(recovered, { ...request, request: { prompt: "changed" } })),
+    "conflict",
+  );
+  await failure(
+    dispatchCall((s) =>
+      s.prepare(recovered, {
+        ordinal: 1,
+        commandId: "dispatch-test",
+        request: { checkId: "fixture-check" },
+      }),
+    ),
+    "invalid_step",
+  );
+  const receipt = { threadId: "fixture-thread", commandId: attempt.commandId };
+  // The fake transport holds no Automation transaction or row lock while it delivers.
+  await run(
+    Effect.gen(function* () {
+      const sql = yield* Database.AutomationDatabase;
+      yield* sql.withTransaction(
+        Effect.gen(function* () {
+          yield* sql`SET LOCAL lock_timeout='1ms'`;
+          yield* sql`SELECT * FROM foundry_automation.dispatch_workers FOR UPDATE`;
+        }),
+      );
+    }).pipe(Effect.provide(db("automation_migrator"))),
+  );
+  const active = await query(
+    "SELECT count(*)::int AS count FROM pg_stat_activity WHERE application_name='foundry-automation' AND state='idle in transaction'",
+  );
+  NodeAssert.equal(active[0]?.count, 0);
+  await dispatchCall((s) => s.release(recovered));
+  const deliveredRecovery = await acquire();
+  NodeAssert.ok(deliveredRecovery);
+  NodeAssert.equal(deliveredRecovery.attempts[0]?.commandId, attempt.commandId);
+  NodeAssert.equal(deliveredRecovery.attempts[0]?.receipt, null);
+  const waiting = {
+    commandId: attempt.commandId,
+    state: "finalizing" as const,
+    reason: "archive_incomplete",
+    receipt,
+    result: null,
+  };
+  NodeAssert.equal(await dispatchCall((s) => s.record(recovered, waiting)), false);
+  NodeAssert.equal(await dispatchCall((s) => s.record(deliveredRecovery, waiting)), true);
+  await failure(
+    dispatchCall((s) =>
+      s.record(deliveredRecovery, { ...waiting, receipt: { threadId: "other" } }),
+    ),
+    "conflict",
+  );
+  NodeAssert.equal((await dispatchCall((s) => s.read("p19", "p19-run"))).state, "waiting");
+  const confirmed = {
+    ...waiting,
+    state: "succeeded" as const,
+    reason: null,
+    result: { complete: true },
+  };
+  // Crash before result confirmation leaves the same durable job awaiting reconciliation.
+  await dispatchCall((s) => s.release(deliveredRecovery));
+  const finalizationRecovery = await acquire();
+  NodeAssert.ok(finalizationRecovery);
+  NodeAssert.equal(finalizationRecovery.attempts[0]?.state, "finalizing");
+  NodeAssert.equal(await dispatchCall((s) => s.record(finalizationRecovery, confirmed)), true);
+  NodeAssert.equal(await dispatchCall((s) => s.record(finalizationRecovery, confirmed)), true);
+  await failure(
+    dispatchCall((s) =>
+      s.record(finalizationRecovery, { ...confirmed, result: { complete: false } }),
+    ),
+    "conflict",
+  );
+  await dispatchCall((s) =>
+    s.prepare(finalizationRecovery, {
+      ordinal: 1,
+      commandId: "dispatch-test",
+      request: { checkId: "fixture-check" },
+    }),
+  );
+  await dispatchCall((s) =>
+    s.record(finalizationRecovery, {
+      commandId: "dispatch-test",
+      state: "failed",
+      reason: "test_failed",
+      receipt: { threadId: "test-thread" },
+      result: { exitCode: 1 },
+    }),
+  );
+  await dispatchCall((s) => s.release(finalizationRecovery));
+  NodeAssert.equal(await acquire(), null);
+  NodeAssert.equal((await dispatchCall((s) => s.read("p19", "p19-queued"))).attempts.length, 0);
+  NodeAssert.equal(
+    (await query("SELECT count(*)::int AS count FROM foundry_automation.dispatch_outbox"))[0]
+      ?.count,
+    2,
+  );
+  for (const runId of ["p19-success", "p19-next"])
+    await dispatchCall((store) =>
+      store.enroll({ ...enrollment, runId, workerId: "success-worker" }),
+    );
+  const successClaim = await dispatchCall((store) =>
+    store.claimNext({ workerId: "success-worker", owner: "success-owner", leaseMillis: 60000 }),
+  );
+  NodeAssert.ok(successClaim);
+  NodeAssert.equal(successClaim.run.id, "p19-success");
+  for (const ordinal of [0, 1]) {
+    const commandId = `success-${ordinal}`;
+    await dispatchCall((store) =>
+      store.prepare(successClaim, { ordinal, commandId, request: { ordinal } }),
+    );
+    await dispatchCall((store) =>
+      store.record(successClaim, {
+        commandId,
+        state: "succeeded",
+        reason: null,
+        receipt: { commandId },
+        result: { exitCode: 0 },
+      }),
+    );
+  }
+  const nextClaim = await dispatchCall((store) =>
+    store.claimNext({ workerId: "success-worker", owner: "success-owner", leaseMillis: 60000 }),
+  );
+  NodeAssert.ok(nextClaim);
+  NodeAssert.equal(nextClaim.run.id, "p19-next");
+  NodeAssert.equal(
+    (await dispatchCall((store) => store.read("p19", "p19-success"))).state,
+    "succeeded",
+  );
+  NodeAssert.equal(
+    (await query("SELECT * FROM foundry_automation.dispatch_runs WHERE run_id='p19-inactive'"))
+      .length,
+    0,
+  );
+  const networkBinding = Schema.decodeSync(Scheduler.DispatchBinding)({
+    identity: {
+      instanceId: "11111111-1111-4111-8111-111111111111",
+      operatorId: "fixture-operator",
+      deviceId: "22222222-2222-4222-8222-222222222222",
+      environmentId: "fixture-environment",
+      deviceGeneration: 1,
+      accessGeneration: 1,
+      automationGeneration: 1,
+      clientSessionId: "fixture-client-session",
+      foundrySessionHash: "a".repeat(43),
+    },
+    projectId: "explicit-isolated-project",
+    model: "replay",
+    checks: [],
+    requiredArtifacts: [],
+  });
+  await dispatchCall((store) =>
+    store.enroll({
+      ...enrollment,
+      runId: "p19-network",
+      workerId: networkBinding.identity.deviceId,
+      binding: networkBinding,
+    }),
+  );
+  let networkReads = 0;
+  const unused = Effect.fn("fixture.unexpected")(() =>
+    Effect.die("Unexpected network-lock fixture operation"),
+  );
+  const networkWorker = WorkerTransport.WorkerTransport.of({
+    identityForRead: unused,
+    authorize: unused,
+    launch: unused,
+    renew: unused,
+    status: Effect.fn("fixture.workerStatus")(() =>
+      Effect.succeed({
+        online: true,
+        providerInstanceId: null,
+        providerReady: false,
+        providerState: "unbound",
+        version: null,
+        checkedAt: "2026-11-03T20:00:00Z",
+        capacityAvailable: true,
+        activeRuns: 0,
+      } as const),
+    ),
+    read: Effect.fn("fixture.workerRead")(() =>
+      Effect.tryPromise({
+        try: async () => {
+          networkReads++;
+          await query(
+            "SELECT * FROM foundry_automation.dispatch_workers FOR UPDATE NOWAIT",
+            "automation_migrator",
+          );
+          const transactions = await query(
+            "SELECT count(*)::int AS count FROM pg_stat_activity WHERE application_name='foundry-automation' AND state='idle in transaction'",
+          );
+          NodeAssert.equal(transactions[0]?.count, 0);
+          return null;
+        },
+        catch: (cause) =>
+          new WorkerTransport.WorkerTransportError({ reason: "unavailable", cause }),
+      }),
+    ),
+  });
+  const networkArchive = ThreadArchive.ThreadArchive.of({
+    ingest: unused,
+    cursor: unused,
+    read: unused,
+    list: unused,
+  });
+  const networkArtifacts = Artifacts.Artifacts.of({
+    begin: unused,
+    status: unused,
+    write: unused,
+    publish: unused,
+    abort: unused,
+    metadata: unused,
+    read: unused,
+    list: unused,
+  });
+  await run(
+    Scheduler.Scheduler.pipe(
+      Effect.flatMap((scheduler) => scheduler.tick),
+      Effect.provide(
+        Scheduler.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              DispatchStore.layer.pipe(
+                Layer.provide(Workflows.layer.pipe(Layer.provideMerge(Factories.layer))),
+                Layer.provide(db("automation_runtime")),
+              ),
+              Layer.succeed(WorkerTransport.WorkerTransport, networkWorker),
+              Layer.succeed(ThreadArchive.ThreadArchive, networkArchive),
+              Layer.succeed(Artifacts.Artifacts, networkArtifacts),
+              Layer.succeed(Scheduler.SchedulerConfig, {
+                deviceId: networkBinding.identity.deviceId,
+                environmentId: networkBinding.identity.environmentId,
+                allowedRunIds: ["p19-network"],
+              }),
+              NodeCrypto.layer,
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  NodeAssert.equal(networkReads, 1);
+  NodeAssert.equal(
+    (await dispatchCall((store) => store.read("p19", "p19-network"))).reason,
+    "worker_not_ready",
+  );
+  for (const statement of [
+    "UPDATE foundry_automation.dispatch_runs SET binding='{}'",
+    "UPDATE foundry_automation.step_attempts SET request='{}'",
+    "DELETE FROM foundry_automation.dispatch_outbox",
+  ])
+    await NodeAssert.rejects(query(statement, "automation_runtime"));
   await run(
     Console.log(
-      "PASS P18a/P18b/P47 isolated PostgreSQL: idempotent factories/workflows/runs; pinned versions/repository/revisions; atomic run/outbox and definition activation; canonical import/export; hash/provenance; version conflicts; invalid definitions preserve active version; v1/v2 upgrades and PostgreSQL restart; immutable runtime history. No runtime activation or dispatch.",
+      "PASS P18a/P18b/P47 isolated PostgreSQL: idempotent factories/workflows/runs; pinned versions/repository/revisions; atomic run/outbox and definition activation; canonical import/export; hash/provenance; version conflicts; invalid definitions preserve active version; v1/v2/v3 upgrades and PostgreSQL restart; immutable runtime history. P19 opt-in enrollment, concurrent claims, restart and stale-lease fencing, immutable requests/receipts, atomic attempt/outbox rollback, reconciliation, failed-step blocking and sequential completion; claim locks released before transport. No live runtime activation.",
     ),
   );
 } finally {
   await stop();
   await NodeFSP.rm(root, { recursive: true, force: true });
 }
+
+await import("./test-automation-session-reference.ts");

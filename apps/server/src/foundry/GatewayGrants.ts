@@ -3,6 +3,9 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
   AuthOrchestrationReadScope,
   AuthAccessWriteScope,
+  AuthSessionId,
+  EnvironmentId,
+  FoundryInstanceId,
   FoundryDeviceId,
   FoundryDeviceApproval,
   type FoundryDeviceCatalog,
@@ -55,9 +58,28 @@ const denied = () => new FoundryGatewayError({ code: "forbidden" });
 const invalid = () => new FoundryGatewayError({ code: "invalid_request" });
 type Request = HttpServerRequest.HttpServerRequest;
 
+export const AutomationGatewayIdentity = Schema.Struct({
+  instanceId: FoundryInstanceId,
+  operatorId: Schema.String,
+  deviceId: FoundryDeviceId,
+  environmentId: EnvironmentId,
+  deviceGeneration: Schema.Int,
+  accessGeneration: Schema.Int,
+  automationGeneration: Schema.Int,
+  clientSessionId: AuthSessionId,
+  foundrySessionHash: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/)),
+});
+export type AutomationGatewayIdentity = typeof AutomationGatewayIdentity.Type;
+
 export class GatewayGrants extends Context.Service<
   GatewayGrants,
   {
+    readonly identityForRead: (
+      request: Request,
+    ) => Effect.Effect<
+      Pick<AutomationGatewayIdentity, "instanceId" | "operatorId">,
+      FoundryGatewayError
+    >;
     readonly catalog: (
       request: Request,
       input: unknown,
@@ -85,6 +107,14 @@ export class GatewayGrants extends Context.Service<
     readonly stream: (
       request: Request,
       upgrade: Effect.Effect<Socket.Socket, FoundryGatewayError>,
+    ) => Effect.Effect<void, FoundryGatewayError>;
+    readonly authorizeAutomation: (
+      request: Request,
+      target: Pick<AutomationGatewayIdentity, "deviceId" | "environmentId">,
+    ) => Effect.Effect<AutomationGatewayIdentity, FoundryGatewayError>;
+    readonly openAutomation: (
+      identity: AutomationGatewayIdentity,
+      socket: Socket.Socket,
     ) => Effect.Effect<void, FoundryGatewayError>;
     readonly projects: (
       request: Request,
@@ -180,6 +210,11 @@ const make = Effect.gen(function* () {
     grants.set(grantId, { grant, binding: identity.foundry.csrfToken });
     return grant;
   });
+  const identityForRead = Effect.fn("GatewayGrants.identityForRead")(function* (request: Request) {
+    const identity = yield* authenticate(request);
+    if (!identity.client.scopes.includes(AuthOrchestrationReadScope)) return yield* denied();
+    return { instanceId: identity.foundry.instanceId, operatorId: identity.foundry.operatorId };
+  });
   const owned = Effect.fn("GatewayGrants.owned")(function* (request: Request, grantId: unknown) {
     const identity = yield* authenticate(request);
     const id = yield* decodeId(grantId).pipe(Effect.mapError(invalid));
@@ -265,6 +300,121 @@ const make = Effect.gen(function* () {
   ) {
     const grant = yield* inspect(request, input);
     return yield* channels.projects(grant, validation(request, grant));
+  });
+  const automationAccess = Effect.fn("GatewayGrants.automationAccess")(function* (
+    deviceId: FoundryDeviceId,
+    operatorId: string,
+    generation?: number,
+  ) {
+    const rows = yield* access.read(deviceId, operatorId);
+    const grant = rows.find((row) => row.kind === "automationExecution");
+    if (!grant?.enabled || (generation !== undefined && grant.generation !== generation))
+      return yield* denied();
+    return grant.generation;
+  });
+  const authorizeAutomation = Effect.fn("GatewayGrants.authorizeAutomation")(function* (
+    request: Request,
+    target: Pick<AutomationGatewayIdentity, "deviceId" | "environmentId">,
+  ) {
+    const grant = yield* create(request, {
+      deviceId: target.deviceId,
+      environmentId: target.environmentId,
+      scopes: ["orchestration:read", "orchestration:operate"],
+    });
+    return yield* Effect.gen(function* () {
+      const automationGeneration = yield* automationAccess(grant.deviceId, grant.operatorId);
+      const foundrySessionHash = yield* sessions
+        .reference(request.cookies[FoundrySessions.FOUNDRY_SESSION_COOKIE])
+        .pipe(Effect.mapError(denied));
+      return {
+        instanceId: grant.instanceId,
+        operatorId: grant.operatorId,
+        deviceId: grant.deviceId,
+        environmentId: grant.environmentId,
+        deviceGeneration: grant.generation,
+        accessGeneration: grant.accessGeneration,
+        automationGeneration,
+        clientSessionId: grant.clientSessionId,
+        foundrySessionHash,
+      } satisfies AutomationGatewayIdentity;
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          grants.delete(grant.grantId);
+        }),
+      ),
+    );
+  });
+  const validateAutomation = Effect.fn("GatewayGrants.validateAutomation")(function* (
+    identity: AutomationGatewayIdentity,
+  ) {
+    if (!streamsEnabled) return yield* denied();
+    const foundry = yield* sessions
+      .inspectReference(identity.foundrySessionHash)
+      .pipe(Effect.mapError(denied));
+    if (foundry.instanceId !== identity.instanceId || foundry.operatorId !== identity.operatorId)
+      return yield* denied();
+    const clients = yield* clientSessions
+      .listActive()
+      .pipe(Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })));
+    const client = clients.find((entry) => entry.sessionId === identity.clientSessionId);
+    if (
+      !client ||
+      !client.scopes.includes("orchestration:read") ||
+      !client.scopes.includes("orchestration:operate")
+    )
+      return yield* denied();
+    yield* access.check(identity.deviceId, identity.operatorId, identity.accessGeneration);
+    yield* automationAccess(identity.deviceId, identity.operatorId, identity.automationGeneration);
+    const lease = yield* channels.current(identity.deviceId).pipe(Effect.mapError(denied));
+    if (
+      lease.device.revoked ||
+      lease.device.instanceId !== identity.instanceId ||
+      lease.device.environmentId !== identity.environmentId ||
+      lease.device.generation !== identity.deviceGeneration ||
+      !lease.rpcStream
+    )
+      return yield* denied();
+    return { foundry, client, lease };
+  });
+  const openAutomation = Effect.fn("GatewayGrants.openAutomation")(function* (
+    identity: AutomationGatewayIdentity,
+    socket: Socket.Socket,
+  ) {
+    const { foundry, client, lease } = yield* validateAutomation(identity);
+    const expiresAt = Math.min(
+      (yield* Clock.currentTimeMillis) + 60_000,
+      foundry.expiresAt,
+      DateTime.toEpochMillis(client.expiresAt),
+    );
+    const grant: FoundryGatewayGrant = {
+      deviceId: identity.deviceId,
+      environmentId: identity.environmentId,
+      scopes: ["orchestration:read", "orchestration:operate"],
+      grantId: FoundryGatewayGrantId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie)),
+      protocolVersion: "2",
+      grantKind: "clientAccess",
+      accessGeneration: identity.accessGeneration,
+      instanceId: identity.instanceId,
+      origin,
+      operatorId: identity.operatorId,
+      clientSessionId: identity.clientSessionId,
+      subject: client.subject,
+      generation: identity.deviceGeneration,
+      channelGeneration: lease.channelGeneration,
+      expiresAt,
+    };
+    // clientAccess authorizes the existing transport; Automation additionally checks its own grant.
+    const check = Effect.gen(function* () {
+      const current = yield* validateAutomation(identity);
+      if (
+        current.lease.channelGeneration !== grant.channelGeneration ||
+        grant.expiresAt <= (yield* Clock.currentTimeMillis)
+      )
+        return yield* denied();
+    });
+    yield* check;
+    yield* channels.stream(grant, check, socket);
   });
   const ticket = Effect.fn("GatewayGrants.ticket")(function* (request: Request, input: unknown) {
     if (!streamsEnabled) return yield* denied();
@@ -376,6 +526,7 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })));
   });
   return GatewayGrants.of({
+    identityForRead,
     catalog,
     approveDevice,
     revokeDevice,
@@ -385,6 +536,8 @@ const make = Effect.gen(function* () {
     projects,
     ticket,
     stream,
+    authorizeAutomation,
+    openAutomation,
     readAccess,
     updateAccess,
   });

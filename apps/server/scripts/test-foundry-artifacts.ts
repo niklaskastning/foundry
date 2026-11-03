@@ -478,6 +478,10 @@ try {
           Layer.provide(Layer.succeed(DeviceConfig.DeviceOrigin, { origin })),
           Layer.provide(
             Layer.succeed(FoundrySessions.FoundrySessions, {
+              reference: Effect.fn("ArtifactsFixture.reference")(() => Effect.die("unused")),
+              inspectReference: Effect.fn("ArtifactsFixture.inspectReference")(() =>
+                Effect.die("unused"),
+              ),
               inspect: Effect.fn("ArtifactsFixture.inspectSession")(function* (
                 token: string | undefined,
               ) {
