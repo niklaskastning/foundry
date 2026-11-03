@@ -446,6 +446,34 @@ def active_restart_verify():
     print(json.dumps(proof, indent=2))
 
 
+def inspect_native_restart():
+    if os.geteuid() != 0:
+        raise RuntimeError("Administrator required")
+    installation = worker.Installation("/")
+    config = installation.previous()["config"]
+    record = json.loads(installation.path(json.loads(installation.path(ACTIVE_POINTER).read_text())["record"]).read_text())
+    projection = rpc(config, "orchestration.getThreadProjection", {"threadId": record["receipt"]["threadId"]})
+    if len(projection["runs"]) != 1 or len(projection["attempts"]) != 1 or len(projection["providerTurns"]) != 1:
+        raise RuntimeError("Expected exactly the original run/attempt/native turn")
+    original_run = projection["runs"][0]
+    thread = next(item for item in projection["providerThreads"] if item["id"] == original_run["providerThreadId"])
+    turn = projection["providerTurns"][0]
+    if not thread.get("nativeThreadRef") or not turn.get("nativeTurnRef"):
+        raise RuntimeError("Native thread/turn binding missing")
+    code = Path(__file__).with_name("g3-native-history.cjs").read_text()
+    summary = json.loads(run([config["node"], "-e", code], account=True, data=json.dumps({
+        "command": SHIM, "args": ["app-server"], "threadId": thread["nativeThreadRef"]["nativeId"], "turnId": turn["nativeTurnRef"]["nativeId"],
+    })))
+    summary.update({"commandId": record["launch"]["commandId"], "generation": record["generation"], "readOnly": True, "providerTurnsStarted": 0})
+    owner = pwd.getpwnam("niklas")
+    output = Path(owner.pw_dir) / ".cache/foundry-g3-acceptance/active-native-history.json"
+    with output.open("x") as stream:
+        json.dump(summary, stream, indent=2)
+    output.chmod(0o600)
+    os.chown(output, owner.pw_uid, owner.pw_gid)
+    print(json.dumps(summary, indent=2))
+
+
 def main():
     if len(sys.argv) == 3 and sys.argv[1] == "acceptance-access":
         acceptance_access(sys.argv[2])
@@ -453,6 +481,8 @@ def main():
         verify_acceptance()
     elif len(sys.argv) == 3 and sys.argv[1] == "verify-acceptance":
         verify_acceptance(sys.argv[2])
+    elif sys.argv[1:] == ["inspect-native-restart"]:
+        inspect_native_restart()
     elif sys.argv[1:] == ["active-restart-start"]:
         active_restart_start()
     elif sys.argv[1:] == ["active-restart-verify"]:

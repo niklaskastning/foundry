@@ -249,6 +249,23 @@ Löschen des Journals. Der Prüfzeiger `/var/lib/foundry-deploy/g3-active-restar
 verhindert einen zweiten kostenpflichtigen Start; bei Fehlern den ausgegebenen
 privaten Record für die gezielte Recovery behalten.
 
+Bleibt die Ausführung nach dem Crash unklar, kann der Administrator die native
+Historie des ursprünglichen Threads lesen:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py inspect-native-restart
+```
+
+Der Prüfer verwendet genau die persistierte native Thread-/Turn-Bindung dieses
+Auftrags und die eingerichtete Worker-CLI. Ein kurzlebiger App-Server führt nur
+`initialize` und `thread/read` aus, niemals `thread/resume` oder `turn/start`.
+Vollständige Turns, laufende Commands und in der Historie referenzierte Kinder
+werden geprüft; fehlende oder laufende Daten bestätigen keinen Stop. Die Ausgabe
+enthält nur Status/Zählungen, keine Historientexte oder Credentials. Eigene
+Probe-Prozesse werden anhand der beim Start erfassten Prozessgruppe beendet.
+Das Ergebnis ist Diagnose, keine automatische Reservation-Freigabe. Ein unklarer
+Altversuch bleibt bis zum belegten Service-Recovery-Pfad gesperrt.
+
 Diese Teilprobe schließt G3 nicht allein: Cancel während Ausführung, Lease-Verlust,
 Restart, Writer-Konflikte und Wiederverbindung der Clients bleiben eigene Nachweise.
 

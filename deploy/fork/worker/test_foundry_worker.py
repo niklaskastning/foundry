@@ -259,6 +259,10 @@ class WorkerInstallationTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 binding.validate_restart_state(database, journal, record)
 
+    def test_native_history_inspection_rejects_live_and_incomplete_history(self):
+        result = subprocess.run(["node", "deploy/fork/worker/test-g3-native-history.mjs"], cwd=Path(__file__).resolve().parents[3], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_native_restart_wait_requires_real_provider_command_milestone(self):
         result = subprocess.run(["node", "deploy/fork/worker/test-g3-native-wait.mjs"], cwd=Path(__file__).resolve().parents[3], input=binding.RPC_NATIVE, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
