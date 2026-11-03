@@ -32,6 +32,7 @@
     "generate": "graphqlgen",
     "generate:expo-schema": "node scripts/fetch-expo-schema.ts",
     "test:foundry-postgres": "node scripts/test-foundry-postgres.ts",
+    "test:foundry-artifacts": "node scripts/test-foundry-artifacts.ts",
     "test:automation-postgres": "node scripts/test-automation-postgres.ts"
   },
   "dependencies": {

@@ -29,7 +29,7 @@ def main_container():
 
 class ActivationTest(unittest.TestCase):
     def test_active_status_is_read_only_and_rejects_drift_without_disclosing_secrets(self):
-        for drift in [None, 'environment', 'compose', 'schema', 'identity', 'migrator', 'permissions', 'gateway-on', 'gateway-capability', 'gateway-schema']:
+        for drift in [None, 'environment', 'compose', 'schema', 'identity', 'migrator', 'permissions', 'gateway-on', 'gateway-v6', 'gateway-capability', 'gateway-schema']:
             with self.subTest(drift=drift), tempfile.TemporaryDirectory() as directory:
                 config = Path(directory)
                 runtime = config / 'access-runtime.env'
@@ -40,7 +40,7 @@ class ActivationTest(unittest.TestCase):
                     'FOUNDRY_ACCESS_ISSUER': activate.ISSUER, 'FOUNDRY_ACCESS_AUDIENCE': secret,
                     'FOUNDRY_PUBLIC_ORIGIN': activate.ORIGIN,
                 }
-                if drift in ['gateway-on', 'gateway-capability', 'gateway-schema']:
+                if drift in ['gateway-on', 'gateway-v6', 'gateway-capability', 'gateway-schema']:
                     values.update(dict.fromkeys(activate.GATEWAY_FLAGS, 'true'))
                 runtime.write_text(''.join(f'{key}={value}\n' for key, value in values.items()))
                 runtime.chmod(0o644 if drift == 'permissions' else 0o600)
@@ -72,7 +72,7 @@ class ActivationTest(unittest.TestCase):
 
                 def sql(statement):
                     self.assertTrue(statement.startswith('BEGIN READ ONLY;'))
-                    return json.dumps({'version': 7 if drift == 'schema' else 5 if drift in ['gateway-on', 'gateway-capability'] else 2,
+                    return json.dumps({'version': 7 if drift == 'schema' else 6 if drift == 'gateway-v6' else 5 if drift in ['gateway-on', 'gateway-capability'] else 2,
                         'instanceId': 'wrong' if drift == 'identity' else activate.INSTANCE,
                         'environmentId': activate.ENVIRONMENT, 'operatorBound': True,
                         'runtimeLogin': True, 'migratorLogin': drift == 'migrator'})
@@ -80,7 +80,7 @@ class ActivationTest(unittest.TestCase):
                 def metadata(path):
                     return {'instanceId': activate.INSTANCE, 'mainEnvironmentId': activate.ENVIRONMENT,
                             'environmentId': activate.ENVIRONMENT, 'ready': True,
-                            'capabilities': ['foundry.access-sessions'] + (sorted(activate.GATEWAY_CAPABILITIES) if drift in ['gateway-on', 'gateway-schema'] else [])}
+                            'capabilities': ['foundry.access-sessions'] + (sorted(activate.GATEWAY_CAPABILITIES) if drift in ['gateway-on', 'gateway-v6', 'gateway-schema'] else [])}
 
                 lstat = Path.lstat
 
@@ -92,7 +92,7 @@ class ActivationTest(unittest.TestCase):
                 with patch.object(activate, 'CONFIG', config), patch.object(activate, 'docker', docker), \
                      patch.object(activate, 'sql', sql), patch.object(activate, 'metadata', metadata), \
                      patch.object(Path, 'lstat', owned):
-                    if drift and drift != 'gateway-on':
+                    if drift and drift not in ['gateway-on', 'gateway-v6']:
                         with self.assertRaises(RuntimeError) as error:
                             activate.active_status()
                         self.assertNotIn(secret, str(error.exception))
@@ -100,7 +100,7 @@ class ActivationTest(unittest.TestCase):
                         report = activate.active_status()
                         self.assertEqual(report['revision'], REVISION)
                         self.assertFalse(report['upgradePerformed'])
-                        self.assertEqual(report['gatewayEnabled'], drift == 'gateway-on')
+                        self.assertEqual(report['gatewayEnabled'], drift in ['gateway-on', 'gateway-v6'])
                         self.assertNotIn(secret, json.dumps(report).replace(DIGEST, 'digest'))
                 self.assertTrue(calls)
 
@@ -184,9 +184,11 @@ class ActivationTest(unittest.TestCase):
                         self.assertEqual(calls, before, 'same desired state must not restart Main')
 
     def test_upgrade_keeps_the_current_backup_and_disables_migration_login_on_failure(self):
-        for same_schema, failure in ([(False, f) for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
-                                     + [(True, f) for f in [None, 'source', 'backup', 'connections', 'start', 'verify']]):
-            with self.subTest(same_schema=same_schema, failure=failure), tempfile.TemporaryDirectory() as directory:
+        for same_schema, artifact_schema, failure in (
+            [(False, artifact, f) for artifact in [False, True] for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
+            + [(True, False, f) for f in [None, 'source', 'backup', 'connections', 'start', 'verify']]
+        ):
+            with self.subTest(same_schema=same_schema, artifact_schema=artifact_schema, failure=failure), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 config, state = root / 'config', root / 'state'
                 config.mkdir()
@@ -200,8 +202,8 @@ class ActivationTest(unittest.TestCase):
                     actions.append(('status', expected_schema))
                     if len([a for a in actions if a[0] == 'status']) == 2 and failure == 'verify':
                         raise RuntimeError('verification failed')
-                    return {'image': activate.REGISTRY + '@' + (DIGEST if expected_schema == 5 else 'sha256:' + 'c' * 64),
-                            'revision': REVISION if expected_schema == 5 else 'd' * 40}
+                    return {'image': activate.REGISTRY + '@' + (DIGEST if expected_schema == (6 if artifact_schema else 5) else 'sha256:' + 'c' * 64),
+                            'revision': REVISION if expected_schema == (6 if artifact_schema else 5) else 'd' * 40}
 
                 def docker(*args, data=None, output=None):
                     nonlocal running
@@ -248,10 +250,10 @@ class ActivationTest(unittest.TestCase):
                      patch('sys.stderr', new=io.StringIO()):
                     if failure:
                         with self.assertRaises(RuntimeError):
-                            activate.upgrade(DIGEST, REVISION, same_schema=same_schema)
+                            activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema)
                     else:
-                        activate.upgrade(DIGEST, REVISION, same_schema=same_schema)
-                self.assertEqual(actions[0], ('status', 5 if same_schema else 2))
+                        activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema)
+                self.assertEqual(actions[0], ('status', 5 if same_schema or artifact_schema else 2))
                 self.assertEqual(running, failure in [None, 'source', 'backup', 'connections'])
                 altered = any(a[0] == 'sql' and 'LOGIN PASSWORD' in a[1] for a in actions)
                 if failure in ['source', 'backup', 'connections']:
@@ -264,6 +266,7 @@ class ActivationTest(unittest.TestCase):
                     else:
                         self.assertIn(('sql', 'ALTER ROLE foundry_instance_migrator NOLOGIN PASSWORD NULL;'), actions)
                     recovery = next(state.iterdir())
+                    self.assertEqual(json.loads((recovery / 'manifest.json').read_text())['targetSchema'], 6 if artifact_schema else 5)
                     self.assertEqual((recovery / 'access-compose.json').read_text(), 'original-access-compose.json')
                     self.assertEqual((recovery / 'success').exists(), failure is None)
                     self.assertEqual((config / 'access-runtime.env').read_text(), 'original-access-runtime.env')

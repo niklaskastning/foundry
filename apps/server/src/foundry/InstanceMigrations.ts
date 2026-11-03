@@ -64,7 +64,7 @@ const make = Effect.gen(function* () {
           const versions = yield* sql<{
             version: number;
           }>`SELECT version FROM foundry_instance.schema_version`;
-          if (versions.length !== 1 || ![1, 2, 3, 4, 5].includes(versions[0]?.version ?? 0)) {
+          if (versions.length !== 1 || ![1, 2, 3, 4, 5, 6].includes(versions[0]?.version ?? 0)) {
             return yield* new InstanceDatabase.InstanceDatabaseError({
               reason: "schema_incompatible",
             });
@@ -117,6 +117,20 @@ const make = Effect.gen(function* () {
               CROSS JOIN (VALUES ('clientAccess'), ('automationExecution'), ('sandboxProvisioning')) AS kinds(kind)`;
             yield* sql`UPDATE foundry_instance.schema_version SET version = 5`;
           }
+          if ((versions[0]?.version ?? 0) < 6) {
+            yield* sql`CREATE TABLE foundry_instance.artifact_uploads (
+              artifact_id uuid PRIMARY KEY,
+              ordinal bigserial NOT NULL UNIQUE,
+              instance_id uuid NOT NULL REFERENCES foundry_instance.instance(instance_id),
+              operator_id uuid NOT NULL REFERENCES foundry_instance.operator_binding(operator_id),
+              command_id text NOT NULL,
+              request jsonb NOT NULL,
+              state text NOT NULL DEFAULT 'uploading' CHECK(state IN ('uploading','published','aborted')),
+              confirmed_offset integer NOT NULL DEFAULT 0 CHECK(confirmed_offset >= 0 AND confirmed_offset <= (request->>'sizeBytes')::integer),
+              UNIQUE(instance_id,operator_id,command_id))`;
+            yield* sql`CREATE INDEX artifact_uploads_owner_page ON foundry_instance.artifact_uploads(instance_id,operator_id,ordinal DESC) WHERE state='published'`;
+            yield* sql`UPDATE foundry_instance.schema_version SET version=6`;
+          }
           yield* InstanceDatabase.checkSchema();
           const identities = yield* sql<{
             instance_id: string;
@@ -142,6 +156,9 @@ const make = Effect.gen(function* () {
           yield* sql`GRANT SELECT, INSERT ON foundry_instance.device_grants TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT UPDATE (enabled, generation) ON foundry_instance.device_grants TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT UPDATE (consumed) ON foundry_instance.device_enrollments TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT SELECT, INSERT ON foundry_instance.artifact_uploads TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT UPDATE(confirmed_offset,state) ON foundry_instance.artifact_uploads TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT USAGE ON SEQUENCE foundry_instance.artifact_uploads_ordinal_seq TO ${sql(input.runtimeRole)}`;
         }),
       );
     },

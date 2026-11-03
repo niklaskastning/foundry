@@ -143,14 +143,14 @@ def active_status(expected_schema=None):
         'runtimeLogin', (SELECT rolcanlogin FROM pg_roles WHERE rolname='foundry_instance_runtime'),
         'migratorLogin', (SELECT rolcanlogin FROM pg_roles WHERE rolname='foundry_instance_migrator'));
       COMMIT;"""))
-    if (database['version'] not in ([expected_schema] if expected_schema else [2, 5]) or database['instanceId'] != INSTANCE
+    if (database['version'] not in ([expected_schema] if expected_schema else [2, 5, 6]) or database['instanceId'] != INSTANCE
             or database['environmentId'] != ENVIRONMENT or database['operatorBound'] is not True
             or database['runtimeLogin'] is not True or database['migratorLogin'] is not False):
         raise RuntimeError('Unexpected instance schema, identity, operator binding or login state.')
     gateway_enabled = all(values.get(key) == 'true' for key in GATEWAY_FLAGS)
     advertised = GATEWAY_CAPABILITIES.intersection(descriptor.get('capabilities', []))
     if (advertised != (GATEWAY_CAPABILITIES if gateway_enabled else set())
-            or (gateway_enabled and database['version'] != 5)):
+            or (gateway_enabled and database['version'] not in [5, 6])):
         raise RuntimeError('Gateway capabilities or schema differ from the configured profile.')
     return {'gatewayEnabled': gateway_enabled, 'revision': revision, 'image': configured_image, 'schemaVersion': database['version'],
             'instanceId': INSTANCE, 'environmentId': ENVIRONMENT, 'ready': True,
@@ -207,10 +207,13 @@ def gateway(enabled):
     print(json.dumps({**result, 'configurationChanged': True, 'configurationRecovery': str(recovery)}, indent=2))
 
 
-def upgrade(digest, revision, *, same_schema=False):
+def upgrade(digest, revision, *, same_schema=False, artifact_schema=False):
     if not re.fullmatch(r'sha256:[a-f0-9]{64}', digest) or not re.fullmatch(r'[a-f0-9]{40}', revision):
         raise ValueError('Use an immutable image digest and its exact reviewed source SHA.')
-    previous = active_status(expected_schema=5 if same_schema else 2)
+    if same_schema and artifact_schema:
+        raise ValueError('A schema upgrade cannot be a same-schema update.')
+    previous = active_status(expected_schema=5 if same_schema or artifact_schema else 2)
+    target_schema = 6 if artifact_schema else 5
     image = REGISTRY + '@' + digest
     docker('pull', image)
     candidate = json.loads(docker('image', 'inspect', image))[0]
@@ -222,7 +225,7 @@ def upgrade(digest, revision, *, same_schema=False):
     backup = Path(tempfile.mkdtemp(prefix='upgrade-', dir=STATE))
     write_private(backup / 'manifest.json', json.dumps({
         'previous': previous, 'candidateImage': image, 'revision': revision,
-        'targetSchema': 5, 'instanceId': INSTANCE, 'environmentId': ENVIRONMENT,
+        'targetSchema': target_schema, 'instanceId': INSTANCE, 'environmentId': ENVIRONMENT,
     }, indent=2) + '\n')
     for name in ['access-runtime.env', 'access-compose.json']:
         write_private(backup / name, (CONFIG / name).read_text())
@@ -248,7 +251,7 @@ def upgrade(digest, revision, *, same_schema=False):
                           f'FOUNDRY_INSTANCE_MIGRATION_URL=postgresql://foundry_instance_migrator:{password}@postgres:5432/fork_connect\n')
             try:
                 sql(f"ALTER ROLE foundry_instance_migrator LOGIN PASSWORD '{password}';")
-                print('Migrating schema 2 to 5 with Main stopped; operator and identities are preserved.', flush=True)
+                print(f'Migrating schema {5 if artifact_schema else 2} to {target_schema} with Main stopped; operator and identities are preserved.', flush=True)
                 run_cli(image, migration_file, 'migrate', '--base-dir', '/var/lib/foundry',
                         '--runtime-role', 'foundry_instance_runtime')
             finally:
@@ -260,7 +263,7 @@ def upgrade(digest, revision, *, same_schema=False):
         docker('compose', '--project-name', 'foundry', '--env-file', '/dev/null',
                '--file', str(CONFIG / 'access-compose.json'), 'up', '--detach', '--no-deps',
                '--no-build', '--pull', 'never', '--wait', '--wait-timeout', '180', 'main')
-        result = active_status(expected_schema=5)
+        result = active_status(expected_schema=target_schema)
         if result['image'] != image or result['revision'] != revision:
             raise RuntimeError('Candidate image verification failed.')
         write_private(backup / 'success', revision + '\n')
@@ -459,8 +462,8 @@ def activate(digest, revision):
 
 
 def main(args):
-    if args not in [['preflight'], ['status'], ['gateway', 'enable'], ['gateway', 'disable']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade', 'update']):
-        raise ValueError('Usage: foundry-activate-access status | preflight | gateway enable|disable | activate|upgrade|update sha256:<digest> <source-sha>')
+    if args not in [['preflight'], ['status'], ['gateway', 'enable'], ['gateway', 'disable']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade', 'upgrade-artifacts', 'update']):
+        raise ValueError('Usage: foundry-activate-access status | preflight | gateway enable|disable | activate|upgrade|upgrade-artifacts|update sha256:<digest> <source-sha>')
     if os.geteuid() != 0:
         raise RuntimeError('This operation requires the administrator; no sudo grant is installed.')
     os.umask(0o077)
@@ -473,8 +476,8 @@ def main(args):
         elif args == ['preflight']:
             preflight()
             print('PASS pinned Docker Main, private PostgreSQL, empty fork_connect, absent login roles, stable IDs.')
-        elif args[0] in ['upgrade', 'update']:
-            upgrade(*args[1:], same_schema=args[0] == 'update')
+        elif args[0] in ['upgrade', 'upgrade-artifacts', 'update']:
+            upgrade(*args[1:], same_schema=args[0] == 'update', artifact_schema=args[0] == 'upgrade-artifacts')
         else:
             activate(*args[1:])
 

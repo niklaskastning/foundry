@@ -21,6 +21,13 @@ import * as DeviceGrants from "./DeviceGrants.ts";
 import * as GatewayGrants from "./GatewayGrants.ts";
 import * as GatewayHttp from "./gatewayHttp.ts";
 import { FoundryDeviceError } from "@t3tools/contracts";
+import * as ServerConfig from "../config.ts";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as ArtifactFiles from "./ArtifactFiles.ts";
+import * as Artifacts from "./Artifacts.ts";
+import * as ArtifactAccess from "./ArtifactAccess.ts";
+import * as ArtifactHttp from "./artifactHttp.ts";
 
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
@@ -42,6 +49,10 @@ export const layer = Layer.unwrap(
     const streams = yield* Config.Boolean("FOUNDRY_STREAM_GATEWAY_ENABLED").pipe(
       Config.withDefault(false),
     );
+    const artifacts = yield* Config.Boolean("FOUNDRY_ARTIFACTS_ENABLED").pipe(
+      Config.withDefault(false),
+    );
+    if (artifacts && !streams) return yield* new FoundryDeviceError({ code: "configuration" });
     if (streams && !gateway) return yield* new FoundryDeviceError({ code: "configuration" });
     if (gateway && !grants) return yield* new FoundryDeviceError({ code: "configuration" });
     if (grants && !channel) return yield* new FoundryDeviceError({ code: "configuration" });
@@ -54,6 +65,29 @@ export const layer = Layer.unwrap(
     const store = yield* Config.String("FOUNDRY_INSTANCE_STORE");
     if (store !== "postgres") return yield* new AccessConfig.AccessConfigurationError({});
     const url = yield* Config.Redacted("FOUNDRY_INSTANCE_DATABASE_URL");
+    const artifactRoutes = artifacts
+      ? ArtifactHttp.layer.pipe(
+          Layer.provide(ArtifactAccess.layer),
+          Layer.provide(Artifacts.layer),
+          Layer.provide(
+            ArtifactFiles.layer.pipe(
+              Layer.provide(
+                Layer.effect(
+                  ArtifactFiles.ArtifactDirectory,
+                  Effect.gen(function* () {
+                    const config = yield* ServerConfig.ServerConfig;
+                    const fs = yield* FileSystem.FileSystem;
+                    const path = yield* Path.Path;
+                    return {
+                      path: path.join(yield* fs.realPath(config.stateDir), "foundry-artifacts"),
+                    };
+                  }),
+                ),
+              ),
+            ),
+          ),
+        )
+      : Layer.empty;
     const deviceRoutes = enrollment
       ? Layer.merge(
           DeviceHttp.layer,
@@ -69,7 +103,12 @@ export const layer = Layer.unwrap(
             : Layer.empty,
         ).pipe(Layer.provide(DeviceRegistry.layer), Layer.provide(DeviceConfig.layer))
       : Layer.empty;
-    return Layer.mergeAll(FoundryHttp.layer, AuthHttp.layer, deviceRoutes).pipe(
+    return Layer.mergeAll(
+      FoundryHttp.layer,
+      AuthHttp.layer,
+      deviceRoutes,
+      artifactRoutes.pipe(Layer.provide(DeviceRegistry.layer), Layer.provide(DeviceConfig.layer)),
+    ).pipe(
       Layer.provide(Layer.merge(InstanceDescriptor.layer, FoundrySessions.layer)),
       Layer.provide(AccessVerifier.layer),
       Layer.provide(AccessVerifier.layerRemoteKeys),
@@ -79,6 +118,7 @@ export const layer = Layer.unwrap(
       Layer.provide(Layer.succeed(DeviceConfig.DeviceChannelEnabled, channel)),
       Layer.provide(Layer.succeed(DeviceConfig.HttpGatewayEnabled, gateway)),
       Layer.provide(Layer.succeed(DeviceConfig.StreamGatewayEnabled, streams)),
+      Layer.provide(Layer.succeed(DeviceConfig.ArtifactsEnabled, artifacts)),
       Layer.provide(InstancePostgres.layerIdentity),
       Layer.provide(InstancePostgres.layer),
       Layer.provide(InstanceDatabase.layer({ url })),

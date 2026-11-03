@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { EnvironmentId } from "./baseSchemas.ts";
+import { EnvironmentId, NonNegativeInt, PositiveInt } from "./baseSchemas.ts";
 import { ServerAuthBootstrapMethod, ServerAuthSessionMethod } from "./auth.ts";
 
 export const FoundryInstanceId = Schema.String.check(Schema.isUUID()).pipe(
@@ -24,6 +24,13 @@ export const FoundryDescriptor = Schema.Struct({
   mainEnvironmentId: EnvironmentId,
   capabilities: Schema.Array(Schema.Literals(FOUNDRY_CAPABILITIES)),
   negotiatedCapabilities: Schema.Array(Schema.Literals(FOUNDRY_CAPABILITIES)),
+  artifactTransfer: Schema.optionalKey(
+    Schema.Struct({
+      protocolVersion: Schema.Literal("1"),
+      chunkBytes: PositiveInt,
+      maxBytes: NonNegativeInt,
+    }),
+  ),
   instanceAuth: Schema.optionalKey(
     Schema.Struct({
       publicOrigin: Schema.optionalKey(Schema.String),

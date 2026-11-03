@@ -22,7 +22,7 @@ sudo /usr/bin/python3 -I deploy/fork/updater/activate-access.py status
 ```
 
 This checks the actual image against the private Compose/runtime configuration,
-the pinned identities, readiness, schema 2 or 5, operator binding and disabled migration
+the pinned identities, readiness, schema 2, 5 or 6, operator binding and disabled migration
 login. Its JSON contains no credentials or operator subject. It does not stop Main,
 change the database or approve an upgrade. Configuration drift or an unsupported schema
 is rejected for explicit investigation. No installation or sudoers change is needed.
@@ -56,6 +56,22 @@ power failure or failed PostgreSQL command needs administrator inspection; no cl
 of automatic recovery is made. Keep all backup files private, and copy the bundle
 to the existing protected backup destination. Do not rerun `activate`, restore the
 activation-era empty database, or downgrade only the image.
+
+### Upgrade schema 5 to the artifact-store schema 6
+
+The current source requires instance schema 6. With the same coordinated backup,
+maintenance window and reviewed image prerequisites described above, use:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/updater/activate-access.py upgrade-artifacts sha256:<candidate-digest> <candidate-source-sha>
+```
+
+This accepts exactly schema 5, migrates to 6 and verifies unchanged identities,
+operator, gateway configuration and disabled migration login. The backup includes
+the existing state volume where artifact files live. It does not enable artifact
+routes or claim P38a client/worker acceptance. Failure after the backup boundary
+leaves Main stopped for coordinated recovery. The existing `upgrade`, `update`
+and `gateway` commands below remain schema-5 procedures.
 
 ### Update an already activated schema-5 Main
 

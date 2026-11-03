@@ -14,20 +14,32 @@ Der separate Linux-Host-Dienst hat einen [eigenen Installer und Betriebsweg](../
 
 This opt-in backend registers a device key and its first local environment. It does
 not connect that environment, provide gateway access or install an agent. The
-outstanding release gates and follow-up work are tracked in
-[issue #13](https://github.com/niklaskastning/foundry/issues/13). Do not activate it
+outstanding release gates and follow-up work are tracked in the
+[implementation plan](implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen). Do not activate it
 on the existing production deployment as part of development testing.
 
-Use an isolated Main with PostgreSQL instance schema **5**, the existing operator
+Use an isolated Main with PostgreSQL instance schema **6**, the existing operator
 binding, and the configured `FOUNDRY_PUBLIC_ORIGIN`. Run the existing
 `foundry migrate` command with the migration role before starting this source
-version; it upgrades schemas 1/2/3/4 while preserving instance identity, operator and
-sessions. Older binaries reject schema 5: an image-only downgrade is not
+version; it upgrades schemas 1/2/3/4/5 while preserving instance identity, operator and
+sessions. Older binaries reject schema 6: an image-only downgrade is not
 a recovery procedure. The runtime role cannot change device keys or enrollment
 expiry. Set `FOUNDRY_DEVICE_ENROLLMENT_ENABLED=true` explicitly alongside
 `FOUNDRY_ACCESS_ENABLED=true` to expose `/api/foundry/devices/enroll` and advertise
 `foundry.device-enrollment`; the route and capability are absent by default.
 This mode does not implement native authentication.
+
+The P38a artifact-store foundation is separately disabled by default. In an isolated
+Main, `FOUNDRY_ARTIFACTS_ENABLED=true` requires the complete stream-gateway profile
+and creates private `userdata/foundry-artifacts/{pending,blobs}` inside the existing
+state volume. Keep that directory and instance PostgreSQL in the same coordinated
+backup/recovery boundary. It exposes bounded JSON transfer operations at
+`POST /api/foundry/artifacts` for existing dual-authenticated clients and
+`POST /api/foundry/devices/channel` for signed device requests; the existing GET
+channel is unchanged. No Cloudflare machine-path expansion is needed. Descriptor
+support uses optional `artifactTransfer` metadata: adding an unknown capability to
+the strict version-1 enum would break older Windows readers. These routes alone do
+not integrate attachments into messages or provide a central thread archive.
 
 From the source checkout, create a private key file on the execution machine:
 

@@ -22,7 +22,7 @@ Architektur und Deployment erklären **was und warum**; der Umsetzungsplan besit
 
 Main, Instanz-PostgreSQL/Access, registrierter Linux-Worker und Gateway sind integriert. Windows/Electron und Firefox greifen auf denselben Worker zu. Windows-Login, Refresh, App-Neustart und Wiederanmeldung mit erhaltener T3-Kopplung sind praktisch bestätigt. Native Foundry-Anmeldung, zentrale Thread-/Attachment-Archive, Workflow-Engine und Sandboxes bleiben geplant.
 
-Nächster Pflichtblock ist **G3: reale Worker-Ausführung** einschließlich Codex-Bindung, idempotentem Launch, bestätigtem Ergebnis/Stop und Workspace-Recovery. Danach folgt der Factory-MVP mit P18b, P47 und zentraler Persistenz P38a/P38b vor dem ersten Dispatch. Der [Umsetzungsplan](implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen) trennt erledigten Code von offenen G1-/G2-/G3-Abnahmen. Keine vorsorgliche Codex-Installation im Main-Container; Agenten laufen auf dem dedizierten Worker.
+G3 ist funktional einschließlich realer Worker-Recovery bestätigt; P18b und P47 sind als inaktive Grundlagen integriert. Nächster Pflichtblock ist **P38a/P38b: zentrale Artefakte und Thread-Archive** vor dem ersten Workflow-Dispatch. Factory-Definitionen liegen im separaten privaten Repository [foundry-definitions](https://github.com/niklaskastning/foundry-definitions); der App-Zugang folgt über P23/P48. Der [Umsetzungsplan](implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen) trennt erledigten Code von offenen G1-/G2- und Betriebsabnahmen. Agenten laufen auf dem dedizierten Worker.
 
 ## Arbeitsweise
 
