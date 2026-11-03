@@ -1,5 +1,6 @@
 import * as AccessConfig from "./AccessConfig.ts";
 import * as DeviceConfig from "./DeviceConfig.ts";
+import { FOUNDRY_ARTIFACT_CHUNK_BYTES, FOUNDRY_ARTIFACT_MAX_BYTES } from "@t3tools/contracts";
 import {
   FOUNDRY_CAPABILITIES,
   FOUNDRY_PROTOCOL_VERSION,
@@ -34,6 +35,7 @@ const make = Effect.gen(function* () {
   const channel = yield* DeviceConfig.DeviceChannelEnabled;
   const gateway = yield* DeviceConfig.HttpGatewayEnabled;
   const streams = yield* DeviceConfig.StreamGatewayEnabled;
+  const artifacts = yield* DeviceConfig.ArtifactsEnabled;
   const access = yield* Effect.serviceOption(AccessConfig.AccessConfig);
   if (enabled && Option.isNone(access))
     return yield* Effect.die(new AccessConfig.AccessConfigurationError({}));
@@ -72,6 +74,15 @@ const make = Effect.gen(function* () {
       instanceId: yield* identity.getOrCreate,
       mainEnvironmentId: yield* environment.getEnvironmentId,
       capabilities,
+      ...(artifacts
+        ? {
+            artifactTransfer: {
+              protocolVersion: "1" as const,
+              chunkBytes: FOUNDRY_ARTIFACT_CHUNK_BYTES,
+              maxBytes: FOUNDRY_ARTIFACT_MAX_BYTES,
+            },
+          }
+        : {}),
       negotiatedCapabilities: capabilities.filter(
         (capability) =>
           input.capabilities.includes(capability) ||

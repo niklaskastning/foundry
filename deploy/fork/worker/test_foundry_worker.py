@@ -1,7 +1,9 @@
+from contextlib import closing
 import importlib.util
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sqlite3
@@ -43,8 +45,61 @@ recovery_spec = importlib.util.spec_from_file_location("foundry_g3_recovery", Pa
 recovery = importlib.util.module_from_spec(recovery_spec)
 recovery_spec.loader.exec_module(recovery)
 
+artifact_spec = importlib.util.spec_from_file_location("foundry_artifact_activation", Path(__file__).with_name("activate-artifacts.py"))
+artifact_activation = importlib.util.module_from_spec(artifact_spec)
+artifact_spec.loader.exec_module(artifact_activation)
+
 
 class WorkerInstallationTest(unittest.TestCase):
+    def test_artifact_start_waits_for_connector_before_inspecting_its_process(self):
+        for provider_ready in (True, False):
+            with self.subTest(provider_ready=provider_ready):
+                reader, writer = os.pipe()
+                connected = False
+                with os.fdopen(reader, "rb", buffering=0) as stream, os.fdopen(writer, "wb", buffering=0) as output:
+                    class Journal:
+                        def fileno(self):
+                            return stream.fileno()
+
+                        def readline(self):
+                            nonlocal connected
+                            line = stream.readline()
+                            connected = b"Foundry device device connected;" in line
+                            return line
+
+                        def terminate(self):
+                            pass
+
+                        def wait(self, timeout):
+                            pass
+
+                    journal = Journal()
+                    journal.stdout = journal
+
+                    def run(args):
+                        if "foundry-host.service" in args:
+                            output.write(b"Listening on http://127.0.0.1:3973\n")
+                        if "foundry-host.target" in args:
+                            self.assertTrue(provider_ready)
+                            output.write(b"Foundry device device connected; project-read adapter enabled.\n")
+
+                    def inventory():
+                        if not connected:
+                            raise RuntimeError("Connector process has not reached its service identity")
+                        return {"services": {}}
+
+                    with patch.object(artifact_activation.subprocess, "Popen", return_value=journal), \
+                         patch.object(artifact_activation.g3, "run", side_effect=run), \
+                         patch.object(artifact_activation.g3, "rpc", return_value={"online": True, "providerReady": provider_ready, "activeRuns": 0}), \
+                         patch.object(artifact_activation.inspection, "inventory", side_effect=inventory), \
+                         patch.object(artifact_activation.worker, "Installation", return_value=None), \
+                         patch.object(artifact_activation, "private_json", return_value={"deviceId": "device"}):
+                        if provider_ready:
+                            artifact_activation.start(config())
+                        else:
+                            with self.assertRaisesRegex(RuntimeError, "not ready"):
+                                artifact_activation.start(config())
+
     def test_recovery_archive_rejects_changed_dirty_or_escaping_programs(self):
         for failure in (None, "digest", "dirty", "escape"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
@@ -69,6 +124,62 @@ class WorkerInstallationTest(unittest.TestCase):
                         recovery.artifacts(stage)
                 else:
                     self.assertEqual(recovery.artifacts(stage), manifest)
+                    installation = worker.Installation(str(stage / "host"))
+                    settings = config()
+                    destination = artifact_activation.unpack(installation, stage, manifest, settings)
+                    self.assertEqual(destination.stat().st_mode & 0o777, 0o755)
+                    self.assertEqual((destination / "dist").stat().st_mode & 0o777, 0o755)
+                    self.assertEqual((destination / "dist/foundry-build.json").stat().st_mode & 0o777, 0o644)
+                    self.assertEqual(artifact_activation.unpack(installation, stage, manifest, settings), destination)
+                    with self.assertRaises(RuntimeError):
+                        artifact_activation.unpack(installation, stage, {**manifest, "sha256": "changed"}, settings)
+
+    def test_artifact_configuration_preserves_credentials_and_recovers_failed_installation(self):
+        for access in [False, True]:
+            for failure in [None, "key", "origin", "permissions", "binding", "write"]:
+                with self.subTest(access=access, failure=failure), tempfile.TemporaryDirectory() as directory:
+                    installation = worker.Installation(directory)
+                    settings = {**config(), "accessFile": access}
+                    release(installation, settings)
+                    installation.install(settings)
+                    secrets = {
+                        "registration.json": {"instanceId": "instance", "environmentId": "worker", "publicKey": "public"},
+                        "device-key.json": {"publicKey": "wrong" if failure == "key" else "public", "privateKey": "dedicated private fixture"},
+                        "access.json": {"origin": "https://foreign.example" if failure == "origin" else settings["origin"], "clientId": "fixture", "clientSecret": "private machine fixture"},
+                    }
+                    for name, value in secrets.items():
+                        path = installation.path(worker.STATE + "/" + name)
+                        path.write_text(json.dumps(value))
+                        path.chmod(0o644 if failure == "permissions" and name == "registration.json" else 0o600)
+                    original = {name: installation.path(worker.STATE + "/" + name).read_bytes() for name in secrets}
+                    previous = installation.previous()
+                    settings = {**settings, "revision": "b" * 40}
+                    release(installation, settings)
+                    binding_path = installation.path(artifact_activation.BINDING)
+                    if failure == "binding":
+                        binding_path.write_text('{"origin":"https://foreign.example"}\n')
+                        binding_path.chmod(0o600)
+                    before = binding_path.read_bytes() if binding_path.exists() else None
+                    original_write = installation.write
+
+                    def write(name, text, mode):
+                        if failure == "write" and name.endswith("foundry-connector.service") and "b" * 40 in text:
+                            raise OSError("injected unit write failure")
+                        original_write(name, text, mode)
+
+                    with patch.object(installation, "write", side_effect=write):
+                        if failure and (failure != "origin" or access):
+                            with self.assertRaises((RuntimeError, OSError)):
+                                artifact_activation.configure(installation, settings)
+                            self.assertEqual(installation.previous(), previous)
+                            self.assertEqual(binding_path.read_bytes() if binding_path.exists() else None, before)
+                        else:
+                            artifact_activation.configure(installation, settings)
+                            artifact_activation.configure(installation, settings)
+                            self.assertTrue(installation.previous()["config"]["artifactPublication"])
+                            self.assertEqual(binding_path.stat().st_mode & 0o777, 0o600)
+                            self.assertEqual(json.loads(binding_path.read_text()).get("accessFile"), worker.STATE + "/access.json" if access else None)
+                    self.assertEqual({name: installation.path(worker.STATE + "/" + name).read_bytes() for name in secrets}, original)
 
     def test_install_upgrade_remove_preserve_identity_credentials_and_other_service(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -93,6 +204,7 @@ class WorkerInstallationTest(unittest.TestCase):
             settings["revision"] = "b" * 40
             settings["memoryMaxMiB"] = 2048
             settings["providerInstanceId"] = "codex-worker"
+            settings["artifactPublication"] = True
             release(installation, settings)
             original_write = installation.write
             def fail_once(name, text, mode):
@@ -107,6 +219,7 @@ class WorkerInstallationTest(unittest.TestCase):
             installation.install(settings)
             self.assertEqual(json.loads(manifest.read_text())["config"]["providerInstanceId"], "codex-worker")
             self.assertIn("FOUNDRY_WORKER_PROVIDER_INSTANCE_ID=codex-worker", installation.path(worker.UNITS + "/foundry-host.service").read_text())
+            self.assertIn("FOUNDRY_WORKER_ARTIFACT_BINDING_FILE=" + worker.STATE + "/artifact-binding.json", installation.path(worker.UNITS + "/foundry-host.service").read_text())
             self.assertIn("MemoryMax=2048M", installation.path(worker.UNITS + "/foundry-host.slice").read_text())
             self.assertIn("b" * 40, installation.path(worker.UNITS + "/foundry-host.service").read_text())
             self.assertEqual(installation.path(worker.WORKER_HOME).stat().st_mode & 0o777, 0o700)
@@ -119,7 +232,7 @@ class WorkerInstallationTest(unittest.TestCase):
             self.assertEqual(identity.read_text(), "isolated-worker-identity\n")
 
     def test_refuses_path_injection_unowned_units_changed_bindings_and_dirty_releases(self):
-        for field, value in [("providerInstanceId", "codex\nExecStart=/bin/sh"), ("providerInstanceId", "1invalid"), ("node", "/home/person/node"), ("node", "/usr/bin/node\nExecStart=/bin/sh"), ("origin", "https://main.example/path"), ("origin", "https://user:secret@main.example"), ("origin", "https://main.example%20"), ("revision", "../personal"), ("workspaceRoots", ["/home/person"]), ("workspaceRoots", [worker.WORKSPACES + "/../private"]), ("memoryMaxMiB", 0), ("tasksMax", True), ("accessFile", "yes")]:
+        for field, value in [("artifactPublication", "true"), ("providerInstanceId", "codex\nExecStart=/bin/sh"), ("providerInstanceId", "1invalid"), ("node", "/home/person/node"), ("node", "/usr/bin/node\nExecStart=/bin/sh"), ("origin", "https://main.example/path"), ("origin", "https://user:secret@main.example"), ("origin", "https://main.example%20"), ("revision", "../personal"), ("workspaceRoots", ["/home/person"]), ("workspaceRoots", [worker.WORKSPACES + "/../private"]), ("memoryMaxMiB", 0), ("tasksMax", True), ("accessFile", "yes")]:
             with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as directory:
                 installation = worker.Installation(directory)
                 invalid = {**config(), field: value}
@@ -212,6 +325,7 @@ class WorkerInstallationTest(unittest.TestCase):
                 connection.executescript("CREATE TABLE orchestration_v2_projection_runs(status TEXT); CREATE TABLE foundry_executions(manifest TEXT);")
                 connection.execute("INSERT INTO orchestration_v2_projection_runs VALUES ('completed')")
             binding.quiet_database(database)
+
             for status in ("queued", "preparing", "running", "finalizing", "unknown"):
                 with sqlite3.connect(database) as connection:
                     connection.execute("UPDATE orchestration_v2_projection_runs SET status=?", (status,))
@@ -233,6 +347,20 @@ class WorkerInstallationTest(unittest.TestCase):
             with sqlite3.connect(journal) as connection:
                 connection.execute("UPDATE reservations SET state='released'")
             binding.quiet_database(database)
+
+            with closing(sqlite3.connect(database)) as connection, connection:
+                connection.execute("ALTER TABLE foundry_executions ADD COLUMN writer_ended INTEGER DEFAULT 0")
+                connection.execute("INSERT INTO foundry_executions(manifest,writer_ended) VALUES ('confirmed',0)")
+            with patch.object(artifact_activation, "DATABASE", database):
+                with self.assertRaisesRegex(RuntimeError, "Writer end"):
+                    artifact_activation.quiescent()
+                with closing(sqlite3.connect(database)) as connection, connection:
+                    connection.execute("UPDATE foundry_executions SET writer_ended=1")
+                artifact_activation.quiescent()
+                before = artifact_activation.schema()
+                with closing(sqlite3.connect(journal)) as connection, connection:
+                    connection.execute("ALTER TABLE reservations ADD COLUMN next_generation INTEGER")
+                self.assertNotEqual(artifact_activation.schema(), before)
 
     def test_persisted_acceptance_requires_exact_attempt_and_checkpoint_binding(self):
         with tempfile.TemporaryDirectory() as directory:

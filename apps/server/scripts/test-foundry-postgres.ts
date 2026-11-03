@@ -257,7 +257,7 @@ try {
     await query("UPDATE foundry_instance.schema_version SET version=99", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 503);
     await expectFailure(migrate());
-    await query("UPDATE foundry_instance.schema_version SET version=5", "foundry_migrate");
+    await query("UPDATE foundry_instance.schema_version SET version=6", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 200);
     await query("GRANT CREATE ON SCHEMA public TO foundry_runtime");
     NodeAssert.equal((await ready()).status, 503);
@@ -369,7 +369,7 @@ try {
     await expectFailure(bind("foreign-operator"));
     const operatorBefore = await query("SELECT * FROM foundry_instance.operator_binding");
     await query(
-      "DROP TABLE foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
+      "DROP TABLE foundry_instance.artifact_uploads, foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
       "foundry_migrate",
     );
     await query("DROP TABLE foundry_instance.sessions", "foundry_migrate");
@@ -596,7 +596,7 @@ try {
     "SELECT * FROM foundry_instance.sessions ORDER BY token_hash",
   );
   await query(
-    "DROP TABLE foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
+    "DROP TABLE foundry_instance.artifact_uploads, foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
     "foundry_migrate",
   );
   await query("UPDATE foundry_instance.schema_version SET version=2", "foundry_migrate");
@@ -701,7 +701,10 @@ try {
       "ALTER TABLE foundry_instance.devices DROP COLUMN channel_generation",
       "foundry_migrate",
     );
-    await query("DROP TABLE foundry_instance.device_grants", "foundry_migrate");
+    await query(
+      "DROP TABLE foundry_instance.artifact_uploads, foundry_instance.device_grants",
+      "foundry_migrate",
+    );
     await query("UPDATE foundry_instance.schema_version SET version=3", "foundry_migrate");
     await expectFailure(readIdentity);
     await run(Effect.all([migrate(), migrate()], { concurrency: "unbounded" }));
@@ -908,14 +911,16 @@ try {
     grantsEnabled,
     gatewayEnabled,
     streamsEnabled,
+    artifactsEnabled,
   ] of [
-    [false, false, false, false, false, false],
-    [true, false, false, false, false, false],
-    [true, true, false, false, false, false],
-    [true, true, true, false, false, false],
-    [true, true, true, true, false, false],
-    [true, true, true, true, true, false],
-    [true, true, true, true, true, true],
+    [false, false, false, false, false, false, false],
+    [true, false, false, false, false, false, false],
+    [true, true, false, false, false, false, false],
+    [true, true, true, false, false, false, false],
+    [true, true, true, true, false, false, false],
+    [true, true, true, true, true, false, false],
+    [true, true, true, true, true, true, false],
+    [true, true, true, true, true, true, true],
   ] as const) {
     const runtimeRoutes = FoundryRuntime.layer.pipe(
       Layer.provide(
@@ -938,6 +943,7 @@ try {
             FOUNDRY_GATEWAY_GRANTS_ENABLED: String(grantsEnabled),
             FOUNDRY_HTTP_GATEWAY_ENABLED: String(gatewayEnabled),
             FOUNDRY_STREAM_GATEWAY_ENABLED: String(streamsEnabled),
+            FOUNDRY_ARTIFACTS_ENABLED: String(artifactsEnabled),
             FOUNDRY_INSTANCE_STORE: "postgres",
             FOUNDRY_INSTANCE_DATABASE_URL: `postgresql://foundry_runtime@localhost/fork_connect?host=${encodeURIComponent(root)}`,
             FOUNDRY_ACCESS_ISSUER: accessConfig.issuer,
@@ -978,6 +984,23 @@ try {
       );
       NodeAssert.equal(streamTicket.status, streamsEnabled ? 400 : 404);
       const descriptor = decodeDescriptor(await metadata.json());
+      NodeAssert.equal(Object.hasOwn(descriptor, "artifactTransfer"), artifactsEnabled);
+      const artifact = await runtimeHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/artifacts`, {
+          method: "POST",
+          headers: { origin: accessConfig.origin, "content-type": "application/json" },
+          body: JSON.stringify({ op: "list", input: {} }),
+        }),
+      );
+      NodeAssert.equal(artifact.status, artifactsEnabled ? 403 : 404);
+      const machineArtifact = await runtimeHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/devices/channel`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      );
+      NodeAssert.equal(machineArtifact.status, artifactsEnabled ? 400 : 404);
       NodeAssert.equal(descriptor.capabilities.includes("foundry.http-gateway"), gatewayEnabled);
       NodeAssert.equal(descriptor.capabilities.includes("foundry.rpc-streams"), streamsEnabled);
       NodeAssert.equal(descriptor.capabilities.includes("foundry.device-catalog"), streamsEnabled);

@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./foundryArtifacts": {
+      "types": "./src/foundryArtifacts.ts",
+      "import": "./src/foundryArtifacts.ts"
+    },
     "./factoryDefinition": {
       "types": "./src/factoryDefinition.ts",
       "import": "./src/factoryDefinition.ts"

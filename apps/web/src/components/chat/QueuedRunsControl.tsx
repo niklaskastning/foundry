@@ -67,7 +67,15 @@ function queuedImageResources(projection: ThreadQueueProjection | undefined) {
   return deriveThreadQueueWorkflowState(projection).queuedRuns.flatMap(({ attachments }) =>
     attachments.flatMap((attachment) =>
       attachment.type === "image"
-        ? [{ _tag: "attachment" as const, attachmentId: attachment.id }]
+        ? [
+            {
+              _tag: "attachment" as const,
+              attachmentId: attachment.id,
+              ...(attachment.foundryArtifact
+                ? { foundryArtifact: attachment.foundryArtifact }
+                : {}),
+            },
+          ]
         : [],
     ),
   );

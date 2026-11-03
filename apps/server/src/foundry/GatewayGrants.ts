@@ -30,12 +30,12 @@ import { base64UrlEncode } from "../auth/utils.ts";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
-import { timingSafeEqualBase64Url } from "../auth/utils.ts";
 import * as DeviceGrants from "./DeviceGrants.ts";
 import * as DeviceRegistry from "./DeviceRegistry.ts";
 import * as DeviceChannel from "./DeviceChannel.ts";
 import * as DeviceConfig from "./DeviceConfig.ts";
 import * as FoundrySessions from "./FoundrySessions.ts";
+import * as ClientIdentity from "./ClientIdentity.ts";
 
 const decodeRequest = Schema.decodeUnknownEffect(FoundryGatewayGrantRequest, {
   onExcessProperty: "error",
@@ -122,20 +122,11 @@ const make = Effect.gen(function* () {
   >();
   // Handles are not credentials: every use reauthenticates both sessions and the device lease.
   const grants = new Map<string, { grant: FoundryGatewayGrant; binding: string }>();
+  const clientIdentityContext =
+    yield* Effect.context<Effect.Services<ReturnType<typeof ClientIdentity.authenticate>>>();
   const authenticate = Effect.fn("GatewayGrants.authenticate")(
-    function* (request: Request) {
-      const url = HttpServerRequest.toURL(request);
-      if (request.headers.origin !== origin || Option.isNone(url) || url.value.origin !== origin)
-        return yield* denied();
-      yield* sessions.checkOrigin(request.headers.origin, request.headers["content-type"]);
-      const foundry = yield* sessions.inspect(
-        request.cookies[FoundrySessions.FOUNDRY_SESSION_COOKIE],
-      );
-      const csrf = request.headers["x-foundry-csrf"];
-      if (!csrf || !timingSafeEqualBase64Url(csrf, foundry.csrfToken)) return yield* denied();
-      const client = yield* auth.authenticateHttpRequest(request);
-      return { foundry, client };
-    },
+    (request: Request) =>
+      ClientIdentity.authenticate(request).pipe(Effect.provide(clientIdentityContext)),
     Effect.mapError((error) =>
       EnvironmentAuth.isServerAuthInternalError(error) ||
       (error._tag === "FoundryAuthError" && error.code === "unavailable")

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { AsyncResult } from "effect/reactivity";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { Button } from "../components/ui/button";
@@ -12,6 +12,10 @@ import {
   type OnboardingResult,
   type Operation,
 } from "./onboarding";
+
+const ArtifactLibrary = lazy(() =>
+  import("./ArtifactLibrary").then((module) => ({ default: module.ArtifactLibrary })),
+);
 
 export function FoundryPage() {
   const [origin, setOrigin] = useState(window.location.origin);
@@ -160,6 +164,11 @@ export function FoundryPage() {
               access.
             </p>
           </div>
+        ) : null}
+        {state?.session && state.artifactsAvailable && !nativeTransport ? (
+          <Suspense fallback={<p className="text-sm">Loading files…</p>}>
+            <ArtifactLibrary />
+          </Suspense>
         ) : null}
       </div>
     </StandalonePage>

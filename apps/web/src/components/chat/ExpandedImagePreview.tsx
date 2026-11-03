@@ -105,13 +105,14 @@ export async function resolveMarkdownMediaPreview(input: {
 
 export function buildAttachmentVideoAsset(
   environmentId: EnvironmentId,
-  attachment: Pick<ChatFileAttachment, "id" | "name" | "mimeType">,
+  attachment: Pick<ChatFileAttachment, "id" | "name" | "mimeType" | "foundryArtifact">,
 ): NonNullable<MediaActionSource["asset"]> {
   return {
     environmentId,
     resource: {
       _tag: "attachment" as const,
       attachmentId: attachment.id,
+      ...(attachment.foundryArtifact ? { foundryArtifact: attachment.foundryArtifact } : {}),
       fileName: attachment.name,
       mimeType: videoMimeType(attachment) ?? attachment.mimeType,
     },

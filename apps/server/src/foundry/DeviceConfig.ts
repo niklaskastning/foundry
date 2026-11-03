@@ -20,6 +20,10 @@ export class StreamGatewayEnabled extends Context.Reference<boolean>(
   "t3/foundry/StreamGatewayEnabled",
   { defaultValue: () => false },
 ) {}
+export class ArtifactsEnabled extends Context.Reference<boolean>(
+  "t3/foundry/DeviceConfig/ArtifactsEnabled",
+  { defaultValue: () => false },
+) {}
 export class DeviceOrigin extends Context.Service<DeviceOrigin, { readonly origin: string }>()(
   "t3/foundry/DeviceConfig/DeviceOrigin",
 ) {}

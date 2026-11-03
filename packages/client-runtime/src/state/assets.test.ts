@@ -11,6 +11,7 @@ import {
   createProjectFaviconUrlAtomFamily,
   materializeAssetQuery,
   resolveAssetUrl,
+  assetUrlStateFromResult,
 } from "./assets.ts";
 
 describe("project favicon URL cache", () => {
@@ -99,4 +100,14 @@ it("never resolves a worker HTTP path against Main or a foreign origin", () => {
   expect(resolveAssetUrl("https://personal.test/", "/api/assets/token/file.png")).toBe(
     "https://personal.test/api/assets/token/file.png",
   );
+  expect(resolveAssetUrl(null, "blob:https://main.test/confirmed")).toBe(
+    "blob:https://main.test/confirmed",
+  );
+  expect(resolveAssetUrl(null, "/api/assets/token/file.png")).toBeNull();
+  expect(
+    assetUrlStateFromResult(
+      AsyncResult.success({ relativeUrl: "blob:https://main.test/confirmed", expiresAt: 100 }),
+      null,
+    ),
+  ).toMatchObject({ _tag: "Success", url: "blob:https://main.test/confirmed" });
 });

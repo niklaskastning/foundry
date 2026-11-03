@@ -383,7 +383,13 @@ const userMessageContextPresentationRegistry = createContextPresentationRegistry
             name={label}
             svgPreview={
               isSvgAttachment(attachment)
-                ? { environmentId: context.environmentId, attachmentId: attachment.id }
+                ? {
+                    environmentId: context.environmentId,
+                    attachmentId: attachment.id,
+                    ...(attachment.foundryArtifact
+                      ? { foundryArtifact: attachment.foundryArtifact }
+                      : {}),
+                  }
                 : undefined
             }
             size={size}

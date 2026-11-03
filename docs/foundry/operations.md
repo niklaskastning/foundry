@@ -18,20 +18,57 @@ Der separate Linux-Host-Dienst hat einen [eigenen Installer und Betriebsweg](../
 
 This opt-in backend registers a device key and its first local environment. It does
 not connect that environment, provide gateway access or install an agent. The
-outstanding release gates and follow-up work are tracked in
-[issue #13](https://github.com/niklaskastning/foundry/issues/13). Do not activate it
+outstanding release gates and follow-up work are tracked in the
+[implementation plan](implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen). Do not activate it
 on the existing production deployment as part of development testing.
 
-Use an isolated Main with PostgreSQL instance schema **5**, the existing operator
+Use an isolated Main with PostgreSQL instance schema **6**, the existing operator
 binding, and the configured `FOUNDRY_PUBLIC_ORIGIN`. Run the existing
 `foundry migrate` command with the migration role before starting this source
-version; it upgrades schemas 1/2/3/4 while preserving instance identity, operator and
-sessions. Older binaries reject schema 5: an image-only downgrade is not
+version; it upgrades schemas 1/2/3/4/5 while preserving instance identity, operator and
+sessions. Older binaries reject schema 6: an image-only downgrade is not
 a recovery procedure. The runtime role cannot change device keys or enrollment
 expiry. Set `FOUNDRY_DEVICE_ENROLLMENT_ENABLED=true` explicitly alongside
 `FOUNDRY_ACCESS_ENABLED=true` to expose `/api/foundry/devices/enroll` and advertise
 `foundry.device-enrollment`; the route and capability are absent by default.
 This mode does not implement native authentication.
+
+The P38a artifact-store foundation is separately disabled by default. In an isolated
+Main, `FOUNDRY_ARTIFACTS_ENABLED=true` requires the complete stream-gateway profile
+and creates private `userdata/foundry-artifacts/{pending,blobs}` inside the existing
+state volume. Keep that directory and instance PostgreSQL in the same coordinated
+backup/recovery boundary. It exposes bounded JSON transfer operations at
+`POST /api/foundry/artifacts` for existing dual-authenticated clients and
+`POST /api/foundry/devices/channel` for signed device requests; the existing GET
+channel is unchanged. No Cloudflare machine-path expansion is needed. Descriptor
+support uses optional `artifactTransfer` metadata: adding an unknown capability to
+the strict version-1 enum would break older Windows readers. The separate opt-in
+[worker binding](../../deploy/fork/worker/README.md#zentrale-artefakte-p38a)
+confirms attachments before message commit; it does not provide a central thread
+archive. When the artifact profile is enabled, `/foundry` shows Files after a
+verified session. Load files there without selecting or connecting their source
+device; a Main T3 session with `orchestration:read` remains required. Confirmed
+thread attachments use the same Main read path. HTML/SVG open as escaped source,
+and Blob URLs remain scoped to their viewer. The native Access sign-in probe does
+not host the file library; its existing Windows download block remains separate.
+Automated client coverage does not complete the live acceptance gate.
+
+On the pinned Docker deployment, the administrator first uses
+`activate-access.py upgrade-artifacts sha256:<digest> <source-sha>` to migrate
+schema 5 to 6 with a coordinated database/state/workspace backup. This leaves the
+artifact profile disabled. Once the reviewed Main image is verified,
+`activate-access.py artifacts enable` changes only the private runtime flag,
+restarts Main and verifies schema, identity and transfer metadata. It saves the
+previous configuration and restores it if startup or verification fails; if
+recovery cannot be verified, Main stays stopped. No general sudo grant is added.
+The `update` command preserves either schema 5 or 6 and the enabled profile.
+
+Disable publication on workers before `activate-access.py artifacts disable`.
+This retains confirmed metadata and blobs. The helper refuses to disable the
+gateway while artifacts remain enabled. A schema upgrade failure still requires
+the coordinated restore procedure; a profile change is not a schema downgrade.
+Development builds alone may explicitly use HTTP on loopback for the artifact
+client, matching local instance verification; deployed clients require HTTPS.
 
 From the source checkout, create a private key file on the execution machine:
 

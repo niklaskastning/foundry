@@ -4,7 +4,6 @@ import {
   Persistence,
 } from "@t3tools/client-runtime/platform";
 import {
-  FoundryInstanceSession,
   BearerConnectionCredential,
   BearerConnectionProfile,
   BearerConnectionRegistration,
@@ -43,7 +42,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { FetchHttpClient } from "effect/http";
 
-import { executeInstanceOperation } from "../foundry/onboarding";
+import { layerFoundryInstanceSession } from "../foundry/instanceSession";
 import { readDeviceSelection } from "../foundry/selection";
 import { APP_VERSION } from "../branding";
 import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
@@ -824,29 +823,6 @@ const layerRpcRequestObserver = Layer.succeed(
     }),
   }),
 );
-
-const layerFoundryInstanceSession = Layer.succeed(FoundryInstanceSession, {
-  current: Effect.fn("FoundryInstanceSession.current")((binding) =>
-    Effect.tryPromise({
-      try: async () => {
-        if (window.location.origin !== binding.origin) throw new Error("Origin mismatch");
-        const result = await executeInstanceOperation({ operation: "session" });
-        if (!result.confirmed || !result.binding || !result.session)
-          throw new Error("Session required");
-        return {
-          binding: result.binding,
-          csrfToken: result.session.csrfToken,
-          authorization: null,
-        };
-      },
-      catch: () =>
-        new ConnectionBlockedError({
-          reason: "authentication",
-          detail: "Open /foundry on this instance to verify its identity and sign in.",
-        }),
-    }),
-  ),
-});
 
 type ConnectionPlatformLayerSource =
   | typeof layerFoundryInstanceSession

@@ -14,7 +14,7 @@ pnpm --config.allow-unused-patches=true --filter t3 deploy --prod --legacy /path
 
 Das vollständige Paket einschließlich `dist`, Metadaten und produktiven Dependencies administrativ unter `/opt/foundry-worker/releases/<vollständiger-commit>/` ablegen. Release und Runtime bleiben root-eigen und für das Dienstkonto unveränderlich; keine Symlinks aus dem Paket in persönliche Checkouts. Der Installer akzeptiert passende Metadaten eines sauberen Foundry-Builds. Diese sind ein Herkunftshinweis, keine kryptographische Signatur; sichere Bereitstellung bleibt Betreiberaufgabe.
 
-Eine Konfigurationsdatei enthält genau die folgenden Felder. Zahlen sind Beispielwerte, kein festgelegtes Produktionsbudget:
+Eine Konfigurationsdatei enthält die folgenden Pflichtfelder; `providerInstanceId` und `artifactPublication` sind optional. Zahlen sind Beispielwerte, kein festgelegtes Produktionsbudget:
 
 ```json
 {
@@ -47,6 +47,59 @@ Das Backend bindet ausschließlich Loopback und behält T3-Authentifizierung. Oh
 Nach dem ersten lokalen Start den vorhandenen [CLI-Enrollment-Weg](../../../docs/foundry/operations.md#experimental-device-enrollment-p06) unter dem Dienstkonto verwenden. Device-Schlüssel als `/var/lib/foundry-worker/device-key.json`, bestätigte Registrierung als `/var/lib/foundry-worker/registration.json` speichern, jeweils Eigentümer Dienstkonto und Modus `0600`. Bei vorgeschaltetem Access die separate Machine-Berechtigung als `/var/lib/foundry-worker/access.json` im vorhandenen Connector-Format (`origin`, `clientId`, `clientSecret`) provisionieren und `accessFile` aktivieren. Keine Secrets in Units, Befehlsargumenten oder Shell-History; Enrollment-Freigaben nach Verwendung entfernen. Der Installer ändert keine Cloudflare-Policy.
 
 Dann `systemctl start foundry-connector.service` ausführen. Der Connector prüft Environment-ID und festen Loopback-Port. Status: `systemctl status foundry-host.service foundry-connector.service`; Logs: `journalctl -u foundry-host.service -u foundry-connector.service`. Logs können Pairing-Ausgaben enthalten und sind nicht ungeprüft zu veröffentlichen. Erst nach erfolgreicher Prüfung mit `systemctl enable foundry-host.target` für den Boot aktivieren. Kein Codex wird installiert oder gestartet.
+
+## Zentrale Artefakte (P38a)
+
+`artifactPublication: true` setzt im Host die Bindungsdatei
+`/var/lib/foundry-worker/artifact-binding.json`. Ohne diese Option bleibt der
+persönliche/lokale T3-Pfad unverändert. Die Datei gehört ausschließlich zum
+dedizierten Worker, Modus `0600`, mit den vorhandenen Device-/Machine-Dateien:
+
+```json
+{
+  "origin": "https://main.example.com",
+  "registrationFile": "/var/lib/foundry-worker/registration.json",
+  "keyFile": "/var/lib/foundry-worker/device-key.json",
+  "accessFile": "/var/lib/foundry-worker/access.json"
+}
+```
+
+`accessFile` entfällt nur bei einem Main ohne vorgeschalteten Machine-Zugang.
+Die Laufzeit prüft HTTPS-Origin und die lokale Environment-ID gegen die
+Registrierung; sie kopiert keine Providerprofile und verändert keine Schlüssel.
+Main benötigt Schema 6 und sein ausdrücklich aktiviertes P38a-Transferprofil.
+Der Host verwendet signierte POSTs auf dem bestehenden Maschinenkanalpfad;
+keine neue Cloudflare-Pfadfreigabe ist erforderlich.
+
+Pending-Anhänge werden vor dem Nachrichten-Commit zentral veröffentlicht. Die
+ursprüngliche Pending-ID hält Wiederholungen auch bei neuer lokaler Claim-ID
+zusammen. Der Thread-Service prüft auch direkte Starts, Nachrichten,
+Queue-Änderungen und Antworten mit Anhängen; bei fehlender Bestätigung beginnt
+kein neuer Message-Commit. Bereits gespeicherte Receipts werden wiedergegeben.
+Fehlgeschlagene Claims behalten ihre Pending-Quelle und entfernen lokale Kopien.
+Downloads sind begrenzt und prüfen Chunk-/Gesamthash, auch bei leeren Dateien.
+Die Device-Bindung erlaubt hier ausschließlich eigene Thread-Artefakte; sie ist
+keine allgemeine Lesefreigabe für andere Devices oder ein Workflow-Dispatch.
+
+Nach dem Main-Upgrade auf Schema 6 und aktiviertem Artefaktprofil übernimmt
+`activate-artifacts.py install STAGE` einen geprüften Worker-Release. `STAGE`
+enthält `worker-release.tar.gz` und `release.json` mit vollständiger `revision`
+und `sha256`. Der Helfer verwendet die vorhandenen Archiv-, Installer- und
+Writer-Prüfungen, prüft den Programmeinstieg als Dienstkonto und erhält Provider,
+Identität und Schlüssel. Er verweigert aktive Turns, fehlendes Writer-Ende und
+gehaltene Reservierungen. Nach dem Stop müssen beide eigenen Cgroups leer sein.
+Der neue Host wird lokal geprüft, bevor der Connector gestartet wird. Erst dessen
+bestätigtes Verbindungsereignis erlaubt die Prüfung der tatsächlichen Prozessidentität;
+`systemctl start` allein bestätigt den endgültigen Dienstprozess noch nicht.
+
+Der Helfer hält den bestehenden `/var/lib/foundry-deploy/lock` einschließlich
+Verifikation; nicht zusätzlich darum sperren. Der ausgegebene private Recovery-Pfad
+enthält vorherige Installation und Binding sowie Worker-SQLite-Snapshots.
+`activate-artifacts.py rollback RECOVERY` stellt die vorherige Konfiguration nur
+bei unverändertem Worker-Schema und bestätigtem Writer-Ende wieder her. Er stellt
+keine Datenbank zurück und verändert Main nicht. Fehler lassen den Worker
+gestoppt; eine ungeklärte Ausführung bleibt gesperrt. Dies ist kein Ersatz für den
+im Implementierungsplan abgegrenzten Client-/Betriebsnachweise oder eine vollständige Restore-Abnahme.
 
 ## Stop, Neustart, Upgrade und Entfernung
 

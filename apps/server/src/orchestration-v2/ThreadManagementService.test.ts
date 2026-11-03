@@ -1,6 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import {
   CommandId,
+  ChatAttachmentId,
+  FoundryArtifactError,
   EnvironmentId,
   MessageId,
   type OrchestrationV2Command,
@@ -37,6 +39,7 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as ArtifactPublication from "../foundry/ArtifactPublication.ts";
 
 it("stamps authoritative provenance on commands that create threads or messages", () => {
   const command: OrchestrationV2Command = {
@@ -108,6 +111,58 @@ const layerDispatchChokepointTest =
       Layer.provide(settingsLayer),
       Layer.provideMerge(layerReceiptsTest),
     );
+
+it.effect("refuses direct attachment dispatch when Main has not confirmed publication", () => {
+  const dispatched: string[] = [];
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    const result = yield* threads
+      .dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("command:unconfirmed-attachment"),
+        threadId: ThreadId.make("thread:thread-management:chokepoint"),
+        messageId: MessageId.make("message:unconfirmed-attachment"),
+        text: "Needs a durable attachment",
+        attachments: [
+          {
+            type: "file",
+            id: ChatAttachmentId.make("fixture"),
+            name: "test.txt",
+            mimeType: "text/plain",
+            sizeBytes: 1,
+          },
+        ],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "user",
+        creationSource: "web",
+      })
+      .pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure")
+      expect(result.failure).toMatchObject({
+        _tag: "OrchestratorCommandRejectedError",
+        cause: { _tag: "FoundryArtifactError", code: "unavailable" },
+      });
+    expect(dispatched).toEqual([]);
+  }).pipe(
+    Effect.provide(
+      layerDispatchChokepointTest(
+        ServerSettings.layerTest({
+          providerInstances: {
+            [ProviderInstanceId.make("codex_work")]: { driver: "codex", enabled: true },
+          },
+        }),
+      )(dispatched).pipe(
+        Layer.provide(
+          Layer.succeed(ArtifactPublication.ArtifactPublication, {
+            publishAttachment: () => Effect.fail(new FoundryArtifactError({ code: "unavailable" })),
+            download: () => Effect.die("not used"),
+          }),
+        ),
+      ),
+    ),
+  );
+});
 
 it.effect(
   "the dispatch chokepoint refuses a continuation message.dispatch on a project-disabled instance before reaching the orchestrator",
@@ -187,14 +242,33 @@ it.effect(
         threadId,
         messageId: MessageId.make("message:thread-management:chokepoint-replay"),
         text: "Background task completed.",
-        attachments: [],
+        attachments: [
+          {
+            type: "file",
+            id: ChatAttachmentId.make("already-accepted"),
+            name: "test.txt",
+            mimeType: "text/plain",
+            sizeBytes: 1,
+          },
+        ],
         dispatchMode: { type: "queue_after_active" },
         createdBy: "agent",
         creationSource: "server",
       });
 
       expect(dispatched).toEqual(["message.dispatch"]);
-    }).pipe(Effect.provide(layerTest));
+    }).pipe(
+      Effect.provide(
+        layerTest.pipe(
+          Layer.provide(
+            Layer.succeed(ArtifactPublication.ArtifactPublication, {
+              publishAttachment: () => Effect.die("An accepted replay must not publish again"),
+              download: () => Effect.die("not used"),
+            }),
+          ),
+        ),
+      ),
+    );
   },
 );
 

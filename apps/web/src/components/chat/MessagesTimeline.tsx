@@ -283,8 +283,8 @@ interface MessagesTimelineProps {
   onRunShellCommand?: (command: string) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
-  onFileOpen?: (attachment: ChatFileAttachment) => void;
-  onFileDownload?: (attachment: ChatFileAttachment) => void;
+  onFileOpen?: (attachment: ChatFileAttachment, preparedUrl?: string | null) => void;
+  onFileDownload?: (attachment: ChatFileAttachment, preparedUrl?: string | null) => void;
   activeThreadEnvironmentId: EnvironmentId;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";

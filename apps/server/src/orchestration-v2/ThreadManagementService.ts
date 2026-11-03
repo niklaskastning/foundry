@@ -66,6 +66,7 @@ import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimi
 import { projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ArtifactPublication from "../foundry/ArtifactPublication.ts";
 
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart";
 
@@ -575,6 +576,7 @@ const make = Effect.gen(function* () {
   const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+  const publication = yield* ArtifactPublication.ArtifactPublication;
 
   const assertProviderInstanceEnabled: ThreadManagementServiceShape["assertProviderInstanceEnabled"] =
     (input) =>
@@ -746,10 +748,62 @@ const make = Effect.gen(function* () {
     }
   };
 
+  const publishAttachments = Effect.fn("ThreadManagementService.publishAttachments")(
+    function* (command: OrchestrationV2ServerCommand) {
+      if (!publication) return command;
+      const attachments =
+        command.type === "message.dispatch" || command.type === "queued-run.edit"
+          ? command.attachments
+          : command.type === "runtime-request.respond" && command.attachmentsByQuestionId
+            ? Object.values(command.attachmentsByQuestionId).flat()
+            : [];
+      if (!attachments?.length) return command;
+      if (Option.isSome(yield* receipts.getByCommandId(command.commandId))) return command;
+      if (command.type === "message.dispatch" || command.type === "queued-run.edit")
+        return {
+          ...command,
+          attachments: yield* Effect.forEach(
+            attachments,
+            (attachment) => publication.publishAttachment(command.threadId, attachment),
+            { concurrency: 1 },
+          ),
+        };
+      if (command.type === "runtime-request.respond" && command.attachmentsByQuestionId)
+        return {
+          ...command,
+          attachmentsByQuestionId: Object.fromEntries(
+            yield* Effect.forEach(
+              Object.entries(command.attachmentsByQuestionId),
+              ([key, files]) =>
+                Effect.forEach(
+                  files,
+                  (attachment) => publication.publishAttachment(command.threadId, attachment),
+                  { concurrency: 1 },
+                ).pipe(Effect.map((published) => [key, published] as const)),
+              { concurrency: 1 },
+            ),
+          ),
+        };
+      return command;
+    },
+    (effect, command) =>
+      effect.pipe(
+        Effect.mapError(
+          (cause) =>
+            new Orchestrator.OrchestratorCommandRejectedError({
+              commandId: command.commandId,
+              commandType: command.type,
+              cause,
+            }),
+        ),
+      ),
+  );
+
   const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
     ensureCommandTranscripts(command).pipe(
       Effect.andThen(assertDispatchTargetEnabled(command)),
-      Effect.andThen(orchestrator.dispatch(command)),
+      Effect.andThen(publishAttachments(command)),
+      Effect.flatMap((prepared) => orchestrator.dispatch(prepared)),
     );
 
   const getProjectThreadRecords: ThreadManagementServiceShape["getProjectThreadRecords"] = (

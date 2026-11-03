@@ -205,7 +205,11 @@ export function useQueuedRunEdit(input: {
 
   const imageResources = (editing?.existingAttachments ?? [])
     .filter((attachment) => attachment.type === "image")
-    .map((attachment) => ({ _tag: "attachment" as const, attachmentId: attachment.id }));
+    .map((attachment) => ({
+      _tag: "attachment" as const,
+      attachmentId: attachment.id,
+      ...(attachment.foundryArtifact ? { foundryArtifact: attachment.foundryArtifact } : {}),
+    }));
   const imageUrls = useAssetUrls(environmentId, imageResources);
   const urlByAttachmentId = new Map(
     imageResources.map((resource, index) => [resource.attachmentId, imageUrls[index] ?? null]),

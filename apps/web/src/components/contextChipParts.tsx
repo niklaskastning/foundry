@@ -195,6 +195,7 @@ export function FileChip(props: {
         file?: Blob | null | undefined;
         environmentId?: EnvironmentId | undefined;
         attachmentId?: string | undefined;
+        foundryArtifact?: import("@t3tools/contracts").FoundryArtifactManifest | undefined;
       }
     | undefined;
 }) {
@@ -248,6 +249,7 @@ function SvgFileChip(props: ComponentProps<typeof FileChip>) {
       ? {
           _tag: "attachment",
           attachmentId: preview.attachmentId,
+          ...(preview.foundryArtifact ? { foundryArtifact: preview.foundryArtifact } : {}),
           fileName: props.name,
           mimeType: "image/svg+xml",
           disposition: "inline",
