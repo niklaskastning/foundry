@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bind the dedicated headless Codex installation; never starts an agent turn."""
+"""Operate the bounded G3 worker checks; active-restart-start starts one Luna turn."""
 
 from contextlib import closing
 import importlib.util
@@ -44,6 +44,26 @@ socket.onmessage = ({ data }) => {
 };
 '''
 
+RPC_NATIVE = RPC.replace(
+    '    if (message._tag !== "Exit" || String(message.requestId) !== "1") continue;',
+    r'''    if (message._tag === "Chunk" && String(message.requestId) === "1") {
+      for (const value of message.values) {
+        const requests = value.kind === "snapshot" ? value.projection.runtimeRequests :
+          value.kind === "event" && value.event.type === "runtime-request.updated" ? [value.event.payload] : [];
+        const pending = requests.find(item => item.kind === "command" && item.status === "pending" && item.providerTurnId && item.nativeRequestRef);
+        if (pending) {
+          clearTimeout(deadline);
+          process.stdout.write(JSON.stringify({ nativePending: true, requestId: pending.id }), () => process.exit(0));
+          return;
+        }
+      }
+      socket.send(JSON.stringify({ _tag: "Ack", requestId: "1" }));
+    }
+    if (message._tag !== "Exit" || String(message.requestId) !== "1") continue;''',
+)
+ACTIVE_POINTER = "/var/lib/foundry-deploy/g3-active-restart.json"
+
+
 
 def run(args, *, account=False, data=None):
     env = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/root"}
@@ -81,12 +101,16 @@ def provider_config():
                        "launchArgs": "-c 'cli_auth_credentials_store=\"file\"'"}}
 
 
-def rpc(config, tag, payload):
+def rpc(config, tag, payload, *, operate=False, settings=False, wait_native=False):
     entry = worker.release(config) + "/dist/bin.mjs"
+    scopes = ["orchestration:read"]
+    if operate:
+        scopes.append("orchestration:operate")
+    if settings:
+        scopes.extend(["settings:write", "providers:manage"])
+    flags = [flag for scope in scopes for flag in ("--scope", scope)]
     session = json.loads(run([config["node"], entry, "auth", "session", "issue",
-                             "--base-dir", worker.T3, "--json", "--ttl", "2m",
-                             "--scope", "orchestration:read", "--scope", "settings:write",
-                             "--scope", "providers:manage"], account=True))
+                             "--base-dir", worker.T3, "--json", "--ttl", "2m", *flags], account=True))
     try:
         origin = f'http://127.0.0.1:{config["port"]}'
         request = urllib.request.Request(origin + "/api/auth/websocket-ticket/rpc", method="POST",
@@ -95,7 +119,7 @@ def rpc(config, tag, payload):
             ticket = json.load(response)["ticket"]
         from urllib.parse import urlencode
         url = origin.replace("http:", "ws:") + "/ws?" + urlencode({"orchestrationProtocol": 2, "wsTicket": ticket})
-        return json.loads(run([config["node"], "-e", RPC], account=True,
+        return json.loads(run([config["node"], "-e", RPC_NATIVE if wait_native else RPC], account=True,
                               data=json.dumps({"url": url, "tag": tag, "payload": payload})))
     finally:
         run([config["node"], entry, "auth", "session", "revoke", session["sessionId"],
@@ -145,7 +169,7 @@ def bind():
     if run([SHIM, "--version"], account=True) != "codex-cli 0.156.1":
         raise RuntimeError("CLI wrapper is not executable as the worker")
     rpc(config, "server.updateSettings", {"patch": {}, "providerInstanceMutation": {
-        "operation": "upsert", "instanceId": BINDING, "instance": provider_config()}})
+        "operation": "upsert", "instanceId": BINDING, "instance": provider_config()}}, settings=True)
     quiet_database(database)
     run(["/usr/bin/systemctl", "stop", "foundry-host.target", "foundry-host.slice"])
     try:
@@ -305,6 +329,123 @@ def restart_idle():
                       "next": "After startup run status and verify-acceptance second-access.json"}))
 
 
+def active_restart_start():
+    if os.geteuid() != 0:
+        raise RuntimeError("Administrator required")
+    os.umask(0o077)
+    installation = worker.Installation("/")
+    config = installation.previous()["config"]
+    pointer = installation.path(ACTIVE_POINTER)
+    if pointer.exists():
+        raise RuntimeError("An active-restart probe already exists; verify it instead of starting another")
+    if config.get("providerInstanceId") != BINDING:
+        raise RuntimeError("Expected worker binding is missing")
+    quiet_database(Path(worker.T3 + "/userdata/statev2.sqlite"))
+    status = rpc(config, "foundry.workerStatus", {})
+    if not status["providerReady"] or status["activeRuns"] != 0:
+        raise RuntimeError("Worker must be ready and idle")
+    account = pwd.getpwnam("foundry-worker")
+    for unit in ("foundry-host.service", "foundry-connector.service"):
+        pid = int(run(["/usr/bin/systemctl", "show", unit, "--property=MainPID", "--value"]))
+        process = Path("/proc") / str(pid)
+        if pid <= 0 or process.stat().st_uid != account.pw_uid or (process / "cwd").resolve() != Path(worker.WORKER_HOME):
+            raise RuntimeError("Unexpected worker service process")
+        if (process / "cgroup").read_text().strip() != "0::/foundry.slice/foundry-host.slice/" + unit:
+            raise RuntimeError("Unexpected worker cgroup")
+    recovery = Path(tempfile.mkdtemp(prefix="worker-g3-active-", dir="/var/lib/foundry-deploy"))
+    workspace = Path(tempfile.mkdtemp(prefix="g3-acceptance-restart-", dir=config["workspaceRoots"][0]))
+    os.chown(workspace, account.pw_uid, account.pw_gid)
+    run(["/usr/bin/git", "-C", str(workspace), "init", "-q"], account=True)
+    run(["/usr/bin/git", "-C", str(workspace), "-c", "user.name=Foundry G3", "-c", "user.email=g3@example.invalid", "commit", "--allow-empty", "-qm", "Active restart fixture"], account=True)
+    identifier = "g3-restart-" + str(uuid.uuid4())
+    launch = {"commandId": identifier, "projectId": identifier + "-project", "title": "G3 active restart fence", "model": "gpt-6-luna",
+              "prompt": "Run pwd and git status --short in this repository. Do not modify files, create commits, spawn subagents, start background processes or contact external services. Finish promptly."}
+    record = {"launch": launch, "workspace": str(workspace), "phase": "prepared", "paidStartLimit": 1}
+    record_file = recovery / "probe.json"
+    record_file.write_text(json.dumps(record))
+    with pointer.open("x") as stream:
+        json.dump({"record": str(record_file)}, stream)
+    print("Private active-restart record: " + str(record_file), flush=True)
+    rpc(config, "projects.mutate", {"type": "project.create", "commandId": identifier + ":project", "projectId": launch["projectId"], "title": "G3 active restart", "workspaceRoot": str(workspace)}, operate=True)
+    try:
+        record["receipt"] = rpc(config, "foundry.workerLaunch", launch, operate=True)
+        execution = rpc(config, "foundry.workerRead", {"commandId": identifier})
+        record["generation"] = execution["lifecycle"]["generation"]
+        rpc(config, "foundry.workerRenew", {"commandId": identifier, "generation": record["generation"]}, operate=True)
+        pending = rpc(config, "orchestration.subscribeThread", {"threadId": record["receipt"]["threadId"]}, wait_native=True)
+        if not pending or pending.get("nativePending") is not True:
+            raise RuntimeError("No native command approval milestone")
+        execution = rpc(config, "foundry.workerRead", {"commandId": identifier})
+        if execution["lifecycle"]["writerEnded"] or execution["lifecycle"]["state"] != "active" or execution["run"]["status"] not in ("running", "waiting"):
+            raise RuntimeError("Turn already ended; refuse claiming an active restart")
+        record["nativePending"] = pending
+        record["phase"] = "native-active-before-crash"
+        record_file.write_text(json.dumps(record))
+    except BaseException:
+        rpc(config, "foundry.workerCancel", {"commandId": identifier + ":prepare-cancel", "launchCommandId": identifier}, operate=True)
+        raise
+    run(["/usr/bin/systemctl", "kill", "--kill-whom=all", "--signal=SIGKILL", "foundry-host.service", "foundry-connector.service"])
+    run(["/usr/bin/systemctl", "stop", "foundry-host.target", "foundry-host.slice"])
+    for unit in ("foundry-host.service", "foundry-connector.service"):
+        group = Path("/sys/fs/cgroup/foundry.slice/foundry-host.slice") / unit / "cgroup.procs"
+        if group.exists() and group.read_text().strip():
+            raise RuntimeError("Owned worker cgroup still contains processes; keep stopped")
+    record["phase"] = "owned-cgroups-empty"
+    record_file.write_text(json.dumps(record))
+    run(["/usr/bin/systemctl", "start", "foundry-host.target"])
+    print(json.dumps({"activeRestartRequested": True, "nativeTurnWasPending": True, "oldWorkerCgroupsEmpty": True,
+                      "commandId": identifier, "workspace": str(workspace), "paidStartsRequested": 1,
+                      "next": "After startup run status and active-restart-verify; never start a replacement"}))
+
+
+def validate_restart_state(database, journal, record):
+    thread_id = record["receipt"]["threadId"]
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+        row = connection.execute("SELECT thread_id,generation,state,writer_ended,manifest FROM foundry_executions WHERE command_id=?", (record["launch"]["commandId"],)).fetchone()
+        if not row or row[0] != thread_id or row[1] != record["generation"]:
+            raise RuntimeError("Restart changed the original execution binding")
+        for table in ("runs", "run_attempts", "provider_turns"):
+            if connection.execute(f"SELECT count(*) FROM orchestration_v2_projection_{table} WHERE thread_id=?", (thread_id,)).fetchone()[0] != 1:
+                raise RuntimeError("Restart created or lost a run/attempt/native turn")
+        run_id = connection.execute("SELECT run_id FROM orchestration_v2_projection_runs WHERE thread_id=?", (thread_id,)).fetchone()[0]
+    with closing(sqlite3.connect(journal.as_uri() + "?mode=ro", uri=True)) as connection:
+        reservations = connection.execute("SELECT r.state FROM reservations r JOIN writer_bindings b ON r.request_id=b.request_id WHERE b.command_id=? AND b.thread_id=? AND b.generation=?", (record["launch"]["commandId"], thread_id, record["generation"])).fetchall()
+    if len(reservations) != 1:
+        raise RuntimeError("Restart lost the workspace reservation")
+    manifest = json.loads(row[4]) if row[4] is not None else None
+    if manifest and (row[3] != 1 or manifest["generation"] != row[1] or manifest.get("runId") != run_id or manifest["outcome"] != "stopped"):
+        raise RuntimeError("Restart result lacks a stopped-writer proof")
+    if not manifest and (row[2] not in ("uncertain", "stopping", "finalizing") or reservations[0][0] == "released"):
+        raise RuntimeError("Unconfirmed writer was unfenced or its workspace released")
+    return {"generation": row[1], "state": row[2], "writerEnded": bool(row[3]), "manifest": manifest,
+            "reservationHeld": reservations[0][0] != "released", "exactlyOneRunAttemptNativeTurn": True}
+
+
+def active_restart_verify():
+    if os.geteuid() != 0:
+        raise RuntimeError("Administrator required")
+    installation = worker.Installation("/")
+    config = installation.previous()["config"]
+    record_file = installation.path(json.loads(installation.path(ACTIVE_POINTER).read_text())["record"])
+    record = json.loads(record_file.read_text())
+    if record.get("phase") != "owned-cgroups-empty":
+        raise RuntimeError("Probe never confirmed its crash/stop milestone")
+    execution = rpc(config, "foundry.workerRead", {"commandId": record["launch"]["commandId"]})
+    replay = rpc(config, "foundry.workerLaunch", record["launch"], operate=True)
+    if replay != record["receipt"] or execution["receipt"] != record["receipt"]:
+        raise RuntimeError("Identical retry changed its original receipt")
+    database = Path(worker.T3 + "/userdata/statev2.sqlite")
+    proof = validate_restart_state(database, database.with_name("foundry-workspaces.sqlite"), record)
+    proof.update({"commandId": record["launch"]["commandId"], "receiptUnchanged": True, "newProviderStarts": 0, "g3FullyAccepted": False})
+    owner = pwd.getpwnam("niklas")
+    output = Path(owner.pw_dir) / ".cache/foundry-g3-acceptance/active-restart-proof.json"
+    with output.open("x") as stream:
+        json.dump(proof, stream, indent=2)
+    os.chmod(output, 0o600)
+    os.chown(output, owner.pw_uid, owner.pw_gid)
+    print(json.dumps(proof, indent=2))
+
+
 def main():
     if len(sys.argv) == 3 and sys.argv[1] == "acceptance-access":
         acceptance_access(sys.argv[2])
@@ -312,6 +453,10 @@ def main():
         verify_acceptance()
     elif len(sys.argv) == 3 and sys.argv[1] == "verify-acceptance":
         verify_acceptance(sys.argv[2])
+    elif sys.argv[1:] == ["active-restart-start"]:
+        active_restart_start()
+    elif sys.argv[1:] == ["active-restart-verify"]:
+        active_restart_verify()
     elif sys.argv[1:] == ["restart-idle"]:
         restart_idle()
     elif sys.argv[1:] == ["bind"]:
@@ -327,7 +472,7 @@ def main():
             status["availableModels"] = [model["slug"] for model in provider["models"]] if provider else []
         print(json.dumps(status, indent=2))
     else:
-        raise RuntimeError("Use bind, status or acceptance-access WORKSPACE; none starts an agent turn")
+        raise RuntimeError("Use bind/status/acceptance-access/verify-acceptance/restart-idle or active-restart-start/active-restart-verify; only active-restart-start starts one Luna turn")
 
 
 if __name__ == "__main__":

@@ -231,6 +231,38 @@ class WorkerInstallationTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 binding.persisted_acceptance(database, "command", receipt, manifest)
 
+    def test_active_restart_requires_held_reservation_until_positive_stop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "statev2.sqlite"
+            journal = Path(directory) / "foundry-workspaces.sqlite"
+            record = {"launch": {"commandId": "command"}, "receipt": {"threadId": "thread"}, "generation": 4}
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE foundry_executions(command_id TEXT,thread_id TEXT,generation INTEGER,state TEXT,writer_ended INTEGER,manifest TEXT)")
+                connection.execute("INSERT INTO foundry_executions VALUES ('command','thread',4,'uncertain',0,NULL)")
+                for table in ("runs", "run_attempts", "provider_turns"):
+                    connection.execute(f"CREATE TABLE orchestration_v2_projection_{table}(thread_id TEXT,run_id TEXT)")
+                    connection.execute(f"INSERT INTO orchestration_v2_projection_{table} VALUES ('thread','run')")
+            with sqlite3.connect(journal) as connection:
+                connection.executescript("CREATE TABLE reservations(request_id TEXT,state TEXT); CREATE TABLE writer_bindings(request_id TEXT,command_id TEXT,thread_id TEXT,generation INTEGER); INSERT INTO reservations VALUES ('reservation','ready'); INSERT INTO writer_bindings VALUES ('reservation','command','thread',4);")
+            proof = binding.validate_restart_state(database, journal, record)
+            self.assertTrue(proof["reservationHeld"])
+            self.assertFalse(proof["writerEnded"])
+            with sqlite3.connect(journal) as connection:
+                connection.execute("UPDATE reservations SET state='released'")
+            with self.assertRaises(RuntimeError):
+                binding.validate_restart_state(database, journal, record)
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE foundry_executions SET state='stopped',writer_ended=1,manifest=?", (json.dumps({"generation": 4, "runId": "run", "outcome": "stopped"}),))
+            self.assertFalse(binding.validate_restart_state(database, journal, record)["reservationHeld"])
+            with sqlite3.connect(database) as connection:
+                connection.execute("INSERT INTO orchestration_v2_projection_run_attempts VALUES ('thread','run')")
+            with self.assertRaises(RuntimeError):
+                binding.validate_restart_state(database, journal, record)
+
+    def test_native_restart_wait_requires_real_provider_command_milestone(self):
+        result = subprocess.run(["node", "deploy/fork/worker/test-g3-native-wait.mjs"], cwd=Path(__file__).resolve().parents[3], input=binding.RPC_NATIVE, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_acceptance_transport_retries_and_rejects_wrong_generation(self):
         result = subprocess.run(["node", "deploy/fork/worker/test-g3-transport.mjs"], cwd=Path(__file__).resolve().parents[3], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)

@@ -214,6 +214,41 @@ Die danach ausgeführte Verifikation liest den ursprünglichen Ergebnis-Checkpoi
 und die persistierten Zählungen erneut. Das ist kein Restart eines aktiven oder
 unklaren Writers und kein Daten-Restore; diese Fälle behalten ihre eigenen Nachweise.
 
+### Aktiver Crash-/Recovery-Nachweis
+
+Dieser gesonderte Betreiberlauf startet **einen weiteren echten Luna-Turn** in
+einem neuen eigenen Git-Fixture. Er benötigt eine begrenzte Turn-Freigabe und ein
+freies Zeitfenster für genau die Foundry-Worker-Dienste. Beide bereits verbundenen
+Clients können währenddessen zur Wiederverbindungsprüfung geöffnet bleiben.
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py active-restart-start
+# Nach dem Start:
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py status
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py active-restart-verify
+```
+
+Der Start verweigert aktive/ungeklärte Arbeit. Er hält die Anfrage vor dem Senden
+privat fest und bestätigt über den Thread-Ereignisstrom einen Pending-Command mit
+nativer Request- und Turn-Bindung; keine Befehlsfreigabe wird erteilt. Dieser
+Meilenstein hat eine 40-Sekunden-Frist, bei fehlendem Nachweis wird nur der eigene
+Auftrag abgebrochen und kein Dienst-Crash durchgeführt. Nach positiver Prüfung
+der tatsächlichen Dienst-UID/cwd/cgroup beendet `systemctl kill --kill-whom=all
+--signal=SIGKILL` ausschließlich `foundry-host.service` und
+`foundry-connector.service`. Danach stoppt der Helfer Target/Slice, bestätigt leere
+Dienst-cgroups und startet denselben Worker mit unverändertem Zustand.
+
+`active-restart-verify` liest den ursprünglichen Auftrag, wiederholt exakt dessen
+Launch-Anfrage und prüft dieselbe Generation, dasselbe Receipt und genau einen
+Run/Attempt/nativen Turn. Ohne bestätigtes Writer-Ende und gültiges Stop-Manifest
+muss die Workspace-Reservation erhalten bleiben; ein wieder aktiver oder freigegebener
+unklarer Writer ist ein Fehler. Positiver nativer Stop darf ein `stopped`-Manifest
+liefern. Prozessende durch den Betreiber wird nicht direkt in die Ausführungs- oder
+Reservierungsdatenbank geschrieben. Kein Ersatzauftrag und keine Freigabe durch
+Löschen des Journals. Der Prüfzeiger `/var/lib/foundry-deploy/g3-active-restart.json`
+verhindert einen zweiten kostenpflichtigen Start; bei Fehlern den ausgegebenen
+privaten Record für die gezielte Recovery behalten.
+
 Diese Teilprobe schließt G3 nicht allein: Cancel während Ausführung, Lease-Verlust,
 Restart, Writer-Konflikte und Wiederverbindung der Clients bleiben eigene Nachweise.
 
