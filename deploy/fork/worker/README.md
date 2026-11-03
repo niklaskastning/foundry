@@ -81,9 +81,23 @@ Downloads sind begrenzt und prüfen Chunk-/Gesamthash, auch bei leeren Dateien.
 Die Device-Bindung erlaubt hier ausschließlich eigene Thread-Artefakte; sie ist
 keine allgemeine Lesefreigabe für andere Devices oder ein Workflow-Dispatch.
 
-Die isolierten PostgreSQL-/HTTP-/Dateiproben sind kein Ersatz für den noch offenen
-Client- und Live-Gatenachweis. Koordinierte Aktivierungs-/Recovery-Helfer folgen
-vor dem externen Aktivierungsauftrag; die laufende Installation bleibt unverändert.
+Nach dem Main-Upgrade auf Schema 6 und aktiviertem Artefaktprofil übernimmt
+`activate-artifacts.py install STAGE` einen geprüften Worker-Release. `STAGE`
+enthält `worker-release.tar.gz` und `release.json` mit vollständiger `revision`
+und `sha256`. Der Helfer verwendet die vorhandenen Archiv-, Installer- und
+Writer-Prüfungen, prüft den Programmeinstieg als Dienstkonto und erhält Provider,
+Identität und Schlüssel. Er verweigert aktive Turns, fehlendes Writer-Ende und
+gehaltene Reservierungen. Nach dem Stop müssen beide eigenen Cgroups leer sein.
+Der neue Host wird lokal geprüft, bevor der Connector wieder erreichbar wird.
+
+Der Helfer hält den bestehenden `/var/lib/foundry-deploy/lock` einschließlich
+Verifikation; nicht zusätzlich darum sperren. Der ausgegebene private Recovery-Pfad
+enthält vorherige Installation und Binding sowie Worker-SQLite-Snapshots.
+`activate-artifacts.py rollback RECOVERY` stellt die vorherige Konfiguration nur
+bei unverändertem Worker-Schema und bestätigtem Writer-Ende wieder her. Er stellt
+keine Datenbank zurück und verändert Main nicht. Fehler lassen den Worker
+gestoppt; eine ungeklärte Ausführung bleibt gesperrt. Dies ist kein Ersatz für den
+noch offenen Live-Gatenachweis oder eine vollständige Betriebs-/Restore-Abnahme.
 
 ## Stop, Neustart, Upgrade und Entfernung
 
