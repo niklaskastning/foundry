@@ -257,6 +257,8 @@ the previous image ID and candidate revision. Backups contain private state and 
 root-readable only; retention is manual. They do not include PostgreSQL or workspaces
 and are not a replacement for the complete backups described below.
 
+The updater already serializes runs with `/var/lib/foundry-deploy/lock` (an exclusive, nonblocking `flock`). Manual Foundry rollouts, worker updates and migrations use the same lock through verification. Do not acquire it again around the updater or bypass a busy lock. The manifest and `success` file provide automatic evidence; briefly report previous/target revision, healthcheck result and recovery path in the PR or handoff. Manual paths report the same fields there, without a separate file or checklist.
+
 If backup creation fails, the old container restarts. If candidate startup or identity
 verification fails, Main stays stopped and the helper reports the backup directory.
 The operator must restore the saved state into the stopped Foundry state volume and
