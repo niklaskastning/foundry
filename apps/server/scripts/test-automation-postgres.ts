@@ -11,6 +11,7 @@ import * as Console from "effect/Console";
 import * as Database from "../src/automation/AutomationDatabase.ts";
 import * as Migrations from "../src/automation/AutomationMigrations.ts";
 import * as Factories from "../src/automation/Factories.ts";
+import * as Workflows from "../src/automation/Workflows.ts";
 const bin = process.env.FOUNDRY_TEST_PG_BIN;
 NodeAssert.ok(
   bin,
@@ -67,6 +68,18 @@ const call = <A, E>(f: (s: Factories.Factories["Service"]) => Effect.Effect<A, E
     Factories.Factories.pipe(
       Effect.flatMap(f),
       Effect.provide(Factories.layer.pipe(Layer.provide(db("automation_runtime")))),
+    ),
+  );
+const workflowCall = <A, E>(f: (s: Workflows.Workflows["Service"]) => Effect.Effect<A, E>) =>
+  run(
+    Workflows.Workflows.pipe(
+      Effect.flatMap(f),
+      Effect.provide(
+        Workflows.layer.pipe(
+          Layer.provide(Factories.layer),
+          Layer.provide(db("automation_runtime")),
+        ),
+      ),
     ),
   );
 const failure = async (promise: Promise<unknown>, reason: string) => {
@@ -206,6 +219,219 @@ try {
   NodeAssert.equal((await call((s) => s.createWorkItem(work))).id, "w1");
   await call((s) => s.setArchived("a", false));
   await call((s) => s.withStartEligibility("a", "w1", Effect.void));
+  const workflow = {
+    commandId: "workflow-a1",
+    id: "flow-a1",
+    factoryId: "a",
+    factoryVersionId: "a1",
+    steps: [
+      { id: "implement", kind: "agent" as const, dependsOn: [], prompt: "Fixture input" },
+      { id: "check", kind: "test" as const, dependsOn: ["implement"], checkId: "unit" },
+      { id: "review", kind: "approval" as const, dependsOn: ["check"], prompt: "Fixture decision" },
+      {
+        id: "publish",
+        kind: "publish" as const,
+        dependsOn: ["review"],
+        target: "pull_request" as const,
+      },
+    ],
+  };
+  const beforeUpgrade = await call((s) => s.readWorkItem("a", "w1"));
+  // Reconstruct the deployed v1 schema around existing P18a data before testing its upgrade.
+  for (const statement of [
+    "DROP TABLE foundry_automation.outbox,foundry_automation.runs,foundry_automation.workflow_versions",
+    "ALTER TABLE foundry_automation.work_items DROP CONSTRAINT work_items_factory_id_id_key",
+    "UPDATE foundry_automation.schema_version SET version=1",
+  ])
+    await query(statement, "automation_migrator");
+  await run(Effect.all([migration, migration], { concurrency: "unbounded" }));
+  NodeAssert.deepEqual(await call((s) => s.readWorkItem("a", "w1")), beforeUpgrade);
+  NodeAssert.equal(
+    (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
+    2,
+  );
+  const definitions = await Promise.all(
+    Array.from({ length: 8 }, () => workflowCall((s) => s.createVersion(workflow))),
+  );
+  NodeAssert.deepEqual(definitions[0]?.steps, workflow.steps);
+  NodeAssert.equal((await query("SELECT * FROM foundry_automation.workflow_versions")).length, 1);
+  for (const steps of [
+    [],
+    [workflow.steps[0]!, workflow.steps[0]!],
+    [{ ...workflow.steps[0]!, dependsOn: ["missing"] }],
+    [{ ...workflow.steps[0]!, dependsOn: ["check"] }, workflow.steps[1]!],
+    [workflow.steps[0]!, { ...workflow.steps[1]!, dependsOn: ["implement", "implement"] }],
+  ])
+    await failure(
+      workflowCall((s) =>
+        s.createVersion({ ...workflow, commandId: "bad-flow", id: "bad-flow", steps }),
+      ),
+      "invalid_input",
+    );
+  await failure(
+    workflowCall((s) =>
+      s.createVersion({
+        ...workflow,
+        commandId: "foreign-definition",
+        id: "foreign-definition",
+        factoryVersionId: "b1",
+      }),
+    ),
+    "not_found",
+  );
+  await failure(
+    workflowCall((s) => s.createVersion({ ...workflow, steps: [workflow.steps[0]!] })),
+    "command_conflict",
+  );
+  const startInput = {
+    commandId: "start-a1",
+    id: "run-a1",
+    factoryId: "a",
+    workItemId: "w1",
+    workflowVersionId: "flow-a1",
+    revision: "input-revision-1",
+  };
+  const unsupportedDefinition = {
+    ...workflow,
+    commandId: "unsupported-flow",
+    credentials: "fixture",
+  };
+  await failure(
+    workflowCall((s) => s.createVersion(unsupportedDefinition)),
+    "invalid_input",
+  );
+  const unsupportedStart = { ...startInput, commandId: "unsupported-start", grant: "fixture" };
+  await failure(
+    workflowCall((s) => s.start(unsupportedStart)),
+    "invalid_input",
+  );
+  const runs = await Promise.all(
+    Array.from({ length: 12 }, () => workflowCall((s) => s.start(startInput))),
+  );
+  NodeAssert.equal(new Set(runs.map((r) => r.id)).size, 1);
+  NodeAssert.deepEqual(runs[0], {
+    id: "run-a1",
+    factoryId: "a",
+    workItemId: "w1",
+    workflowVersionId: "flow-a1",
+    factoryVersionId: "a1",
+    repository: "repo-a",
+    revision: "input-revision-1",
+    state: "pending",
+  });
+  NodeAssert.deepEqual(await workflowCall((s) => s.readOutbox("a", "run-a1")), [
+    { id: "start-a1", runId: "run-a1", kind: "run.created", payload: { runId: "run-a1" } },
+  ]);
+  await failure(
+    workflowCall((s) => s.start({ ...startInput, revision: "changed" })),
+    "command_conflict",
+  );
+  await failure(
+    workflowCall((s) => s.start({ ...startInput, commandId: "create-a" })),
+    "command_conflict",
+  );
+  await failure(
+    workflowCall((s) => s.readRun("b", "run-a1")),
+    "not_found",
+  );
+  await failure(
+    workflowCall((s) => s.readOutbox("b", "run-a1")),
+    "not_found",
+  );
+  await workflowCall((s) =>
+    s.createVersion({
+      ...workflow,
+      commandId: "workflow-a2",
+      id: "flow-a2",
+      factoryVersionId: "a2",
+    }),
+  );
+  await failure(
+    workflowCall((s) =>
+      s.start({
+        ...startInput,
+        commandId: "out-of-scope",
+        id: "out-of-scope",
+        workflowVersionId: "flow-a2",
+      }),
+    ),
+    "scope_mismatch",
+  );
+  await call((s) =>
+    s.createVersion({
+      commandId: "version-a3",
+      id: "a3",
+      factoryId: "a",
+      repositories: ["repo-a"],
+    }),
+  );
+  await workflowCall((s) =>
+    s.createVersion({
+      ...workflow,
+      commandId: "workflow-a3",
+      id: "flow-a3",
+      factoryVersionId: "a3",
+      steps: [workflow.steps[0]!],
+    }),
+  );
+  await workflowCall((s) =>
+    s.start({
+      ...startInput,
+      commandId: "start-a3",
+      id: "run-a3",
+      workflowVersionId: "flow-a3",
+      revision: "input-revision-2",
+    }),
+  );
+  NodeAssert.deepEqual(await workflowCall((s) => s.readRun("a", "run-a1")), runs[0]);
+  NodeAssert.deepEqual(
+    (await workflowCall((s) => s.readVersion("a", "flow-a1"))).steps,
+    workflow.steps,
+  );
+  NodeAssert.equal((await workflowCall((s) => s.readRun("a", "run-a3"))).workItemId, "w1");
+  await call((s) => s.setArchived("a", true));
+  NodeAssert.deepEqual(await workflowCall((s) => s.start(startInput)), runs[0]);
+  await failure(
+    workflowCall((s) =>
+      s.start({ ...startInput, commandId: "archived-start", id: "archived-start" }),
+    ),
+    "archived",
+  );
+  await call((s) => s.setArchived("a", false));
+  await query(
+    "CREATE FUNCTION foundry_automation.fail_fixture_outbox() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected after run insert'; END $$",
+    "automation_migrator",
+  );
+  await query(
+    "CREATE TRIGGER fail_fixture_outbox BEFORE INSERT ON foundry_automation.outbox FOR EACH ROW EXECUTE FUNCTION foundry_automation.fail_fixture_outbox()",
+    "automation_migrator",
+  );
+  await failure(
+    workflowCall((s) =>
+      s.start({ ...startInput, commandId: "rollback-start", id: "rollback-run" }),
+    ),
+    "unavailable",
+  );
+  for (const statement of [
+    "SELECT * FROM foundry_automation.runs WHERE id='rollback-run'",
+    "SELECT * FROM foundry_automation.outbox WHERE run_id='rollback-run'",
+    "SELECT * FROM foundry_automation.commands WHERE id IN ('rollback-start','archived-start','out-of-scope','bad-flow','foreign-definition','unsupported-flow','unsupported-start')",
+  ])
+    NodeAssert.equal((await query(statement)).length, 0);
+  await query(
+    "DROP TRIGGER fail_fixture_outbox ON foundry_automation.outbox",
+    "automation_migrator",
+  );
+  await query("DROP FUNCTION foundry_automation.fail_fixture_outbox()", "automation_migrator");
+  await workflowCall((s) =>
+    s.start({ ...startInput, commandId: "rollback-start", id: "rollback-run" }),
+  );
+  await stop();
+  await start();
+  NodeAssert.deepEqual(await workflowCall((s) => s.start(startInput)), runs[0]);
+  NodeAssert.equal((await workflowCall((s) => s.readOutbox("a", "run-a1"))).length, 1);
+  NodeAssert.equal((await query("SELECT * FROM foundry_automation.runs")).length, 3);
+  NodeAssert.equal((await call((s) => s.readWorkItem("a", "w1"))).state, "completed");
   await NodeAssert.rejects(
     call((s) =>
       s.withStartEligibility(
@@ -233,6 +459,10 @@ try {
     "DELETE FROM foundry_automation.work_items",
     "DELETE FROM foundry_automation.factories",
     "UPDATE foundry_automation.commands SET payload='{}'",
+    "UPDATE foundry_automation.workflow_versions SET steps='[]'",
+    "UPDATE foundry_automation.runs SET workflow_version_id='flow-a3'",
+    "UPDATE foundry_automation.outbox SET payload='{}'",
+    "DELETE FROM foundry_automation.outbox",
     "UPDATE foundry_automation.schema_version SET version=2",
     "UPDATE foundry_instance.fixture SET version=99",
     "CREATE TABLE foundry_automation.forbidden(id int)",
@@ -248,11 +478,11 @@ try {
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
     99,
   );
-  await query("UPDATE foundry_automation.schema_version SET version=1", "automation_migrator");
+  await query("UPDATE foundry_automation.schema_version SET version=2", "automation_migrator");
   await run(migration);
   await run(
     Console.log(
-      "PASS P18a isolated PostgreSQL: concurrent idempotent creates; conflict and scope rejection; immutable history; archive/restore and independent factories; business completion without runs; PostgreSQL restart; transactional rollback; separate instance ownership and restricted runtime. No runtime activation or G3 acceptance.",
+      "PASS P18a/P18b isolated PostgreSQL: idempotent factories/workflows/runs; sequential reference validation; pinned versions/repository/revisions; archive guard with retry; atomic command/run/outbox rollback; v1 upgrade and PostgreSQL restart; separate instance ownership and immutable runtime history. No runtime activation or dispatch.",
     ),
   );
 } finally {

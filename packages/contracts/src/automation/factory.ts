@@ -47,3 +47,73 @@ export const CreateAutomationWorkItem = Schema.Struct({
   title: Title,
   source: AutomationWorkItem.fields.source,
 });
+
+const StepText = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(20_000));
+const StepFields = { id: Key, dependsOn: Schema.Array(Key) };
+const AutomationStep = Schema.Union([
+  Schema.Struct({ ...StepFields, kind: Schema.Literal("agent"), prompt: StepText }),
+  Schema.Struct({ ...StepFields, kind: Schema.Literal("test"), checkId: Key }),
+  Schema.Struct({ ...StepFields, kind: Schema.Literal("approval"), prompt: StepText }),
+  Schema.Struct({
+    ...StepFields,
+    kind: Schema.Literal("publish"),
+    target: Schema.Literal("pull_request"),
+  }),
+]);
+const SequentialSteps = Schema.Array(AutomationStep).check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(100),
+  Schema.makeFilter(
+    (steps) => {
+      const seen = new Set<string>();
+      for (const step of steps) {
+        if (
+          seen.has(step.id) ||
+          new Set(step.dependsOn).size !== step.dependsOn.length ||
+          step.dependsOn.some((id) => !seen.has(id))
+        )
+          return false;
+        seen.add(step.id);
+      }
+      return true;
+    },
+    { message: "Sequential steps require unique IDs and dependencies on earlier steps only." },
+  ),
+);
+export const AutomationWorkflowVersion = Schema.Struct({
+  id: Key,
+  factoryId: Key,
+  factoryVersionId: Key,
+  steps: SequentialSteps,
+});
+export type AutomationWorkflowVersion = typeof AutomationWorkflowVersion.Type;
+export const CreateAutomationWorkflowVersion = Schema.Struct({
+  commandId: Key,
+  ...AutomationWorkflowVersion.fields,
+});
+export const AutomationRun = Schema.Struct({
+  id: Key,
+  factoryId: Key,
+  workItemId: Key,
+  workflowVersionId: Key,
+  factoryVersionId: Key,
+  repository: Key,
+  revision: Key,
+  state: Schema.Literal("pending"),
+});
+export type AutomationRun = typeof AutomationRun.Type;
+export const StartAutomationRun = Schema.Struct({
+  commandId: Key,
+  id: Key,
+  factoryId: Key,
+  workItemId: Key,
+  workflowVersionId: Key,
+  revision: Key,
+});
+export const AutomationOutboxEntry = Schema.Struct({
+  id: Key,
+  runId: Key,
+  kind: Schema.Literal("run.created"),
+  payload: Schema.Struct({ runId: Key }),
+});
+export type AutomationOutboxEntry = typeof AutomationOutboxEntry.Type;
