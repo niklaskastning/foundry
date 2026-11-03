@@ -1,8 +1,12 @@
 import importlib.util
+import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
+import sqlite3
 import tempfile
+import tarfile
 import unittest
 from unittest.mock import patch
 
@@ -26,7 +30,46 @@ def release(installation, settings):
     (directory / "foundry-build.json").write_text(json.dumps({"repository": "niklaskastning/foundry", "revision": settings["revision"], "dirty": False}))
 
 
+inspection_spec = importlib.util.spec_from_file_location("foundry_g3_inspection", Path(__file__).with_name("inspect-g3.py"))
+inspection = importlib.util.module_from_spec(inspection_spec)
+inspection_spec.loader.exec_module(inspection)
+
+
+binding_spec = importlib.util.spec_from_file_location("foundry_g3_binding", Path(__file__).with_name("bind-codex-g3.py"))
+binding = importlib.util.module_from_spec(binding_spec)
+binding_spec.loader.exec_module(binding)
+
+recovery_spec = importlib.util.spec_from_file_location("foundry_g3_recovery", Path(__file__).with_name("install-g3-recovery.py"))
+recovery = importlib.util.module_from_spec(recovery_spec)
+recovery_spec.loader.exec_module(recovery)
+
+
 class WorkerInstallationTest(unittest.TestCase):
+    def test_recovery_archive_rejects_changed_dirty_or_escaping_programs(self):
+        for failure in (None, "digest", "dirty", "escape"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                stage = Path(directory)
+                archive = stage / "worker-release.tar.gz"
+                with tarfile.open(archive, "w:gz") as output:
+                    data = json.dumps({"repository": "niklaskastning/foundry", "revision": "a" * 40, "dirty": failure == "dirty"}).encode()
+                    metadata = tarfile.TarInfo("./dist/foundry-build.json")
+                    metadata.size = len(data)
+                    output.addfile(metadata, io.BytesIO(data))
+                    if failure == "escape":
+                        link = tarfile.TarInfo("./node_modules/escape")
+                        link.type = tarfile.SYMTYPE
+                        link.linkname = "../../outside"
+                        output.addfile(link)
+                manifest = {"revision": "a" * 40, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}
+                (stage / "release.json").write_text(json.dumps(manifest))
+                if failure == "digest":
+                    archive.write_bytes(archive.read_bytes() + b"changed")
+                if failure:
+                    with self.assertRaises(RuntimeError):
+                        recovery.artifacts(stage)
+                else:
+                    self.assertEqual(recovery.artifacts(stage), manifest)
+
     def test_install_upgrade_remove_preserve_identity_credentials_and_other_service(self):
         with tempfile.TemporaryDirectory() as directory:
             installation = worker.Installation(directory)
@@ -121,6 +164,144 @@ class WorkerInstallationTest(unittest.TestCase):
             run.return_value.stdout = "inactive\n"
             installation.stopped()
             self.assertEqual(run.call_args.args[0][:2], ["systemctl", "show"])
+
+    def test_g3_inventory_is_offline_read_only_and_never_claims_provider_readiness(self):
+        with tempfile.TemporaryDirectory() as directory:
+            installation = worker.Installation(directory)
+            settings = config()
+            release(installation, settings)
+            node = installation.path(settings["node"])
+            node.parent.mkdir(parents=True)
+            node.write_text("fixture")
+            for path in (node, installation.path(worker.release(settings) + "/dist/bin.mjs")):
+                path.chmod(0o644)
+            for path in (installation.path(worker.release(settings)), installation.path(worker.release(settings) + "/dist")):
+                path.chmod(0o755)
+            installation.install(settings)
+            secret = installation.path(worker.STATE + "/device-key.json")
+            secret.write_text("private-must-not-appear")
+            before = {p: p.read_bytes() for p in Path(directory).rglob("*") if p.is_file()}
+            with patch.object(inspection, "command", side_effect=AssertionError("No command offline")), patch.object(inspection.urllib.request, "build_opener", side_effect=AssertionError("No HTTP offline")):
+                report = inspection.inventory(directory)
+            self.assertIsNone(report["providerReady"])
+            self.assertIsNone(report["providerInstanceId"])
+            self.assertFalse(report["g3Accepted"])
+            self.assertFalse(report["runtimeVerifiedAsWorker"])
+            self.assertTrue(report["offlineOnly"])
+            self.assertNotIn("private-must-not-appear", json.dumps(report))
+            self.assertEqual(before, {p: p.read_bytes() for p in Path(directory).rglob("*") if p.is_file()})
+            settings["providerInstanceId"] = "codex-worker"
+            installation.install(settings)
+            self.assertIsNone(inspection.inventory(directory)["providerReady"])
+            entry = installation.path(worker.release(settings) + "/dist/bin.mjs")
+            entry.chmod(0o666)
+            with self.assertRaises(RuntimeError):
+                inspection.inventory(directory)
+            entry.chmod(0o644)
+            unit = installation.path(worker.UNITS + "/foundry-host.service")
+            unit.write_text("external drift")
+            with self.assertRaises(RuntimeError):
+                inspection.inventory(directory)
+
+    def test_codex_binding_refuses_active_unresolved_and_reserved_writers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "statev2.sqlite"
+            with self.assertRaises(RuntimeError):
+                binding.quiet_database(database)
+            with sqlite3.connect(database) as connection:
+                connection.executescript("CREATE TABLE orchestration_v2_projection_runs(status TEXT); CREATE TABLE foundry_executions(manifest TEXT);")
+                connection.execute("INSERT INTO orchestration_v2_projection_runs VALUES ('completed')")
+            binding.quiet_database(database)
+            for status in ("queued", "preparing", "running", "finalizing", "unknown"):
+                with sqlite3.connect(database) as connection:
+                    connection.execute("UPDATE orchestration_v2_projection_runs SET status=?", (status,))
+                with self.subTest(status=status), self.assertRaises(RuntimeError):
+                    binding.quiet_database(database)
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE orchestration_v2_projection_runs SET status='completed'")
+                connection.execute("INSERT INTO foundry_executions VALUES (NULL)")
+            with self.assertRaises(RuntimeError):
+                binding.quiet_database(database)
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE foundry_executions SET manifest='confirmed'")
+            journal = database.with_name("foundry-workspaces.sqlite")
+            with sqlite3.connect(journal) as connection:
+                connection.execute("CREATE TABLE reservations(state TEXT)")
+                connection.execute("INSERT INTO reservations VALUES ('ready')")
+            with self.assertRaises(RuntimeError):
+                binding.quiet_database(database)
+            with sqlite3.connect(journal) as connection:
+                connection.execute("UPDATE reservations SET state='released'")
+            binding.quiet_database(database)
+
+    def test_persisted_acceptance_requires_exact_attempt_and_checkpoint_binding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "statev2.sqlite"
+            manifest = {"generation": 2, "runId": "run", "checkpointId": "checkpoint", "checkpointRef": "ref", "outcome": "completed"}
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE foundry_executions(command_id TEXT,thread_id TEXT,generation INTEGER,writer_ended INTEGER,manifest TEXT)")
+                connection.execute("INSERT INTO foundry_executions VALUES ('command','thread',2,1,?)", (json.dumps(manifest),))
+                for table in ("threads", "runs", "run_attempts", "provider_turns"):
+                    connection.execute(f"CREATE TABLE orchestration_v2_projection_{table}(thread_id TEXT)")
+                    connection.execute(f"INSERT INTO orchestration_v2_projection_{table} VALUES ('thread')")
+                connection.execute("CREATE TABLE orchestration_v2_projection_checkpoints(checkpoint_id TEXT,thread_id TEXT,run_id TEXT,status TEXT)")
+                connection.execute("INSERT INTO orchestration_v2_projection_checkpoints VALUES ('checkpoint','thread','run','ready')")
+            receipt = {"threadId": "thread"}
+            self.assertEqual(binding.persisted_acceptance(database, "command", receipt, manifest), manifest)
+            with sqlite3.connect(database) as connection:
+                connection.execute("INSERT INTO orchestration_v2_projection_run_attempts VALUES ('thread')")
+            with self.assertRaises(RuntimeError):
+                binding.persisted_acceptance(database, "command", receipt, manifest)
+            with sqlite3.connect(database) as connection:
+                connection.execute("DELETE FROM orchestration_v2_projection_run_attempts WHERE rowid=2")
+                connection.execute("UPDATE orchestration_v2_projection_checkpoints SET run_id='other-run'")
+            with self.assertRaises(RuntimeError):
+                binding.persisted_acceptance(database, "command", receipt, manifest)
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE orchestration_v2_projection_checkpoints SET run_id='run'")
+                connection.execute("UPDATE foundry_executions SET writer_ended=0")
+            with self.assertRaises(RuntimeError):
+                binding.persisted_acceptance(database, "command", receipt, manifest)
+
+    def test_active_restart_requires_held_reservation_until_positive_stop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "statev2.sqlite"
+            journal = Path(directory) / "foundry-workspaces.sqlite"
+            record = {"launch": {"commandId": "command"}, "receipt": {"threadId": "thread"}, "generation": 4}
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE foundry_executions(command_id TEXT,thread_id TEXT,generation INTEGER,state TEXT,writer_ended INTEGER,manifest TEXT)")
+                connection.execute("INSERT INTO foundry_executions VALUES ('command','thread',4,'uncertain',0,NULL)")
+                for table in ("runs", "run_attempts", "provider_turns"):
+                    connection.execute(f"CREATE TABLE orchestration_v2_projection_{table}(thread_id TEXT,run_id TEXT)")
+                    connection.execute(f"INSERT INTO orchestration_v2_projection_{table} VALUES ('thread','run')")
+            with sqlite3.connect(journal) as connection:
+                connection.executescript("CREATE TABLE reservations(request_id TEXT,state TEXT); CREATE TABLE writer_bindings(request_id TEXT,command_id TEXT,thread_id TEXT,generation INTEGER); INSERT INTO reservations VALUES ('reservation','ready'); INSERT INTO writer_bindings VALUES ('reservation','command','thread',4);")
+            proof = binding.validate_restart_state(database, journal, record)
+            self.assertTrue(proof["reservationHeld"])
+            self.assertFalse(proof["writerEnded"])
+            with sqlite3.connect(journal) as connection:
+                connection.execute("UPDATE reservations SET state='released'")
+            with self.assertRaises(RuntimeError):
+                binding.validate_restart_state(database, journal, record)
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE foundry_executions SET state='stopped',writer_ended=1,manifest=?", (json.dumps({"generation": 4, "runId": "run", "outcome": "stopped"}),))
+            self.assertFalse(binding.validate_restart_state(database, journal, record)["reservationHeld"])
+            with sqlite3.connect(database) as connection:
+                connection.execute("INSERT INTO orchestration_v2_projection_run_attempts VALUES ('thread','run')")
+            with self.assertRaises(RuntimeError):
+                binding.validate_restart_state(database, journal, record)
+
+    def test_native_history_inspection_rejects_live_and_incomplete_history(self):
+        result = subprocess.run(["node", "deploy/fork/worker/test-g3-native-history.mjs"], cwd=Path(__file__).resolve().parents[3], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_native_restart_wait_requires_real_provider_command_milestone(self):
+        result = subprocess.run(["node", "deploy/fork/worker/test-g3-native-wait.mjs"], cwd=Path(__file__).resolve().parents[3], input=binding.RPC_NATIVE, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_acceptance_transport_retries_and_rejects_wrong_generation(self):
+        result = subprocess.run(["node", "deploy/fork/worker/test-g3-transport.mjs"], cwd=Path(__file__).resolve().parents[3], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_systemd_accepts_units_with_shared_budget_and_explicit_runtime_paths(self):
         with tempfile.TemporaryDirectory() as directory:

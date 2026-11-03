@@ -66,7 +66,35 @@ Entfernung: zuerst `systemctl disable --now foundry-host.target`, Slice stoppen,
 python3 -m unittest discover -s deploy/fork/worker -p 'test_*.py' -v
 ```
 
-Dies ersetzt **nicht** Start/Neustart, Ressourcenbegrenzung und Erreichbarkeitsprüfung unter dem echten Dienstkonto. Offene G1/G2/P13-Nachweise stehen in [Issue #13](https://github.com/niklaskastning/foundry/issues/13).
+Dies ersetzt **nicht** Start/Neustart, Ressourcenbegrenzung und Erreichbarkeitsprüfung unter dem echten Dienstkonto. Offene G1/G2/P13-Nachweise stehen im [Umsetzungsplan](../../../docs/foundry/implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen); Issue #13 bleibt Nachweisarchiv.
+
+## G3-Bestandsaufnahme vor der Provider-Einrichtung
+
+Aus dem geprüften Checkout kann der Administrator ausschließlich lesend prüfen:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/worker/inspect-g3.py
+sudo /usr/bin/python3 -I deploy/fork/updater/activate-access.py status
+```
+
+Der Worker-Prüfer gleicht Installer-Manifest und Units ab, prüft private Datenwurzeln,
+Release-Metadaten, tatsächliche Prozess-UID/cgroup und aktive gemeinsame Kernel-Limits.
+Er startet nur `--version` des installierten T3-Einstiegs als `foundry-worker` mit dessen
+Home und Arbeitsverzeichnis. Er liest keine Credentials, startet keinen Provider und
+ändert oder stoppt keine Dienste. Abweichungen liefern einen Fehler ohne private
+Unterprozessausgaben. `--root /offline/fixture` prüft nur Dateien, ohne Prozesse oder
+Netzwerk. Das ist keine Lastprüfung und kein positiver Provider-/G3-Nachweis;
+`providerReady` bleibt unbekannt. Den gebundenen Provider anschließend über
+`foundry.workerStatus` frisch prüfen, etwa mit **Check selected worker**.
+
+Für eine noch leere Bindung zuerst die folgende dedizierte Anmeldung abschließen;
+keine vorhandenen Replay-Projekte oder persönlichen Checkouts für den G3-Auftrag
+verwenden. Danach innerhalb einer bereits erlaubten Wurzel ein eigenes neues
+Git-Repository mit initialem Commit anlegen. Command-ID und unveränderte Anfrage
+vor dem ersten Worker-Launch privat speichern. Die konkrete Modell-/Turn-Freigabe
+folgt erst nach bestätigter Provider-Bereitschaft; Anmeldung und `--version` sind
+keine kostenpflichtigen Turns. Aktuelle Restabnahmen besitzt der
+[Umsetzungsplan](../../../docs/foundry/implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen).
 
 ## Codex im Worker einrichten und prüfen
 
@@ -77,6 +105,191 @@ Die dort gewählte Codex-Instanz-ID als optionales `providerInstanceId` in die I
 Nach Auswahl des Devices in Connections prüft **Check selected worker** über dessen bestehende RPC-Verbindung die gebundene Instanz neu. Online, Provider-Bereitschaft und Kapazität sind getrennt. Fehlendes Binary, fehlende/unklare Anmeldung und unbekannte oder inkompatible Versionen ergeben keine Bereitschaft. Bei einem fehlgeschlagenen Probe darf ein älterer Registry-Cache keinen erfolgreichen Status vortäuschen. Antworten enthalten keine Kontodaten oder Credentials.
 
 Die Kapazität ist vorerst ein Snapshot: kein unvollendeter T3-Run auf diesem Worker, unabhängig von Archivierung und Provider. Abfragefehler ergeben unbekannt. Sie reserviert keine Ressourcen und ersetzt weder Launch-Berechtigungen noch die spätere Workspace-Zuteilung. Hintergrundprozesse außerhalb eines Runs sind damit nicht inventarisiert. Live-Status nach Verbindungsverlust erneut abfragen. Die integrierte Prüfung unter dem tatsächlichen Dienstkonto und ein autorisierter echter Codex-Turn bleiben eigene Abnahmen; Replay-/Service-Fixtures sind kein Codex-Login-Nachweis.
+
+### Headless-Codex für den begrenzten G3-Versuch binden
+
+Nach abgeschlossener Gerätecode-Anmeldung mit der separat unter
+`/var/lib/foundry-worker/home/tools/codex-cli` installierten CLI `0.156.1` kann der
+Administrator aus dem geprüften Checkout ausführen:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py bind
+# Nach abgeschlossenem Worker-Start:
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py status
+```
+
+`bind` prüft Version und Login unter dem Dienstkonto, verweigert offene Runs,
+Ausführungen und Writer-Reservierungen und legt eine private Konfigurationskopie
+unter dem ausgegebenen `/var/lib/foundry-deploy/worker-codex-g3-*` an. Es registriert
+`codexG3` über den bestehenden Settings-Service als vorhandene CLI mit eigenem Home;
+ein Wrapper verwendet den absoluten Node-Pfad unabhängig vom Dienst-PATH. Anschließend
+stoppt es ausschließlich Worker-Target und gemeinsame Slice, prüft erneut offene
+Arbeit und bindet die Instanz über den vorhandenen Installer vor dem Neustart.
+Eine neue private Git-Fixture innerhalb der erlaubten Wurzel wird ausgegeben.
+Kein Projekt-/Thread-Start, kein Modellaufruf und kein Main-Update erfolgen.
+
+`status` fragt `foundry.workerStatus` über einen frischen authentifizierten RPC ab.
+Dafür erzeugte lokale T3-Sessions sind kurzlebig und werden nach jedem RPC widerrufen;
+Tokens werden weder ausgegeben noch in Argumenten übergeben. `providerReady=true`
+beweist die aktuelle Provider-Prüfung, noch keinen erfolgreichen G3-Auftrag.
+Nach der Bindung gilt die gemeinsame Writer-Grenze auch für manuelle Starts;
+Replay auf diesen verwalteten Checkouts ohne positiven Stop-Nachweis nicht weiterbenutzen.
+
+Bei fehlgeschlagener Installation/Start bleibt der Worker gestoppt. Vor Rücknahme
+offene Arbeit abgleichen; Reservierungsjournal und Ausführungsdaten nie löschen.
+Die ausgegebene Recovery enthält `installation.json` und die vorherige `settings.json`.
+Der Administrator kann bei gestopptem Target/Slice deren `config` als private
+Installer-Konfiguration verwenden, die Settings mit Eigentümer `foundry-worker`
+und Modus `0600` zurücklegen, den Installer erneut ausführen und erst danach
+`daemon-reload` und `start foundry-host.target` ausführen. Das ist eine
+Konfigurationsrücknahme, kein Daten-Restore und kein Codex-Logout.
+
+### Begrenzter echter G3-Auftrag
+
+Nach bestätigter Bereitschaft kann der Administrator dem lokalen Prüfer einen
+30 Minuten gültigen Worker-Zugang mit `orchestration:read` und
+`orchestration:operate` geben. Keine allgemeinen sudo-/Docker-Rechte:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py acceptance-access /srv/foundry-worker/workspaces/g2/g3-acceptance-<konkrete-fixture>
+```
+
+Das prüft erneut die eigene saubere Git-Fixture ohne Remotes und fehlende offene
+Arbeit. Anfrage und Command-ID werden zusammen mit der lokalen T3-Session in
+`~niklas/.cache/foundry-g3-acceptance/worker-access.json` gespeichert, Modus `0600`.
+Die Datei enthält ein Secret; nicht anzeigen oder ins Issue kopieren. Die Scopes
+gelten für den Worker, die zusätzliche Begrenzung auf genau die Fixture und Anfrage
+setzt der geprüfte Runner durch. Ein vorhandener Auftrag wird nicht überschrieben.
+
+Ohne Modellaufruf Projekt und Verbindung vorbereiten:
+
+```sh
+node deploy/fork/worker/g3-acceptance.mjs /home/niklas/.cache/foundry-g3-acceptance/worker-access.json prepare
+```
+
+Nur nach ausdrücklicher Freigabe des einen Luna-Turns:
+
+```sh
+node deploy/fork/worker/g3-acceptance.mjs /home/niklas/.cache/foundry-g3-acceptance/worker-access.json run-one-luna-turn
+```
+
+Der Runner speichert vor dem Start eine exklusive Startsperre. Für diese konkrete
+Fixture bedient er einzelne native Befehlsfreigaben über den normalen Approval-Service:
+eine feste Liste aus Repository-Inspektion, Schreiben und Lesen von `G3.txt`.
+Unbekannte Befehle brechen den Lauf ab; keine dauerhafte Session-Freigabe und keine
+Änderung des Approval-Modus. Er verwirft die
+committete Launch-Antwort an seiner RPC-Eingangsgrenze und schließt die Verbindung;
+Wiederverbindung und Retry verwenden exakt die gespeicherte Anfrage. Read, aktive
+Lease-Erneuerung und zwei sequenzierte Follow-Streams prüfen den ursprünglichen Run,
+einer davon ab bestätigtem `afterSequence`. Ein fertiges Manifest muss Writer-Ende,
+Generation, Run und Checkpoint enthalten und bei erneutem Read/Launch-Retry gleich
+bleiben. Nach 120 Sekunden wird Cancel angefordert; bei Fehlern ebenfalls. Ein
+Cancel-Ack beweist keinen Stop. Kein Ersatzstart; eine vorhandene Startsperre bleibt
+auch nach Fehler erhalten. Diese Zeitgrenze ist kein messbares Euro-Limit für eine
+Subscription und kann einen unklaren Writer nicht als beendet erklären.
+
+Die `.result.json` neben der Zugangsdatei enthält nur Prüfergebnisse. Der zusätzliche
+Administratorlauf bestätigt gegen die echte SQLite genau einen Thread/Run/Attempt,
+Manifest-/Checkpoint-Bindung, Git-Objekt und Dateiinhalt unter Dienstkonto und
+widerruft die kurzlebige Prüfersession:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py verify-acceptance second-access.json
+```
+
+Für einen gesonderten Neustartnachweis nach bestätigtem Ende aller Writer:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py restart-idle
+# Nach dem Start:
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py status
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py verify-acceptance second-access.json
+```
+
+`restart-idle` verweigert aktive/unaufgelöste Runs und Reservierungen, speichert die
+Ausführungszeilen privat, stoppt ausschließlich das Worker-Target und dessen Slice
+und bestätigt leere Dienst-cgroups. Vor dem Start müssen die Ausführungszeilen
+unverändert sein. Es startet keinen Modell-Turn und ändert keine Konfiguration.
+Die danach ausgeführte Verifikation liest den ursprünglichen Ergebnis-Checkpoint
+und die persistierten Zählungen erneut. Das ist kein Restart eines aktiven oder
+unklaren Writers und kein Daten-Restore; diese Fälle behalten ihre eigenen Nachweise.
+
+### Aktiver Crash-/Recovery-Nachweis
+
+Dieser gesonderte Betreiberlauf startet **einen weiteren echten Luna-Turn** in
+einem neuen eigenen Git-Fixture. Er benötigt eine begrenzte Turn-Freigabe und ein
+freies Zeitfenster für genau die Foundry-Worker-Dienste. Beide bereits verbundenen
+Clients können währenddessen zur Wiederverbindungsprüfung geöffnet bleiben.
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py active-restart-start
+# Nach dem Start:
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py status
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py active-restart-verify
+```
+
+Der Start verweigert aktive/ungeklärte Arbeit. Er hält die Anfrage vor dem Senden
+privat fest und bestätigt über den Thread-Ereignisstrom einen Pending-Command mit
+nativer Request- und Turn-Bindung; keine Befehlsfreigabe wird erteilt. Dieser
+Meilenstein hat eine 40-Sekunden-Frist, bei fehlendem Nachweis wird nur der eigene
+Auftrag abgebrochen und kein Dienst-Crash durchgeführt. Nach positiver Prüfung
+der tatsächlichen Dienst-UID/cwd/cgroup beendet `systemctl kill --kill-whom=all
+--signal=SIGKILL` ausschließlich `foundry-host.service` und
+`foundry-connector.service`. Danach stoppt der Helfer Target/Slice, bestätigt leere
+Dienst-cgroups und startet denselben Worker mit unverändertem Zustand.
+
+`active-restart-verify` liest den ursprünglichen Auftrag, wiederholt exakt dessen
+Launch-Anfrage und prüft dieselbe Generation, dasselbe Receipt und genau einen
+Run/Attempt/nativen Turn. Ohne bestätigtes Writer-Ende und gültiges Stop-Manifest
+muss die Workspace-Reservation erhalten bleiben; ein wieder aktiver oder freigegebener
+unklarer Writer ist ein Fehler. Positiver nativer Stop darf ein `stopped`-Manifest
+liefern. Prozessende durch den Betreiber wird nicht direkt in die Ausführungs- oder
+Reservierungsdatenbank geschrieben. Kein Ersatzauftrag und keine Freigabe durch
+Löschen des Journals. Der Prüfzeiger `/var/lib/foundry-deploy/g3-active-restart.json`
+verhindert einen zweiten kostenpflichtigen Start; bei Fehlern den ausgegebenen
+privaten Record für die gezielte Recovery behalten.
+
+Bleibt die Ausführung nach dem Crash unklar, kann der Administrator die native
+Historie des ursprünglichen Threads lesen:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py inspect-native-restart
+```
+
+Der Prüfer verwendet genau die persistierte native Thread-/Turn-Bindung dieses
+Auftrags und die eingerichtete Worker-CLI. Ein kurzlebiger App-Server führt nur
+`initialize` und `thread/read` aus, niemals `thread/resume` oder `turn/start`.
+Vollständige Turns, laufende Commands und in der Historie referenzierte Kinder
+werden geprüft; fehlende oder laufende Daten bestätigen keinen Stop. Die Ausgabe
+enthält nur Status/Zählungen, keine Historientexte oder Credentials. Eigene
+Probe-Prozesse werden anhand der beim Start erfassten Prozessgruppe beendet.
+Das Ergebnis ist Diagnose, keine automatische Reservation-Freigabe. Ein unklarer
+Altversuch bleibt bis zum belegten Service-Recovery-Pfad gesperrt.
+
+Für den bestätigten nativen Stop kann ein sauberes Recovery-Release bereitgestellt
+werden: Produktionspaket als `worker-release.tar.gz` und `release.json` mit
+vollständiger `revision` und Archiv-`sha256`. Der begrenzte Helfer prüft Metadaten,
+Archivpfade, ursprüngliche Ausführungsbindung und native Historie erneut. Er
+verweigert andere aktive/ungeklärte Arbeit, installiert ausschließlich den Worker,
+prüft den Einstieg unter dessen Dienst-UID und hält vor dem Update private
+Konfigurations-/SQLite-Snapshots fest. Main und Credentials werden nicht geändert.
+
+```sh
+python3 -I deploy/fork/worker/install-g3-recovery.py /path/to/stage --check
+sudo /usr/bin/python3 -I deploy/fork/worker/install-g3-recovery.py /path/to/stage
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py status
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py active-recovery-verify
+```
+
+Nach dem Start erhebt `foundry.workerRead` seinen eigenen nativen Nachweis über
+die ursprüngliche Codex-Instanz. Es öffnet dafür den Harness, ohne den Thread oder
+einen Turn fortzusetzen. Erst Writer-Ende plus unveränderliches Stop-Manifest
+erlauben dem bestehenden Reconciler die Workspace-Freigabe. Der letzte Prüfschritt
+verlangt auch die freigegebene Reservation und genau den ursprünglichen
+Run/Attempt/nativen Turn; kein Ersatzauftrag, keine direkten SQLite-Änderungen.
+
+Diese Teilprobe schließt G3 nicht allein: Cancel während Ausführung, Lease-Verlust,
+Restart, Writer-Konflikte und Wiederverbindung der Clients bleiben eigene Nachweise.
 
 ## Idempotenter Worker-Launch
 

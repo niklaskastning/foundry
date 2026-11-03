@@ -1,6 +1,6 @@
 # Foundry – Umsetzungsplan in PR-großen Arbeitspaketen
 
-Stand: 2. November 2026. Planungsbaseline für [Architektur](architecture.md) und [Deployment](deployment.md). Die Pakete P01–P60 sind **keine GitHub-PR-Nummern**. Auf Maintainerwunsch führt dieser Plan nach Abschluss von [Issue #13](https://github.com/niklaskastning/foundry/issues/13) auch die erledigte Implementierung und offenen Abnahmen. Detaillierte Evidence bleibt in den verlinkten Issues/PRs; erledigter Code ist keine pauschale Gate- oder Deployment-Abnahme.
+Stand: 3. November 2026. Planungsbaseline für [Architektur](architecture.md) und [Deployment](deployment.md). Die Pakete P01–P60 sind **keine GitHub-PR-Nummern**. Auf Maintainerwunsch führt dieser Plan nach Abschluss von [Issue #13](https://github.com/niklaskastning/foundry/issues/13) auch die erledigte Implementierung und offenen Abnahmen. Detaillierte Evidence bleibt in den verlinkten Issues/PRs; erledigter Code ist keine pauschale Gate- oder Deployment-Abnahme.
 
 ## Erledigte Implementierung und verbleibende Abnahmen
 
@@ -10,14 +10,80 @@ Die Häkchen bezeichnen den jeweils genannten Umfang. Offene Teilnachweise werde
 - [x] **P04/P05 – Implementierung:** Windows-Access-Transport und Instanzeinstieg integriert. Diagnose und JSON-Decoder für gekoppelte T3-Sessions in [#42](https://github.com/niklaskastning/foundry/pull/42)/[#43](https://github.com/niklaskastning/foundry/pull/43) korrigiert; P05-Instanzwechsel bleibt ein eigener Live-Nachweis.
 - [x] **Windows-Session-Lebenszyklus:** Login, Check, Refresh vor Ablauf, vollständiger App-Neustart und Wiederanmeldung nach mindestens 16 Minuten ohne erneutes T3-Pairing bestätigt. [Evidence](https://github.com/niklaskastning/foundry/issues/13#issuecomment-6588567831); Build `41519672835`, Source `b57fbec08`. Die genaue Trennung von Foundry- und Access-Ablauf ist damit nicht belegt.
 - [x] **P06–P12 – Implementierung und realer G2-Durchstich:** Enrollment, Maschinenkanal, Gateway, Streams, Grants und Katalog integriert; dedizierter Linux-Worker über Main aus Windows/Electron und Firefox nutzbar. Replay, Terminal, Datei/Diff und Entzug/Wiederfreigabe bestätigt. Attachment-Vorschau in beiden Clients und Firefox-Download nach [#41](https://github.com/niklaskastning/foundry/pull/41) bestätigt. Windows-Download bleibt ausgenommen.
-- [x] **P13–P17 – Code und Integration:** isolierter Host-Dienst, Readiness/Binding, idempotenter Launch, Read/Follow/Cancel, Lease/Manifest und Workspace-/Writer-Integration über den Basisstack [#29](https://github.com/niklaskastning/foundry/pull/29), den P16-Abschluss [#38](https://github.com/niklaskastning/foundry/pull/38) und die Integration [#39](https://github.com/niklaskastning/foundry/pull/39)/[#40](https://github.com/niklaskastning/foundry/pull/40) integriert. Das reale G3-Gate bleibt offen; der laufende Replay-Worker besitzt noch keine dedizierte Codex-Bindung.
+- [x] **P13–P17 – Code und Integration:** isolierter Host-Dienst, Readiness/Binding, idempotenter Launch, Read/Follow/Cancel, Lease/Manifest und Workspace-/Writer-Integration über den Basisstack [#29](https://github.com/niklaskastning/foundry/pull/29), den P16-Abschluss [#38](https://github.com/niklaskastning/foundry/pull/38) und die Integration [#39](https://github.com/niklaskastning/foundry/pull/39)/[#40](https://github.com/niklaskastning/foundry/pull/40) integriert. Der funktionale G3-Workerabschluss ist inzwischen real bestätigt; verbleibende G1/G2- und Betriebsabnahmen bleiben getrennt offen.
 - [x] **P18a – isolierte Grundlage:** Factory/Version/WorkItem mit eigener Automation-PostgreSQL-Persistenz in [#36](https://github.com/niklaskastning/foundry/pull/36) implementiert und getestet. Noch inaktiv; keine Scheduler-/Startfreigabe.
 - [ ] **G1-Restabnahme:** P05-Instanzselektor, frisches Profil, Instanzwechsel/Entfernen und zwei reale getrennte Instanzen; genaue Access-/Foundry-Ablauftrennung. Die bestandenen Windows-Session-Folgen nicht ohne Änderung oder Fehler wiederholen.
 - [ ] **G2-Restabnahme:** Worker auf getrennter zweiter Maschine und gezielter Main-/Connector-Abbruch mit Wiederverbindung beider Clients; Wiederaufnahme eines laufenden Auftrags separat von bloßer Erreichbarkeit nach Neustart belegen. Permanente Device-Widerrufsprobe nur mit geplantem Wiederanmeldungsweg. Bereits bestätigte Terminal-/Replay-/Grant-Proben übernehmen.
-- [ ] **G3 – nächster Pflichtblock vor echter Automation:** dedizierte Codex-Anmeldung/Provider-Bindung unter dem Worker-Dienstkonto; ein minimaler autorisierter Auftrag über `foundry.workerLaunch`, identischer Command-ID-Retry ohne Doppelstart, Read/Follow, bestätigtes Writer-Ende, passender Checkpoint und unveränderliches Manifest. Zusätzlich Cancel, Lease-/Verbindungsverlust, Worker-Restart und Workspace-Konflikt mit genau einem aktiven Attempt prüfen. Bei unklarem Stop keine Wiederbelegung. Replay und native Protokoll-Fixtures ersetzen den realen Provider-Nachweis nicht; kostenpflichtige Turns benötigen eine ausdrückliche begrenzte Freigabe.
-- [ ] **Betriebsnachweise:** aktive Kernel-Limits (1 CPU, 2 GiB, 256 Tasks) sind geprüft; Last-/Kindprozess-Durchsetzung und gezielte Recovery sind offen. Vor breiter automatisierter Last die für G3 nötigen Grenzen prüfen; vollständiger Backup-/Restore-/Upgrade-Nachweis gehört zu G5. Dauerhafte Entscheidung zum für das Testfenster deaktivierten zonenweiten Cloudflare Bot Fight Mode offen, keine eigenständige Policy-Änderung.
+- [x] **G3 – reale Teilnachweise am 3. November:** `codexG3`/CLI `0.156.1` über Headless-ChatGPT-Anmeldung gebunden und frisch bereit. Drei begrenzte Luna-Turns im eigenen Git-Fixture: expliziter Cancel mit positivem Writer-Ende/`stopped`-Manifest; erfolgreicher `foundry.workerLaunch` mit verworfener RPC-Antwort, identischen Retries, Read/Follow ab Cursor, erneuerter Lease und unverändertem generationgebundenem `completed`-Manifest; Launch-Verbindungsabbruch ohne weitere Erneuerung mit lokalem Watchdog-Stop. Konkurrierender manueller Einstieg scheitert vor nativem Provider-Turn. Details und Grenzen in [#45](https://github.com/niklaskastning/foundry/pull/45).
+- [x] **G3 – unabhängiger Ergebnis- und Idle-Restart-Nachweis:** Betreiberlauf am 3. November bestätigt unter Dienstkonto genau einen Thread/Run/Attempt, positives Writer-Ende, dasselbe Generation-2-Manifest, passenden `ready`-Checkpoint, vorhandenes Git-Objekt und exakten Dateiinhalt. Zuvor kontrollierter Neustart des untätigen Workers mit leeren alten Dienst-cgroups; nachher `providerReady=true`, CLI `0.156.1`, `activeRuns=0`, unveränderte Environment-ID und `foundryManagedWorkspaces=true`. Prüfersession widerrufen.
+- [x] **G3 – aktiver Crash und gehaltene Sperre:** echter nativer Pending-Command vor dem gezielten Worker-/Connector-Crash, leere alte Dienst-cgroups und erfolgreicher Neustart bestätigt. Vor der Recovery blieb Generation 4 `uncertain`, `writerEnded=false`, ohne Manifest und mit gehaltener Reservation; identische Anfrage liefert unverändertes Receipt und genau einen Run/Attempt/nativen Turn, ohne neuen Provider-Start.
+- [x] **G3 – funktionaler Workerabschluss einschließlich Recovery:** Generation 4 über den bestehenden Service-Pfad real als `stopped` mit `writerEnded=true`, generationsgebundenem Stop-Manifest und freigegebener Workspace-Reservation bestätigt. Unverändert genau ein Run/Attempt/nativer Turn, gleiches Receipt, null Ersatzstarts. Worker-Release `6643d6439`, private Konfigurations-/SQLite-Recovery `/var/lib/foundry-deploy/worker-g3-recovery-8r5u81yp`; Main unverändert. Zusammen mit den obigen realen und fokussierten deterministischen Nachweisen ist G3 für die folgende inaktive Factory-Entwicklung bestanden. Der einzelne Betreiberprüfer bleibt bewusst kein aggregierter Gate-Entscheider (`g3FullyAccepted=false`). Main-/Connector-Reconnect beider Clients bleibt G2; volle Ressourcen-/Restore-Lastabnahme bleibt Betriebsarbeit.
+- [ ] **Betriebsnachweise:** aktive Kernel-Limits (1 CPU, 2 GiB, 256 Tasks) sind geprüft; Last-/Kindprozess-Durchsetzung und vollständiger Restore sind offen; die begrenzte aktive Worker-Recovery ist in G3 bestätigt. Vor breiter automatisierter Last die für G3 nötigen Grenzen prüfen; vollständiger Backup-/Restore-/Upgrade-Nachweis gehört zu G5. Dauerhafte Entscheidung zum für das Testfenster deaktivierten zonenweiten Cloudflare Bot Fight Mode offen, keine eigenständige Policy-Änderung.
 - [ ] **Produktlücken:** P03N/G1-Nativ, automatischer Katalog-Erstabruf und Einstieg ohne getrenntes T3-Pairing noch nicht umgesetzt. Windows-Downloads im Foundry-Einstieg sind durch dessen `will-download`-Sperre blockiert und bleiben gesonderte begrenzte Produktarbeit, kein behaupteter Upstream-Fehler. Native Mobile-Abnahme bleibt verschoben.
+- [ ] **Zentrale Verbindungen und Autorisierungsweitergabe:** noch nicht implementiert. Provider-, Source-Control- und später MCP-Zugänge einmal in Foundry einrichten; dauerhafte Devices und Sandboxes erhalten daraus ausdrücklich autorisierte Laufzeitbindungen. P14Z ergänzt die zentrale Grundlage; P23/P41/P37/P52 integrieren die jeweiligen Zugangsarten. Die lokale Anmeldung für G3 ist ein Übergangsweg, kein erfüllter zentraler Login.
 - [ ] **Nächste Entwicklung nach G3:** P18b → P47 → P38a → P38b → P19 → P20 → P21 → P49 → P22 → P23 → P24 → G4; danach die unten beschriebene Reihenfolge. Zentrale Threads/Anhänge sind noch nicht implementiert und müssen vor erstem Workflow-Dispatch geräteunabhängig gesichert werden.
+
+G3-Betriebsstand: Remote-main zuletzt `d457f63f`, Main Source `8ab7001b8` mit
+Image `sha256:e0a36d209e78db06c3d5bdede7f71a11e4ff6a515862604e113a69c7c7e4304a`,
+Schema 5, Gateway/Readiness/Betreiberbindung/Konfigurationsabgleich bestätigt,
+Migrator NOLOGIN. Worker-Release `6643d6439` nach begrenztem Recovery-Update, Dienstkonto `foundry-worker`, gemeinsame
+`foundry-host.slice` mit `cpu.max=100000 100000`, `memory.max=2147483648`, `pids.max=256`.
+Der Maintainer hat den realen Einstieg als Dienstkonto und anschließend die Bindung
+`codexG3` samt Readiness bestätigt. Ressourcen-Durchsetzung unter Last bleibt offen.
+Konfigurations-Recovery `/var/lib/foundry-deploy/worker-codex-g3-t3eq97qt`;
+erlaubte eigene Fixture `/srv/foundry-worker/workspaces/g2/g3-acceptance-5e75qro4`.
+
+Die drei Ausführungen besitzen monotone Generationen 1/2/3. Generation 1 endete nach
+der 120-Sekunden-Grenze bestätigt `stopped`; Generation 2 meldet bestätigtes natives
+Ende und ein zum Run gehörendes `completed`-Manifest mit `ready`-Checkpoint;
+Generation 3 endete nach ausbleibender Lease-Erneuerung und geschlossenem Launch-Socket
+bestätigt `stopped`, ohne Checkpoint-Erfolgszusage. Der manuelle Konkurrenzstart
+endete in der Workspace-Vorbereitung `failed`, ohne nativen Provider-Turn. Geänderte
+Anfrage unter gleicher Command-ID, alte Generation, unbekannter Read, zukünftiger
+Follow-Cursor und Cancel-ID-Verwechslung wurden real abgewiesen; alte Manifeste
+blieben erhalten. Der Approval-Pfad bleibt aktiv: der Prüfer bestätigt ausschließlich
+eine feste Liste von Befehlen für diese Fixture über den bestehenden Service.
+Keine neue Login-Testfolge, kein Main-Update, kein GitHub-/Publishing-Zugriff.
+
+Der [Betreiberlauf](../../deploy/fork/worker/README.md#begrenzter-echter-g3-auftrag)
+für Git-Objekt, Dateiinhalt und persistente Zählungen wurde nach dem Idle-Neustart
+real bestätigt. Restart-Snapshot
+`/var/lib/foundry-deploy/worker-g3-restart-n_4xor5l/execution-snapshot.json`, alter
+Worker-PID `3664234`, nach Neustart Host/Connector `112498`/`112499`; Environment-ID
+`3bf8c5a6-bd4e-444d-9279-6bcad20f396e` unverändert. Ergebnisnachweis für Command
+`g3-16fd60c2-6e02-42be-ba87-ceed55a2af57`, Generation 2, ist unabhängig gespeichert;
+keine neue Ausführung beim Neustart.
+
+Der anschließende aktive Crash-Prüfer wurde real ausgeführt: privater Record
+`/var/lib/foundry-deploy/worker-g3-active-2d5hmvo7/probe.json`, eigene Fixture
+`/srv/foundry-worker/workspaces/g2/g3-acceptance-restart-iu_2px8m`, Command
+`g3-restart-fa8c64e1-9844-4cf7-8142-8e80231277d9`. Native Command-Freigabe war offen,
+als ausschließlich die Worker-Dienste beendet wurden. Nach Neustart ist Codex
+bereit; zunächst blieb Generation 4 korrekt unklar und reserviert. Die lesende
+native Diagnose bestätigte den ursprünglichen Turn als `interrupted`, vollständige
+Historie und keine laufenden Turns/Befehle. Anschließend wurde Worker-Release
+`6643d6439c9e2d02069240765d25cc76f3408240` unter der tatsächlichen Dienst-UID
+geprüft und installiert, mit privater Konfigurations-/SQLite-Recovery unter
+`/var/lib/foundry-deploy/worker-g3-recovery-8r5u81yp`. Der Read-Service öffnete den
+Harness ohne Thread-/Turn-Fortsetzung und erhob den nativen Stop erneut.
+`active-recovery-verify` bestätigt am 3. November Generation 4 als `stopped`,
+positives Writer-Ende, passendes Stop-Manifest, freigegebene Reservation und
+unverändert genau einen Run/Attempt/nativen Turn. Keine direkten SQL-Atteste,
+kein Ersatzauftrag. Frische Readiness um 09:10:26Z: `codexG3`, CLI `0.156.1`,
+`activeRuns=0`; Host/Connector-PIDs `319318`/`319319` im bestehenden Dienstkonto
+und der gemeinsamen Slice. Main wurde nicht geändert. Evidence und fokussierte
+Regressionstests in [#45](https://github.com/niklaskastning/foundry/pull/45).
+
+Windows war für diese Unterbrechungsprobe nicht verfügbar. Zwei andere Clients
+hatten dieselbe Instanz verwendet; Main wurde erst nach dem Crash neu geöffnet
+und über `Instance sign in` angemeldet. Eine Worker-/Threadseite war während des
+Crashs nicht als aktive Reconnect-Probe geöffnet. Das belegt
+Katalogzugang nach Anmeldung, noch keine fortgesetzte Worker-/Thread-Verbindung
+in beiden Clients. Ablauf einer Main-/Foundry-Session und Worker-Reconnect bleiben
+getrennt zu klären; keine Zuordnung als Crash-bedingter Login-Fehler und keine
+neue pauschale Login-Testfolge. Der funktionale G3-Abschluss ist unabhängig davon
+bestätigt; P18b folgt jetzt in der bestehenden Reihenfolge und aktiviert noch
+keine automatisierten Provider-Starts.
 
 G1/G2 sind damit für die Entwicklungsfortsetzung ausreichend praktisch geprüft, aber nicht vollständig abgenommen. Die Restabnahmen bleiben sichtbar; keine Freigabe für Betrieb ohne Access, neue Infrastruktur oder bezahlte Turns ableiten. Nach G3 darf die isoliert vorgezogene P18a-Grundlage integriert weitergenutzt werden. Änderungen und neue Nachweise in ihren jeweiligen PRs belegen und die betroffenen Häkchen hier aktualisieren; Issue #13 dient als Nachweisarchiv.
 
@@ -260,6 +326,18 @@ G1 wird pro Betriebsart abgenommen: zunächst **G1-Access** für unser Deploymen
 
 **Gate P17 – Nachweis:** Zwei Writer auf demselben verwalteten Checkout werden serialisiert oder getrennten Worktrees zugeordnet. Restart verliert aktive Reservierung nicht; Cancel gibt erst nach Stop frei; Nutzerdateien außerhalb verwalteter Wurzeln bleiben unberührt.
 
+### P14Z · Zentrale Verbindungen und delegierte Provider-Autorisierung
+
+**Voraussetzungen und Einordnung:** G3 für die Integration mit realen Ausführungen; vorhandene Secret-/Provider-Adapter wiederverwenden. Die G4-Reihenfolge P18b → P47 → P38a/P38b → P19 ff. bleibt erhalten. P14Z ist vor zentral autorisierten zusätzlichen dauerhaften Workern (P32) umzusetzen; P37 und P52 bauen darauf auf. P23 liefert zuvor den zentralen GitHub-App-Teilzugang für Publishing, ohne vollständige Provider-Delegation zu behaupten.
+
+**Ergebnis und Umfang:** Verbindungen einmal über Foundry einrichten, prüfen, erneuern, trennen und erneut anmelden. Main besitzt Verbindungsidentität, Kontobindung und Freigaben; ein Credential-Service liefert autorisierten dauerhaften Devices und kurzlebigen Sandboxes nur die benötigte Laufzeitberechtigung. Neue Environments übernehmen freigegebene Bindings ohne erneute manuelle Anmeldung je Environment. Gerät, Factory/Agent und Auftrag begrenzen die Nutzung; Enrollment allein erteilt keinen Zugang. Zentrale Auswahl und fehlende Anmeldung sind auch für manuelle Threads sichtbar. Ein Refresh-Owner je erneuerbarem Konto, Ablauf, Rotation, Entzug und Wiederverbindung gehören zum Vertrag.
+
+**Teilpakete:** P14Za implementiert zentrale Verbindungsverwaltung und genau einen nachgewiesenen Codex-Delegationspfad für dauerhafte Worker. Weitere Adapter einzeln als P14Zb-Teilpakete integrieren: Claude sowie weitere Modellprovider/OpenAI-Zugangsarten; GitHub über P23, Azure DevOps über P41. Jeder Adapter besitzt eigenes Auth-/Delegationsgate. P37 verwendet dieselben Verbindungen für Sandboxes; P52 ergänzt zentral konfigurierte MCP-Server/Tools mit denselben Secret- und Grant-Bindings, einschließlich OAuth-Erneuerung soweit unterstützt. Das gemeinsame Verbindungsmodell ist verbindlich; nicht jeder Adapter muss zum ersten Teilpaket verfügbar sein.
+
+**Abgrenzung:** Keine Kopie persönlicher Providerprofile oder vollständiger Homes; keine unkoordinierte Verteilung erneuerbarer Login-Caches. Provider-spezifisch unterstützte Delegation nachweisen, statt universelle Token-Weitergabe vorauszusetzen. Fehlende Unterstützung sichtbar sperren und zentral als Handlungsbedarf melden. Kein automatischer Wechsel von Subscription zu API-Abrechnung. Foundry-Login und externe Kontoverbindungen bleiben getrennte Identitäten; zentrale Bedienung führt keine Agent-Turns auf Main ein.
+
+**Gate P14Z je Adapter – Nachweis:** Einmal zentral verbinden, zwei getrennte dauerhafte Testdevices ohne eigene Anmeldung autorisieren; nur freigegebene Bindings nutzbar. Refresh-Rennen, Ablauf, Rotation, Entzug, Offline-Device und Main-/Worker-Neustart prüfen. Widerruf verhindert neue Credential-Ausgabe; bereits ausgegebene Berechtigungen erhalten eine nachgewiesene begrenzte Gültigkeit beziehungsweise wirksamen Upstream-Widerruf, keine Fernlöschungsbehauptung für Offline-Caches. Fremde Instanz/Device/Factory und unzulässiger Scope scheitern; keine Secrets in Logs, Definitionen oder Archiven. Sandbox-Wiederverwendung wird in P37 und MCP-Zugriff in P52 separat abgenommen.
+
 ## Factory-MVP · G4
 
 ### P18a · Factory und beständiger Auftrag
@@ -448,7 +526,7 @@ G1 wird pro Betriebsart abgenommen: zunächst **G1-Access** für unser Deploymen
 
 ### P52 · Agentenressourcen und Ausführungseinstellungen
 
-**Voraussetzungen:** P28, P49; Pool-/Sandbox-Einstellungen erst nach P32/P34.
+**Voraussetzungen:** P28, P49; zentrale MCP-/Credential-Bindings benötigen P14Z, Pool-/Sandbox-Einstellungen erst nach P32/P34.
 
 **Ergebnis und Umfang:** P52a liefert das Agentendetail mit Instruktionen, Automationen, Version und Einstellungen; globale MCP-/Secret-/Connector-Ressourcen an Factory und Rolle binden. Provider, Modell und unterstützte Optionen aus Worker-Capabilities beziehen; wirksame Defaults/Overrides anzeigen. P52b ergänzt deklarative Modell-Routingregeln nach Aufgabenklasse und ausdrücklich erlaubter Kandidatenliste; die aufgelöste Wahl samt Regelversion wird vor Dispatch festgehalten.
 
@@ -552,7 +630,7 @@ G1 wird pro Betriebsart abgenommen: zunächst **G1-Access** für unser Deploymen
 
 ### P32 · Kapazitäten und explizite Zielauswahl
 
-**Voraussetzungen:** G5, P11, P16.
+**Voraussetzungen:** G5, P11, P16, P14Za für zentral autorisierte Worker.
 
 **Ergebnis und Umfang:** Atomare Worker-Reservierungen, provider-/kontobezogene Limits, feste Ziele und freigegebene Pools sowie draining bereitstellen.
 
@@ -602,7 +680,7 @@ G1 wird pro Betriebsart abgenommen: zunächst **G1-Access** für unser Deploymen
 
 ### P37 · Unterstützter Codex-Credential-Bootstrap für Sandboxes
 
-**Voraussetzungen:** P36, P14.
+**Voraussetzungen:** P36, P14, P14Za.
 
 **Ergebnis und Umfang:** Genau einen verifizierten Provider-Pfad mit Kontobindung, Refresh-Owner, Ablauf und Widerruf integrieren; capability-gesteuerte Freigabe.
 

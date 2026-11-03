@@ -1142,6 +1142,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     onRequest: (method: string, params: unknown) => Effect.Effect<void> = () => Effect.void,
     readChildMetadata?: Parameters<typeof withCodexReplayChildMetadata>[2],
     beforeEmitInbound?: CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"],
+    existingNativeThreadId?: string,
   ) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1210,11 +1211,34 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         modelSelection: CODEX_TEST_MODEL_SELECTION,
         runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
       });
-      const providerThread = yield* runtime.ensureThread({
-        threadId,
-        modelSelection: CODEX_TEST_MODEL_SELECTION,
-        runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
-      });
+      const providerThread: OrchestrationV2ProviderThread =
+        existingNativeThreadId === undefined
+          ? yield* runtime.ensureThread({
+              threadId,
+              modelSelection: CODEX_TEST_MODEL_SELECTION,
+              runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+            })
+          : {
+              id: ProviderThreadId.make("recovered-provider-thread"),
+              driver: runtime.driver,
+              providerInstanceId: runtime.instanceId,
+              providerSessionId: runtime.providerSessionId,
+              appThreadId: threadId,
+              ownerNodeId: null,
+              nativeThreadRef: {
+                driver: runtime.driver,
+                nativeId: existingNativeThreadId,
+                strength: "strong",
+              },
+              nativeConversationHeadRef: null,
+              status: "idle",
+              firstRunOrdinal: 1,
+              lastRunOrdinal: 1,
+              handoffIds: [],
+              forkedFrom: null,
+              createdAt: yield* DateTime.now,
+              updatedAt: yield* DateTime.now,
+            };
       const events: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
       const firstTerminal = yield* Deferred.make<void>();
       yield* runtime.events.pipe(
@@ -1270,6 +1294,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     });
 
   it.effect.each([
+    "recovered",
     "completed",
     "inProgress",
     "missing",
@@ -1288,7 +1313,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           nativeThreadId,
           nativeTurnId,
           prompt: "fixture",
-        }).slice(0, 5);
+        }).slice(0, state === "recovered" ? 3 : 5);
         const thread = {
           id: nativeThreadId,
           sessionId: nativeThreadId,
@@ -1359,7 +1384,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               type: "expect_outbound",
               label: "proof",
               frame: {
-                id: 3,
+                id: state === "recovered" ? 2 : 3,
                 method: "thread/read",
                 params: { threadId: nativeThreadId, includeTurns: true },
               },
@@ -1370,7 +1395,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               frame:
                 state === "disconnected"
                   ? { id: 3, error: { code: -32603, message: "offline fixture" } }
-                  : { id: 3, result: { thread } },
+                  : { id: state === "recovered" ? 2 : 3, result: { thread } },
             },
             ...(state.startsWith("child-")
               ? [
@@ -1409,7 +1434,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               : []),
           ],
         });
-        const harness = yield* makeCodexReplayHarness(transcript);
+        const harness = yield* makeCodexReplayHarness(
+          transcript,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          state === "recovered" ? nativeThreadId : undefined,
+        );
         assert.isDefined(harness.runtime.confirmWriterEnded);
         assert.equal(
           yield* harness.runtime.confirmWriterEnded!({
@@ -1417,7 +1449,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             nativeTurnId,
             runId: RunId.make("writer-evidence-run"),
           }),
-          state === "completed" || state === "child-completed",
+          state === "recovered" || state === "completed" || state === "child-completed",
         );
       }).pipe(
         Effect.scoped,

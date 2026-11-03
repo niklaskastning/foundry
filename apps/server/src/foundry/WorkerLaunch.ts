@@ -1,5 +1,6 @@
 import { WorkspaceGate } from "./workspaces/WorkspaceGate.ts";
 import * as ProviderSessions from "../orchestration-v2/ProviderSessionManager.ts";
+import * as RuntimePolicy from "../orchestration-v2/RuntimePolicy.ts";
 import * as ExecutionStore from "./ExecutionStore.ts";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as Schedule from "effect/Schedule";
@@ -105,6 +106,7 @@ export const layer = Layer.effect(
     const readiness = yield* WorkerReadiness;
     const workspaceGate = yield* WorkspaceGate;
     const sessions = yield* ProviderSessions.ProviderSessionManagerV2;
+    const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
     const executions = yield* ExecutionStore.ExecutionStore;
     const checkpoints = yield* CheckpointStore.CheckpointStore;
     const renew = Effect.fn("WorkerLaunch.renew")(
@@ -170,7 +172,9 @@ export const layer = Layer.effect(
             (candidate) => candidate.id === run.providerThreadId,
           );
           const turns = records.providerTurns.filter(
-            (candidate) => candidate.runAttemptId === run.activeAttemptId,
+            (candidate) =>
+              candidate.runAttemptId === run.activeAttemptId &&
+              candidate.providerThreadId === providerThread?.id,
           );
           const turn = turns.at(-1);
           if (
@@ -178,9 +182,40 @@ export const layer = Layer.effect(
             providerThread?.providerSessionId &&
             turn?.nativeTurnRef?.nativeId
           ) {
-            const runtime = yield* sessions.get(providerThread.providerSessionId);
+            let runtime = yield* sessions.get(providerThread.providerSessionId);
+            const providerSessionId = providerThread.providerSessionId;
+            const nativeThreadId = providerThread.nativeThreadRef?.nativeId;
+            if (
+              Option.isNone(runtime) &&
+              row.state === "uncertain" &&
+              row.stopRequested === 1 &&
+              providerThread.driver === "codex" &&
+              nativeThreadId &&
+              providerThread.providerInstanceId === binding &&
+              run.modelSelection.instanceId === providerThread.providerInstanceId
+            ) {
+              // Opening the harness permits native history reads; never resume the crashed thread or turn.
+              runtime = yield* Effect.gen(function* () {
+                const policy = yield* runtimePolicy.resolve({
+                  thread: records.thread,
+                  modelSelection: run.modelSelection,
+                });
+                return yield* sessions.open({
+                  threadId: receipt.threadId,
+                  providerSessionId,
+                  modelSelection: run.modelSelection,
+                  runtimePolicy: policy,
+                  initialNativeThreadId: nativeThreadId,
+                });
+              }).pipe(
+                Effect.timeoutOption("10 seconds"),
+                Effect.orElseSucceed(() => Option.none()),
+              );
+            }
             if (
               Option.isSome(runtime) &&
+              runtime.value.instanceId === providerThread.providerInstanceId &&
+              runtime.value.driver === providerThread.driver &&
               runtime.value.confirmWriterEnded &&
               (yield* runtime.value
                 .confirmWriterEnded({
