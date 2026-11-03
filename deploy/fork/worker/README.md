@@ -48,7 +48,7 @@ Nach dem ersten lokalen Start den vorhandenen [CLI-Enrollment-Weg](../../../docs
 
 Dann `systemctl start foundry-connector.service` ausführen. Der Connector prüft Environment-ID und festen Loopback-Port. Status: `systemctl status foundry-host.service foundry-connector.service`; Logs: `journalctl -u foundry-host.service -u foundry-connector.service`. Logs können Pairing-Ausgaben enthalten und sind nicht ungeprüft zu veröffentlichen. Erst nach erfolgreicher Prüfung mit `systemctl enable foundry-host.target` für den Boot aktivieren. Kein Codex wird installiert oder gestartet.
 
-## Zentrale Artefakte (P38a, noch keine Live-Abnahme)
+## Zentrale Artefakte (P38a)
 
 `artifactPublication: true` setzt im Host die Bindungsdatei
 `/var/lib/foundry-worker/artifact-binding.json`. Ohne diese Option bleibt der
@@ -99,7 +99,7 @@ enthält vorherige Installation und Binding sowie Worker-SQLite-Snapshots.
 bei unverändertem Worker-Schema und bestätigtem Writer-Ende wieder her. Er stellt
 keine Datenbank zurück und verändert Main nicht. Fehler lassen den Worker
 gestoppt; eine ungeklärte Ausführung bleibt gesperrt. Dies ist kein Ersatz für den
-noch offenen Live-Gatenachweis oder eine vollständige Betriebs-/Restore-Abnahme.
+im Implementierungsplan abgegrenzten Client-/Betriebsnachweise oder eine vollständige Restore-Abnahme.
 
 ## Stop, Neustart, Upgrade und Entfernung
 

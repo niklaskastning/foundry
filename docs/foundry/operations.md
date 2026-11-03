@@ -43,7 +43,7 @@ backup/recovery boundary. It exposes bounded JSON transfer operations at
 channel is unchanged. No Cloudflare machine-path expansion is needed. Descriptor
 support uses optional `artifactTransfer` metadata: adding an unknown capability to
 the strict version-1 enum would break older Windows readers. The separate opt-in
-[worker binding](../../deploy/fork/worker/README.md#zentrale-artefakte-p38a-noch-keine-live-abnahme)
+[worker binding](../../deploy/fork/worker/README.md#zentrale-artefakte-p38a)
 confirms attachments before message commit; it does not provide a central thread
 archive. When the artifact profile is enabled, `/foundry` shows Files after a
 verified session. Load files there without selecting or connecting their source
