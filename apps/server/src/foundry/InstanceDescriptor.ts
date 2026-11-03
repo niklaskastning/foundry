@@ -76,6 +76,7 @@ const make = Effect.gen(function* () {
       capabilities,
       ...(artifacts
         ? {
+            threadArchive: { protocolVersion: "1" as const, pageSize: 50 },
             artifactTransfer: {
               protocolVersion: "1" as const,
               chunkBytes: FOUNDRY_ARTIFACT_CHUNK_BYTES,

@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ExecutionObserver from "./ExecutionObserver.ts";
+import * as ArchivePublication from "./ArchivePublication.ts";
 
 export class ExecutionStoreError extends Schema.TaggedError<ExecutionStoreError>()(
   "ExecutionStoreError",
@@ -64,6 +65,7 @@ export const layer = Layer.effect(
   ExecutionStore,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const archive = yield* ArchivePublication.ArchivePublication;
     yield* sql`UPDATE foundry_executions SET state = 'uncertain', expires_at = 0, stop_requested = 1 WHERE writer_ended = 0 AND manifest IS NULL`;
     const columns = sql.literal(
       `generation, command_id AS "commandId", thread_id AS "threadId", expires_at AS "expiresAt", state, writer_ended AS "writerEnded", stop_requested AS "stopRequested", manifest`,
@@ -125,6 +127,16 @@ export const layer = Layer.effect(
     const finish = Effect.fn("ExecutionStore.finish")(
       function* (commandId: CommandId, generation: number, manifest: FoundryWorkerManifest) {
         if (manifest.generation !== generation) return;
+        const row = yield* read(commandId);
+        if (!row || row.generation !== generation || row.writerEnded !== 1 || row.manifest !== null)
+          return;
+        if (manifest.outcome === "completed" && archive) {
+          const complete = yield* archive.reconcile(row.threadId).pipe(
+            Effect.map((status) => status.complete),
+            Effect.orElseSucceed(() => false),
+          );
+          if (!complete) return;
+        }
         yield* sql`UPDATE foundry_executions SET manifest = ${yield* encodeManifest(manifest)},
       state = ${manifest.outcome === "completed" ? "completed" : "stopped"}
       WHERE command_id = ${commandId} AND generation = ${generation} AND writer_ended = 1 AND manifest IS NULL AND (stop_requested = 0 OR ${manifest.outcome} = 'stopped')`;

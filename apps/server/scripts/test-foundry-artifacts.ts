@@ -41,6 +41,8 @@ import * as ServerConfig from "../src/config.ts";
 import * as Files from "../src/foundry/ArtifactFiles.ts";
 import * as Artifacts from "../src/foundry/Artifacts.ts";
 import * as ArtifactAccess from "../src/foundry/ArtifactAccess.ts";
+import * as ThreadArchiveAccess from "../src/foundry/ThreadArchiveAccess.ts";
+import * as ThreadArchive from "../src/foundry/ThreadArchive.ts";
 import * as ArtifactHttp from "../src/foundry/artifactHttp.ts";
 import * as ArtifactPublication from "../src/foundry/ArtifactPublication.ts";
 import * as DocumentText from "../src/provider/DocumentText.ts";
@@ -470,7 +472,8 @@ try {
       const device = yield* registry.enroll(signEnrollment(enrollment, key.privateKey));
       const handler = HttpRouter.toWebHandler(
         ArtifactHttp.layer.pipe(
-          Layer.provide(ArtifactAccess.layer),
+          Layer.provide(Layer.merge(ArtifactAccess.layer, ThreadArchiveAccess.layer)),
+          Layer.provide(ThreadArchive.layer.pipe(Layer.provide(faultStorage))),
           Layer.provide(Layer.succeedContext(context)),
           Layer.provide(Layer.succeed(DeviceConfig.DeviceOrigin, { origin })),
           Layer.provide(

@@ -1,10 +1,18 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, ThreadId, ProviderThreadId, RunId, CheckpointId } from "@t3tools/contracts";
+import {
+  CommandId,
+  ThreadId,
+  ProviderThreadId,
+  RunId,
+  CheckpointId,
+  FoundryArchiveError,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ExecutionStore from "./ExecutionStore.ts";
+import * as ArchivePublication from "./ArchivePublication.ts";
 
 const commandId = CommandId.make("lease-test");
 const threadId = ThreadId.make("foundry-launch:lease-test");
@@ -94,3 +102,41 @@ it.effect(
       }).pipe(Effect.provide(Layer.fresh(ExecutionStore.layer)));
     }).pipe(Effect.provide(testLayer)),
 );
+
+it.effect("requires a complete central archive before recording a successful result", () => {
+  let mode = "unavailable";
+  const archive = {
+    reconcile: () =>
+      mode === "unavailable"
+        ? Effect.fail(new FoundryArchiveError({ code: "unavailable" }))
+        : Effect.succeed({ complete: mode === "complete" }),
+  };
+  return Effect.gen(function* () {
+    const store = yield* ExecutionStore.ExecutionStore;
+    const row = yield* store.reserve(commandId, threadId);
+    yield* store.confirm(commandId, row.generation);
+    const manifest = {
+      generation: row.generation,
+      runId: RunId.make("run"),
+      checkpointId: CheckpointId.make("checkpoint"),
+      checkpointRef: "refs/checkpoints/result",
+      outcome: "completed" as const,
+    };
+    for (const next of ["unavailable", "incomplete", "complete"]) {
+      mode = next;
+      yield* store.finish(commandId, row.generation, manifest);
+      assert.equal(
+        (yield* store.read(commandId))?.state,
+        mode === "complete" ? "completed" : "finalizing",
+      );
+    }
+    const finished = yield* store.read(commandId);
+    mode = "unavailable";
+    yield* store.finish(commandId, row.generation, manifest);
+    assert.deepEqual(yield* store.read(commandId), finished);
+  }).pipe(
+    Effect.provide(
+      testLayer.pipe(Layer.provide(Layer.succeed(ArchivePublication.ArchivePublication, archive))),
+    ),
+  );
+});

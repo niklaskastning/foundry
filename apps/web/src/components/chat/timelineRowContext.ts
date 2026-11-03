@@ -75,6 +75,7 @@ export interface TimelineRowSharedState {
    * Draws a published HTML visual. Unset, the row loads it from the environment; the guest page
    * loads it through its own route.
    */
+  renderMcpApp?: ((row: Extract<TimelineRow, { kind: "mcp-app" }>) => ReactNode) | undefined;
   renderHtmlRender: ((row: Extract<TimelineRow, { kind: "html-render" }>) => ReactNode) | undefined;
   /** Unset, expanded rows read detail and command output from the environment. */
   turnItemSource: TurnItemSource | undefined;

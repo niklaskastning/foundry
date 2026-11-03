@@ -194,6 +194,7 @@ export interface OnboardingResult {
   confirmed: boolean;
   session: FoundrySession | null;
   artifactsAvailable?: boolean;
+  archivesAvailable?: boolean;
   message: string;
 }
 
@@ -332,6 +333,7 @@ export function createInstanceClient(options: {
       confirmed: true,
       session,
       artifactsAvailable: descriptor.artifactTransfer?.protocolVersion === "1",
+      archivesAvailable: descriptor.threadArchive?.protocolVersion === "1",
       message:
         "Signed in to Foundry. This session does not grant T3 environment or gateway access.",
     };

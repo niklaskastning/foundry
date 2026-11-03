@@ -13,6 +13,10 @@ import {
   type Operation,
 } from "./onboarding";
 
+const ThreadArchiveLibrary = lazy(() =>
+  import("./ThreadArchiveLibrary").then((module) => ({ default: module.ThreadArchiveLibrary })),
+);
+
 const ArtifactLibrary = lazy(() =>
   import("./ArtifactLibrary").then((module) => ({ default: module.ArtifactLibrary })),
 );
@@ -168,6 +172,7 @@ export function FoundryPage() {
         {state?.session && state.artifactsAvailable && !nativeTransport ? (
           <Suspense fallback={<p className="text-sm">Loading files…</p>}>
             <ArtifactLibrary />
+            {state.archivesAvailable ? <ThreadArchiveLibrary /> : null}
           </Suspense>
         ) : null}
       </div>
