@@ -177,6 +177,9 @@ function ArchiveTimeline({
   const theme = useRenderedAppearance();
   const source: TurnItemSource = {
     inlineDiff: true,
+    readOnlyArchive: true,
+    runtimeRequest: (requestId) =>
+      projection.runtimeRequests.find((request) => request.id === requestId),
     detail: ({ itemId }) =>
       Atom.make(
         AsyncResult.success({

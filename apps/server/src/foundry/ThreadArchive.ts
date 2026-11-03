@@ -19,6 +19,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
+import { ARCHIVE_UNAVAILABLE_RESOURCE } from "./archiveResources.ts";
 import * as InstanceDatabase from "./InstanceDatabase.ts";
 import * as ArtifactFiles from "./ArtifactFiles.ts";
 import { archiveEvent } from "./archiveEvent.ts";
@@ -81,11 +83,26 @@ type ThreadRow = {
   source_complete: boolean;
   device_id: FoundryDeviceId;
 };
+const decodeToolJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const attachmentClaims = (input: unknown): Map<string, unknown | null> => {
   const result = new Map<string, unknown | null>();
-  const visit = (value: unknown) => {
+  const visit = (value: unknown, path = "", owner = "", toolOutput = false) => {
+    if (typeof value === "string") {
+      if (
+        value === ARCHIVE_UNAVAILABLE_RESOURCE &&
+        (toolOutput || path.endsWith(".viewedImagePath"))
+      ) {
+        result.set(`resource:${owner}:${path}`, null);
+      } else if (toolOutput && value.includes(ARCHIVE_UNAVAILABLE_RESOURCE)) {
+        const parsed = decodeToolJson(value);
+        if (Option.isSome(parsed) && typeof parsed.value === "object")
+          visit(parsed.value, path, owner, toolOutput);
+      }
+      return;
+    }
     if (Array.isArray(value)) {
-      for (const entry of value) visit(entry);
+      for (const [index, entry] of value.entries())
+        visit(entry, `${path}.${index}`, owner, toolOutput);
       return;
     }
     if (!value || typeof value !== "object") return;
@@ -103,7 +120,14 @@ const attachmentClaims = (input: unknown): Map<string, unknown | null> => {
           : null,
       );
     }
-    for (const child of Object.values(object)) visit(child);
+    const id = typeof object.id === "string" ? object.id : owner;
+    for (const [key, child] of Object.entries(object))
+      visit(
+        child,
+        `${path}.${key}`,
+        id,
+        toolOutput || (object.type === "dynamic_tool" && key === "output"),
+      );
   };
   visit(input);
   return result;

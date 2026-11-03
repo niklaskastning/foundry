@@ -104,6 +104,7 @@ const isError = Schema.is(FoundryArchiveError);
 const failure = (promise: Promise<unknown>, code: FoundryArchiveError["code"]) =>
   NodeAssert.rejects(promise, (error: unknown) => isError(error) && error.code === code);
 const decodeEvent = Schema.decodeUnknownSync(FoundryArchiveEvent);
+const encodeStoredEvent = Schema.encodeSync(Schema.fromJsonString(FoundryArchiveEvent));
 const now = "2026-11-03T00:00:00.000Z";
 const created = decodeEvent({
   sequence: 1,
@@ -449,6 +450,62 @@ try {
   NodeAssert.equal((await call((s) => s.ingest(machine, input([missing], 4)))).complete, false);
   await artifact((s) => s.publish(principal, begun.reference));
   NodeAssert.equal((await call((s) => s.cursor(principal, owner))).complete, true);
+  const localResources = decodeEvent({
+    sequence: 5,
+    sourceSequence: 50,
+    event: {
+      id: "event:local-resources",
+      type: "turn-item.updated",
+      threadId: owner.threadId,
+      occurredAt: now,
+      payload: {
+        id: "tool:resources",
+        threadId: owner.threadId,
+        runId: null,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        status: "completed",
+        title: null,
+        startedAt: null,
+        completedAt: null,
+        updatedAt: now,
+        type: "dynamic_tool",
+        toolName: "asset-fixture",
+        input: { path: "literal call argument" },
+        viewedImagePath: "/srv/foundry-worker/private/image.png",
+        output: {
+          content: [
+            { type: "image", mimeType: "image/png" },
+            { type: "resource_link", uri: "file:///srv/foundry-worker/private/output.bin" },
+            { type: "text", text: "Literal transcript /srv/foundry-worker/private stays readable" },
+          ],
+          htmlRender: { attachmentId: "worker-html", title: "HTML", height: 320 },
+          resourceURL: "blob:worker-temporary",
+          gatewayTicket: "temporary-ticket",
+        },
+      },
+    },
+  });
+  const resourceStatus = await call((s) => s.ingest(machine, input([localResources], 5)));
+  NodeAssert.equal(resourceStatus.complete, false);
+  NodeAssert.ok(resourceStatus.missingAttachmentCount >= 5);
+  const resourceRead = await call((s) => s.read(principal, { owner, after: 4 }));
+  const archivedTool = resourceRead.events[0]?.event;
+  NodeAssert.equal(archivedTool?.type, "turn-item.updated");
+  if (archivedTool?.type !== "turn-item.updated" || archivedTool.payload.type !== "dynamic_tool")
+    throw new Error("fixture tool event");
+  NodeAssert.equal(archivedTool.payload.viewedImagePath, "foundry-archive:unavailable");
+  const serialized = encodeStoredEvent(resourceRead.events[0]!);
+  NodeAssert.ok(!serialized.includes("/srv/foundry-worker/private/image.png"));
+  NodeAssert.ok(!serialized.includes("blob:worker-temporary"));
+  NodeAssert.ok(!serialized.includes("temporary-ticket"));
+  NodeAssert.ok(
+    serialized.includes("Literal transcript /srv/foundry-worker/private stays readable"),
+  );
   const blobs = await NodeFSP.readdir(NodePath.join(directory, "blobs"));
   NodeAssert.equal(blobs.length, 1);
   await NodeFSP.unlink(NodePath.join(directory, "blobs", blobs[0]!));
@@ -466,8 +523,8 @@ try {
     "archive_migrator",
   );
   const fresh = await call((s) => s.read({ ...principal }, { owner }));
-  NodeAssert.equal(fresh.confirmedCursor, 4);
-  NodeAssert.equal(fresh.events.length, 4);
+  NodeAssert.equal(fresh.confirmedCursor, 5);
+  NodeAssert.equal(fresh.events.length, 5);
   NodeAssert.equal(fresh.events[1]?.event.type, "message.updated");
   NodeAssert.equal((await call((s) => s.list(principal, {}))).items.length, 3);
   await failure(

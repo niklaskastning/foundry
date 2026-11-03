@@ -2,6 +2,7 @@ import type { ToolCallDiffTarget } from "../../diffPanelStore";
 import type {
   ProviderApprovalDecision,
   RuntimeRequestId,
+  OrchestrationV2RuntimeRequest,
   WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import {
@@ -36,6 +37,10 @@ import { type HandoffTimelineRun } from "./V2LifecycleRow";
  */
 export interface TurnItemSource {
   readonly inlineDiff?: boolean;
+  readonly readOnlyArchive?: boolean;
+  readonly runtimeRequest?: (
+    requestId: RuntimeRequestId,
+  ) => OrchestrationV2RuntimeRequest | undefined;
   readonly detail: TurnItemDetailSource;
   readonly commandOutput: (target: {
     readonly threadId: ThreadId;

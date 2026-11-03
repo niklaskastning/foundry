@@ -122,11 +122,13 @@ function useFetchedTurnItem(
   );
   const fetchedItem = detail.data?.item;
   const item = fetchedItem?.type === wireItem.type ? fetchedItem : wireItem;
+  const images = turnItemOutputImages(item);
   return {
     item,
     output: {
       output: turnItemOutputText(item),
-      images: turnItemOutputImages(item),
+      images: source?.readOnlyArchive ? [] : images,
+      imagesUnavailable: source?.readOnlyArchive === true && images.length > 0,
       environmentId,
       pending: item === wireItem && detail.isPending,
       error:
@@ -142,6 +144,7 @@ function useFetchedTurnItem(
 
 interface ToolOutputState {
   readonly output: string | null;
+  readonly imagesUnavailable?: boolean;
   readonly images: ReturnType<typeof turnItemOutputImages>;
   readonly environmentId: EnvironmentId;
   readonly pending: boolean;
@@ -173,6 +176,11 @@ function ToolOutput(props: ToolOutputState) {
   return (
     <>
       {images}
+      {props.imagesUnavailable ? (
+        <p className="text-muted-foreground">
+          Tool output images are unavailable in this Main archive.
+        </p>
+      ) : null}
       {text}
     </>
   );
@@ -243,6 +251,10 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
   );
   const item = fetched.item;
   const outputState = fetched.output;
+  const archivedRequest =
+    item.type === "approval_request" || item.type === "user_input_request"
+      ? props.source?.runtimeRequest?.(item.requestId)
+      : undefined;
   return (
     <div className="space-y-2 text-xs" data-v2-item-inspector={item.type}>
       {item.type === "reasoning" && item.text ? (
@@ -397,6 +409,20 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
               ),
             )
             .join("\n\n")}
+        />
+      ) : null}
+      {archivedRequest ? (
+        <StructuredValue
+          value={{
+            status: archivedRequest.status,
+            ...(archivedRequest.decision === undefined
+              ? {}
+              : { decision: archivedRequest.decision }),
+            ...(archivedRequest.feedback === undefined
+              ? {}
+              : { feedback: archivedRequest.feedback }),
+            ...(archivedRequest.answers === undefined ? {} : { answers: archivedRequest.answers }),
+          }}
         />
       ) : null}
       {item.type === "notification" ? <StructuredValue value={item.detail} /> : null}
