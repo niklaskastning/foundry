@@ -5,8 +5,9 @@ description: Test T3 Code's web and desktop UI through its built-in Browser pane
 
 # Test T3 web and desktop
 
-Use T3's built-in Browser panel for verification. If its tools are absent or
-the panel reports unavailable, explain the blocker and stop verification.
+Use T3's built-in Browser panel for verification. If the browser tools themselves
+are absent or return an explicit tool-unavailable error, explain the blocker and
+stop verification.
 Do not install or switch to another automation system. For native mobile
 testing, use [test-t3-mobile](../test-t3-mobile/SKILL.md).
 
@@ -36,8 +37,10 @@ model, such as Haiku for Claude or Luna for Codex.
 
 ## Use the Browser panel
 
-Call `preview_status`, then `preview_open` if the Browser panel is
-closed. Navigate to the complete startup pairing URL once with
+Call `preview_status`. A result of `available:false` means no preview has been
+started, not that the browser tools are unavailable. Call `preview_open` when
+`available:false` or no tab is open, then continue verification.
+Navigate to the complete startup pairing URL once with
 `preview_navigate`, then use `preview_snapshot` and T3's interaction tools.
 If the token was consumed or expired, run `node apps/server/src/bin.ts pair`
 for a fresh one. Keep using the same tab.
