@@ -61,14 +61,22 @@ Der anschließende aktive Crash-Prüfer wurde real ausgeführt: privater Record
 als ausschließlich die Worker-Dienste beendet wurden. Nach Neustart ist Codex
 bereit, die alte Generation 4 bleibt jedoch korrekt unklar und reserviert;
 ein Retry startet nichts neu. Die positive Recovery und anschließende Freigabe
-sind damit noch nicht belegt. Der bestehende Read-Pfad benötigt für seinen
-nativen Stop-Nachweis eine Provider-Runtime; der Reconciler verlangt gespeichertes
-Writer-Ende plus Manifest. Eine lesende Diagnose der ursprünglichen nativen
-Historie ist vorbereitet, ändert aber keine Ausführungs-/Reservierungsdaten.
+sind damit noch nicht belegt. Die inzwischen real ausgeführte lesende Diagnose
+bestätigt den ursprünglichen nativen Turn als `interrupted`, vollständige Historie,
+keine laufenden Turns/Befehle und keinen neuen Provider-Turn. Der bisherige
+Read-Pfad kann nach Session-Verlust die Runtime nicht selbst wieder öffnen.
+[#45](https://github.com/niklaskastning/foundry/pull/45) ergänzt diesen Codex-Recovery-Pfad:
+Harness öffnen, ohne Thread/Turn fortzusetzen, native Historie erneut prüfen,
+erst dann Writer-Ende und generationsgebundenes Stop-Manifest speichern.
+Unbestätigte Historie, Provider-Ausfall oder andere Instanz bleiben gesperrt.
+Der bestehende Reconciler übernimmt danach die Freigabe. Die Änderung und ihr
+Worker-Update-Helfer sind vorbereitet; Deployment und positiver Lauf des Service-Pfads
+auf Generation 4 bleiben offen. Die Diagnose allein ändert keine Ausführungsdaten.
 
 Windows war für diese Unterbrechungsprobe nicht verfügbar. Zwei andere Clients
-waren mit derselben Instanz verbunden; der Maintainer musste nach Seitenaufruf
-zunächst `Instance sign in` verwenden und sah danach das Device wieder. Das belegt
+hatten dieselbe Instanz verwendet; Main wurde erst nach dem Crash neu geöffnet
+und über `Instance sign in` angemeldet. Eine Worker-/Threadseite war während des
+Crashs nicht als aktive Reconnect-Probe geöffnet. Das belegt
 Katalogzugang nach Anmeldung, noch keine fortgesetzte Worker-/Thread-Verbindung
 in beiden Clients. Ablauf einer Main-/Foundry-Session und Worker-Reconnect bleiben
 getrennt zu klären; keine Zuordnung als Crash-bedingter Login-Fehler und keine

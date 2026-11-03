@@ -421,7 +421,7 @@ def validate_restart_state(database, journal, record):
             "reservationHeld": reservations[0][0] != "released", "exactlyOneRunAttemptNativeTurn": True}
 
 
-def active_restart_verify():
+def active_restart_verify(*, recovered=False):
     if os.geteuid() != 0:
         raise RuntimeError("Administrator required")
     installation = worker.Installation("/")
@@ -436,9 +436,11 @@ def active_restart_verify():
         raise RuntimeError("Identical retry changed its original receipt")
     database = Path(worker.T3 + "/userdata/statev2.sqlite")
     proof = validate_restart_state(database, database.with_name("foundry-workspaces.sqlite"), record)
+    if recovered and (not proof["writerEnded"] or proof["manifest"] is None or proof["reservationHeld"]):
+        raise RuntimeError("Recovery has not confirmed writer end, stopped manifest and workspace release; keep fenced")
     proof.update({"commandId": record["launch"]["commandId"], "receiptUnchanged": True, "newProviderStarts": 0, "g3FullyAccepted": False})
     owner = pwd.getpwnam("niklas")
-    output = Path(owner.pw_dir) / ".cache/foundry-g3-acceptance/active-restart-proof.json"
+    output = Path(owner.pw_dir) / (".cache/foundry-g3-acceptance/active-recovery-proof.json" if recovered else ".cache/foundry-g3-acceptance/active-restart-proof.json")
     with output.open("x") as stream:
         json.dump(proof, stream, indent=2)
     os.chmod(output, 0o600)
@@ -446,12 +448,7 @@ def active_restart_verify():
     print(json.dumps(proof, indent=2))
 
 
-def inspect_native_restart():
-    if os.geteuid() != 0:
-        raise RuntimeError("Administrator required")
-    installation = worker.Installation("/")
-    config = installation.previous()["config"]
-    record = json.loads(installation.path(json.loads(installation.path(ACTIVE_POINTER).read_text())["record"]).read_text())
+def native_restart_summary(config, record):
     projection = rpc(config, "orchestration.getThreadProjection", {"threadId": record["receipt"]["threadId"]})
     if len(projection["runs"]) != 1 or len(projection["attempts"]) != 1 or len(projection["providerTurns"]) != 1:
         raise RuntimeError("Expected exactly the original run/attempt/native turn")
@@ -465,6 +462,16 @@ def inspect_native_restart():
         "command": SHIM, "args": ["app-server"], "threadId": thread["nativeThreadRef"]["nativeId"], "turnId": turn["nativeTurnRef"]["nativeId"],
     })))
     summary.update({"commandId": record["launch"]["commandId"], "generation": record["generation"], "readOnly": True, "providerTurnsStarted": 0})
+    return summary
+
+
+def inspect_native_restart():
+    if os.geteuid() != 0:
+        raise RuntimeError("Administrator required")
+    installation = worker.Installation("/")
+    config = installation.previous()["config"]
+    record = json.loads(installation.path(json.loads(installation.path(ACTIVE_POINTER).read_text())["record"]).read_text())
+    summary = native_restart_summary(config, record)
     owner = pwd.getpwnam("niklas")
     output = Path(owner.pw_dir) / ".cache/foundry-g3-acceptance/active-native-history.json"
     with output.open("x") as stream:
@@ -487,6 +494,8 @@ def main():
         active_restart_start()
     elif sys.argv[1:] == ["active-restart-verify"]:
         active_restart_verify()
+    elif sys.argv[1:] == ["active-recovery-verify"]:
+        active_restart_verify(recovered=True)
     elif sys.argv[1:] == ["restart-idle"]:
         restart_idle()
     elif sys.argv[1:] == ["bind"]:

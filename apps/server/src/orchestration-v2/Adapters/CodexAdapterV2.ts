@@ -6904,6 +6904,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           events: Stream.fromEffectRepeat(Queue.take(events)),
           confirmWriterEnded: Effect.fn("CodexAdapterV2.confirmWriterEnded")(
             function* (probe) {
+              yield* ensureInitialized;
               const nativeThreadId = yield* getNativeThreadId(probe.providerThread);
               if (yield* runtime.hasPendingBackgroundWorkForThread!(probe.providerThread))
                 return false;

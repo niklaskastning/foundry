@@ -266,6 +266,28 @@ Probe-Prozesse werden anhand der beim Start erfassten Prozessgruppe beendet.
 Das Ergebnis ist Diagnose, keine automatische Reservation-Freigabe. Ein unklarer
 Altversuch bleibt bis zum belegten Service-Recovery-Pfad gesperrt.
 
+Für den bestätigten nativen Stop kann ein sauberes Recovery-Release bereitgestellt
+werden: Produktionspaket als `worker-release.tar.gz` und `release.json` mit
+vollständiger `revision` und Archiv-`sha256`. Der begrenzte Helfer prüft Metadaten,
+Archivpfade, ursprüngliche Ausführungsbindung und native Historie erneut. Er
+verweigert andere aktive/ungeklärte Arbeit, installiert ausschließlich den Worker,
+prüft den Einstieg unter dessen Dienst-UID und hält vor dem Update private
+Konfigurations-/SQLite-Snapshots fest. Main und Credentials werden nicht geändert.
+
+```sh
+python3 -I deploy/fork/worker/install-g3-recovery.py /path/to/stage --check
+sudo /usr/bin/python3 -I deploy/fork/worker/install-g3-recovery.py /path/to/stage
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py status
+sudo /usr/bin/python3 -I deploy/fork/worker/bind-codex-g3.py active-recovery-verify
+```
+
+Nach dem Start erhebt `foundry.workerRead` seinen eigenen nativen Nachweis über
+die ursprüngliche Codex-Instanz. Es öffnet dafür den Harness, ohne den Thread oder
+einen Turn fortzusetzen. Erst Writer-Ende plus unveränderliches Stop-Manifest
+erlauben dem bestehenden Reconciler die Workspace-Freigabe. Der letzte Prüfschritt
+verlangt auch die freigegebene Reservation und genau den ursprünglichen
+Run/Attempt/nativen Turn; kein Ersatzauftrag, keine direkten SQLite-Änderungen.
+
 Diese Teilprobe schließt G3 nicht allein: Cancel während Ausführung, Lease-Verlust,
 Restart, Writer-Konflikte und Wiederverbindung der Clients bleiben eigene Nachweise.
 

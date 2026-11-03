@@ -62,6 +62,7 @@ import * as ResetCreditCoordinator from "./provider/resetCreditCoordinator.ts";
 import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as RuntimePolicy from "./orchestration-v2/RuntimePolicy.ts";
 import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
 import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCodeServerLedger";
 import * as ProviderHostLive from "./provider/ProviderHostLive.ts";
@@ -603,6 +604,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.provide(ExecutionStore.layer),
   ),
   WorkerLaunch.layer.pipe(
+    Layer.provide(RuntimePolicy.layerFromProjectStore),
     Layer.provide(layerWorkspaceGate),
     Layer.provide(ExecutionStore.layer),
     Layer.provide(layerCheckpointStore),

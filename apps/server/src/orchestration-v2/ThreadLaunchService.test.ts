@@ -7,6 +7,9 @@ import {
   CheckpointScopeId,
   NodeId,
   ProviderThreadId,
+  ProviderSessionId,
+  ProviderTurnId,
+  RunAttemptId,
 } from "@t3tools/contracts";
 import * as ExecutionStore from "../foundry/ExecutionStore.ts";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
@@ -76,12 +79,14 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
+import * as RuntimePolicy from "./RuntimePolicy.ts";
+import * as ProviderSessions from "./ProviderSessionManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as ThreadTitleRegeneration from "./ThreadTitleRegenerationService.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
-import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const projectId = ProjectId.make("project:launch-test");
 const otherProjectId = ProjectId.make("project:launch-other");
@@ -2415,6 +2420,7 @@ function workerLayer(
   checkpointExists = false,
 ) {
   return WorkerLaunch.layer.pipe(
+    Layer.provide(RuntimePolicy.layer),
     Layer.provideMerge(ExecutionStore.layer),
     Layer.provide(
       Layer.succeed(CheckpointStore.CheckpointStore, {
@@ -2465,6 +2471,171 @@ const workerInput = {
   model: modelSelection.model,
   prompt: "An isolated launch without a parent agent",
 };
+
+it.effect.each(["stopped", "unproven", "unavailable", "other-instance"] as const)(
+  "worker recovers native writer evidence after losing its local session: %s",
+  (history) => {
+    const open = vi.fn<ProviderAdapter.ProviderAdapterV2["Service"]["openSession"]>((input) =>
+      Effect.gen(function* () {
+        if (history === "unavailable")
+          return yield* new ProviderAdapter.ProviderAdapterOpenSessionError({
+            driver: adapter.driver,
+            providerSessionId: input.providerSessionId,
+          });
+        const now = yield* DateTime.now;
+        return {
+          instanceId: adapter.instanceId,
+          driver: adapter.driver,
+          providerSessionId: input.providerSessionId,
+          providerSession: {
+            id: input.providerSessionId,
+            driver: adapter.driver,
+            providerInstanceId: adapter.instanceId,
+            status: "ready",
+            cwd: input.runtimePolicy.cwd ?? "/repo",
+            model: input.modelSelection.model,
+            capabilities: CodexProviderCapabilitiesV2,
+            createdAt: now,
+            updatedAt: now,
+            lastError: null,
+          },
+          events: Stream.never,
+          confirmWriterEnded: (probe) => {
+            assert.equal(probe.nativeTurnId, "interrupted-native-turn");
+            assert.equal(probe.providerThread.nativeThreadRef?.nativeId, "original-native-thread");
+            return Effect.succeed(history === "stopped");
+          },
+          ensureThread: () => Effect.die("Recovery must not create a native thread"),
+          resumeThread: () => Effect.die("Recovery must not resume a native thread"),
+          startTurn: () => Effect.die("Recovery must not start a native turn"),
+          steerTurn: () => Effect.die("Recovery must not steer a native turn"),
+          interruptTurn: () => Effect.die("Recovery must only inspect native history"),
+          respondToRuntimeRequest: () => Effect.die("Recovery must not approve commands"),
+          readThreadSnapshot: () => Effect.die("Recovery must use the writer verifier"),
+          rollbackThread: () => Effect.die("Recovery must not roll back a native thread"),
+          forkThread: () => Effect.die("Recovery must not fork a native thread"),
+        } satisfies ProviderAdapter.ProviderAdapterV2SessionRuntime;
+      }),
+    );
+    const harness = makeHarness({ adapters: [{ ...adapter, openSession: open }] });
+    return Effect.gen(function* () {
+      const worker = yield* WorkerLaunch.WorkerLaunch;
+      const store = yield* ExecutionStore.ExecutionStore;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const sink = yield* EventSink.EventSinkV2;
+      const sessions = yield* ProviderSessions.ProviderSessionManagerV2;
+      const receipt = yield* worker.launch(workerInput);
+      const { runs } = yield* threads.getThreadRecords(receipt.threadId, ["runs"]);
+      const run = runs[0]!;
+      const attemptId = RunAttemptId.make("crashed-worker-attempt");
+      const providerThreadId = ProviderThreadId.make("crashed-worker-provider-thread");
+      const providerSessionId = ProviderSessionId.make("crashed-worker-provider-session");
+      assert.isTrue(
+        yield* store.starting({ threadId: receipt.threadId, providerThreadId, runOrdinal: 1 }),
+      );
+      yield* store.stop(workerInput.commandId);
+      yield* store.uncertain(workerInput.commandId);
+      const now = yield* DateTime.now;
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("crashed-worker-provider-thread"),
+            type: "provider-thread.updated",
+            threadId: receipt.threadId,
+            driver: adapter.driver,
+            occurredAt: now,
+            payload: {
+              id: providerThreadId,
+              driver: adapter.driver,
+              providerInstanceId:
+                history === "other-instance"
+                  ? ProviderInstanceId.make("other-codex")
+                  : adapter.instanceId,
+              providerSessionId,
+              appThreadId: receipt.threadId,
+              ownerNodeId: null,
+              nativeThreadRef: {
+                driver: adapter.driver,
+                nativeId: "original-native-thread",
+                strength: "strong",
+              },
+              nativeConversationHeadRef: null,
+              status: "idle",
+              firstRunOrdinal: 1,
+              lastRunOrdinal: 1,
+              handoffIds: [],
+              forkedFrom: null,
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+          {
+            id: EventId.make("crashed-worker-provider-turn"),
+            type: "provider-turn.updated",
+            threadId: receipt.threadId,
+            runId: run.id,
+            driver: adapter.driver,
+            occurredAt: now,
+            payload: {
+              id: ProviderTurnId.make("crashed-worker-provider-turn"),
+              providerThreadId,
+              nodeId: NodeId.make("crashed-worker-node"),
+              runAttemptId: attemptId,
+              nativeTurnRef: {
+                driver: adapter.driver,
+                nativeId: "interrupted-native-turn",
+                strength: "strong",
+              },
+              ordinal: 1,
+              status: "interrupted",
+              startedAt: now,
+              completedAt: now,
+            },
+          },
+          {
+            id: EventId.make("crashed-worker-run"),
+            type: "run.updated",
+            threadId: receipt.threadId,
+            occurredAt: now,
+            payload: {
+              ...run,
+              status: "interrupted",
+              providerThreadId,
+              activeAttemptId: attemptId,
+              completedAt: now,
+            },
+          },
+        ],
+      });
+      assert.isTrue(Option.isNone(yield* sessions.get(providerSessionId)));
+      const result = yield* worker.read({ commandId: workerInput.commandId });
+      if (history === "stopped") {
+        assert.isTrue(result.lifecycle?.writerEnded);
+        assert.equal(result.lifecycle?.state, "stopped");
+        assert.deepInclude(result.lifecycle?.manifest, {
+          outcome: "stopped",
+          runId: run.id,
+          checkpointId: null,
+        });
+        assert.deepEqual(
+          (yield* worker.read({ commandId: workerInput.commandId })).lifecycle?.manifest,
+          result.lifecycle?.manifest,
+        );
+      } else {
+        assert.isFalse(result.lifecycle?.writerEnded);
+        assert.equal(result.lifecycle?.state, "uncertain");
+        assert.isNull(result.lifecycle?.manifest);
+      }
+      assert.equal(open.mock.calls.length, history === "other-instance" ? 0 : 1);
+      if (open.mock.calls[0]) {
+        assert.deepEqual(open.mock.calls[0][0].modelSelection, run.modelSelection);
+        assert.equal(open.mock.calls[0][0].initialNativeThreadId, "original-native-thread");
+      }
+      assert.deepEqual(yield* worker.launch(workerInput), receipt);
+      assert.lengthOf((yield* threads.getThreadRecords(receipt.threadId, ["runs"])).runs, 1);
+    }).pipe(Effect.provide(workerLayer().pipe(Layer.provideMerge(harness.layer))));
+  },
+);
 
 it.effect.each([
   "before-commit",
@@ -2580,15 +2751,24 @@ it.effect.each([
     const projection = yield* threads.getThreadProjection(first.threadId);
     assert.equal(projection.messages.length, 1);
     assert.equal(projection.runs.length, 1);
-    const execution = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
-      worker.read({ commandId: workerInput.commandId }),
-    ).pipe(Effect.provide(workerLayer(["/other"], false)));
+    const execution = yield* Effect.gen(function* () {
+      const worker = yield* WorkerLaunch.WorkerLaunch;
+      if (failurePoint === "after-message-commit")
+        yield* threads.streamStoredEventsFrom({ threadId: first.threadId }).pipe(
+          Stream.filter(
+            (stored) =>
+              stored.event.type === "run.updated" && stored.event.payload.status === "interrupted",
+          ),
+          Stream.runHead,
+        );
+      return yield* worker.read({ commandId: workerInput.commandId });
+    }).pipe(Effect.provide(workerLayer(["/other"], false)));
     assert.deepEqual(execution.receipt, first);
-    assert.deepEqual(execution.run, {
+    assert.deepInclude(execution.run, {
       id: projection.runs[0]!.id,
-      status: projection.runs[0]!.status,
       checkpointId: projection.runs[0]!.checkpointId,
     });
+    if (failurePoint === "after-message-commit") assert.equal(execution.run.status, "interrupted");
     assert.equal(
       (yield* threads.listProjectThreads({ projectId, includeSubagents: true })).length,
       1,

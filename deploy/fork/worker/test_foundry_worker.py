@@ -1,9 +1,12 @@
 import importlib.util
+import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
 import sqlite3
 import tempfile
+import tarfile
 import unittest
 from unittest.mock import patch
 
@@ -36,8 +39,37 @@ binding_spec = importlib.util.spec_from_file_location("foundry_g3_binding", Path
 binding = importlib.util.module_from_spec(binding_spec)
 binding_spec.loader.exec_module(binding)
 
+recovery_spec = importlib.util.spec_from_file_location("foundry_g3_recovery", Path(__file__).with_name("install-g3-recovery.py"))
+recovery = importlib.util.module_from_spec(recovery_spec)
+recovery_spec.loader.exec_module(recovery)
+
 
 class WorkerInstallationTest(unittest.TestCase):
+    def test_recovery_archive_rejects_changed_dirty_or_escaping_programs(self):
+        for failure in (None, "digest", "dirty", "escape"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                stage = Path(directory)
+                archive = stage / "worker-release.tar.gz"
+                with tarfile.open(archive, "w:gz") as output:
+                    data = json.dumps({"repository": "niklaskastning/foundry", "revision": "a" * 40, "dirty": failure == "dirty"}).encode()
+                    metadata = tarfile.TarInfo("./dist/foundry-build.json")
+                    metadata.size = len(data)
+                    output.addfile(metadata, io.BytesIO(data))
+                    if failure == "escape":
+                        link = tarfile.TarInfo("./node_modules/escape")
+                        link.type = tarfile.SYMTYPE
+                        link.linkname = "../../outside"
+                        output.addfile(link)
+                manifest = {"revision": "a" * 40, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}
+                (stage / "release.json").write_text(json.dumps(manifest))
+                if failure == "digest":
+                    archive.write_bytes(archive.read_bytes() + b"changed")
+                if failure:
+                    with self.assertRaises(RuntimeError):
+                        recovery.artifacts(stage)
+                else:
+                    self.assertEqual(recovery.artifacts(stage), manifest)
+
     def test_install_upgrade_remove_preserve_identity_credentials_and_other_service(self):
         with tempfile.TemporaryDirectory() as directory:
             installation = worker.Installation(directory)
