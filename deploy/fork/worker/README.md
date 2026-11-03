@@ -88,7 +88,9 @@ und `sha256`. Der Helfer verwendet die vorhandenen Archiv-, Installer- und
 Writer-Prüfungen, prüft den Programmeinstieg als Dienstkonto und erhält Provider,
 Identität und Schlüssel. Er verweigert aktive Turns, fehlendes Writer-Ende und
 gehaltene Reservierungen. Nach dem Stop müssen beide eigenen Cgroups leer sein.
-Der neue Host wird lokal geprüft, bevor der Connector wieder erreichbar wird.
+Der neue Host wird lokal geprüft, bevor der Connector gestartet wird. Erst dessen
+bestätigtes Verbindungsereignis erlaubt die Prüfung der tatsächlichen Prozessidentität;
+`systemctl start` allein bestätigt den endgültigen Dienstprozess noch nicht.
 
 Der Helfer hält den bestehenden `/var/lib/foundry-deploy/lock` einschließlich
 Verifikation; nicht zusätzlich darum sperren. Der ausgegebene private Recovery-Pfad

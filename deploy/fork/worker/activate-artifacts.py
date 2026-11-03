@@ -136,8 +136,9 @@ def stop(installation):
 
 
 def start(config):
+    device = private_json(worker.Installation("/"), worker.STATE + "/registration.json")
     journal = subprocess.Popen(["/usr/bin/journalctl", "--follow", "--lines=0", "--since=@" + str(time.time()),
-                                "--unit=foundry-host.service", "--output=cat"], stdout=subprocess.PIPE,
+                                "--unit=foundry-host.service", "--unit=foundry-connector.service", "--output=cat"], stdout=subprocess.PIPE, bufsize=0,
                                stderr=subprocess.DEVNULL, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/root"}, cwd="/")
     try:
         g3.run(["/usr/bin/systemctl", "start", "foundry-host.slice"])
@@ -146,19 +147,23 @@ def start(config):
         deadline = time.monotonic() + 60
         with selectors.DefaultSelector() as events:
             events.register(journal.stdout, selectors.EVENT_READ)
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0 or not events.select(remaining):
-                    raise RuntimeError("Worker startup did not report readiness; keep stopped")
-                line = journal.stdout.readline()
-                if not line:
-                    raise RuntimeError("Worker readiness journal ended")
-                if f'Listening on http://127.0.0.1:{config["port"]}'.encode() in line:
-                    break
-        status = g3.rpc(config, "foundry.workerStatus", {})
-        if not status["online"] or not status["providerReady"] or status["activeRuns"] != 0:
-            raise RuntimeError("Bound worker is not ready and idle; keep stopped")
-        g3.run(["/usr/bin/systemctl", "start", "foundry-host.target"])
+            def wait_for(marker):
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not events.select(remaining):
+                        raise RuntimeError("Worker startup did not report readiness; keep stopped")
+                    line = journal.stdout.readline()
+                    if not line:
+                        raise RuntimeError("Worker readiness journal ended")
+                    if marker in line:
+                        return
+
+            wait_for(f'Listening on http://127.0.0.1:{config["port"]}'.encode())
+            status = g3.rpc(config, "foundry.workerStatus", {})
+            if not status["online"] or not status["providerReady"] or status["activeRuns"] != 0:
+                raise RuntimeError("Bound worker is not ready and idle; keep stopped")
+            g3.run(["/usr/bin/systemctl", "start", "foundry-host.target"])
+            wait_for(f'Foundry device {device["deviceId"]} connected; project-read adapter enabled.'.encode())
         verify_processes(config, inspection.inventory())
     finally:
         journal.terminate()

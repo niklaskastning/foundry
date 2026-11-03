@@ -3,6 +3,7 @@ import importlib.util
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sqlite3
@@ -50,6 +51,55 @@ artifact_spec.loader.exec_module(artifact_activation)
 
 
 class WorkerInstallationTest(unittest.TestCase):
+    def test_artifact_start_waits_for_connector_before_inspecting_its_process(self):
+        for provider_ready in (True, False):
+            with self.subTest(provider_ready=provider_ready):
+                reader, writer = os.pipe()
+                connected = False
+                with os.fdopen(reader, "rb", buffering=0) as stream, os.fdopen(writer, "wb", buffering=0) as output:
+                    class Journal:
+                        def fileno(self):
+                            return stream.fileno()
+
+                        def readline(self):
+                            nonlocal connected
+                            line = stream.readline()
+                            connected = b"Foundry device device connected;" in line
+                            return line
+
+                        def terminate(self):
+                            pass
+
+                        def wait(self, timeout):
+                            pass
+
+                    journal = Journal()
+                    journal.stdout = journal
+
+                    def run(args):
+                        if "foundry-host.service" in args:
+                            output.write(b"Listening on http://127.0.0.1:3973\n")
+                        if "foundry-host.target" in args:
+                            self.assertTrue(provider_ready)
+                            output.write(b"Foundry device device connected; project-read adapter enabled.\n")
+
+                    def inventory():
+                        if not connected:
+                            raise RuntimeError("Connector process has not reached its service identity")
+                        return {"services": {}}
+
+                    with patch.object(artifact_activation.subprocess, "Popen", return_value=journal), \
+                         patch.object(artifact_activation.g3, "run", side_effect=run), \
+                         patch.object(artifact_activation.g3, "rpc", return_value={"online": True, "providerReady": provider_ready, "activeRuns": 0}), \
+                         patch.object(artifact_activation.inspection, "inventory", side_effect=inventory), \
+                         patch.object(artifact_activation.worker, "Installation", return_value=None), \
+                         patch.object(artifact_activation, "private_json", return_value={"deviceId": "device"}):
+                        if provider_ready:
+                            artifact_activation.start(config())
+                        else:
+                            with self.assertRaisesRegex(RuntimeError, "not ready"):
+                                artifact_activation.start(config())
+
     def test_recovery_archive_rejects_changed_dirty_or_escaping_programs(self):
         for failure in (None, "digest", "dirty", "escape"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
