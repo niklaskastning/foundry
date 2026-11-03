@@ -13,10 +13,11 @@ import * as Console from "effect/Console";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Exit from "effect/Exit";
-import { HttpRouter } from "effect/http";
+import { HttpRouter, HttpClient, HttpClientResponse, FetchHttpClient } from "effect/http";
 import {
   CommandId,
   EnvironmentId,
@@ -26,7 +27,12 @@ import {
   FOUNDRY_ARTIFACT_CHUNK_BYTES,
   FoundryAuthError,
   type FoundryArtifactRequest,
+  FoundryArtifactMachineRequest,
+  FoundryArtifactManifest,
+  FoundryArtifactId,
+  ChatAttachmentId,
 } from "@t3tools/contracts";
+import { downloadArtifact } from "@t3tools/shared/foundryArtifacts";
 import * as Database from "../src/foundry/InstanceDatabase.ts";
 import * as Migrations from "../src/foundry/InstanceMigrations.ts";
 import * as Identity from "../src/foundry/InstancePostgres.ts";
@@ -36,6 +42,10 @@ import * as Files from "../src/foundry/ArtifactFiles.ts";
 import * as Artifacts from "../src/foundry/Artifacts.ts";
 import * as ArtifactAccess from "../src/foundry/ArtifactAccess.ts";
 import * as ArtifactHttp from "../src/foundry/artifactHttp.ts";
+import * as ArtifactPublication from "../src/foundry/ArtifactPublication.ts";
+import * as DocumentText from "../src/provider/DocumentText.ts";
+import * as AttachmentClaims from "../src/orchestration-v2/AttachmentClaims.ts";
+import { createPendingAttachmentId } from "../src/attachmentStore.ts";
 import * as DeviceConfig from "../src/foundry/DeviceConfig.ts";
 import * as DeviceRegistry from "../src/foundry/DeviceRegistry.ts";
 import * as FoundrySessions from "../src/foundry/FoundrySessions.ts";
@@ -137,6 +147,11 @@ const isArtifactError = Schema.is(FoundryArtifactError);
 const failure = async (value: Promise<unknown>, code: FoundryArtifactError["code"]) =>
   NodeAssert.rejects(value, (error: unknown) => isArtifactError(error) && error.code === code);
 const digest = (bytes: Uint8Array) => NodeCrypto.createHash("sha256").update(bytes).digest("hex");
+const decodeMachineRequest = Schema.decodeEffect(
+  Schema.fromJsonString(FoundryArtifactMachineRequest),
+);
+const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const decodeArtifactManifest = Schema.decodeUnknownEffect(FoundryArtifactManifest);
 try {
   const initialized = NodeChildProcess.spawnSync(
     NodePath.join(bin, "initdb"),
@@ -527,6 +542,139 @@ try {
             },
           ),
         );
+      const lost = new Set(["begin", "write", "publish"]);
+      let substituteReference = false;
+      const adapter = HttpClient.make((request, url) =>
+        Effect.gen(function* () {
+          NodeAssert.equal(url.origin, origin);
+          NodeAssert.equal(url.pathname, "/api/foundry/devices/channel");
+          NodeAssert.equal(request.headers["cf-access-client-id"], "fixture-access-id");
+          NodeAssert.equal(request.headers["cf-access-client-secret"], "fixture-access-secret");
+          const options = yield* Effect.serviceOption(FetchHttpClient.RequestInit);
+          if (options._tag !== "Some") return yield* Effect.die("Missing request policy");
+          NodeAssert.equal(options.value.redirect, "manual");
+          NodeAssert.equal(options.value.credentials, "omit");
+          NodeAssert.equal(request.body._tag, "Uint8Array");
+          if (request.body._tag !== "Uint8Array") return yield* Effect.die("Fixture requires JSON");
+          const body = new TextDecoder().decode(request.body.body);
+          const envelope = yield* decodeMachineRequest(body).pipe(Effect.orDie);
+          const response = yield* Effect.promise(() =>
+            handler.handler(
+              new Request(url, {
+                method: request.method,
+                headers: request.headers,
+                body,
+              }),
+            ),
+          );
+          if (
+            substituteReference &&
+            envelope.request.op === "metadata" &&
+            response.status === 200
+          ) {
+            const metadata = yield* Effect.promise(() => response.json()).pipe(
+              Effect.flatMap(decodeArtifactManifest),
+              Effect.orDie,
+            );
+            return HttpClientResponse.fromWeb(
+              request,
+              Response.json({
+                ...metadata,
+                reference: {
+                  ...metadata.reference,
+                  artifactId: FoundryArtifactId.make("77777777-7777-4777-8777-777777777777"),
+                },
+              }),
+            );
+          }
+          if (response.status === 200 && lost.delete(envelope.request.op)) {
+            yield* Effect.promise(() => response.arrayBuffer());
+            return HttpClientResponse.fromWeb(
+              request,
+              Response.json({ code: "unavailable" }, { status: 503 }),
+            );
+          }
+          return HttpClientResponse.fromWeb(request, response);
+        }),
+      );
+      const bindingFile = NodePath.join(root, "worker-artifact-binding.json");
+      const registrationFile = NodePath.join(root, "artifact-registration.json");
+      const keyFile = NodePath.join(root, "artifact-device-key.json");
+      const accessFile = NodePath.join(root, "artifact-access.json");
+      for (const [path, data] of [
+        [bindingFile, { origin, registrationFile, keyFile, accessFile }],
+        [registrationFile, device],
+        [keyFile, { privateKey: key.privateKey }],
+        [
+          accessFile,
+          { origin, clientId: "fixture-access-id", clientSecret: "fixture-access-secret" },
+        ],
+      ] as const) {
+        const text = yield* encodeJson(data).pipe(Effect.orDie);
+        yield* Effect.promise(() => NodeFSP.writeFile(path, text, { mode: 0o600 }));
+      }
+      const workerContext = yield* Layer.build(
+        Layer.merge(ArtifactPublication.layer, DocumentText.layer).pipe(
+          Layer.provideMerge(
+            ServerConfig.layerTest(root, NodePath.join(root, "artifact-worker-home")),
+          ),
+          Layer.provideMerge(NodeServices.layer),
+          Layer.provide(Layer.succeed(HttpClient.HttpClient, adapter)),
+          Layer.provide(
+            Layer.succeed(Environment.ServerEnvironmentIdentity, {
+              getEnvironmentId: Effect.succeed(owner.environmentId),
+            }),
+          ),
+          Layer.provide(
+            Layer.succeed(
+              ConfigProvider.ConfigProvider,
+              ConfigProvider.fromUnknown({ FOUNDRY_WORKER_ARTIFACT_BINDING_FILE: bindingFile }),
+            ),
+          ),
+        ),
+      );
+      const worker = Context.get(workerContext, ArtifactPublication.ArtifactPublication);
+      NodeAssert.ok(worker);
+      const workerConfig = Context.get(workerContext, ServerConfig.ServerConfig);
+      const pendingId = createPendingAttachmentId("txt");
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(NodePath.join(workerConfig.attachmentsDir, `${pendingId}.txt`), bytes),
+      );
+      const claimInput = {
+        threadId: owner.threadId,
+        attachments: [
+          {
+            type: "file" as const,
+            id: ChatAttachmentId.make(pendingId),
+            name: "worker-note.txt",
+            mimeType: "text/plain",
+            sizeBytes: bytes.byteLength,
+          },
+        ],
+      };
+      const claimed = yield* AttachmentClaims.claimPendingAttachments(claimInput).pipe(
+        Effect.provide(workerContext),
+      );
+      const central = claimed.attachments[0]?.foundryArtifact;
+      NodeAssert.ok(central);
+      NodeAssert.equal(lost.size, 0);
+      NodeAssert.deepEqual(Buffer.from((yield* worker.download(central.reference)).bytes), bytes);
+      yield* AttachmentClaims.releaseClaimedAttachments(claimed.claimedPaths).pipe(
+        Effect.provide(workerContext),
+      );
+      const reclaimed = yield* AttachmentClaims.claimPendingAttachments(claimInput).pipe(
+        Effect.provide(workerContext),
+      );
+      NodeAssert.notEqual(reclaimed.attachments[0]?.id, claimed.attachments[0]?.id);
+      NodeAssert.deepEqual(reclaimed.attachments[0]?.foundryArtifact, central);
+      substituteReference = true;
+      const differentReference = yield* worker
+        .publishAttachment(owner.threadId, reclaimed.attachments[0]!)
+        .pipe(Effect.result);
+      NodeAssert.equal(differentReference._tag, "Failure");
+      if (differentReference._tag === "Failure")
+        NodeAssert.equal(differentReference.failure.code, "changed");
+      substituteReference = false;
       yield* Effect.promise(async () => {
         NodeAssert.deepEqual(await (await send(metadataRequest)).json(), published);
         for (const headers of [
@@ -585,6 +733,43 @@ try {
         NodeAssert.equal((await send(metadataRequest, machineHeaders)).status, 403);
       });
       yield* registry.revoke(device.deviceId);
+      const beforeFailedClaim = yield* Effect.promise(() =>
+        NodeFSP.readdir(workerConfig.attachmentsDir),
+      );
+      const refused = yield* AttachmentClaims.claimPendingAttachments(claimInput).pipe(
+        Effect.provide(workerContext),
+        Effect.result,
+      );
+      NodeAssert.equal(refused._tag, "Failure");
+      NodeAssert.deepEqual(
+        (yield* Effect.promise(() => NodeFSP.readdir(workerConfig.attachmentsDir))).sort(),
+        beforeFailedClaim.sort(),
+      );
+      NodeAssert.equal(
+        (yield* worker.download(central.reference).pipe(Effect.flip)).code,
+        "forbidden",
+      );
+      const clientTransport = Effect.fn("ArtifactsFixture.clientRead")(function* (
+        request: FoundryArtifactRequest,
+      ) {
+        const response = yield* Effect.promise(() =>
+          send(request, {
+            cookie: `${FoundrySessions.FOUNDRY_SESSION_COOKIE}=foundry-client-b`,
+            authorization: `Bearer ${readerB.token}`,
+            "x-foundry-csrf": "b".repeat(43),
+          }),
+        );
+        NodeAssert.equal(response.status, 200);
+        return yield* Effect.promise(() => response.json());
+      });
+      NodeAssert.deepEqual(
+        Buffer.from((yield* downloadArtifact(clientTransport, central.reference)).bytes),
+        bytes,
+      );
+      NodeAssert.equal(
+        (yield* downloadArtifact(clientTransport, empty.reference)).bytes.byteLength,
+        0,
+      );
       yield* Effect.promise(async () => {
         NodeAssert.equal((await send(signed(metadataRequest), machineHeaders, true)).status, 403);
         const secondClient = {
@@ -609,7 +794,7 @@ try {
   );
   await run(
     Console.log(
-      "PASS P38a storage/HTTP foundation: durable resume; rename/commit recovery; immutable publication; real Main T3 sessions and scopes; Foundry cookie/CSRF/origin boundary; signed device identity/generation/revocation; second authenticated client reads after source device revocation; bounded bodies. Worker publication and integrated client UI remain pending.",
+      "PASS P38a storage/worker/HTTP: durable resume and rename/commit recovery; immutable publication; real Main T3 sessions/scopes; cookie/CSRF/origin boundary; signed device identity/generation/revocation; worker claims converge after lost begin/write/publish replies and changed local claim ID; changed response reference refused; failed claim cleans local copies; bounded verified worker download; second authenticated client downloads the full original bytes after source revocation. Integrated client UI and live gate remain pending.",
     ),
   );
 } finally {

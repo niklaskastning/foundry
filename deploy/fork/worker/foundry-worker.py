@@ -23,7 +23,7 @@ MANIFEST = CONFIG + "/installation.json"
 
 
 def validate(config):
-    if set(config) - {"providerInstanceId"} != {"revision", "node", "origin", "port", "workspaceRoots", "cpuQuotaPercent", "memoryMaxMiB", "tasksMax", "accessFile"}:
+    if set(config) - {"providerInstanceId", "artifactPublication"} != {"revision", "node", "origin", "port", "workspaceRoots", "cpuQuotaPercent", "memoryMaxMiB", "tasksMax", "accessFile"}:
         raise ValueError("Supply exactly the documented worker configuration fields")
     if not isinstance(config["revision"], str) or not re.fullmatch(r"[0-9a-f]{40}", config["revision"]):
         raise ValueError("A full release commit is required")
@@ -42,6 +42,8 @@ def validate(config):
         raise ValueError("Workspace roots must be distinct direct children of " + WORKSPACES)
     if "providerInstanceId" in config and (not isinstance(config["providerInstanceId"], str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,63}", config["providerInstanceId"])):
         raise ValueError("Invalid provider instance binding")
+    if "artifactPublication" in config and type(config["artifactPublication"]) is not bool:
+        raise ValueError("Artifact publication needs an explicit boolean")
     return config
 
 
@@ -53,6 +55,7 @@ def render(config):
     validate(config)
     entry = release(config) + "/dist/bin.mjs"
     command = config["node"] + " " + entry
+    artifacts = f"Environment=FOUNDRY_WORKER_ARTIFACT_BINDING_FILE={STATE}/artifact-binding.json\n" if config.get("artifactPublication", False) else ""
     common = f"""[Service]
 Type=simple
 User=foundry-worker
@@ -93,7 +96,7 @@ StandardError=journal
     return {
         "foundry-host.target": "[Unit]\nDescription=Foundry host worker\nWants=foundry-host.service foundry-connector.service\nAfter=network-online.target\n\n[Install]\nWantedBy=multi-user.target\n",
         "foundry-host.slice": f"[Unit]\nDescription=Foundry worker resource budget\n\n[Slice]\nCPUQuota={config['cpuQuotaPercent']}%\nMemoryMax={config['memoryMaxMiB']}M\nTasksMax={config['tasksMax']}\n",
-        "foundry-host.service": "[Unit]\nDescription=Foundry isolated T3 host\nPartOf=foundry-host.target\nAfter=network-online.target\nWants=network-online.target foundry-connector.service\n\n" + common + f"ExecStart={command} --base-dir {T3} --host 127.0.0.1 --port {config['port']} --no-browser\n",
+        "foundry-host.service": "[Unit]\nDescription=Foundry isolated T3 host\nPartOf=foundry-host.target\nAfter=network-online.target\nWants=network-online.target foundry-connector.service\n\n" + common + artifacts + f"ExecStart={command} --base-dir {T3} --host 127.0.0.1 --port {config['port']} --no-browser\n",
         "foundry-connector.service": f"[Unit]\nDescription=Foundry outgoing device connector\nPartOf=foundry-host.target foundry-host.service\nAfter=foundry-host.service network-online.target\nRequires=foundry-host.service\nConditionPathExists={STATE}/registration.json\nConditionPathExists={STATE}/device-key.json\n\n" + common + f"ExecStart={connector}\n",
     }
 

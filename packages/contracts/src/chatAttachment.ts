@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { FoundryArtifactManifest } from "./foundryArtifact.ts";
 
 import {
   IsoDateTime,
@@ -152,6 +153,7 @@ export const ChatImageAttachment = Schema.Struct({
   mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100), Schema.isPattern(/^image\//i)),
   sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES)),
   source: Schema.optional(SnapShotSource),
+  foundryArtifact: Schema.optional(FoundryArtifactManifest),
 });
 export type ChatImageAttachment = typeof ChatImageAttachment.Type;
 
@@ -169,6 +171,7 @@ export const ChatFileAttachment = Schema.Struct({
   ),
   /** Keep path-only so agents inspect selectively without consuming the context folding preserves. */
   source: Schema.optional(PastedTextAttachmentSource),
+  foundryArtifact: Schema.optional(FoundryArtifactManifest),
 });
 export type ChatFileAttachment = typeof ChatFileAttachment.Type;
 
@@ -182,6 +185,7 @@ export const ChatUnknownAttachment = Schema.Struct({
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
   mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
   sizeBytes: NonNegativeInt,
+  foundryArtifact: Schema.optional(FoundryArtifactManifest),
 });
 export type ChatUnknownAttachment = typeof ChatUnknownAttachment.Type;
 

@@ -891,7 +891,6 @@ function UserMessageMedia(props: {
             <ThreadMarkdownVideo
               source={attachmentVideoPreviewSource(props.environmentId, {
                 ...attachment,
-                type: "file",
                 id: attachment.uploadedAttachmentId,
               })}
               onPlaybackStart={props.onPlaybackStart}

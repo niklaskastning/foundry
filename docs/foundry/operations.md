@@ -38,8 +38,10 @@ backup/recovery boundary. It exposes bounded JSON transfer operations at
 `POST /api/foundry/devices/channel` for signed device requests; the existing GET
 channel is unchanged. No Cloudflare machine-path expansion is needed. Descriptor
 support uses optional `artifactTransfer` metadata: adding an unknown capability to
-the strict version-1 enum would break older Windows readers. These routes alone do
-not integrate attachments into messages or provide a central thread archive.
+the strict version-1 enum would break older Windows readers. The separate opt-in
+[worker binding](../../deploy/fork/worker/README.md#zentrale-artefakte-p38a-noch-keine-live-abnahme)
+confirms attachments before message commit; it does not provide a central thread
+archive or complete the client acceptance gate.
 
 From the source checkout, create a private key file on the execution machine:
 

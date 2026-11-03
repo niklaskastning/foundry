@@ -16,6 +16,7 @@ import {
 } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
+import * as ArtifactPublication from "../foundry/ArtifactPublication.ts";
 
 export class AttachmentClaimError extends Schema.TaggedError<AttachmentClaimError>()(
   "AttachmentClaimError",
@@ -85,6 +86,7 @@ export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingA
     const fileSystem = yield* FileSystem.FileSystem;
     const claimedPaths: string[] = [];
     const documents = yield* DocumentText.DocumentText;
+    const publication = yield* ArtifactPublication.ArtifactPublication;
     const attachments = yield* Effect.forEach(
       input.attachments,
       (attachment) =>
@@ -163,7 +165,18 @@ export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingA
             const extracted = yield* documents.ensure(claim.finalPath);
             if (extracted) claimedPaths.push(extracted);
           }
-          return normalized;
+          return publication
+            ? yield* publication.publishAttachment(input.threadId, normalized, attachment.id).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new AttachmentClaimError({
+                      message:
+                        "The attachment could not be confirmed in Foundry Main. Retry before sending.",
+                      cause,
+                    }),
+                ),
+              )
+            : normalized;
         }),
       { concurrency: 1 },
     ).pipe(Effect.onError(() => releaseClaimedAttachments(claimedPaths)));
