@@ -10,15 +10,15 @@ Die Häkchen bezeichnen den jeweils genannten Umfang. Offene Teilnachweise werde
 - [x] **P04/P05 – Implementierung:** Windows-Access-Transport und Instanzeinstieg integriert. Diagnose und JSON-Decoder für gekoppelte T3-Sessions in [#42](https://github.com/niklaskastning/foundry/pull/42)/[#43](https://github.com/niklaskastning/foundry/pull/43) korrigiert; P05-Instanzwechsel bleibt ein eigener Live-Nachweis.
 - [x] **Windows-Session-Lebenszyklus:** Login, Check, Refresh vor Ablauf, vollständiger App-Neustart und Wiederanmeldung nach mindestens 16 Minuten ohne erneutes T3-Pairing bestätigt. [Evidence](https://github.com/niklaskastning/foundry/issues/13#issuecomment-6588567831); Build `41519672835`, Source `b57fbec08`. Die genaue Trennung von Foundry- und Access-Ablauf ist damit nicht belegt.
 - [x] **P06–P12 – Implementierung und realer G2-Durchstich:** Enrollment, Maschinenkanal, Gateway, Streams, Grants und Katalog integriert; dedizierter Linux-Worker über Main aus Windows/Electron und Firefox nutzbar. Replay, Terminal, Datei/Diff und Entzug/Wiederfreigabe bestätigt. Attachment-Vorschau in beiden Clients und Firefox-Download nach [#41](https://github.com/niklaskastning/foundry/pull/41) bestätigt. Windows-Download bleibt ausgenommen.
-- [x] **P13–P17 – Code und Integration:** isolierter Host-Dienst, Readiness/Binding, idempotenter Launch, Read/Follow/Cancel, Lease/Manifest und Workspace-/Writer-Integration über den Basisstack [#29](https://github.com/niklaskastning/foundry/pull/29), den P16-Abschluss [#38](https://github.com/niklaskastning/foundry/pull/38) und die Integration [#39](https://github.com/niklaskastning/foundry/pull/39)/[#40](https://github.com/niklaskastning/foundry/pull/40) integriert. Das reale G3-Gate bleibt offen; dedizierte Codex-Bindung und erste reale Teilnachweise sind inzwischen bestätigt.
+- [x] **P13–P17 – Code und Integration:** isolierter Host-Dienst, Readiness/Binding, idempotenter Launch, Read/Follow/Cancel, Lease/Manifest und Workspace-/Writer-Integration über den Basisstack [#29](https://github.com/niklaskastning/foundry/pull/29), den P16-Abschluss [#38](https://github.com/niklaskastning/foundry/pull/38) und die Integration [#39](https://github.com/niklaskastning/foundry/pull/39)/[#40](https://github.com/niklaskastning/foundry/pull/40) integriert. Der funktionale G3-Workerabschluss ist inzwischen real bestätigt; verbleibende G1/G2- und Betriebsabnahmen bleiben getrennt offen.
 - [x] **P18a – isolierte Grundlage:** Factory/Version/WorkItem mit eigener Automation-PostgreSQL-Persistenz in [#36](https://github.com/niklaskastning/foundry/pull/36) implementiert und getestet. Noch inaktiv; keine Scheduler-/Startfreigabe.
 - [ ] **G1-Restabnahme:** P05-Instanzselektor, frisches Profil, Instanzwechsel/Entfernen und zwei reale getrennte Instanzen; genaue Access-/Foundry-Ablauftrennung. Die bestandenen Windows-Session-Folgen nicht ohne Änderung oder Fehler wiederholen.
 - [ ] **G2-Restabnahme:** Worker auf getrennter zweiter Maschine und gezielter Main-/Connector-Abbruch mit Wiederverbindung beider Clients; Wiederaufnahme eines laufenden Auftrags separat von bloßer Erreichbarkeit nach Neustart belegen. Permanente Device-Widerrufsprobe nur mit geplantem Wiederanmeldungsweg. Bereits bestätigte Terminal-/Replay-/Grant-Proben übernehmen.
 - [x] **G3 – reale Teilnachweise am 3. November:** `codexG3`/CLI `0.156.1` über Headless-ChatGPT-Anmeldung gebunden und frisch bereit. Drei begrenzte Luna-Turns im eigenen Git-Fixture: expliziter Cancel mit positivem Writer-Ende/`stopped`-Manifest; erfolgreicher `foundry.workerLaunch` mit verworfener RPC-Antwort, identischen Retries, Read/Follow ab Cursor, erneuerter Lease und unverändertem generationgebundenem `completed`-Manifest; Launch-Verbindungsabbruch ohne weitere Erneuerung mit lokalem Watchdog-Stop. Konkurrierender manueller Einstieg scheitert vor nativem Provider-Turn. Details und Grenzen in [#45](https://github.com/niklaskastning/foundry/pull/45).
 - [x] **G3 – unabhängiger Ergebnis- und Idle-Restart-Nachweis:** Betreiberlauf am 3. November bestätigt unter Dienstkonto genau einen Thread/Run/Attempt, positives Writer-Ende, dasselbe Generation-2-Manifest, passenden `ready`-Checkpoint, vorhandenes Git-Objekt und exakten Dateiinhalt. Zuvor kontrollierter Neustart des untätigen Workers mit leeren alten Dienst-cgroups; nachher `providerReady=true`, CLI `0.156.1`, `activeRuns=0`, unveränderte Environment-ID und `foundryManagedWorkspaces=true`. Prüfersession widerrufen.
-- [x] **G3 – aktiver Crash und gehaltene Sperre:** echter nativer Pending-Command vor dem gezielten Worker-/Connector-Crash, leere alte Dienst-cgroups und erfolgreicher Neustart bestätigt. Generation 4 bleibt `uncertain`, `writerEnded=false`, Manifest fehlt, Reservation bleibt erhalten; identische Anfrage liefert unverändertes Receipt und genau einen Run/Attempt/nativen Turn, ohne neuen Provider-Start.
-- [ ] **G3 – Recovery vor echter Automation:** für den gesperrten Generation-4-Altversuch positives Writer-Ende über einen belegten Recovery-Pfad bestätigen, generationgebundenes `stopped`-Manifest speichern und erst danach die Workspace-Freigabe über die bestehenden Services nachweisen. `activeRuns=0`, leere alte cgroups oder ein synthetisch unterbrochener Run reichen allein nicht als persistenter Service-Nachweis. Zunächst native Codex-Historie lesend prüfen; keine direkte SQL-Freigabe oder Journal-Löschung. G3 bleibt offen. Main-/Connector-Unterbrechung mit beiden Clients bleibt zusätzlich in G2 offen.
-- [ ] **Betriebsnachweise:** aktive Kernel-Limits (1 CPU, 2 GiB, 256 Tasks) sind geprüft; Last-/Kindprozess-Durchsetzung und gezielte Recovery sind offen. Vor breiter automatisierter Last die für G3 nötigen Grenzen prüfen; vollständiger Backup-/Restore-/Upgrade-Nachweis gehört zu G5. Dauerhafte Entscheidung zum für das Testfenster deaktivierten zonenweiten Cloudflare Bot Fight Mode offen, keine eigenständige Policy-Änderung.
+- [x] **G3 – aktiver Crash und gehaltene Sperre:** echter nativer Pending-Command vor dem gezielten Worker-/Connector-Crash, leere alte Dienst-cgroups und erfolgreicher Neustart bestätigt. Vor der Recovery blieb Generation 4 `uncertain`, `writerEnded=false`, ohne Manifest und mit gehaltener Reservation; identische Anfrage liefert unverändertes Receipt und genau einen Run/Attempt/nativen Turn, ohne neuen Provider-Start.
+- [x] **G3 – funktionaler Workerabschluss einschließlich Recovery:** Generation 4 über den bestehenden Service-Pfad real als `stopped` mit `writerEnded=true`, generationsgebundenem Stop-Manifest und freigegebener Workspace-Reservation bestätigt. Unverändert genau ein Run/Attempt/nativer Turn, gleiches Receipt, null Ersatzstarts. Worker-Release `6643d6439`, private Konfigurations-/SQLite-Recovery `/var/lib/foundry-deploy/worker-g3-recovery-8r5u81yp`; Main unverändert. Zusammen mit den obigen realen und fokussierten deterministischen Nachweisen ist G3 für die folgende inaktive Factory-Entwicklung bestanden. Der einzelne Betreiberprüfer bleibt bewusst kein aggregierter Gate-Entscheider (`g3FullyAccepted=false`). Main-/Connector-Reconnect beider Clients bleibt G2; volle Ressourcen-/Restore-Lastabnahme bleibt Betriebsarbeit.
+- [ ] **Betriebsnachweise:** aktive Kernel-Limits (1 CPU, 2 GiB, 256 Tasks) sind geprüft; Last-/Kindprozess-Durchsetzung und vollständiger Restore sind offen; die begrenzte aktive Worker-Recovery ist in G3 bestätigt. Vor breiter automatisierter Last die für G3 nötigen Grenzen prüfen; vollständiger Backup-/Restore-/Upgrade-Nachweis gehört zu G5. Dauerhafte Entscheidung zum für das Testfenster deaktivierten zonenweiten Cloudflare Bot Fight Mode offen, keine eigenständige Policy-Änderung.
 - [ ] **Produktlücken:** P03N/G1-Nativ, automatischer Katalog-Erstabruf und Einstieg ohne getrenntes T3-Pairing noch nicht umgesetzt. Windows-Downloads im Foundry-Einstieg sind durch dessen `will-download`-Sperre blockiert und bleiben gesonderte begrenzte Produktarbeit, kein behaupteter Upstream-Fehler. Native Mobile-Abnahme bleibt verschoben.
 - [ ] **Zentrale Verbindungen und Autorisierungsweitergabe:** noch nicht implementiert. Provider-, Source-Control- und später MCP-Zugänge einmal in Foundry einrichten; dauerhafte Devices und Sandboxes erhalten daraus ausdrücklich autorisierte Laufzeitbindungen. P14Z ergänzt die zentrale Grundlage; P23/P41/P37/P52 integrieren die jeweiligen Zugangsarten. Die lokale Anmeldung für G3 ist ein Übergangsweg, kein erfüllter zentraler Login.
 - [ ] **Nächste Entwicklung nach G3:** P18b → P47 → P38a → P38b → P19 → P20 → P21 → P49 → P22 → P23 → P24 → G4; danach die unten beschriebene Reihenfolge. Zentrale Threads/Anhänge sind noch nicht implementiert und müssen vor erstem Workflow-Dispatch geräteunabhängig gesichert werden.
@@ -26,7 +26,7 @@ Die Häkchen bezeichnen den jeweils genannten Umfang. Offene Teilnachweise werde
 G3-Betriebsstand: Remote-main zuletzt `d457f63f`, Main Source `8ab7001b8` mit
 Image `sha256:e0a36d209e78db06c3d5bdede7f71a11e4ff6a515862604e113a69c7c7e4304a`,
 Schema 5, Gateway/Readiness/Betreiberbindung/Konfigurationsabgleich bestätigt,
-Migrator NOLOGIN. Worker-Release `b4e0b6709`, Dienstkonto `foundry-worker`, gemeinsame
+Migrator NOLOGIN. Worker-Release `6643d6439` nach begrenztem Recovery-Update, Dienstkonto `foundry-worker`, gemeinsame
 `foundry-host.slice` mit `cpu.max=100000 100000`, `memory.max=2147483648`, `pids.max=256`.
 Der Maintainer hat den realen Einstieg als Dienstkonto und anschließend die Bindung
 `codexG3` samt Readiness bestätigt. Ressourcen-Durchsetzung unter Last bleibt offen.
@@ -59,19 +59,20 @@ Der anschließende aktive Crash-Prüfer wurde real ausgeführt: privater Record
 `/srv/foundry-worker/workspaces/g2/g3-acceptance-restart-iu_2px8m`, Command
 `g3-restart-fa8c64e1-9844-4cf7-8142-8e80231277d9`. Native Command-Freigabe war offen,
 als ausschließlich die Worker-Dienste beendet wurden. Nach Neustart ist Codex
-bereit, die alte Generation 4 bleibt jedoch korrekt unklar und reserviert;
-ein Retry startet nichts neu. Die positive Recovery und anschließende Freigabe
-sind damit noch nicht belegt. Die inzwischen real ausgeführte lesende Diagnose
-bestätigt den ursprünglichen nativen Turn als `interrupted`, vollständige Historie,
-keine laufenden Turns/Befehle und keinen neuen Provider-Turn. Der bisherige
-Read-Pfad kann nach Session-Verlust die Runtime nicht selbst wieder öffnen.
-[#45](https://github.com/niklaskastning/foundry/pull/45) ergänzt diesen Codex-Recovery-Pfad:
-Harness öffnen, ohne Thread/Turn fortzusetzen, native Historie erneut prüfen,
-erst dann Writer-Ende und generationsgebundenes Stop-Manifest speichern.
-Unbestätigte Historie, Provider-Ausfall oder andere Instanz bleiben gesperrt.
-Der bestehende Reconciler übernimmt danach die Freigabe. Die Änderung und ihr
-Worker-Update-Helfer sind vorbereitet; Deployment und positiver Lauf des Service-Pfads
-auf Generation 4 bleiben offen. Die Diagnose allein ändert keine Ausführungsdaten.
+bereit; zunächst blieb Generation 4 korrekt unklar und reserviert. Die lesende
+native Diagnose bestätigte den ursprünglichen Turn als `interrupted`, vollständige
+Historie und keine laufenden Turns/Befehle. Anschließend wurde Worker-Release
+`6643d6439c9e2d02069240765d25cc76f3408240` unter der tatsächlichen Dienst-UID
+geprüft und installiert, mit privater Konfigurations-/SQLite-Recovery unter
+`/var/lib/foundry-deploy/worker-g3-recovery-8r5u81yp`. Der Read-Service öffnete den
+Harness ohne Thread-/Turn-Fortsetzung und erhob den nativen Stop erneut.
+`active-recovery-verify` bestätigt am 3. November Generation 4 als `stopped`,
+positives Writer-Ende, passendes Stop-Manifest, freigegebene Reservation und
+unverändert genau einen Run/Attempt/nativen Turn. Keine direkten SQL-Atteste,
+kein Ersatzauftrag. Frische Readiness um 09:10:26Z: `codexG3`, CLI `0.156.1`,
+`activeRuns=0`; Host/Connector-PIDs `319318`/`319319` im bestehenden Dienstkonto
+und der gemeinsamen Slice. Main wurde nicht geändert. Evidence und fokussierte
+Regressionstests in [#45](https://github.com/niklaskastning/foundry/pull/45).
 
 Windows war für diese Unterbrechungsprobe nicht verfügbar. Zwei andere Clients
 hatten dieselbe Instanz verwendet; Main wurde erst nach dem Crash neu geöffnet
@@ -80,7 +81,9 @@ Crashs nicht als aktive Reconnect-Probe geöffnet. Das belegt
 Katalogzugang nach Anmeldung, noch keine fortgesetzte Worker-/Thread-Verbindung
 in beiden Clients. Ablauf einer Main-/Foundry-Session und Worker-Reconnect bleiben
 getrennt zu klären; keine Zuordnung als Crash-bedingter Login-Fehler und keine
-neue pauschale Login-Testfolge. G3 bleibt offen; P18b wurde nicht vorgezogen.
+neue pauschale Login-Testfolge. Der funktionale G3-Abschluss ist unabhängig davon
+bestätigt; P18b folgt jetzt in der bestehenden Reihenfolge und aktiviert noch
+keine automatisierten Provider-Starts.
 
 G1/G2 sind damit für die Entwicklungsfortsetzung ausreichend praktisch geprüft, aber nicht vollständig abgenommen. Die Restabnahmen bleiben sichtbar; keine Freigabe für Betrieb ohne Access, neue Infrastruktur oder bezahlte Turns ableiten. Nach G3 darf die isoliert vorgezogene P18a-Grundlage integriert weitergenutzt werden. Änderungen und neue Nachweise in ihren jeweiligen PRs belegen und die betroffenen Häkchen hier aktualisieren; Issue #13 dient als Nachweisarchiv.
 

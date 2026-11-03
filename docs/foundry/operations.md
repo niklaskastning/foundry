@@ -687,8 +687,8 @@ Replay-Prüfungen; Foundry-Launch verlangt weiterhin die gesonderte Provider-Bin
 eigenen verwalteten Worktree. Dafür muss eine erlaubte Wurzel das Quellrepository
 enthalten; Worktrees werden nicht innerhalb ihres Quell-Checkouts erzeugt. Ohne
 Option bleibt der Checkout-Modus erhalten. Beide Modi benutzen dasselbe dauerhafte
-Journal pro Worker. Reale G3-Abnahme und Aktivierung bleiben gesonderte Schritte
-in Issue #13.
+Journal pro Worker. Die reale G3-Abnahme ist im [aktuellen Plan](implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen)
+mit Evidence in PR #45 festgehalten. Die Factory-Aktivierung bleibt gesondert.
 
 ## Inaktive Automation-Persistenz (P18a)
 
@@ -713,7 +713,8 @@ P18b muss `Factories.withStartEligibility` und das persistente Anlegen seines St
 in derselben Automation-Transaktion ausführen; ein anschließender separater Start
 würde die Sperre umgehen. Externe Ausführung darf erst nach dem Commit folgen.
 WorkItem-Abschluss wird ausdrücklich fachlich gesetzt, unabhängig von Run-Erfolg.
-G3, P18b-Anschluss und integrierte P18a-Abnahme bleiben offen.
+Der funktionale G3-Nachweis ist bestätigt; P18b-Anschluss und integrierte
+P18a-Abnahme bleiben gesonderte Schritte.
 
 Der isolierte Nachweis verwendet ausschließlich einen temporären PostgreSQL-Cluster,
 keine vorhandenen Datenbanken oder persönlichen Provider-Zugänge:
