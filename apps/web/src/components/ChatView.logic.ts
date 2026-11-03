@@ -628,7 +628,7 @@ export function resolveTerminalWorktreePath(input: {
 export async function resolveFileAttachmentUrl(input: {
   attachment: ChatFileAttachment;
   environmentId: EnvironmentId;
-  httpBaseUrl: string;
+  httpBaseUrl: string | null;
   createAssetUrl: (input: {
     environmentId: EnvironmentId;
     input: AssetCreateUrlInput;
@@ -641,6 +641,7 @@ export async function resolveFileAttachmentUrl(input: {
       resource: {
         _tag: "attachment",
         attachmentId: attachment.id,
+        ...(attachment.foundryArtifact ? { foundryArtifact: attachment.foundryArtifact } : {}),
         fileName: attachment.name,
         mimeType: videoMimeType(attachment) ?? attachment.mimeType,
       },

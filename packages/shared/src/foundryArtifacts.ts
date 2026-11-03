@@ -19,6 +19,21 @@ export type ArtifactTransport = (
 ) => Effect.Effect<unknown, FoundryArtifactError>;
 export const artifactSha256 = (bytes: Uint8Array) =>
   Array.from(sha256(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+export function artifactPreviewMime(bytes: Uint8Array): string {
+  const prefix = Array.from(bytes.subarray(0, 12), (byte) => String.fromCharCode(byte)).join("");
+  if (prefix.startsWith("\x89PNG\r\n\x1a\n")) return "image/png";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (prefix.startsWith("GIF87a") || prefix.startsWith("GIF89a")) return "image/gif";
+  if (prefix.startsWith("RIFF") && prefix.slice(8) === "WEBP") return "image/webp";
+  if (prefix.startsWith("%PDF-")) return "application/pdf";
+  if (prefix.startsWith("RIFF") && prefix.slice(8) === "WAVE") return "audio/wav";
+  if (prefix.startsWith("ID3")) return "audio/mpeg";
+  if (prefix.slice(4, 8) === "ftyp") return "video/mp4";
+  if (bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3)
+    return "video/webm";
+  if (prefix.startsWith("OggS")) return "audio/ogg";
+  return "application/octet-stream";
+}
 const decodeBegin = Schema.decodeEffect(FoundryArtifactBegin);
 const decodeStatus = Schema.decodeUnknownEffect(FoundryArtifactStatus);
 const decodeManifest = Schema.decodeUnknownEffect(FoundryArtifactManifest);
@@ -100,6 +115,7 @@ export const downloadArtifact = Effect.fn("FoundryArtifacts.download")(function*
   );
   if (!sameReference(reference, manifest.reference)) return yield* changed();
   const bytes = new Uint8Array(manifest.sizeBytes);
+  const fileHash = sha256.create();
   let offset = 0;
   do {
     const chunk = yield* request(send, { op: "read", input: { reference, offset } }).pipe(
@@ -119,8 +135,13 @@ export const downloadArtifact = Effect.fn("FoundryArtifacts.download")(function*
     )
       return yield* changed();
     bytes.set(data, offset);
+    fileHash.update(data);
     offset += data.byteLength;
   } while (offset < bytes.byteLength);
-  if (artifactSha256(bytes) !== manifest.sha256) return yield* changed();
+  if (
+    Array.from(fileHash.digest(), (byte) => byte.toString(16).padStart(2, "0")).join("") !==
+    manifest.sha256
+  )
+    return yield* changed();
   return { manifest, bytes };
 });

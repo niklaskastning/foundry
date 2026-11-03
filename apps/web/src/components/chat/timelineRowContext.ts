@@ -86,8 +86,8 @@ export interface TimelineRowSharedState {
     | undefined;
   onToggleTurnFold: (runId: RunId) => void;
   onToggleAttemptFold: (attemptId: RunAttemptId) => void;
-  onFileOpen: (attachment: ChatFileAttachment) => void;
-  onFileDownload: (attachment: ChatFileAttachment) => void;
+  onFileOpen: (attachment: ChatFileAttachment, preparedUrl?: string | null) => void;
+  onFileDownload: (attachment: ChatFileAttachment, preparedUrl?: string | null) => void;
   openPullRequest: (event: MouseEvent<HTMLElement>, url: string) => void;
   onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
   onToggleWorkEntry: (anchorKey: string, collapsed: boolean) => void;

@@ -9,9 +9,22 @@ import {
 } from "@t3tools/contracts";
 import * as Base64 from "effect/encoding/Base64";
 import * as Effect from "effect/Effect";
-import { artifactSha256, downloadArtifact, type ArtifactTransport } from "./foundryArtifacts.ts";
+import {
+  artifactSha256,
+  artifactPreviewMime,
+  downloadArtifact,
+  type ArtifactTransport,
+} from "./foundryArtifacts.ts";
 
 const bytes = new TextEncoder().encode("confirmed fixture");
+it.each([
+  "<html><script>top.x=1</script></html>",
+  '<svg xmlns="http://www.w3.org/2000/svg" onload="top.x=1"/>',
+  '<?xml version="1.0"?><svg/>',
+  "plain text",
+])("never gives active document bytes a privileged Blob type (%s)", (text) => {
+  expect(artifactPreviewMime(new TextEncoder().encode(text))).toBe("application/octet-stream");
+});
 const manifest: FoundryArtifactManifest = {
   reference: {
     instanceId: FoundryInstanceId.make("11111111-1111-4111-8111-111111111111"),

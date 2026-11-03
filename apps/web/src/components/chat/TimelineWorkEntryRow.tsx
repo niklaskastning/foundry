@@ -572,6 +572,7 @@ function QuestionAnswerHistory({
   const resources = attachments.map((attachment) => ({
     _tag: "attachment" as const,
     attachmentId: attachment.id,
+    ...(attachment.foundryArtifact ? { foundryArtifact: attachment.foundryArtifact } : {}),
   }));
   const urls = useAssetUrls(activeThreadEnvironmentId, resources);
   return (

@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { FoundryConnectionTarget, BearerConnectionTarget } from "./model.ts";
 import * as FoundryGateway from "./foundryGateway.ts";
+import { FoundryInstanceSession } from "./foundryMain.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import { layerRemoteHttpClient } from "../rpc/http.ts";
 import { fetchEnvironmentSessionState } from "../state/session.ts";
@@ -137,7 +138,7 @@ it.effect.each([
             thumbprint: Effect.succeed("fixture-key"),
             createProof: (input) => Effect.succeed(JSON.stringify(input)),
           }),
-          Layer.succeed(FoundryGateway.FoundryInstanceSession, {
+          Layer.succeed(FoundryInstanceSession, {
             current: () =>
               Effect.succeed({
                 binding: {

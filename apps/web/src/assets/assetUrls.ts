@@ -152,7 +152,12 @@ export function useAssetUrlRefresh(
     refresh: true,
   });
   return async () => {
-    if (environmentId === null || resource === null || httpBaseUrl === null) return null;
+    if (
+      environmentId === null ||
+      resource === null ||
+      (httpBaseUrl === null && !(resource._tag === "attachment" && resource.foundryArtifact))
+    )
+      return null;
     lifetime.retain();
     const result = await refresh({ environmentId, input: { resource } });
     if (result._tag === "Failure") throw squashAtomCommandFailure(result);
@@ -175,7 +180,6 @@ export function useAssetUrls(
       resources: allowedResources,
     }),
   );
-  if (preparedConnection._tag === "None") return resources.map(() => null);
   const urls: Array<string | null> = [];
   let resultIndex = 0;
   for (const resource of resources) {
@@ -187,7 +191,10 @@ export function useAssetUrls(
     resultIndex += 1;
     urls.push(
       result && AsyncResult.isSuccess(result)
-        ? resolveAssetUrl(preparedConnection.value.httpBaseUrl, result.value.relativeUrl)
+        ? resolveAssetUrl(
+            preparedConnection._tag === "Some" ? preparedConnection.value.httpBaseUrl : null,
+            result.value.relativeUrl,
+          )
         : null,
     );
   }

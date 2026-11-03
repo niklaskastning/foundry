@@ -14,7 +14,7 @@ import { useQuietThreadShell } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
-import { memo, use, useState, type ReactNode } from "react";
+import { memo, use, useState, type ReactNode, type ComponentProps } from "react";
 import {
   createMessageAttachmentPreviewProjector,
   selectMessageImageResources,
@@ -96,6 +96,36 @@ const MEDIA_EDGE_CLASS_NAME =
 const BUBBLE_CHIP_CLASS_NAME =
   "[&_[data-slot=context-chip]]:[--context-chip-ink:var(--context-chip-message,var(--context-chip-accent))]";
 
+function FileDownloadButton({
+  file,
+  ...props
+}: ComponentProps<typeof Button> & { file: ChatFileAttachment }) {
+  const ctx = use(TimelineRowCtx);
+  const prepare = useAssetUrlRefresh(
+    ctx.activeThreadEnvironmentId,
+    file.foundryArtifact
+      ? {
+          _tag: "attachment",
+          attachmentId: file.id,
+          foundryArtifact: file.foundryArtifact,
+        }
+      : null,
+  );
+  return (
+    <Button
+      {...props}
+      onClick={async () => {
+        if (!file.foundryArtifact) return ctx.onFileDownload(file);
+        try {
+          ctx.onFileDownload(file, await prepare());
+        } catch {
+          ctx.onFileDownload(file, null);
+        }
+      }}
+    />
+  );
+}
+
 function UserFileCard({
   file,
   copyMarkdown,
@@ -154,11 +184,11 @@ function UserFileCard({
           <Tooltip>
             <TooltipTrigger
               render={
-                <Button
+                <FileDownloadButton
+                  file={file}
                   size="icon-xs"
                   variant="ghost-muted"
                   aria-label={`Download ${label}`}
-                  onClick={() => ctx.onFileDownload(file)}
                 />
               }
             >
@@ -184,12 +214,9 @@ function UserVideoAttachment({
   const ctx = use(TimelineRowCtx);
   // Row updates rebuild attachment objects, so the asset follows only the
   // fields it reads.
-  const { downloadable, id, mimeType, name } = file;
+  const { downloadable } = file;
   const environmentId = ctx.activeThreadEnvironmentId;
-  const asset =
-    downloadable === false
-      ? null
-      : buildAttachmentVideoAsset(environmentId, { id, mimeType, name });
+  const asset = downloadable === false ? null : buildAttachmentVideoAsset(environmentId, file);
   const resource = asset?.resource ?? null;
   const assetUrl = useAssetUrlState(ctx.activeThreadEnvironmentId, resource);
   const refreshAssetUrl = useAssetUrlRefresh(ctx.activeThreadEnvironmentId, resource);
@@ -891,6 +918,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                     resource={{
                       _tag: "attachment",
                       attachmentId: file.id,
+                      ...(file.foundryArtifact ? { foundryArtifact: file.foundryArtifact } : {}),
                       fileName: file.name,
                       mimeType: file.mimeType,
                       disposition: "inline",
@@ -951,11 +979,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                         <Tooltip>
                           <TooltipTrigger
                             render={
-                              <Button
+                              <FileDownloadButton
+                                file={file}
                                 size="icon-xs"
                                 variant="ghost-muted"
                                 aria-label={`Download ${label}`}
-                                onClick={() => ctx.onFileDownload(file)}
                               />
                             }
                           >

@@ -193,6 +193,7 @@ export interface OnboardingResult {
   binding: InstanceBinding | null;
   confirmed: boolean;
   session: FoundrySession | null;
+  artifactsAvailable?: boolean;
   message: string;
 }
 
@@ -271,7 +272,7 @@ export function createInstanceClient(options: {
     };
     if (operation !== "inspect" && !saved && operation !== "confirm")
       throw new OnboardingError("unconfirmed");
-    const { binding } = verifyDescriptor(
+    const { binding, descriptor } = verifyDescriptor(
       await request(
         "/.well-known/foundry?protocolVersion=1&requiredCapability=foundry.access-sessions",
       ),
@@ -330,6 +331,7 @@ export function createInstanceClient(options: {
       binding,
       confirmed: true,
       session,
+      artifactsAvailable: descriptor.artifactTransfer?.protocolVersion === "1",
       message:
         "Signed in to Foundry. This session does not grant T3 environment or gateway access.",
     };

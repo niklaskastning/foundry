@@ -41,7 +41,13 @@ support uses optional `artifactTransfer` metadata: adding an unknown capability 
 the strict version-1 enum would break older Windows readers. The separate opt-in
 [worker binding](../../deploy/fork/worker/README.md#zentrale-artefakte-p38a-noch-keine-live-abnahme)
 confirms attachments before message commit; it does not provide a central thread
-archive or complete the client acceptance gate.
+archive. When the artifact profile is enabled, `/foundry` shows Files after a
+verified session. Load files there without selecting or connecting their source
+device; a Main T3 session with `orchestration:read` remains required. Confirmed
+thread attachments use the same Main read path. HTML/SVG open as escaped source,
+and Blob URLs remain scoped to their viewer. The native Access sign-in probe does
+not host the file library; its existing Windows download block remains separate.
+Automated client coverage does not complete the live acceptance gate.
 
 From the source checkout, create a private key file on the execution machine:
 

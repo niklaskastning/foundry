@@ -57,8 +57,10 @@ function parseAssetCollectionKey(
   }
 }
 
-export function resolveAssetUrl(httpBaseUrl: string, relativeUrl: string): string | null {
+export function resolveAssetUrl(httpBaseUrl: string | null, relativeUrl: string): string | null {
   try {
+    if (relativeUrl.startsWith("blob:")) return new URL(relativeUrl).href;
+    if (httpBaseUrl === null) return null;
     const base = new URL(httpBaseUrl);
     if (
       base.pathname.startsWith("/api/foundry/gateway/devices/") &&
@@ -122,7 +124,11 @@ export function assetUrlStateFromResult(
   httpBaseUrl: string | null,
 ): AssetUrlState {
   if (result._tag === "Failure") return { _tag: "Failure" };
-  if (httpBaseUrl === null || result._tag !== "Success") return { _tag: "Loading" };
+  if (
+    result._tag !== "Success" ||
+    (httpBaseUrl === null && !result.value.relativeUrl.startsWith("blob:"))
+  )
+    return { _tag: "Loading" };
   const url = resolveAssetUrl(httpBaseUrl, result.value.relativeUrl);
   if (url === null) return { _tag: "Failure" };
   return {
