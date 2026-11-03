@@ -748,11 +748,11 @@ Option bleibt der Checkout-Modus erhalten. Beide Modi benutzen dasselbe dauerhaf
 Journal pro Worker. Die reale G3-Abnahme ist im [aktuellen Plan](implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen)
 mit Evidence in PR #45 festgehalten. Die Factory-Aktivierung bleibt gesondert.
 
-## Inaktive Automation-Persistenz (P18a/P18b/P47)
+## Automation-Persistenz und begrenzter Dispatch (P18a/P18b/P47/P19)
 
-`apps/server/src/automation/` stellt eine noch nicht in Main/Worker eingebundene
-Service-Schicht bereit. Explizite Service-Aufrufe können gepinnte `pending`-Runs
-speichern; Startup-Migration, CLI-Aktivierung, RPCs und Dispatch sind nicht eingebunden.
+`apps/server/src/automation/` speichert gepinnte Runs und Definitionen. P19 ergänzt
+einen standardmäßig deaktivierten Scheduler im bestehenden Main-Prozess. Das
+Anlegen eines `pending`-Runs erteilt keine Ausführungsfreigabe.
 Sie verwendet einen eigenen `AutomationDatabase`-Pool und den schemaqualifizierten
 Namespace `foundry_automation` mit eigenem Migrationsmarker. Für spätere Aktivierung
 ist eine separate Automation-Datenbank mit eigenen Migrator-/Runtime-Rollen
@@ -771,15 +771,16 @@ Archivieren sperrt neue Starts, erhält Aufträge/Versionen und beendet keine Ru
 `Workflows.start` verwendet `Factories.withStartEligibility` und speichert Command,
 Run und Outbox innerhalb derselben Automation-Transaktion. Ein identischer Retry
 liest den vorhandenen Run auch nach Archivierung; neue Starts bleiben gesperrt.
-Externe Ausführung darf erst nach dem Commit folgen und ist noch nicht angebunden.
+Externe Ausführung folgt ausschließlich nach dem Automation-Commit.
 WorkItem-Abschluss wird ausdrücklich fachlich gesetzt, unabhängig von Run-Erfolg.
 Schema 2 erweitert vorhandene P18a-Daten ohne Instanz-/T3-Migration. Factory- und
 Workflow-Version sowie Repository und Eingaberevision bleiben am Run gepinnt;
 die Revision ist ein opaker Eingabestand, kein verifiziertes Git-Objekt. Die
 geordnete Step-Liste unterstützt Agent, Test, Approval und Publish; Referenzen
 dürfen nur auf vorherige Steps zeigen. Test-IDs sind konfigurierte Prüfungen,
-keine im Backend auszuwertenden Skripte. Die Runtime darf Versionen, Runs und Outbox nicht ändern
-oder löschen; weitere Zustandsübergänge und Zustellung folgen in P19/P20.
+keine im Backend auszuwertenden Skripte. Die Runtime darf Versionen, Run-Snapshots und ursprüngliche Outbox nicht ändern
+oder löschen. Schema 4 ergänzt getrennte, gezielt beschreibbare Dispatchzustände,
+Attempts und Zustell-Outbox. `readRun` projiziert daraus den aktuellen Zustand.
 
 P47 ergänzt in Schema 3 unveränderliche Definitions-Snapshots und einen aktiven
 Versionszeiger. Der gemeinsame Validator in `@t3tools/shared/factoryDefinition`
@@ -810,12 +811,81 @@ und aktiver Zeiger werden gemeinsam committet. Hashes beziehen sich auf die
 kanonische Semantik, Herkunft wird separat gespeichert. Ein identischer Retry
 liest seine ursprüngliche Revision auch nach späteren Aktivierungen. Eine alte
 Version wird für neue Starts durch Export und erneute Aktivierung mit aktuellem
-Basisabgleich wiedergewählt; bestehende Runs bleiben gepinnt. Keine Startup- oder
-Dispatch-Aktivierung und noch kein Git-Verwaltungsmodus (P48).
+Basisabgleich wiedergewählt; bestehende Runs bleiben gepinnt. Definitionsaktivierung
+startet keine Ausführung. Git-Verwaltung folgt in P48.
 
 Der isolierte Nachweis verwendet ausschließlich einen temporären PostgreSQL-Cluster,
 keine vorhandenen Datenbanken oder persönlichen Provider-Zugänge:
 
 ```sh
 FOUNDRY_TEST_PG_BIN=/path/to/postgresql/bin vp run --filter t3 test:automation-postgres
+```
+
+### P19 gezielt aktivieren
+
+P19 besitzt keine Run-Steuerungsoberfläche. Pause/Resume/Cancel/Retry und Freigaben
+folgen in P20, manuelle Run-Ansicht in P21. Approval- und Publish-Steps warten;
+fachliche Fehler werden nicht wiederholt und halten den Worker-Slot konservativ.
+Es gibt genau einen konfigurierten Worker und höchstens einen aktiven Run darauf.
+
+Vor Aktivierung eine separate Automation-Datenbank mit eigenem Migrator und
+Runtime-Benutzer bereitstellen. Die Runtime braucht weder DDL noch Migrator-Login.
+Migration erfolgt ausdrücklich mit `FOUNDRY_AUTOMATION_MIGRATION_URL` aus geschützter
+Konfiguration und `foundry automation-migrate --database <bestätigte-datenbank>
+--runtime-role <automation-runtime>`. Der Befehl prüft den Datenbanknamen und verweigert
+ein vorhandenes Instanzschema. Er startet keine Runs. Auf der Entwicklungs-VPS gilt
+der gemeinsame Deployment-Lock; Instanzschema 7 und lokales T3-SQLite bleiben getrennt.
+
+Die Main-Runtime verlangt bei `FOUNDRY_AUTOMATION_ENABLED=true` zusätzlich:
+
+- `FOUNDRY_AUTOMATION_DATABASE_URL`: separater Runtime-Pool, Schema 4;
+- `FOUNDRY_AUTOMATION_TARGET`: JSON mit genau `deviceId`, `environmentId` und
+  `allowedRunIds` (explizite eigene Fixture-Runs, höchstens 100);
+- den vorhandenen Gateway-/Artefaktbetrieb sowie eine bewusst erteilte
+  `automationExecution`-Device-Freigabe zusätzlich zu `clientAccess`.
+
+Die bisherige Connections-Oberfläche vergibt diese Automation-Freigabe nicht.
+Kein Flag, allgemeines Capability-Bit oder Deployment aktiviert bestehende Runs.
+Der installierte VPS-Updater kennt das deaktivierte Profil; ein aktiviertes Profil
+benötigt eine passende ausdrücklich konfigurierte Betreiberinstallation, keine
+ungeprüften zusätzlichen Variablen im bisherigen Updater.
+
+Für einen bereits über P18/P47 angelegten und freigegebenen Run nimmt der interne
+Service beziehungsweise `POST /api/foundry/automation/dispatch` den Vorgang
+`{op:"enroll",input:{factoryId,runId,projectId,model,checks,requiredArtifacts}}`
+entgegen. Er benutzt eine aktuelle Foundry- und T3-Session mit den bestehenden
+Scopes; keine Maschinen-Credentials als Benutzerlogin. `checks` bindet Test-IDs
+an ausdrücklich vorgegebene `prompt`, exakten nativen `command` und absolutes `cwd`.
+`requiredArtifacts` nennt pro `stepId` erforderliche Dateinamen. Doppelte Bindungen
+werden abgewiesen. `{op:"read",factoryId,runId}` liest den dauerhaften Zustand.
+Dies ist ein begrenzter Entwicklungsanschluss, kein öffentlicher Trigger oder MCP-API.
+
+Die Bindung pinnt Provider-Modell, Projekt, Device- und Grant-Generationen sowie
+bestehende Sessionreferenzen. Sie speichert keine Credentials und verlängert keine
+Anmeldung. Logout, Refresh, Ablauf oder Widerruf blockieren weitere Zugriffe und
+Lease-Erneuerungen; die lokale Worker-Lease bleibt maßgeblich. P19 ersetzt dabei
+keinen Writer. Wiederaufnahme mit neuer Benutzerfreigabe gehört zu P20.
+
+Der Scheduler findet offene Arbeit nach Neustart aus PostgreSQL wieder. Claims
+werden vor Worker-/Archivzugriff committet; abgelaufene Claimgenerationen dürfen
+keine Ergebnisse bestätigen. Verlorene Antworten verwenden dieselbe Command-ID,
+Anfrage, Worker-Generation und denselben Thread. `complete=true` ist ausschließlich
+eine Archivbestätigung. Erfolg verlangt zusätzlich Writer-Ende, passenden nativen
+Run, Checkpoint, finalen Archivcursor und erforderliche Ergebnisdaten. Ein Test
+braucht einen eindeutig passenden abgeschlossenen nativen Command mit Exitcode 0;
+fehlendes CWD oder reine Agentenaussagen sind kein Nachweis. Andere Provider als
+die nachweisfähigen Adapter bleiben dadurch konservativ unbestätigt.
+
+Codeübergaben bleiben auf demselben expliziten Checkout: Der Worker vergleicht einen
+frischen Snapshot unter der Reservation mit dem Vorgänger-Checkpoint, ohne Restore.
+Erforderliche Artefakte werden vollständig mit Hash geprüft und vor dem Folgestart
+über P38a als echte Anhänge materialisiert. Ein lokaler Git-SHA ersetzt diese
+Übergabe nicht. Archive über 10.000 Ereignisse warten sichtbar mit
+`archive_result_limit`; P19 lädt keine unbegrenzt großen Resultate in Main.
+
+Gezielte Nachweise, jeweils ausschließlich gegen eigene temporäre PostgreSQL-Cluster:
+
+```sh
+FOUNDRY_TEST_PG_BIN=/path/to/postgresql/bin vp run --filter t3 test:automation-postgres
+(cd apps/server && FOUNDRY_TEST_PG_BIN=/path/to/postgresql/bin node scripts/test-automation-session-reference.ts)
 ```
