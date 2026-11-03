@@ -23,7 +23,7 @@ const urlFamily = Atom.family((key: string) => {
     .atom(
       Effect.gen(function* () {
         if (!binding) return yield* new FoundryArtifactError({ code: "forbidden" });
-        const client = yield* FoundryArtifacts.make();
+        const client = yield* FoundryArtifacts.make({ allowLoopback: import.meta.env.DEV });
         const result = yield* client.download(binding, manifest);
         const url = yield* Effect.acquireRelease(
           Effect.sync(() =>
@@ -52,7 +52,7 @@ export const artifactListCommand = createRuntimeCommand(appAtomRuntime, {
   execute: Effect.fn("FoundryFiles.list")(function* (input: FoundryArtifactList) {
     const binding = initialState().binding;
     if (!binding) return yield* new FoundryArtifactError({ code: "forbidden" });
-    const client = yield* FoundryArtifacts.make();
+    const client = yield* FoundryArtifacts.make({ allowLoopback: import.meta.env.DEV });
     return yield* client.list(binding, input);
   }, Effect.provide(layerFoundryInstanceSession)),
 });

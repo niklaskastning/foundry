@@ -48,13 +48,13 @@ const unavailable = () =>
   });
 
 const decodeJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
-export const make = Effect.fn("FoundryMain.make")(function* () {
+export const make = Effect.fn("FoundryMain.make")(function* (options = { allowLoopback: false }) {
   const http = yield* HttpClient.HttpClient;
   const access = yield* FoundryInstanceSession;
   const signer = yield* Effect.serviceOption(ManagedRelay.ManagedRelayDpopSigner);
   const prepare = Effect.fn("FoundryMain.prepare")(function* (binding: InstanceBinding) {
     const origin = yield* Effect.try({
-      try: () => normalizeOrigin(binding.origin),
+      try: () => normalizeOrigin(binding.origin, options.allowLoopback),
       catch: blocked,
     });
     const session = yield* access.current(binding);

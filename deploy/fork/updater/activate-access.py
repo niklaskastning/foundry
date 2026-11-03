@@ -31,6 +31,8 @@ GATEWAY_CAPABILITIES = {
     'foundry.device-enrollment', 'foundry.device-channel', 'foundry.http-gateway',
     'foundry.rpc-streams', 'foundry.device-catalog',
 }
+ARTIFACT_FLAG = 'FOUNDRY_ARTIFACTS_ENABLED'
+ARTIFACT_TRANSFER = {'protocolVersion': '1', 'chunkBytes': 262144, 'maxBytes': 52428800}
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': '/root'}
 
 
@@ -91,9 +93,11 @@ def parse_runtime(text):
     if any(len(entry) != 2 for entry in entries) or len(dict(entries)) != len(entries):
         raise RuntimeError('Unexpected active runtime configuration.')
     values = dict(entries)
-    extra = set(values) - expected
+    extra = set(values) - expected - {ARTIFACT_FLAG}
     if extra and (extra != set(GATEWAY_FLAGS) or any(values[key] != 'true' for key in GATEWAY_FLAGS)):
         raise RuntimeError('Supply either no gateway flags or the complete enabled gateway profile.')
+    if ARTIFACT_FLAG in values and (values[ARTIFACT_FLAG] != 'true' or extra != set(GATEWAY_FLAGS)):
+        raise RuntimeError('Artifact transfers require the complete gateway profile and an explicit true flag.')
     if (not expected.issubset(values) or values['FOUNDRY_INSTANCE_STORE'] != 'postgres'
             or values['FOUNDRY_ACCESS_ENABLED'] != 'true' or values['FOUNDRY_ACCESS_ISSUER'] != ISSUER
             or values['FOUNDRY_PUBLIC_ORIGIN'] != ORIGIN
@@ -152,7 +156,11 @@ def active_status(expected_schema=None):
     if (advertised != (GATEWAY_CAPABILITIES if gateway_enabled else set())
             or (gateway_enabled and database['version'] not in [5, 6])):
         raise RuntimeError('Gateway capabilities or schema differ from the configured profile.')
-    return {'gatewayEnabled': gateway_enabled, 'revision': revision, 'image': configured_image, 'schemaVersion': database['version'],
+    artifacts_enabled = values.get(ARTIFACT_FLAG) == 'true'
+    if (descriptor.get('artifactTransfer') != (ARTIFACT_TRANSFER if artifacts_enabled else None)
+            or (artifacts_enabled and (database['version'] != 6 or not gateway_enabled))):
+        raise RuntimeError('Artifact transfer metadata or schema differs from the configured profile.')
+    return {'gatewayEnabled': gateway_enabled, 'artifactsEnabled': artifacts_enabled, 'revision': revision, 'image': configured_image, 'schemaVersion': database['version'],
             'instanceId': INSTANCE, 'environmentId': ENVIRONMENT, 'ready': True,
             'operatorBound': True, 'migratorLogin': False, 'configurationMatches': True,
             'upgradePerformed': False}
@@ -164,17 +172,24 @@ def start_main():
            '--no-build', '--pull', 'never', '--wait', '--wait-timeout', '180', 'main')
 
 
-def gateway(enabled):
-    previous = active_status(expected_schema=5)
-    if previous['gatewayEnabled'] == enabled:
+def gateway(enabled, *, artifacts=False):
+    previous = active_status()
+    schema = previous['schemaVersion']
+    if schema not in [5, 6] or (artifacts and (schema != 6 or not previous['gatewayEnabled'])):
+        raise RuntimeError('This profile requires the migrated gateway; artifacts require schema 6.')
+    if not artifacts and not enabled and previous['artifactsEnabled']:
+        raise RuntimeError('Disable artifact publication on workers and Main before disabling the gateway.')
+    field = 'artifactsEnabled' if artifacts else 'gatewayEnabled'
+    flags = (ARTIFACT_FLAG,) if artifacts else GATEWAY_FLAGS
+    if previous[field] == enabled:
         print(json.dumps({**previous, 'configurationChanged': False}, indent=2))
         return
     runtime = CONFIG / 'access-runtime.env'
     original = runtime.read_text()
-    lines = [line for line in original.splitlines() if line.split('=', 1)[0] not in GATEWAY_FLAGS]
+    lines = [line for line in original.splitlines() if line.split('=', 1)[0] not in flags]
     if enabled:
-        lines.extend(f'{key}=true' for key in GATEWAY_FLAGS)
-    recovery = Path(tempfile.mkdtemp(prefix='gateway-', dir=STATE))
+        lines.extend(f'{key}=true' for key in flags)
+    recovery = Path(tempfile.mkdtemp(prefix='artifacts-' if artifacts else 'gateway-', dir=STATE))
     write_private(recovery / 'access-runtime.env', original)
     write_private(recovery / 'manifest.json', json.dumps(previous, indent=2) + '\n')
     replacement = recovery / 'candidate-runtime.env'
@@ -184,10 +199,10 @@ def gateway(enabled):
         docker('stop', '--time', '60', MAIN)
         os.replace(replacement, runtime)
         start_main()
-        result = active_status(expected_schema=5)
-        if (result['gatewayEnabled'] != enabled or result['image'] != previous['image']
+        result = active_status(expected_schema=schema)
+        if (result[field] != enabled or result['image'] != previous['image']
                 or result['revision'] != previous['revision']):
-            raise RuntimeError('Gateway configuration verification failed.')
+            raise RuntimeError('Profile configuration verification failed.')
     except BaseException:
         try:
             docker('stop', '--time', '60', MAIN)
@@ -195,13 +210,13 @@ def gateway(enabled):
             write_private(rollback, original)
             os.replace(rollback, runtime)
             start_main()
-            restored = active_status(expected_schema=5)
-            if any(restored[key] != previous[key] for key in ['gatewayEnabled', 'image', 'revision']):
+            restored = active_status(expected_schema=schema)
+            if any(restored[key] != previous[key] for key in ['gatewayEnabled', 'artifactsEnabled', 'schemaVersion', 'image', 'revision']):
                 raise RuntimeError('Previous configuration could not be verified.')
         except BaseException:
             docker('stop', '--time', '60', MAIN)
             raise RuntimeError(f'Main stays stopped. Restore the runtime configuration from {recovery}.') from None
-        print('Previous Main configuration restored; gateway change failed.', file=sys.stderr)
+        print('Previous Main configuration restored; profile change failed.', file=sys.stderr)
         raise
     write_private(recovery / 'success', 'enabled\n' if enabled else 'disabled\n')
     print(json.dumps({**result, 'configurationChanged': True, 'configurationRecovery': str(recovery)}, indent=2))
@@ -212,8 +227,10 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False):
         raise ValueError('Use an immutable image digest and its exact reviewed source SHA.')
     if same_schema and artifact_schema:
         raise ValueError('A schema upgrade cannot be a same-schema update.')
-    previous = active_status(expected_schema=5 if same_schema or artifact_schema else 2)
-    target_schema = 6 if artifact_schema else 5
+    previous = active_status(expected_schema=None if same_schema else 5 if artifact_schema else 2)
+    if same_schema and previous['schemaVersion'] not in [5, 6]:
+        raise RuntimeError('Same-schema updates require gateway schema 5 or 6.')
+    target_schema = previous['schemaVersion'] if same_schema else 6 if artifact_schema else 5
     image = REGISTRY + '@' + digest
     docker('pull', image)
     candidate = json.loads(docker('image', 'inspect', image))[0]
@@ -462,8 +479,8 @@ def activate(digest, revision):
 
 
 def main(args):
-    if args not in [['preflight'], ['status'], ['gateway', 'enable'], ['gateway', 'disable']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade', 'upgrade-artifacts', 'update']):
-        raise ValueError('Usage: foundry-activate-access status | preflight | gateway enable|disable | activate|upgrade|upgrade-artifacts|update sha256:<digest> <source-sha>')
+    if args not in [['preflight'], ['status'], ['gateway', 'enable'], ['gateway', 'disable'], ['artifacts', 'enable'], ['artifacts', 'disable']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade', 'upgrade-artifacts', 'update']):
+        raise ValueError('Usage: foundry-activate-access status | preflight | gateway|artifacts enable|disable | activate|upgrade|upgrade-artifacts|update sha256:<digest> <source-sha>')
     if os.geteuid() != 0:
         raise RuntimeError('This operation requires the administrator; no sudo grant is installed.')
     os.umask(0o077)
@@ -471,8 +488,8 @@ def main(args):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if args == ['status']:
             print(json.dumps(active_status(), indent=2))
-        elif args[0] == 'gateway':
-            gateway(args[1] == 'enable')
+        elif args[0] in ['gateway', 'artifacts']:
+            gateway(args[1] == 'enable', artifacts=args[0] == 'artifacts')
         elif args == ['preflight']:
             preflight()
             print('PASS pinned Docker Main, private PostgreSQL, empty fork_connect, absent login roles, stable IDs.')

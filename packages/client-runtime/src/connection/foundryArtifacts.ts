@@ -32,8 +32,10 @@ const failure = (error: unknown) =>
               ? "changed"
               : "unavailable",
       });
-export const make = Effect.fn("FoundryArtifactsClient.make")(function* () {
-  const main = yield* FoundryMain.make();
+export const make = Effect.fn("FoundryArtifactsClient.make")(function* (
+  options = { allowLoopback: false },
+) {
+  const main = yield* FoundryMain.make(options);
   const prepare = Effect.fn("FoundryArtifactsClient.prepare")(function* (binding: InstanceBinding) {
     const connection = yield* main.prepare(binding);
     const descriptor = yield* connection.request("/.well-known/foundry?protocolVersion=1").pipe(

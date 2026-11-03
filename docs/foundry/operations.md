@@ -49,6 +49,23 @@ and Blob URLs remain scoped to their viewer. The native Access sign-in probe doe
 not host the file library; its existing Windows download block remains separate.
 Automated client coverage does not complete the live acceptance gate.
 
+On the pinned Docker deployment, the administrator first uses
+`activate-access.py upgrade-artifacts sha256:<digest> <source-sha>` to migrate
+schema 5 to 6 with a coordinated database/state/workspace backup. This leaves the
+artifact profile disabled. Once the reviewed Main image is verified,
+`activate-access.py artifacts enable` changes only the private runtime flag,
+restarts Main and verifies schema, identity and transfer metadata. It saves the
+previous configuration and restores it if startup or verification fails; if
+recovery cannot be verified, Main stays stopped. No general sudo grant is added.
+The `update` command preserves either schema 5 or 6 and the enabled profile.
+
+Disable publication on workers before `activate-access.py artifacts disable`.
+This retains confirmed metadata and blobs. The helper refuses to disable the
+gateway while artifacts remain enabled. A schema upgrade failure still requires
+the coordinated restore procedure; a profile change is not a schema downgrade.
+Development builds alone may explicitly use HTTP on loopback for the artifact
+client, matching local instance verification; deployed clients require HTTPS.
+
 From the source checkout, create a private key file on the execution machine:
 
 ```sh
