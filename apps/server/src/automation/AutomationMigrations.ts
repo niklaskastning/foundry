@@ -56,7 +56,7 @@ const make = Effect.gen(function* () {
           const versions = yield* sql<{
             version: number;
           }>`SELECT version FROM foundry_automation.schema_version`;
-          if (versions.length !== 1 || ![1, 2].includes(versions[0]?.version ?? 0))
+          if (versions.length !== 1 || ![1, 2, 3].includes(versions[0]?.version ?? 0))
             return yield* new AutomationMigrationError({ reason: "schema_incompatible" });
           if (versions[0]?.version === 1) {
             yield* sql`ALTER TABLE foundry_automation.work_items ADD CONSTRAINT work_items_factory_id_id_key UNIQUE(factory_id,id)`;
@@ -65,10 +65,17 @@ const make = Effect.gen(function* () {
             yield* sql`CREATE TABLE foundry_automation.outbox (id text PRIMARY KEY REFERENCES foundry_automation.commands(id), run_id text NOT NULL UNIQUE REFERENCES foundry_automation.runs(id), kind text NOT NULL CHECK(kind='run.created'), payload jsonb NOT NULL)`;
             yield* sql`UPDATE foundry_automation.schema_version SET version=2`;
           }
+          if ([1, 2].includes(versions[0]?.version ?? 0)) {
+            yield* sql`CREATE TABLE foundry_automation.definition_versions (id text PRIMARY KEY, command_id text NOT NULL UNIQUE REFERENCES foundry_automation.commands(id), factory_id text NOT NULL, factory_version_id text NOT NULL, scope_version_id text NOT NULL, content_hash text NOT NULL CHECK(content_hash ~ '^[a-f0-9]{64}$'), source jsonb NOT NULL, definition jsonb NOT NULL, workflow_versions jsonb NOT NULL, FOREIGN KEY(factory_id,factory_version_id) REFERENCES foundry_automation.versions(factory_id,id), FOREIGN KEY(factory_id,scope_version_id) REFERENCES foundry_automation.versions(factory_id,id), UNIQUE(factory_id,id))`;
+            yield* sql`CREATE TABLE foundry_automation.definition_heads (factory_id text PRIMARY KEY REFERENCES foundry_automation.factories(id), version_id text NOT NULL, FOREIGN KEY(factory_id,version_id) REFERENCES foundry_automation.definition_versions(factory_id,id))`;
+            yield* sql`UPDATE foundry_automation.schema_version SET version=3`;
+          }
           yield* sql`GRANT USAGE ON SCHEMA foundry_automation TO ${sql(runtimeRole)}`;
           yield* sql`GRANT SELECT ON ALL TABLES IN SCHEMA foundry_automation TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT ON foundry_automation.factories, foundry_automation.versions, foundry_automation.work_items, foundry_automation.commands TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT ON foundry_automation.workflow_versions, foundry_automation.runs, foundry_automation.outbox TO ${sql(runtimeRole)}`;
+          yield* sql`GRANT INSERT ON foundry_automation.definition_versions, foundry_automation.definition_heads TO ${sql(runtimeRole)}`;
+          yield* sql`GRANT UPDATE(version_id) ON foundry_automation.definition_heads TO ${sql(runtimeRole)}`;
           yield* sql`GRANT UPDATE(archived) ON foundry_automation.factories TO ${sql(runtimeRole)}`;
           yield* sql`GRANT UPDATE(state) ON foundry_automation.work_items TO ${sql(runtimeRole)}`;
         }),
