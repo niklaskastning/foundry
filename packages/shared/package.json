@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./factoryDefinition": {
+      "types": "./src/factoryDefinition.ts",
+      "import": "./src/factoryDefinition.ts"
+    },
     "./changedFileKind": {
       "types": "./src/changedFileKind.ts",
       "import": "./src/changedFileKind.ts"

@@ -8,10 +8,14 @@ import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Console from "effect/Console";
+import * as Option from "effect/Option";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { exportFactoryFiles } from "@t3tools/shared/factoryDefinition";
 import * as Database from "../src/automation/AutomationDatabase.ts";
 import * as Migrations from "../src/automation/AutomationMigrations.ts";
 import * as Factories from "../src/automation/Factories.ts";
 import * as Workflows from "../src/automation/Workflows.ts";
+import * as Definitions from "../src/automation/Definitions.ts";
 const bin = process.env.FOUNDRY_TEST_PG_BIN;
 NodeAssert.ok(
   bin,
@@ -89,6 +93,19 @@ const failure = async (promise: Promise<unknown>, reason: string) => {
       typeof error === "object" && error !== null && "reason" in error && error.reason === reason,
   );
 };
+const definitionCall = <A, E>(f: (s: Definitions.Definitions["Service"]) => Effect.Effect<A, E>) =>
+  run(
+    Definitions.Definitions.pipe(
+      Effect.flatMap(f),
+      Effect.provide(
+        Definitions.layer.pipe(
+          Layer.provide(Workflows.layer.pipe(Layer.provideMerge(Factories.layer))),
+          Layer.provide(db("automation_runtime")),
+          Layer.provide(NodeCrypto.layer),
+        ),
+      ),
+    ),
+  );
 try {
   const initialized = NodeChildProcess.spawnSync(
     NodePath.join(bin, "initdb"),
@@ -239,7 +256,7 @@ try {
   const beforeUpgrade = await call((s) => s.readWorkItem("a", "w1"));
   // Reconstruct the deployed v1 schema around existing P18a data before testing its upgrade.
   for (const statement of [
-    "DROP TABLE foundry_automation.outbox,foundry_automation.runs,foundry_automation.workflow_versions",
+    "DROP TABLE foundry_automation.definition_heads,foundry_automation.definition_versions,foundry_automation.outbox,foundry_automation.runs,foundry_automation.workflow_versions",
     "ALTER TABLE foundry_automation.work_items DROP CONSTRAINT work_items_factory_id_id_key",
     "UPDATE foundry_automation.schema_version SET version=1",
   ])
@@ -248,7 +265,7 @@ try {
   NodeAssert.deepEqual(await call((s) => s.readWorkItem("a", "w1")), beforeUpgrade);
   NodeAssert.equal(
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
-    2,
+    3,
   );
   const definitions = await Promise.all(
     Array.from({ length: 8 }, () => workflowCall((s) => s.createVersion(workflow))),
@@ -432,6 +449,221 @@ try {
   NodeAssert.equal((await workflowCall((s) => s.readOutbox("a", "run-a1"))).length, 1);
   NodeAssert.equal((await query("SELECT * FROM foundry_automation.runs")).length, 3);
   NodeAssert.equal((await call((s) => s.readWorkItem("a", "w1"))).state, "completed");
+  for (const statement of [
+    "DROP TABLE foundry_automation.definition_heads,foundry_automation.definition_versions",
+    "UPDATE foundry_automation.schema_version SET version=2",
+  ])
+    await query(statement, "automation_migrator");
+  await run(migration);
+  NodeAssert.deepEqual(await workflowCall((s) => s.readRun("a", "run-a1")), runs[0]);
+  const activation = {
+    commandId: "activate-a1",
+    factoryId: "a",
+    scopeVersionId: "a1",
+    expectedVersionId: null,
+    files: exportFactoryFiles({
+      schemaVersion: 1,
+      factoryId: "a",
+      repositories: ["repo-a"],
+      workflows: [
+        { id: "main", steps: workflow.steps },
+        { id: "quick", steps: [workflow.steps[0]!] },
+      ],
+    }),
+    source: { kind: "files" as const, reference: "fixture-import" },
+  };
+  NodeAssert.ok(Option.isNone(await definitionCall((s) => s.active("a"))));
+  const activated = await Promise.all(
+    Array.from({ length: 8 }, () => definitionCall((s) => s.activate(activation))),
+  );
+  const initialDefinition = activated[0]!;
+  NodeAssert.equal(new Set(activated.map((item) => item.id)).size, 1);
+  NodeAssert.equal(initialDefinition.workflowVersions.length, 2);
+  NodeAssert.equal(initialDefinition.commandId, activation.commandId);
+  NodeAssert.equal(initialDefinition.scopeVersionId, activation.scopeVersionId);
+  for (const version of initialDefinition.workflowVersions) {
+    const persisted = await workflowCall((s) => s.readVersion("a", version.versionId));
+    NodeAssert.equal(persisted.factoryVersionId, initialDefinition.factoryVersionId);
+    NodeAssert.deepEqual(
+      persisted.steps,
+      initialDefinition.definition.workflows.find((item) => item.id === version.id)?.steps,
+    );
+  }
+  NodeAssert.match(initialDefinition.contentHash, /^[a-f0-9]{64}$/);
+  NodeAssert.deepEqual(initialDefinition.source, activation.source);
+  const exportedFiles = await definitionCall((s) => s.exportVersion("a", initialDefinition.id));
+  const pinnedRun = await workflowCall((s) =>
+    s.start({
+      ...startInput,
+      commandId: "definition-run",
+      id: "definition-run",
+      workflowVersionId: initialDefinition.workflowVersions[0]!.versionId,
+    }),
+  );
+  NodeAssert.equal(pinnedRun.factoryVersionId, initialDefinition.factoryVersionId);
+  const roundtrip = await definitionCall((s) =>
+    s.activate({
+      ...activation,
+      commandId: "roundtrip",
+      expectedVersionId: initialDefinition.id,
+      files: exportedFiles,
+      source: { kind: "foundry", reference: "roundtrip" },
+    }),
+  );
+  NodeAssert.equal(roundtrip.contentHash, initialDefinition.contentHash);
+  NodeAssert.deepEqual(roundtrip.definition, initialDefinition.definition);
+  const edits = await Promise.allSettled(
+    ["left", "right"].map((edit) =>
+      definitionCall((s) =>
+        s.activate({
+          ...activation,
+          commandId: "edit-" + edit,
+          expectedVersionId: roundtrip.id,
+          files: exportFactoryFiles({
+            ...initialDefinition.definition,
+            workflows: [
+              {
+                id: "main",
+                steps: [{ id: "implement", kind: "agent", dependsOn: [], prompt: edit }],
+              },
+            ],
+          }),
+        }),
+      ),
+    ),
+  );
+  NodeAssert.equal(edits.filter((item) => item.status === "fulfilled").length, 1);
+  const rejected = edits.find((item) => item.status === "rejected");
+  NodeAssert.ok(rejected?.status === "rejected" && rejected.reason.reason === "version_conflict");
+  const current = await definitionCall((s) => s.active("a"));
+  NodeAssert.ok(Option.isSome(current));
+  if (Option.isNone(current)) throw new Error("Missing active definition");
+  NodeAssert.notEqual(current.value.contentHash, initialDefinition.contentHash);
+  const invalidPathFiles = exportedFiles.map((file) =>
+    file.path === "factory.yaml"
+      ? { ...file, content: file.content.replace("workflows/main.yaml", "../private.yaml") }
+      : file,
+  );
+  await failure(
+    definitionCall((s) =>
+      s.activate({
+        ...activation,
+        commandId: "bad-path-activation",
+        expectedVersionId: current.value.id,
+        files: invalidPathFiles,
+      }),
+    ),
+    "invalid_definition",
+  );
+  const invalidReferenceFiles = exportedFiles.map((file) =>
+    file.path === "workflows/main.yaml"
+      ? { ...file, content: file.content.replace("dependsOn: []", "dependsOn: [missing]") }
+      : file,
+  );
+  await failure(
+    definitionCall((s) =>
+      s.activate({
+        ...activation,
+        commandId: "bad-reference-activation",
+        expectedVersionId: current.value.id,
+        files: invalidReferenceFiles,
+      }),
+    ),
+    "invalid_definition",
+  );
+  await failure(
+    definitionCall((s) =>
+      s.activate({
+        ...activation,
+        commandId: "bad-scope-activation",
+        expectedVersionId: current.value.id,
+        scopeVersionId: "a2",
+      }),
+    ),
+    "scope_mismatch",
+  );
+  await failure(
+    definitionCall((s) =>
+      s.activate({
+        ...activation,
+        commandId: "bad-factory-activation",
+        factoryId: "b",
+        expectedVersionId: null,
+      }),
+    ),
+    "scope_mismatch",
+  );
+  const credentialsFiles = exportedFiles.map((file) =>
+    file.path === "factory.yaml"
+      ? { ...file, content: file.content + "credentials: fixture-secret\ngrants: [admin]\n" }
+      : file,
+  );
+  await failure(
+    definitionCall((s) =>
+      s.activate({
+        ...activation,
+        commandId: "credentials-activation",
+        expectedVersionId: current.value.id,
+        files: credentialsFiles,
+      }),
+    ),
+    "invalid_definition",
+  );
+  NodeAssert.deepEqual(await definitionCall((s) => s.active("a")), current);
+  NodeAssert.deepEqual(await workflowCall((s) => s.readRun("a", "definition-run")), pinnedRun);
+  NodeAssert.deepEqual(await definitionCall((s) => s.activate(activation)), initialDefinition);
+  await failure(
+    definitionCall((s) =>
+      s.activate({ ...activation, source: { kind: "files", reference: "changed" } }),
+    ),
+    "command_conflict",
+  );
+  await failure(
+    definitionCall((s) => s.readVersion("b", initialDefinition.id)),
+    "not_found",
+  );
+  const historyCounts =
+    "SELECT 'factory' AS kind,count(*) AS n FROM foundry_automation.versions UNION ALL SELECT 'workflow',count(*) FROM foundry_automation.workflow_versions UNION ALL SELECT 'definition',count(*) FROM foundry_automation.definition_versions UNION ALL SELECT 'command',count(*) FROM foundry_automation.commands ORDER BY kind";
+  const historyBeforeFailure = await query(historyCounts);
+  await query(
+    "CREATE FUNCTION foundry_automation.fail_fixture_activation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected activation failure'; END $$",
+    "automation_migrator",
+  );
+  await query(
+    "CREATE TRIGGER fail_fixture_activation BEFORE UPDATE ON foundry_automation.definition_heads FOR EACH ROW EXECUTE FUNCTION foundry_automation.fail_fixture_activation()",
+    "automation_migrator",
+  );
+  await failure(
+    definitionCall((s) =>
+      s.activate({
+        ...activation,
+        commandId: "rollback-activation",
+        expectedVersionId: current.value.id,
+      }),
+    ),
+    "unavailable",
+  );
+  NodeAssert.deepEqual(await definitionCall((s) => s.active("a")), current);
+  NodeAssert.deepEqual(await query(historyCounts), historyBeforeFailure);
+  await query(
+    "DROP TRIGGER fail_fixture_activation ON foundry_automation.definition_heads",
+    "automation_migrator",
+  );
+  await query("DROP FUNCTION foundry_automation.fail_fixture_activation()", "automation_migrator");
+  const restoredDefinition = await definitionCall((s) =>
+    s.activate({
+      ...activation,
+      commandId: "rollback-activation",
+      expectedVersionId: current.value.id,
+    }),
+  );
+  NodeAssert.equal(restoredDefinition.contentHash, initialDefinition.contentHash);
+  await stop();
+  await start();
+  const restoredActive = await definitionCall((s) => s.active("a"));
+  NodeAssert.ok(Option.isSome(restoredActive));
+  if (Option.isSome(restoredActive)) NodeAssert.deepEqual(restoredActive.value, restoredDefinition);
+  NodeAssert.deepEqual(await workflowCall((s) => s.readRun("a", "definition-run")), pinnedRun);
   await NodeAssert.rejects(
     call((s) =>
       s.withStartEligibility(
@@ -463,6 +695,9 @@ try {
     "UPDATE foundry_automation.runs SET workflow_version_id='flow-a3'",
     "UPDATE foundry_automation.outbox SET payload='{}'",
     "DELETE FROM foundry_automation.outbox",
+    "UPDATE foundry_automation.definition_versions SET content_hash=repeat('0',64)",
+    "DELETE FROM foundry_automation.definition_versions",
+    "UPDATE foundry_automation.definition_heads SET factory_id='b'",
     "UPDATE foundry_automation.schema_version SET version=2",
     "UPDATE foundry_instance.fixture SET version=99",
     "CREATE TABLE foundry_automation.forbidden(id int)",
@@ -478,11 +713,11 @@ try {
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
     99,
   );
-  await query("UPDATE foundry_automation.schema_version SET version=2", "automation_migrator");
+  await query("UPDATE foundry_automation.schema_version SET version=3", "automation_migrator");
   await run(migration);
   await run(
     Console.log(
-      "PASS P18a/P18b isolated PostgreSQL: idempotent factories/workflows/runs; sequential reference validation; pinned versions/repository/revisions; archive guard with retry; atomic command/run/outbox rollback; v1 upgrade and PostgreSQL restart; separate instance ownership and immutable runtime history. No runtime activation or dispatch.",
+      "PASS P18a/P18b/P47 isolated PostgreSQL: idempotent factories/workflows/runs; pinned versions/repository/revisions; atomic run/outbox and definition activation; canonical import/export; hash/provenance; version conflicts; invalid definitions preserve active version; v1/v2 upgrades and PostgreSQL restart; immutable runtime history. No runtime activation or dispatch.",
     ),
   );
 } finally {

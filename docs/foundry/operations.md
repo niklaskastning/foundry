@@ -690,7 +690,7 @@ Option bleibt der Checkout-Modus erhalten. Beide Modi benutzen dasselbe dauerhaf
 Journal pro Worker. Die reale G3-Abnahme ist im [aktuellen Plan](implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen)
 mit Evidence in PR #45 festgehalten. Die Factory-Aktivierung bleibt gesondert.
 
-## Inaktive Automation-Persistenz (P18a/P18b)
+## Inaktive Automation-Persistenz (P18a/P18b/P47)
 
 `apps/server/src/automation/` stellt eine noch nicht in Main/Worker eingebundene
 Service-Schicht bereit. Explizite Service-Aufrufe können gepinnte `pending`-Runs
@@ -720,9 +720,40 @@ Workflow-Version sowie Repository und Eingaberevision bleiben am Run gepinnt;
 die Revision ist ein opaker Eingabestand, kein verifiziertes Git-Objekt. Die
 geordnete Step-Liste unterstützt Agent, Test, Approval und Publish; Referenzen
 dürfen nur auf vorherige Steps zeigen. Test-IDs sind konfigurierte Prüfungen,
-keine im Backend auszuwertenden Skripte. P47 ergänzt das kanonische Dateiformat
-und die Aktivierung. Die Runtime darf Versionen, Runs und Outbox nicht ändern
+keine im Backend auszuwertenden Skripte. Die Runtime darf Versionen, Runs und Outbox nicht ändern
 oder löschen; weitere Zustandsübergänge und Zustellung folgen in P19/P20.
+
+P47 ergänzt in Schema 3 unveränderliche Definitions-Snapshots und einen aktiven
+Versionszeiger. Der gemeinsame Validator in `@t3tools/shared/factoryDefinition`
+verarbeitet einen expliziten Dateibaum, liest keine Host-Pfade und wird auch vom
+späteren Formulareditor verwendet. Einstieg ist `factory.yaml`:
+
+```yaml
+schemaVersion: 1
+factoryId: existing-factory
+repositories: [existing-repository-binding]
+workflows:
+  - id: main
+    file: workflows/main.yaml
+```
+
+Die Workflow-Datei enthält `steps` nach dem P18b-Schema. Weitere Ressourcen,
+Credential-Werte und Grants sind nicht Bestandteil dieses Formats. Dateipfade
+sind relativ, ohne Parent-Segmente, URLs oder Backslashes; alle referenzierten
+Dateien müssen mitgeliefert werden. Maximal 101 Dateien, 256 KiB je Datei und
+2 MiB insgesamt, auch nach kanonischem Export. YAML-Aliasse und unbekannte Felder
+werden abgewiesen. Die Validierung liefert Datei und Feldpfad, keine Quellwerte
+in Fehlermeldungen.
+
+Die Aktivierung verlangt die erwartete aktive Basisversion und eine bestehende
+Factory-Version als Repository-Freigabe; Definitionen dürfen deren Scope nur
+einschränken. Command, vollständiger Snapshot, neue Factory-/Workflow-Versionen
+und aktiver Zeiger werden gemeinsam committet. Hashes beziehen sich auf die
+kanonische Semantik, Herkunft wird separat gespeichert. Ein identischer Retry
+liest seine ursprüngliche Revision auch nach späteren Aktivierungen. Eine alte
+Version wird für neue Starts durch Export und erneute Aktivierung mit aktuellem
+Basisabgleich wiedergewählt; bestehende Runs bleiben gepinnt. Keine Startup- oder
+Dispatch-Aktivierung und noch kein Git-Verwaltungsmodus (P48).
 
 Der isolierte Nachweis verwendet ausschließlich einen temporären PostgreSQL-Cluster,
 keine vorhandenen Datenbanken oder persönlichen Provider-Zugänge:
