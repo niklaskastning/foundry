@@ -690,10 +690,11 @@ Option bleibt der Checkout-Modus erhalten. Beide Modi benutzen dasselbe dauerhaf
 Journal pro Worker. Die reale G3-Abnahme ist im [aktuellen Plan](implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen)
 mit Evidence in PR #45 festgehalten. Die Factory-Aktivierung bleibt gesondert.
 
-## Inaktive Automation-Persistenz (P18a)
+## Inaktive Automation-Persistenz (P18a/P18b)
 
 `apps/server/src/automation/` stellt eine noch nicht in Main/Worker eingebundene
-Service-Schicht bereit. Keine Startup-Migration, CLI-Aktivierung, RPCs oder Runs.
+Service-Schicht bereit. Explizite Service-Aufrufe können gepinnte `pending`-Runs
+speichern; Startup-Migration, CLI-Aktivierung, RPCs und Dispatch sind nicht eingebunden.
 Sie verwendet einen eigenen `AutomationDatabase`-Pool und den schemaqualifizierten
 Namespace `foundry_automation` mit eigenem Migrationsmarker. Für spätere Aktivierung
 ist eine separate Automation-Datenbank mit eigenen Migrator-/Runtime-Rollen
@@ -709,12 +710,19 @@ muss dieselbe globale Command-ID und denselben Inhalt verwenden. Er liest die
 vorhandene Entität einschließlich ihres aktuellen fachlichen Zustands.
 
 Archivieren sperrt neue Starts, erhält Aufträge/Versionen und beendet keine Runs.
-P18b muss `Factories.withStartEligibility` und das persistente Anlegen seines Starts
-in derselben Automation-Transaktion ausführen; ein anschließender separater Start
-würde die Sperre umgehen. Externe Ausführung darf erst nach dem Commit folgen.
+`Workflows.start` verwendet `Factories.withStartEligibility` und speichert Command,
+Run und Outbox innerhalb derselben Automation-Transaktion. Ein identischer Retry
+liest den vorhandenen Run auch nach Archivierung; neue Starts bleiben gesperrt.
+Externe Ausführung darf erst nach dem Commit folgen und ist noch nicht angebunden.
 WorkItem-Abschluss wird ausdrücklich fachlich gesetzt, unabhängig von Run-Erfolg.
-Der funktionale G3-Nachweis ist bestätigt; P18b-Anschluss und integrierte
-P18a-Abnahme bleiben gesonderte Schritte.
+Schema 2 erweitert vorhandene P18a-Daten ohne Instanz-/T3-Migration. Factory- und
+Workflow-Version sowie Repository und Eingaberevision bleiben am Run gepinnt;
+die Revision ist ein opaker Eingabestand, kein verifiziertes Git-Objekt. Die
+geordnete Step-Liste unterstützt Agent, Test, Approval und Publish; Referenzen
+dürfen nur auf vorherige Steps zeigen. Test-IDs sind konfigurierte Prüfungen,
+keine im Backend auszuwertenden Skripte. P47 ergänzt das kanonische Dateiformat
+und die Aktivierung. Die Runtime darf Versionen, Runs und Outbox nicht ändern
+oder löschen; weitere Zustandsübergänge und Zustellung folgen in P19/P20.
 
 Der isolierte Nachweis verwendet ausschließlich einen temporären PostgreSQL-Cluster,
 keine vorhandenen Datenbanken oder persönlichen Provider-Zugänge:
