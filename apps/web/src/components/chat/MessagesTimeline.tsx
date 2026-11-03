@@ -255,6 +255,7 @@ interface MessagesTimelineProps {
   onOpenToolDiff?: (target: ToolCallDiffTarget) => void;
   onOpenTurnDiff?: (runId: RunId, filePath?: string) => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
+  renderMcpApp?: TimelineRowSharedState["renderMcpApp"];
   renderHtmlRender?: TimelineRowSharedState["renderHtmlRender"];
   turnItemSource?: TimelineRowSharedState["turnItemSource"];
   /**
@@ -368,6 +369,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onOpenToolDiff,
   onOpenTurnDiff,
   onOpenThread,
+  renderMcpApp,
   renderHtmlRender,
   turnItemSource,
   parentThreadLink = null,
@@ -1048,6 +1050,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onOpenToolDiff,
     onOpenTurnDiff,
     onOpenThread,
+    renderMcpApp,
     renderHtmlRender,
     turnItemSource,
     workflowOpening,

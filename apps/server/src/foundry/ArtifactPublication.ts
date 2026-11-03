@@ -8,6 +8,9 @@ import {
   FoundryDevice,
   FoundryArtifactManifest,
   FoundryArtifactError,
+  FoundryArchiveError,
+  FoundryArchiveMachineRequest,
+  type FoundryArchiveRequest,
   FOUNDRY_ARTIFACT_MAX_BYTES,
   FOUNDRY_ARTIFACT_CHUNK_BYTES,
   type ChatAttachment,
@@ -37,6 +40,8 @@ import {
   parseThreadSegmentFromAttachmentId,
   PENDING_ATTACHMENT_THREAD_SEGMENT,
 } from "../attachmentStore.ts";
+import * as ArchiveTransport from "./ArchiveTransport.ts";
+import { signArchiveRequest } from "./ThreadArchiveProof.ts";
 import { signArtifactRequest } from "./ArtifactProof.ts";
 
 export class ArtifactPublication extends Context.Reference<
@@ -57,6 +62,7 @@ export class ArtifactPublication extends Context.Reference<
   | undefined
 >("t3/foundry/ArtifactPublication", { defaultValue: () => undefined }) {}
 
+const encodeArchiveMachineRequest = Schema.encodeEffect(FoundryArchiveMachineRequest);
 const parseJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeBinding = Schema.decodeUnknownEffect(
   Schema.Struct({
@@ -246,70 +252,147 @@ export const layer = Layer.unwrap(
       Effect.timeout("15 seconds"),
       Effect.catchTags({ TimeoutError: unavailable }),
     );
-    return Layer.succeed(ArtifactPublication, {
-      publishAttachment: Effect.fn("ArtifactPublication.publishAttachment")(function* <
-        Attachment extends ChatAttachment,
-      >(threadId: string, attachment: Attachment, retryId?: string) {
-        if (parseThreadSegmentFromAttachmentId(attachment.id) === PENDING_ATTACHMENT_THREAD_SEGMENT)
-          return yield* new FoundryArtifactError({ code: "invalid_request" });
-        const path = resolveAttachmentPath({ attachmentsDir: root, attachment });
+    const sendArchive = Effect.fn("ArtifactPublication.archiveRequest")(
+      function* (input: FoundryArchiveRequest) {
+        const issuedAt = yield* Clock.currentTimeMillis;
+        const request = yield* Effect.try({
+          try: () =>
+            signArchiveRequest(binding.origin, device, issuedAt, input, Redacted.value(privateKey)),
+          catch: () => new FoundryArchiveError({ code: "unavailable" }),
+        });
+        const encoded = yield* encodeArchiveMachineRequest(request).pipe(
+          Effect.mapError(() => new FoundryArchiveError({ code: "invalid_request" })),
+        );
+        const req = yield* HttpClientRequest.bodyJson(
+          HttpClientRequest.post(`${binding.origin}/api/foundry/devices/channel`, {
+            headers: {
+              "content-type": "application/json",
+              ...(accessHeaders
+                ? Object.fromEntries(
+                    Object.entries(accessHeaders).map(([name, value]) => [
+                      name,
+                      Redacted.value(value),
+                    ]),
+                  )
+                : {}),
+            },
+          }),
+          encoded,
+        ).pipe(Effect.mapError(() => new FoundryArchiveError({ code: "unavailable" })));
+        const response = yield* http.execute(req).pipe(
+          Effect.provideService(FetchHttpClient.RequestInit, {
+            redirect: "manual",
+            cache: "no-store",
+            credentials: "omit",
+          }),
+          Effect.provideService(Headers.CurrentRedactedNames, [
+            ...redact,
+            "cf-access-client-id",
+            "cf-access-client-secret",
+          ]),
+          Effect.mapError(() => new FoundryArchiveError({ code: "unavailable" })),
+        );
+        if (response.status === 403) return yield* new FoundryArchiveError({ code: "forbidden" });
         if (
-          !path ||
-          (yield* fs.realPath(NodePath.dirname(path)).pipe(Effect.mapError(unavailable))) !== root
+          response.status !== 200 ||
+          !response.headers["content-type"]?.includes("application/json")
         )
-          return yield* new FoundryArtifactError({ code: "forbidden" });
-        const bytes = yield* readBytes(path);
-        if (bytes.byteLength !== attachment.sizeBytes) return yield* changed();
-        const sha = artifactSha256(bytes);
-        const owner = { environmentId: device.environmentId, threadId: ThreadId.make(threadId) };
-        let manifest: FoundryArtifactManifest;
-        if (attachment.foundryArtifact) {
-          const reference = attachment.foundryArtifact.reference;
+          return yield* new FoundryArchiveError({ code: "unavailable" });
+        const bytes = yield* response.stream.pipe(
+          Stream.runFoldEffect(
+            () => ({ parts: [] as Uint8Array[], size: 0 }),
+            (state, chunk) => {
+              if (state.size + chunk.byteLength > 256 * 1024)
+                return Effect.fail(new FoundryArchiveError({ code: "invalid_request" }));
+              state.parts.push(chunk);
+              state.size += chunk.byteLength;
+              return Effect.succeed(state);
+            },
+          ),
+          Effect.mapError(() => new FoundryArchiveError({ code: "unavailable" })),
+        );
+        const result = new Uint8Array(bytes.size);
+        let offset = 0;
+        for (const chunk of bytes.parts) {
+          result.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        return yield* parseJson(new TextDecoder().decode(result)).pipe(
+          Effect.mapError(() => new FoundryArchiveError({ code: "invalid_request" })),
+        );
+      },
+      Effect.timeout("15 seconds"),
+      Effect.catchTags({ TimeoutError: () => new FoundryArchiveError({ code: "unavailable" }) }),
+    );
+    return Layer.merge(
+      Layer.succeed(ArchiveTransport.ArchiveTransport, { device, send: sendArchive }),
+      Layer.succeed(ArtifactPublication, {
+        publishAttachment: Effect.fn("ArtifactPublication.publishAttachment")(function* <
+          Attachment extends ChatAttachment,
+        >(threadId: string, attachment: Attachment, retryId?: string) {
           if (
-            reference.instanceId !== device.instanceId ||
-            reference.owner.environmentId !== owner.environmentId ||
-            reference.owner.threadId !== owner.threadId
+            parseThreadSegmentFromAttachmentId(attachment.id) === PENDING_ATTACHMENT_THREAD_SEGMENT
+          )
+            return yield* new FoundryArtifactError({ code: "invalid_request" });
+          const path = resolveAttachmentPath({ attachmentsDir: root, attachment });
+          if (
+            !path ||
+            (yield* fs.realPath(NodePath.dirname(path)).pipe(Effect.mapError(unavailable))) !== root
           )
             return yield* new FoundryArtifactError({ code: "forbidden" });
-          manifest = yield* send({ op: "metadata", input: reference }).pipe(
-            Effect.flatMap(decodeManifest),
-            Effect.mapError((error) => (Schema.isSchemaError(error) ? changed() : error)),
-          );
-        } else {
-          const commandId = CommandId.make(
-            `artifact:${artifactSha256(new TextEncoder().encode(stableStringify([device.instanceId, owner, retryId ?? attachment.id, sha])))}`,
-          );
-          manifest = yield* publishArtifact(
-            send,
-            {
-              instanceId: device.instanceId,
-              commandId,
-              owner,
-              name: attachment.name,
-              mimeType: attachment.mimeType.toLowerCase(),
-              sizeBytes: bytes.byteLength,
-              sha256: sha,
-            },
-            bytes,
-          );
-        }
-        if (
-          manifest.reference.instanceId !== device.instanceId ||
-          manifest.reference.owner.environmentId !== owner.environmentId ||
-          manifest.reference.owner.threadId !== owner.threadId ||
-          (attachment.foundryArtifact !== undefined &&
-            manifest.reference.artifactId !== attachment.foundryArtifact.reference.artifactId) ||
-          manifest.sha256 !== sha ||
-          manifest.name !== attachment.name ||
-          manifest.mimeType !== attachment.mimeType.toLowerCase() ||
-          manifest.sizeBytes !== bytes.byteLength
-        )
-          return yield* changed();
-        return { ...attachment, foundryArtifact: manifest };
+          const bytes = yield* readBytes(path);
+          if (bytes.byteLength !== attachment.sizeBytes) return yield* changed();
+          const sha = artifactSha256(bytes);
+          const owner = { environmentId: device.environmentId, threadId: ThreadId.make(threadId) };
+          let manifest: FoundryArtifactManifest;
+          if (attachment.foundryArtifact) {
+            const reference = attachment.foundryArtifact.reference;
+            if (
+              reference.instanceId !== device.instanceId ||
+              reference.owner.environmentId !== owner.environmentId ||
+              reference.owner.threadId !== owner.threadId
+            )
+              return yield* new FoundryArtifactError({ code: "forbidden" });
+            manifest = yield* send({ op: "metadata", input: reference }).pipe(
+              Effect.flatMap(decodeManifest),
+              Effect.mapError((error) => (Schema.isSchemaError(error) ? changed() : error)),
+            );
+          } else {
+            const commandId = CommandId.make(
+              `artifact:${artifactSha256(new TextEncoder().encode(stableStringify([device.instanceId, owner, retryId ?? attachment.id, sha])))}`,
+            );
+            manifest = yield* publishArtifact(
+              send,
+              {
+                instanceId: device.instanceId,
+                commandId,
+                owner,
+                name: attachment.name,
+                mimeType: attachment.mimeType.toLowerCase(),
+                sizeBytes: bytes.byteLength,
+                sha256: sha,
+              },
+              bytes,
+            );
+          }
+          if (
+            manifest.reference.instanceId !== device.instanceId ||
+            manifest.reference.owner.environmentId !== owner.environmentId ||
+            manifest.reference.owner.threadId !== owner.threadId ||
+            (attachment.foundryArtifact !== undefined &&
+              manifest.reference.artifactId !== attachment.foundryArtifact.reference.artifactId) ||
+            manifest.sha256 !== sha ||
+            manifest.name !== attachment.name ||
+            manifest.mimeType !== attachment.mimeType.toLowerCase() ||
+            manifest.sizeBytes !== bytes.byteLength
+          )
+            return yield* changed();
+          return { ...attachment, foundryArtifact: manifest };
+        }),
+        download: Effect.fn("ArtifactPublication.download")((reference) =>
+          downloadArtifact(send, reference),
+        ),
       }),
-      download: Effect.fn("ArtifactPublication.download")((reference) =>
-        downloadArtifact(send, reference),
-      ),
-    });
+    );
   }),
 );

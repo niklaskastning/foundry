@@ -305,8 +305,9 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       : skill
         ? (skill.args ?? null)
         : undefined;
+  const archivedImageUnavailable = Boolean(viewedImagePath && ctx.turnItemSource?.readOnlyArchive);
   const viewedImage =
-    viewedImagePath && threadRef
+    viewedImagePath && threadRef && !archivedImageUnavailable
       ? resolveViewedImageAsset(viewedImagePath, {
           threadId: threadRef.threadId,
           workspaceRoot,
@@ -320,7 +321,8 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       workEntry.command?.trim() ||
       workEntry.detail?.trim() ||
       workEntry.changedFiles?.length ||
-      viewedImage,
+      viewedImage ||
+      archivedImageUnavailable,
     );
   const expandedBody =
     expanded && !isReasoning
@@ -339,13 +341,20 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     turnItemNeedsDetailFetch(workEntry.projectedItem.item);
   const canExpandProjectedItem =
     plainOutput !== undefined
-      ? Boolean(plainOutput || viewedImage || workEntry.questionAnswer || plainOutputFetches)
+      ? Boolean(
+          plainOutput ||
+          viewedImage ||
+          archivedImageUnavailable ||
+          workEntry.questionAnswer ||
+          plainOutputFetches,
+        )
       : workEntry.projectedItem === undefined
         ? canExpand
         : isReasoning
           ? Boolean(workEntry.detail?.trim())
           : Boolean(
               viewedImage ||
+              archivedImageUnavailable ||
               workEntry.questionAnswer ||
               turnItemHasDetail(workEntry.projectedItem.item),
             );
@@ -506,6 +515,13 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         </>
       }
     >
+      {expanded && archivedImageUnavailable ? (
+        <WorkLogDetails kind="panel">
+          <p className="text-sm text-muted-foreground">
+            Viewed image is unavailable in this Main archive.
+          </p>
+        </WorkLogDetails>
+      ) : null}
       {expanded && viewedImage && threadRef ? (
         <WorkLogDetails kind="media">
           <ChatMarkdownAssetImage
@@ -567,9 +583,12 @@ function QuestionAnswerHistory({
 }: {
   answer: import("@t3tools/contracts").UserInputAttachmentAnswerPayload;
 }) {
-  const { activeThreadEnvironmentId } = use(TimelineRowCtx);
+  const { activeThreadEnvironmentId, turnItemSource } = use(TimelineRowCtx);
   const attachments = Object.values(answer.attachmentsByQuestionId).flat();
-  const resources = attachments.map((attachment) => ({
+  const readableAttachments = turnItemSource?.readOnlyArchive
+    ? attachments.filter((attachment) => attachment.foundryArtifact)
+    : attachments;
+  const resources = readableAttachments.map((attachment) => ({
     _tag: "attachment" as const,
     attachmentId: attachment.id,
     ...(attachment.foundryArtifact ? { foundryArtifact: attachment.foundryArtifact } : {}),
@@ -597,7 +616,7 @@ function QuestionAnswerHistory({
           ) : null}
           <div className="flex flex-wrap gap-2">
             {(answer.attachmentsByQuestionId[questionId] ?? []).map((attachment) => {
-              const url = urls[attachments.indexOf(attachment)];
+              const url = urls[readableAttachments.indexOf(attachment)];
               return (
                 <a
                   key={attachment.id}

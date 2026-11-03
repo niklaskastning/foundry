@@ -27,6 +27,8 @@ import * as Path from "effect/Path";
 import * as ArtifactFiles from "./ArtifactFiles.ts";
 import * as Artifacts from "./Artifacts.ts";
 import * as ArtifactAccess from "./ArtifactAccess.ts";
+import * as ThreadArchive from "./ThreadArchive.ts";
+import * as ThreadArchiveAccess from "./ThreadArchiveAccess.ts";
 import * as ArtifactHttp from "./artifactHttp.ts";
 
 export const layer = Layer.unwrap(
@@ -67,7 +69,8 @@ export const layer = Layer.unwrap(
     const url = yield* Config.Redacted("FOUNDRY_INSTANCE_DATABASE_URL");
     const artifactRoutes = artifacts
       ? ArtifactHttp.layer.pipe(
-          Layer.provide(ArtifactAccess.layer),
+          Layer.provide(Layer.merge(ArtifactAccess.layer, ThreadArchiveAccess.layer)),
+          Layer.provide(ThreadArchive.layer),
           Layer.provide(Artifacts.layer),
           Layer.provide(
             ArtifactFiles.layer.pipe(

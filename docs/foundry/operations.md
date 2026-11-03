@@ -2,7 +2,7 @@
 
 Foundry serves the shared Web client and T3 backend at `http://127.0.0.1:3783`. The existing host `cloudflared` service should route `foundry.heavenforgeprod.com` to that origin. Keep Cloudflare Access enabled for this hostname, including HTTP and WebSocket paths. Do not expose port 3783 or PostgreSQL publicly.
 
-This is the isolated base deployment, not the planned instance gateway, Automation engine, or host worker. The backend still uses its own local SQLite state. PostgreSQL has empty `fork_automation` and `fork_connect` databases reserved for their separate future migrations. No application receives the database administrator credential. Owner roles cannot log in; runtime and migration logins are provisioned with the services that need them.
+This isolated Main serves the instance registry, gateway, confirmed artifacts and thread archives. Instance PostgreSQL uses `fork_connect` with its own migrations; local T3 state remains in the separate SQLite store. Automation retains its separate database/migrations and is not activated by this profile. No application receives the database administrator credential. Owner roles cannot log in; the migration login stays disabled outside an explicit migration. The dedicated host worker is managed separately.
 
 ## Development-VPS authorization
 
@@ -22,11 +22,11 @@ outstanding release gates and follow-up work are tracked in the
 [implementation plan](implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen). Do not activate it
 on the existing production deployment as part of development testing.
 
-Use an isolated Main with PostgreSQL instance schema **6**, the existing operator
+Use an isolated Main with PostgreSQL instance schema **7**, the existing operator
 binding, and the configured `FOUNDRY_PUBLIC_ORIGIN`. Run the existing
 `foundry migrate` command with the migration role before starting this source
-version; it upgrades schemas 1/2/3/4/5 while preserving instance identity, operator and
-sessions. Older binaries reject schema 6: an image-only downgrade is not
+version; it upgrades schemas 1/2/3/4/5/6 while preserving instance identity, operator and
+sessions. Older binaries reject schema 7: an image-only downgrade is not
 a recovery procedure. The runtime role cannot change device keys or enrollment
 expiry. Set `FOUNDRY_DEVICE_ENROLLMENT_ENABLED=true` explicitly alongside
 `FOUNDRY_ACCESS_ENABLED=true` to expose `/api/foundry/devices/enroll` and advertise
@@ -44,8 +44,8 @@ channel is unchanged. No Cloudflare machine-path expansion is needed. Descriptor
 support uses optional `artifactTransfer` metadata: adding an unknown capability to
 the strict version-1 enum would break older Windows readers. The separate opt-in
 [worker binding](../../deploy/fork/worker/README.md#zentrale-artefakte-p38a)
-confirms attachments before message commit; it does not provide a central thread
-archive. When the artifact profile is enabled, `/foundry` shows Files after a
+confirms attachments before message commit. P38b also reconciles the local
+event journal with the central thread archive. When the artifact profile is enabled, `/foundry` shows Files after a
 verified session. Load files there without selecting or connecting their source
 device; a Main T3 session with `orchestration:read` remains required. Confirmed
 thread attachments use the same Main read path. HTML/SVG open as escaped source,
@@ -53,7 +53,7 @@ and Blob URLs remain scoped to their viewer. The native Access sign-in probe doe
 not host the file library; its existing Windows download block remains separate.
 Automated client coverage does not complete the live acceptance gate.
 
-On the pinned Docker deployment, the administrator first uses
+For a reviewed schema-6 image on a schema-5 Docker deployment, the administrator uses
 `activate-access.py upgrade-artifacts sha256:<digest> <source-sha>` to migrate
 schema 5 to 6 with a coordinated database/state/workspace backup. This leaves the
 artifact profile disabled. Once the reviewed Main image is verified,
@@ -61,7 +61,7 @@ artifact profile disabled. Once the reviewed Main image is verified,
 restarts Main and verifies schema, identity and transfer metadata. It saves the
 previous configuration and restores it if startup or verification fails; if
 recovery cannot be verified, Main stays stopped. No general sudo grant is added.
-The `update` command preserves either schema 5 or 6 and the enabled profile.
+The `update` command preserves schema 5, 6 or 7 and the enabled profile.
 
 Disable publication on workers before `activate-access.py artifacts disable`.
 This retains confirmed metadata and blobs. The helper refuses to disable the
@@ -69,6 +69,21 @@ gateway while artifacts remain enabled. A schema upgrade failure still requires
 the coordinated restore procedure; a profile change is not a schema downgrade.
 Development builds alone may explicitly use HTTP on loopback for the artifact
 client, matching local instance verification; deployed clients require HTTPS.
+
+With schema 7, `/foundry` also lists confirmed thread archives after session
+verification. Open a thread and load further history as needed; messages, tool
+details, recorded decisions and confirmed attachments come from Main even when
+the source device is unavailable or removed. This view has no live terminal or
+writer actions. Incomplete history and missing resources stay explicitly marked.
+
+P38b uses instance schema 7 for central thread events, confirmed cursors and artifact
+references. Automation keeps its separate database and migrations. Upgrade an
+existing schema-6 Main with `activate-access.py upgrade-archive sha256:<digest>
+<source-sha>`; the helper holds the deployment lock through migration and
+verification and records the coordinated previous database/state/image recovery.
+An older schema-6 image alone cannot recover a schema-7 deployment. Same-schema
+`update` and profile changes retain schema 7. Worker credentials and local T3
+state remain on the worker; archive ingestion never copies an active SQLite file.
 
 From the source checkout, create a private key file on the execution machine:
 

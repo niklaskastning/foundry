@@ -1,3 +1,4 @@
+import * as ArchiveTransport from "../foundry/ArchiveTransport.ts";
 import { ThreadId } from "@t3tools/contracts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Context from "effect/Context";
@@ -64,6 +65,7 @@ export const layer: Layer.Layer<
   ProjectionMaintenanceV2,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const archiveTransport = yield* ArchiveTransport.ArchiveTransport;
     const eventStore = yield* EventStore.EventStoreV2;
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
 
@@ -231,6 +233,12 @@ export const layer: Layer.Layer<
     const compactEventStore = Effect.fn("ProjectionMaintenance.compactEventStore")(function* (
       betweenPages: Effect.Effect<void> = Effect.void,
     ) {
+      // Foundry's replication outbox is the committed journal, including superseded events.
+      if (
+        archiveTransport ||
+        (yield* sql`SELECT 1 FROM foundry_archive_activation LIMIT 1`).length > 0
+      )
+        return { deletedEventCount: 0, deletedReceiptCount: 0, reclaimableBytes: 0 };
       const bounds = yield* sql<{
         readonly event_sequence: number;
         readonly receipt_row_id: number;

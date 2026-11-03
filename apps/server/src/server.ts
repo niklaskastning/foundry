@@ -534,9 +534,13 @@ const layerScheduledTaskWebhookOrigin = Layer.effect(
 
 const layerWorkspaceGate = WorkspaceGate.layerConfigured.pipe(Layer.provide(GitVcsDriver.layer));
 
+const layerExecutionStore = ExecutionStore.layer.pipe(
+  Layer.provide(RuntimeLayer.layerArchivePublication),
+);
+
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   Layer.provide(layerWorkspaceGate),
-  Layer.provide(ExecutionStore.layerObserver.pipe(Layer.provide(ExecutionStore.layer))),
+  Layer.provide(ExecutionStore.layerObserver.pipe(Layer.provide(layerExecutionStore))),
   Layer.provide(layerScheduledTaskWebhookOrigin),
   Layer.provide(ProviderEventIngestor.layerAnalytics),
   Layer.provide(layerCheckpointStore),
@@ -602,12 +606,12 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   WorkspaceReconciler.layerWatchdog.pipe(
     Layer.provide(layerWorkspaceGate),
-    Layer.provide(ExecutionStore.layer),
+    Layer.provide(layerExecutionStore),
   ),
   WorkerLaunch.layer.pipe(
     Layer.provide(RuntimePolicy.layerFromProjectStore),
     Layer.provide(layerWorkspaceGate),
-    Layer.provide(ExecutionStore.layer),
+    Layer.provide(layerExecutionStore),
     Layer.provide(layerCheckpointStore),
     Layer.provide(EventStoreV2.layerFromOrchestrationEventStore),
     Layer.provide(CommandReceiptStore.layer),
