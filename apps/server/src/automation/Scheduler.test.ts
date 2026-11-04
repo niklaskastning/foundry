@@ -9,6 +9,7 @@ import {
   EventId,
   FoundryArtifactId,
   FoundryArtifactError,
+  FoundryArchiveError,
   type FoundryArtifactManifest,
   FoundryDeviceId,
   FoundryInstanceId,
@@ -24,6 +25,8 @@ import {
   TurnItemId,
   type FoundryArchiveEvent,
   type FoundryArchiveStatus,
+  type FoundryPublishEvidence,
+  type FoundryPublishRequest,
   type FoundryWorkerExecution,
   type FoundryWorkerLaunchInput,
 } from "@t3tools/contracts";
@@ -309,6 +312,138 @@ it("requires matching final worker, checkpoint, archive and test evidence", () =
     decideStep({ ...good, events: [...good.events.slice(0, 2), oldAttempt, testEvent] }).reason,
     "test_attempt_pending",
   );
+  const publishRequest: typeof FoundryPublishRequest.Type = {
+    repository: "owner/test",
+    baseBranch: "main",
+    checks: [{ id: "check", command: good.command, cwd: "." }],
+  };
+  const evidence: FoundryPublishEvidence = {
+    ...publishRequest,
+    sourceCwd: good.cwd,
+    commitSha: "a".repeat(40),
+    treeSha: "b".repeat(40),
+    checks: [
+      {
+        ...publishRequest.checks[0]!,
+        relativeCwd: ".",
+        exitCode: 0,
+        commitSha: "a".repeat(40),
+        treeSha: "b".repeat(40),
+      },
+    ],
+    bundle: {
+      reference: {
+        instanceId: good.identity.instanceId,
+        artifactId: FoundryArtifactId.make("33333333-3333-4333-8333-333333333333"),
+        owner: good.archive.owner,
+      },
+      name: "result.bundle",
+      mimeType: "application/octet-stream",
+      sizeBytes: 1,
+      sha256: "c".repeat(64),
+    },
+  };
+  const wrappedCommand = {
+    ...testEvent,
+    event: {
+      ...testEvent.event,
+      payload: { ...testEvent.event.payload, input: `/usr/bin/bash -lc "${good.command}"` },
+    },
+  };
+  const published = {
+    ...good,
+    cwd: ".",
+    publishRequest,
+    execution: {
+      ...good.execution,
+      lifecycle: { ...lifecycle, manifest: { ...manifest, publishEvidence: evidence } },
+    },
+    events: [...good.events.slice(0, 3), wrappedCommand],
+  };
+  assert.deepEqual(decideStep(published), { state: "succeeded", reason: null });
+  assert.equal(
+    decideStep({
+      ...good,
+      cwd: published.cwd,
+      execution: published.execution,
+      events: published.events,
+    }).reason,
+    "test_result_pending",
+  );
+  const invalidEvidence: ReadonlyArray<FoundryPublishEvidence | undefined> = [
+    undefined,
+    { ...evidence, repository: "foreign/repository" },
+    { ...evidence, baseBranch: "other" },
+    { ...evidence, checks: [] },
+    { ...evidence, checks: [...evidence.checks, evidence.checks[0]!] },
+    { ...evidence, checks: [{ ...evidence.checks[0]!, id: "unrequested" }] },
+    { ...evidence, checks: [{ ...evidence.checks[0]!, command: "different-command" }] },
+    { ...evidence, checks: [{ ...evidence.checks[0]!, cwd: "/different-project" }] },
+    { ...evidence, commitSha: "d".repeat(40) },
+    { ...evidence, treeSha: "e".repeat(40) },
+    ...[
+      {
+        ...evidence.bundle.reference,
+        instanceId: FoundryInstanceId.make("44444444-4444-4444-8444-444444444444"),
+      },
+      {
+        ...evidence.bundle.reference,
+        owner: { ...good.archive.owner, environmentId: EnvironmentId.make("foreign") },
+      },
+      {
+        ...evidence.bundle.reference,
+        owner: { ...good.archive.owner, threadId: ThreadId.make("foreign") },
+      },
+    ].map((reference) => ({ ...evidence, bundle: { ...evidence.bundle, reference } })),
+  ];
+  for (const publishEvidence of invalidEvidence) {
+    assert.equal(
+      decideStep({
+        ...published,
+        execution: {
+          ...published.execution,
+          lifecycle: { ...lifecycle, manifest: { ...manifest, publishEvidence } },
+        },
+      }).reason,
+      "publish_evidence_mismatch",
+    );
+  }
+  assert.equal(
+    decideStep({
+      ...published,
+      publishRequest: {
+        ...publishRequest,
+        checks: [...publishRequest.checks, ...publishRequest.checks],
+      },
+      execution: {
+        ...published.execution,
+        lifecycle: {
+          ...lifecycle,
+          manifest: {
+            ...manifest,
+            publishEvidence: { ...evidence, checks: [...evidence.checks, ...evidence.checks] },
+          },
+        },
+      },
+    }).reason,
+    "publish_evidence_mismatch",
+  );
+  assert.equal(decideStep({ ...published, artifactsReady: false }).reason, "artifacts_pending");
+  assert.equal(
+    decideStep({
+      ...published,
+      execution: {
+        ...published.execution,
+        lifecycle: { ...published.execution.lifecycle, writerEnded: false },
+      },
+    }).reason,
+    "writer_end_pending",
+  );
+  assert.equal(
+    decideStep({ ...published, events: [...good.events.slice(0, 2), oldAttempt, wrappedCommand] })
+      .reason,
+    "test_attempt_pending",
+  );
 });
 
 it.effect(
@@ -541,8 +676,18 @@ it.effect(
       const archive = ThreadArchive.ThreadArchive.of({
         ingest: () => unsupported,
         list: () => unsupported,
-        cursor: () => Effect.succeed(proof.archive),
-        read: () => Effect.succeed({ ...proof.archive, events: proof.events, nextCursor: null }),
+        cursor: (principal) =>
+          principal.instanceId === proof.identity.instanceId &&
+          principal.operatorId === proof.identity.operatorId &&
+          principal.deviceId === undefined
+            ? Effect.succeed(proof.archive)
+            : Effect.fail(new FoundryArchiveError({ code: "forbidden" })),
+        read: (principal) =>
+          principal.instanceId === proof.identity.instanceId &&
+          principal.operatorId === proof.identity.operatorId &&
+          principal.deviceId === undefined
+            ? Effect.succeed({ ...proof.archive, events: proof.events, nextCursor: null })
+            : Effect.fail(new FoundryArchiveError({ code: "forbidden" })),
       });
       const artifacts = Artifacts.Artifacts.of({
         begin: () => unsupported,

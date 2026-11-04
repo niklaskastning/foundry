@@ -9,11 +9,13 @@ Stand: 4. November 2026. Dieser Plan beschreibt Produktfunktionen, ihre Reihenfo
 - [x] **P38a/P38b:** Zentrale Anhänge und fortlaufende Thread-Archive integriert und auf der Entwicklungs-VPS aktiviert ([#48](https://github.com/niklaskastning/foundry/pull/48), [#50](https://github.com/niklaskastning/foundry/pull/50)).
 - [x] **P19:** Sequenzieller Workflow-Dispatch integriert ([#51](https://github.com/niklaskastning/foundry/pull/51)).
 - [x] **P20/P21/P49:** Run-Steuerung, manueller Definitions-/Startfluss und persönliche Inbox integriert; Automation auf der Entwicklungs-VPS aktiviert ([#52](https://github.com/niklaskastning/foundry/pull/52)).
-- [x] **P22/P23/P24 – Implementierung:** GitHub-Polling, PR-Publishing und Zeitpläne implementiert. Die reale GitHub-App-Verbindung und der vollständige native Workflow bis zum PR bleiben offen.
-- [ ] **Funktionale Restabnahmen:** Instanzwechsel/Entfernen mit zwei realen Instanzen, Worker auf zweiter Maschine, Wiederverbindung beider Clients und Wiederaufnahme laufender Aufträge. Windows-Bedienung der Factory sowie ein neuer nativer Workflow bis zum PR bleiben offen; G4 ist noch nicht vollständig bestanden.
+- [x] **P22/P23/P24 – Implementierung:** GitHub-Polling, PR-Publishing und Zeitpläne implementiert. Die reale GitHub-App-Verbindung und ein betreuter nativer Issue-bis-PR-Workflow sind bestätigt ([#56](https://github.com/niklaskastning/foundry/pull/56)).
+- [ ] **Funktionale Restabnahmen:** Instanzwechsel/Entfernen mit zwei realen Instanzen, Worker auf zweiter Maschine, Wiederverbindung beider Clients und Wiederaufnahme laufender Aufträge. Windows-Laufzeit und Bedienung der Factory bleiben offen; der bestätigte native G4-Durchstich schließt diese Restabnahmen nicht.
 - [ ] **Produktlücken:** Native Foundry-Anmeldung P03N, automatischer Katalog-Erstabruf, Einstieg ohne getrenntes T3-Pairing und Windows-Downloads im Foundry-Einstieg.
 - [ ] **Zentrale Verbindungen P14Z:** Provider-, Source-Control- und MCP-Konten einmal in Foundry einrichten und auf Workern/Sandboxes nutzen.
 - [ ] **Git-Verwaltung P48:** Das private [Definitions-Repository](https://github.com/niklaskastning/foundry-definitions) ist angelegt; die App-Anbindung folgt über P23/P48. Bis dahin manueller P47-Import/-Export.
+
+Der zentrale Benutzerzugang ist noch ein Übergangsstand: Foundry-Anmeldung und eine separat autorisierte Main-T3-Sitzung werden gemeinsam geprüft. Worker-Zugriff benötigt kein eigenes Geräte-Pairing, reicht aber bisher nur die freigegebenen Thread-, Terminal- und Dateileserechte weiter; `settings:write` gehört noch nicht zum Gateway-Vertrag. Eine Anmeldung mit vollständig daraus abgeleiteten zentralen Benutzerrechten ist damit noch nicht abgenommen. Dies betrifft den Benutzerzugang, nicht die getrennte Provider-Autorisierung aus P14Z.
 
 Die ausführlichen bisherigen Prüf- und Deploymentnachweise sind nach [Basic-Leitplanken](basic-leitplanken.md#bestehende-nachweise-und-offene-technische-abnahmen) verschoben. Offene Abnahmen werden durch diese Aufteilung nicht als erledigt markiert.
 
@@ -151,7 +153,7 @@ Runs pausieren, fortsetzen, abbrechen und erneut versuchen. Menschliche Freigabe
 
 ### P21 · Manueller Start und Run-Ansicht
 
-Factory und Auftrag auswählen, Definitionen im Formular bearbeiten und aktivieren, Runs manuell starten sowie Schritte, Versuche, Ergebnisse und verlinkte Threads ansehen.
+Factory und Auftrag auswählen, Definitionen übergangsweise im Formular bearbeiten/importieren und als Snapshot aktivieren, Runs manuell starten sowie Schritte, Versuche, Ergebnisse und verlinkte Threads ansehen. Mit P48 werden Definitionen verbindlich über Git gepflegt.
 
 ### P49 · Factory-Navigation und persönliche Inbox
 
@@ -173,7 +175,7 @@ Workflows nach Zeitplan und Zeitzone starten; Verhalten bei verpassten oder übe
 
 ### P48 · Git als Definitions-Owner
 
-Das separate Definitions-Repository an Factory, Pfad und Branch binden und Änderungen synchronisieren. Quelle, Diff, aktive Revision und Fehler anzeigen; zwischen Foundry- und Git-Verwaltung wechseln und frühere Definitionen aktivieren. Aktivierte Snapshots bleiben für laufende Runs und Historie erhalten.
+Das separate Definitions-Repository an Factory, Pfad und Branch binden und Änderungen synchronisieren. Quelle, Diff, aktive Revision und Fehler anzeigen; manuelle Testdefinitionen mit Driftabgleich übernehmen und frühere Git-Revisionen aktivieren. Git ist der dauerhafte Owner, kein Parallelmodus zu App-Definitionen. Menschen, autorisierte Agenten und ein späterer UI-Editor ändern dieselben Dateien über PRs. Betriebsbindungen, Trigger und Run-Entscheidungen bleiben in der App bedienbar. Aktivierte Snapshots bleiben für laufende Runs und Historie erhalten.
 
 ## Zusammenarbeit und wiederverwendbare Agenten
 
@@ -229,7 +231,7 @@ Benchmark-Suites aus vorhandenen Runs oder manuellen Aufgaben erstellen, Repo-Au
 
 ### P57 · Belegte Verbesserungsvorschläge
 
-Als aktivierbare Produktfunktion Fehler auswerten und Vorschlags-PRs für Code, Prompts, Skills oder Konfiguration erzeugen. Manuell starten und deaktivieren; bereits bearbeitete Fehlergruppen erkennen.
+Als aktivierbare Produktfunktion Beobachtungen und Evals auswerten und Vorschlags-PRs erzeugen: Factory-Workflows, Prompts, Skills und Evaluationsdefinitionen im gemeinsamen Definitionsrepository, Anwendungscode im jeweiligen Arbeitsrepository. Menschen und Agenten nutzen dieselben Dateien und denselben Review-Weg. Manuell starten und deaktivieren; bereits bearbeitete Fehlergruppen erkennen.
 
 ## Mehrere Worker und Sandboxes
 

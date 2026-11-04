@@ -22,6 +22,8 @@ import { applicationGates } from "./test-automation-application-gates.ts";
 import * as Control from "../src/automation/Control.ts";
 import {
   FoundryArchiveEvent,
+  FoundryWorkerExecution,
+  EnvironmentId,
   AutomationTriggerError,
   type AutomationControlCommand,
   type StartAutomationRun,
@@ -31,6 +33,9 @@ import * as DispatchStore from "../src/automation/DispatchStore.ts";
 import * as Scheduler from "../src/automation/Scheduler.ts";
 import * as WorkerTransport from "../src/automation/WorkerTransport.ts";
 import * as ThreadArchive from "../src/foundry/ThreadArchive.ts";
+import * as InstanceDatabase from "../src/foundry/InstanceDatabase.ts";
+import * as InstanceMigrations from "../src/foundry/InstanceMigrations.ts";
+import * as ArtifactFiles from "../src/foundry/ArtifactFiles.ts";
 import * as Artifacts from "../src/foundry/Artifacts.ts";
 import * as Schema from "effect/Schema";
 const decodeDispatchBinding = Schema.decodeUnknownSync(Scheduler.DispatchBinding);
@@ -1054,7 +1059,7 @@ try {
   const networkBinding = Schema.decodeSync(Scheduler.DispatchBinding)({
     identity: {
       instanceId: "11111111-1111-4111-8111-111111111111",
-      operatorId: "fixture-operator",
+      operatorId: "44444444-4444-4444-8444-444444444444",
       deviceId: "22222222-2222-4222-8222-222222222222",
       environmentId: "fixture-environment",
       deviceGeneration: 1,
@@ -1166,6 +1171,223 @@ try {
   NodeAssert.equal(
     (await dispatchCall((store) => store.read("p19", "p19-network"))).reason,
     "worker_not_ready",
+  );
+  for (const statement of [
+    "CREATE ROLE archive_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+    "CREATE ROLE archive_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+    "CREATE DATABASE archive_fixture OWNER archive_migrator",
+    "REVOKE ALL ON DATABASE archive_fixture FROM PUBLIC",
+    "GRANT CONNECT ON DATABASE archive_fixture TO archive_runtime",
+  ])
+    await query(statement);
+  const archiveDb = (username: string) =>
+    InstanceDatabase.layer({ path, username, database: "archive_fixture" });
+  const archiveQuery = (statement: string) =>
+    run(
+      Effect.gen(function* () {
+        const sql = yield* InstanceDatabase.InstanceDatabase;
+        return yield* sql.unsafe(statement);
+      }).pipe(Effect.provide(archiveDb("fixture_admin"))),
+    );
+  await archiveQuery("REVOKE ALL ON SCHEMA public FROM PUBLIC");
+  await run(
+    InstanceMigrations.InstanceMigrations.pipe(
+      Effect.flatMap((service) =>
+        service.migrate({
+          instanceId: networkBinding.identity.instanceId,
+          mainEnvironmentId: EnvironmentId.make("archive-main"),
+          runtimeRole: "archive_runtime",
+        }),
+      ),
+      Effect.provide(InstanceMigrations.layer.pipe(Layer.provide(archiveDb("archive_migrator")))),
+    ),
+  );
+  await archiveQuery(
+    `INSERT INTO foundry_instance.operator_binding(operator_id,issuer,subject) VALUES('${networkBinding.identity.operatorId}','https://fixture.invalid','operator')`,
+  );
+  await archiveQuery(
+    `INSERT INTO foundry_instance.devices(device_id,instance_id,operator_id,environment_id,public_key) VALUES('${networkBinding.identity.deviceId}','${networkBinding.identity.instanceId}','${networkBinding.identity.operatorId}','${networkBinding.identity.environmentId}','${"a".repeat(43)}')`,
+  );
+  const archiveEvents = Schema.decodeSync(Schema.Array(FoundryArchiveEvent))([
+    {
+      sequence: 1,
+      sourceSequence: 1,
+      event: {
+        id: "archive-run-complete",
+        threadId: "archive-thread",
+        occurredAt: "2026-11-04T00:00:00Z",
+        type: "run.updated",
+        payload: {
+          id: "archive-native-run",
+          threadId: "archive-thread",
+          ordinal: 1,
+          providerInstanceId: "fixture",
+          modelSelection: { instanceId: "fixture", model: "fixture" },
+          providerThreadId: null,
+          userMessageId: "archive-message",
+          rootNodeId: "archive-node",
+          activeAttemptId: "archive-attempt",
+          status: "completed",
+          requestedAt: "2026-11-04T00:00:00Z",
+          startedAt: "2026-11-04T00:00:00Z",
+          completedAt: "2026-11-04T00:00:00Z",
+          checkpointId: "archive-checkpoint",
+          contextHandoffId: null,
+        },
+      },
+    },
+    {
+      sequence: 2,
+      sourceSequence: 2,
+      event: {
+        id: "archive-checkpoint-ready",
+        threadId: "archive-thread",
+        occurredAt: "2026-11-04T00:00:00Z",
+        type: "checkpoint.captured",
+        payload: {
+          id: "archive-checkpoint",
+          threadId: "archive-thread",
+          scopeId: "archive-scope",
+          runId: "archive-native-run",
+          nodeId: "archive-node",
+          parentCheckpointId: null,
+          ordinalWithinScope: 1,
+          appRunOrdinal: 1,
+          ref: "refs/checkpoints/archive-fixture",
+          status: "ready",
+          files: [],
+          capturedAt: "2026-11-04T00:00:00Z",
+        },
+      },
+    },
+  ]);
+  await archiveQuery(
+    `INSERT INTO foundry_instance.archive_threads(instance_id,operator_id,environment_id,thread_id,device_id,source_complete,confirmed_cursor,confirmed_source_sequence,source_head) VALUES('${networkBinding.identity.instanceId}','${networkBinding.identity.operatorId}','${networkBinding.identity.environmentId}','archive-thread','${networkBinding.identity.deviceId}',true,2,2,2)`,
+  );
+  await run(
+    Effect.gen(function* () {
+      const sql = yield* InstanceDatabase.InstanceDatabase;
+      const encode = Schema.encodeEffect(Schema.toCodecJson(FoundryArchiveEvent));
+      for (const event of archiveEvents)
+        yield* sql`INSERT INTO foundry_instance.archive_events(instance_id,environment_id,thread_id,sequence,source_sequence,event) VALUES(${networkBinding.identity.instanceId},${networkBinding.identity.environmentId},'archive-thread',${event.sequence},${event.sourceSequence},${sql.json(yield* encode(event))})`;
+    }).pipe(Effect.provide(archiveDb("fixture_admin"))),
+  );
+  const realArchive = ThreadArchive.layer.pipe(
+    Layer.provide(archiveDb("archive_runtime")),
+    Layer.provide(
+      Layer.succeed(ArtifactFiles.ArtifactFiles, {
+        read: unused,
+        write: unused,
+        publish: unused,
+        abort: unused,
+      }),
+    ),
+  );
+  await run(
+    ThreadArchive.ThreadArchive.pipe(
+      Effect.flatMap((service) =>
+        service.read(
+          {
+            instanceId: networkBinding.identity.instanceId,
+            operatorId: networkBinding.identity.operatorId,
+            deviceId: networkBinding.identity.deviceId,
+            deviceEnvironmentId: networkBinding.identity.environmentId,
+            generation: networkBinding.identity.deviceGeneration,
+          },
+          {
+            owner: {
+              environmentId: networkBinding.identity.environmentId,
+              threadId: archiveEvents[0]!.event.threadId,
+            },
+            limit: 50,
+          },
+        ),
+      ),
+      Effect.flip,
+      Effect.tap((error) => Effect.sync(() => NodeAssert.equal(error.code, "forbidden"))),
+      Effect.provide(realArchive),
+    ),
+  );
+  const preparedArchiveAttempt = (await dispatchCall((store) => store.read("p19", "p19-network")))
+    .attempts[0]!;
+  const archiveExecution = Schema.decodeSync(FoundryWorkerExecution)({
+    receipt: {
+      commandId: preparedArchiveAttempt.commandId,
+      threadId: "archive-thread",
+      acceptedAt: "2026-11-04T00:00:00Z",
+      sequence: 1,
+    },
+    run: { id: "archive-native-run", status: "completed", checkpointId: "archive-checkpoint" },
+    lifecycle: {
+      generation: 1,
+      expiresAt: 1,
+      state: "completed",
+      writerEnded: true,
+      manifest: {
+        generation: 1,
+        runId: "archive-native-run",
+        outcome: "completed",
+        checkpointId: "archive-checkpoint",
+        checkpointRef: "refs/checkpoints/archive-fixture",
+        archive: {
+          instanceId: networkBinding.identity.instanceId,
+          deviceId: networkBinding.identity.deviceId,
+          deviceGeneration: 1,
+          owner: {
+            environmentId: networkBinding.identity.environmentId,
+            threadId: "archive-thread",
+          },
+          cursor: 2,
+          sourceSequence: 2,
+        },
+      },
+    },
+  });
+  await run(
+    Scheduler.Scheduler.pipe(
+      Effect.flatMap((scheduler) => scheduler.tick),
+      Effect.provide(
+        Scheduler.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              DispatchStore.layer.pipe(
+                Layer.provide(Workflows.layer.pipe(Layer.provideMerge(Factories.layer))),
+                Layer.provide(db("automation_runtime")),
+              ),
+              Layer.mock(Publish.Publish)({ prepareEvidence: () => Effect.succeed(null) }),
+              Layer.succeed(WorkerTransport.WorkerTransport, {
+                ...networkWorker,
+                read: Effect.fn("Fixture.readArchivedExecution")(() =>
+                  Effect.succeed(archiveExecution),
+                ),
+              }),
+              realArchive,
+              Layer.succeed(Artifacts.Artifacts, {
+                ...networkArtifacts,
+                list: Effect.fn("Fixture.listArchivedArtifacts")(() =>
+                  Effect.succeed({ items: [], nextCursor: null }),
+                ),
+              }),
+              Layer.succeed(Scheduler.SchedulerConfig, {
+                deviceId: networkBinding.identity.deviceId,
+                environmentId: networkBinding.identity.environmentId,
+                allowedRunIds: ["p19-network"],
+              }),
+              NodeCrypto.layer,
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  const archivedStep = (await dispatchCall((store) => store.read("p19", "p19-network")))
+    .attempts[0]!;
+  NodeAssert.equal(archivedStep.state, "succeeded");
+  NodeAssert.equal(archivedStep.reason, null);
+  await run(
+    Console.log(
+      "PASS G4 archive principal: real separate instance PostgreSQL archive authorizes the Scheduler's central read and confirms the completed worker-shaped result/checkpoint; no native provider was executed.",
+    ),
   );
   for (const statement of [
     "UPDATE foundry_automation.step_attempts SET request='{}'",

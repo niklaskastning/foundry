@@ -2,6 +2,7 @@ import type {
   FoundryArchiveEvent,
   FoundryArchiveStatus,
   FoundryWorkerExecution,
+  FoundryPublishRequest,
   OrchestrationV2TurnItemJson,
   OrchestrationV2ProviderTurnJson,
 } from "@t3tools/contracts";
@@ -18,6 +19,7 @@ export const decideStep = (input: {
   readonly command?: string;
   readonly cwd?: string;
   readonly artifactsReady: boolean;
+  readonly publishRequest?: typeof FoundryPublishRequest.Type;
 }): StepDecision => {
   const { execution, archive, events } = input;
   const lifecycle = execution.lifecycle;
@@ -108,6 +110,45 @@ export const decideStep = (input: {
   )
     return { state: "finalizing", reason: "required_events_pending" };
   if (!input.artifactsReady) return { state: "finalizing", reason: "artifacts_pending" };
+  if (input.publishRequest) {
+    const requested = input.publishRequest;
+    const evidence = manifest.publishEvidence;
+    if (
+      !evidence ||
+      evidence.repository !== requested.repository ||
+      evidence.baseBranch !== requested.baseBranch ||
+      requested.checks.length === 0 ||
+      !requested.checks.some(
+        (check) => check.command === input.command && check.cwd === input.cwd,
+      ) ||
+      evidence.checks.length !== requested.checks.length ||
+      new Set(requested.checks.map((check) => check.id)).size !== requested.checks.length ||
+      new Set(evidence.checks.map((check) => check.id)).size !== evidence.checks.length ||
+      requested.checks.some((check) => {
+        const confirmed = evidence.checks.find((item) => item.id === check.id);
+        return (
+          !confirmed ||
+          confirmed.command !== check.command ||
+          confirmed.cwd !== check.cwd ||
+          confirmed.exitCode !== 0 ||
+          confirmed.commitSha !== evidence.commitSha ||
+          confirmed.treeSha !== evidence.treeSha
+        );
+      }) ||
+      evidence.bundle.reference.instanceId !== final.instanceId ||
+      evidence.bundle.reference.owner.environmentId !== final.owner.environmentId ||
+      evidence.bundle.reference.owner.threadId !== execution.receipt.threadId
+    )
+      return { state: "finalizing", reason: "publish_evidence_mismatch" };
+    if (
+      !runAttemptId ||
+      ![...turns.values()].some(
+        (turn) => turn.runAttemptId === runAttemptId && turn.status === "completed",
+      )
+    )
+      return { state: "finalizing", reason: "test_attempt_pending" };
+    return { state: "succeeded", reason: null };
+  }
   if (input.command !== undefined) {
     const matching = [...commands.values()].filter(
       (item) =>

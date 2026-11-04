@@ -490,9 +490,14 @@ const make = Effect.gen(function* () {
       yield* worker
         .renew(binding.identity, { commandId: request.commandId, generation: lifecycle.generation })
         .pipe(Effect.ignore);
+    // Archive reads use Main's operator principal after the worker read validates current grants.
+    const archivePrincipal = {
+      instanceId: binding.identity.instanceId,
+      operatorId: binding.identity.operatorId,
+    };
     yield* Effect.gen(function* () {
       const after = yield* store.archiveCursor(attempt.commandId);
-      const page = yield* archive.read(binding.identity, {
+      const page = yield* archive.read(archivePrincipal, {
         owner: {
           environmentId: binding.identity.environmentId,
           threadId: execution.receipt.threadId,
@@ -532,14 +537,14 @@ const make = Effect.gen(function* () {
     let status = null;
     let artifactsReady = false;
     if (final) {
-      status = yield* archive.cursor(binding.identity, final.owner);
+      status = yield* archive.cursor(archivePrincipal, final.owner);
       let after = 0;
       while (after < final.cursor) {
         if (events.length >= 10_000) {
           yield* store.wait(claim, "archive_result_limit");
           return;
         }
-        const page = yield* archive.read(binding.identity, {
+        const page = yield* archive.read(archivePrincipal, {
           owner: final.owner,
           after,
           limit: 50,
@@ -585,13 +590,21 @@ const make = Effect.gen(function* () {
       }
     }
     if (events.length) yield* store.projectQuestions(claim, attempt.commandId, events);
-    const decision = decideStep({
+    let decision = decideStep({
       execution,
       archive: status,
       events,
       artifactsReady,
+      ...(request.publishEvidence ? { publishRequest: request.publishEvidence } : {}),
       ...(check ? { command: check.command, cwd: check.cwd } : {}),
     });
+    if (
+      decision.state === "succeeded" &&
+      request.publishEvidence &&
+      lifecycle.manifest?.publishEvidence &&
+      !(yield* verifyArtifact(binding.identity, lifecycle.manifest.publishEvidence.bundle))
+    )
+      decision = { state: "finalizing", reason: "artifacts_pending" };
     yield* store.record(claim, {
       commandId: attempt.commandId,
       ...decision,
