@@ -1,3 +1,5 @@
+import { triggerGates } from "./test-automation-trigger-gates.ts";
+import * as Publish from "../src/automation/Publish.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- The isolated harness owns its temporary cluster and filesystem.
 // @effect-diagnostics globalProcess:off -- Only a PostgreSQL binary directory is read from the environment.
 import * as NodeAssert from "node:assert/strict";
@@ -20,6 +22,7 @@ import { applicationGates } from "./test-automation-application-gates.ts";
 import * as Control from "../src/automation/Control.ts";
 import {
   FoundryArchiveEvent,
+  AutomationTriggerError,
   type AutomationControlCommand,
   type StartAutomationRun,
 } from "@t3tools/contracts";
@@ -285,6 +288,7 @@ try {
   const beforeUpgrade = await call((s) => s.readWorkItem("a", "w1"));
   // Reconstruct the deployed v1 schema around existing P18a data before testing its upgrade.
   for (const statement of [
+    "DROP TABLE foundry_automation.publish_operations,foundry_automation.trigger_commands,foundry_automation.trigger_admissions,foundry_automation.trigger_events,foundry_automation.unattended_grants,foundry_automation.trigger_bindings",
     "DROP TABLE foundry_automation.inbox_marks,foundry_automation.inbox_entries,foundry_automation.inbox_commands,foundry_automation.manual_admissions,foundry_automation.run_questions,foundry_automation.run_decisions,foundry_automation.control_commands,foundry_automation.run_controls,foundry_automation.dispatch_outbox,foundry_automation.step_attempts,foundry_automation.dispatch_workers,foundry_automation.dispatch_runs",
     "DROP TABLE foundry_automation.definition_heads,foundry_automation.definition_versions,foundry_automation.outbox,foundry_automation.runs,foundry_automation.workflow_versions",
     "ALTER TABLE foundry_automation.work_items DROP CONSTRAINT work_items_factory_id_id_key",
@@ -295,7 +299,7 @@ try {
   NodeAssert.deepEqual(await call((s) => s.readWorkItem("a", "w1")), beforeUpgrade);
   NodeAssert.equal(
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
-    5,
+    6,
   );
   const definitions = await Promise.all(
     Array.from({ length: 8 }, () => workflowCall((s) => s.createVersion(workflow))),
@@ -480,6 +484,7 @@ try {
   NodeAssert.equal((await query("SELECT * FROM foundry_automation.runs")).length, 3);
   NodeAssert.equal((await call((s) => s.readWorkItem("a", "w1"))).state, "completed");
   for (const statement of [
+    "DROP TABLE foundry_automation.publish_operations,foundry_automation.trigger_commands,foundry_automation.trigger_admissions,foundry_automation.trigger_events,foundry_automation.unattended_grants,foundry_automation.trigger_bindings",
     "DROP TABLE foundry_automation.inbox_marks,foundry_automation.inbox_entries,foundry_automation.inbox_commands,foundry_automation.manual_admissions,foundry_automation.run_questions,foundry_automation.run_decisions,foundry_automation.control_commands,foundry_automation.run_controls,foundry_automation.dispatch_outbox,foundry_automation.step_attempts,foundry_automation.dispatch_workers,foundry_automation.dispatch_runs",
     "DROP TABLE foundry_automation.definition_heads,foundry_automation.definition_versions",
     "UPDATE foundry_automation.schema_version SET version=2",
@@ -744,7 +749,7 @@ try {
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
     99,
   );
-  await query("UPDATE foundry_automation.schema_version SET version=5", "automation_migrator");
+  await query("UPDATE foundry_automation.schema_version SET version=6", "automation_migrator");
   await run(migration);
   const preservedQueries = [
     "SELECT * FROM foundry_automation.definition_versions ORDER BY id",
@@ -756,6 +761,10 @@ try {
   ];
   const schema3Data = await Promise.all(preservedQueries.map((statement) => query(statement)));
   NodeAssert.ok(schema3Data.every((rows) => rows.length > 0));
+  await query(
+    "DROP TABLE foundry_automation.publish_operations,foundry_automation.trigger_commands,foundry_automation.trigger_admissions,foundry_automation.trigger_events,foundry_automation.unattended_grants,foundry_automation.trigger_bindings",
+    "automation_migrator",
+  );
   await query(
     "DROP TABLE foundry_automation.inbox_marks,foundry_automation.inbox_entries,foundry_automation.inbox_commands,foundry_automation.manual_admissions,foundry_automation.run_questions,foundry_automation.run_decisions,foundry_automation.control_commands,foundry_automation.run_controls,foundry_automation.dispatch_outbox,foundry_automation.step_attempts,foundry_automation.dispatch_workers,foundry_automation.dispatch_runs",
     "automation_migrator",
@@ -769,7 +778,7 @@ try {
   await run(migration);
   NodeAssert.equal(
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
-    5,
+    6,
   );
   NodeAssert.deepEqual(
     await Promise.all(preservedQueries.map((statement) => query(statement))),
@@ -1137,6 +1146,7 @@ try {
                 Layer.provide(Workflows.layer.pipe(Layer.provideMerge(Factories.layer))),
                 Layer.provide(db("automation_runtime")),
               ),
+              Layer.mock(Publish.Publish)({ prepareEvidence: () => Effect.succeed(null) }),
               Layer.succeed(WorkerTransport.WorkerTransport, networkWorker),
               Layer.succeed(ThreadArchive.ThreadArchive, networkArchive),
               Layer.succeed(Artifacts.Artifacts, networkArtifacts),
@@ -1372,7 +1382,10 @@ try {
     clientSessionId: "newer-session",
   });
   NodeAssert.deepEqual(await executeControl(recoveredCancel), recoveredReceipt);
-  NodeAssert.equal((await cancellationBinding()).identity.clientSessionId, "fresh-cancel-session");
+  NodeAssert.deepEqual((await cancellationBinding()).identity, {
+    ...controlIdentity,
+    clientSessionId: "fresh-cancel-session",
+  });
   controlIdentity = controlBinding.identity;
   const cancellationClaim = await dispatchCall((s) =>
     s.claimNext({ workerId: controlIdentity.deviceId, owner: "p20-owner", leaseMillis: 60000 }),
@@ -1990,6 +2003,18 @@ try {
     ),
   );
   await run(applicationGates(db("automation_runtime")));
+  await run(
+    triggerGates(
+      db("automation_runtime"),
+      Effect.tryPromise({
+        try: async () => {
+          await stop();
+          await start();
+        },
+        catch: () => new AutomationTriggerError({ code: "unavailable" }),
+      }),
+    ),
+  );
   await run(
     Console.log(
       "PASS P18a/P18b/P47 isolated PostgreSQL: idempotent factories/workflows/runs; pinned versions/repository/revisions; atomic run/outbox and definition activation; canonical import/export; hash/provenance; version conflicts; invalid definitions preserve active version; v1/v2/v3 upgrades and PostgreSQL restart; immutable runtime history. P19 opt-in enrollment, concurrent claims, restart and stale-lease fencing, immutable requests/receipts, atomic attempt/outbox rollback, reconciliation, failed-step blocking and sequential completion; claim locks released before transport. No live runtime activation.",

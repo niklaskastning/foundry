@@ -15,6 +15,8 @@ import { WS_METHODS } from "./rpc.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [WS_METHODS.foundryAutomationTriggerQuery]: AuthOrchestrationReadScope,
+  [WS_METHODS.foundryAutomationTriggerCommand]: AuthAccessWriteScope,
   [WS_METHODS.foundryAutomationQuery]: AuthOrchestrationReadScope,
   [WS_METHODS.foundryAutomationCommand]: AuthOrchestrationOperateScope,
   [WS_METHODS.foundryAutomationControl]: AuthOrchestrationOperateScope,

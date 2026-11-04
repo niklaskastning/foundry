@@ -28,6 +28,7 @@ const operationError = (cause: unknown) =>
 export const AttemptRequest = FoundryWorkerLaunchInput;
 const ResultExecution = Schema.Struct({ execution: FoundryWorkerExecution });
 const decodeResultExecution = Schema.decodeUnknownOption(ResultExecution);
+const isPublish = Schema.is(Schema.Struct({ kind: Schema.Literal("publish") }));
 const isApproval = Schema.is(Schema.Struct({ kind: Schema.Literal("approval") }));
 export const writerEnded = (result: unknown): boolean => {
   const decoded = decodeResultExecution(result);
@@ -76,6 +77,18 @@ export class DispatchStore extends Context.Service<
       binding: unknown,
       identity: unknown,
     ) => Effect.Effect<DispatchRun, DispatchError>;
+    readonly startTriggered: (
+      input: typeof StartAutomationRun.Type,
+      workerId: string,
+      binding: unknown,
+      admission: { eventId: string; bindingId: string; generation: number; identity: unknown },
+    ) => Effect.Effect<DispatchRun, DispatchError>;
+    readonly completePublish: (
+      claim: DispatchClaim,
+      ordinal: number,
+      commandId: string,
+      result: { number: number; url: string; commitSha: string; operationKey: string },
+    ) => Effect.Effect<boolean, DispatchError>;
     readonly enroll: (input: {
       readonly factoryId: string;
       readonly runId: string;
@@ -289,7 +302,8 @@ const make = Effect.gen(function* () {
             return yield* new DispatchError({ reason: "invalid_step" });
         }
         yield* sql`INSERT INTO foundry_automation.step_attempts(command_id,run_id,ordinal,request) VALUES(${input.commandId},${claim.run.id},${input.ordinal},${sql.json(input.request)})`;
-        yield* sql`INSERT INTO foundry_automation.dispatch_outbox(command_id) VALUES(${input.commandId})`;
+        if (!isPublish(input.request))
+          yield* sql`INSERT INTO foundry_automation.dispatch_outbox(command_id) VALUES(${input.commandId})`;
         yield* sql`UPDATE foundry_automation.dispatch_runs SET state='running',reason=NULL WHERE run_id=${claim.run.id}`;
         return (yield* attempts(claim.run.id)).findLast((a) => a.ordinal === input.ordinal)!;
       }),
@@ -411,7 +425,7 @@ const make = Effect.gen(function* () {
   }, Effect.mapError(operationError));
   const permitted = Effect.fn("DispatchStore.permitted")(function* (runId: string) {
     return (
-      (yield* sql`SELECT run_id FROM foundry_automation.manual_admissions WHERE run_id=${runId}`)
+      (yield* sql`SELECT run_id FROM foundry_automation.manual_admissions WHERE run_id=${runId} UNION SELECT t.run_id FROM foundry_automation.trigger_admissions t JOIN foundry_automation.unattended_grants g ON g.binding_id=t.binding_id AND g.generation=t.generation AND g.enabled WHERE t.run_id=${runId} UNION SELECT t.run_id FROM foundry_automation.trigger_admissions t JOIN foundry_automation.run_controls c ON c.run_id=t.run_id JOIN foundry_automation.dispatch_runs d ON d.run_id=t.run_id WHERE t.run_id=${runId} AND c.mode='cancel_requested' AND d.binding->'identity' ? 'clientSessionId' AND d.binding->'identity' ? 'foundrySessionHash' AND NOT (d.binding->'identity' ? 'authority')`)
         .length === 1
     );
   }, Effect.mapError(operationError));
@@ -487,6 +501,34 @@ const make = Effect.gen(function* () {
       }),
     );
   }, Effect.mapError(operationError));
+  const completePublish = Effect.fn("DispatchStore.completePublish")(function* (
+    claim: DispatchClaim,
+    ordinal: number,
+    commandId: string,
+    result: { number: number; url: string; commitSha: string; operationKey: string },
+  ) {
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        if (!(yield* lockClaim(claim)) || !(yield* canLaunch(claim))) return false;
+        const current = yield* read(claim.run.factoryId, claim.run.id);
+        const step = current.workflow.steps[ordinal];
+        if (
+          step?.kind !== "publish" ||
+          !(yield* approved(claim, step.id)) ||
+          current.resultRevision !== claim.resultRevision
+        )
+          return false;
+        const attempt = yield* prepare(claim, { ordinal, commandId, request: { kind: "publish" } });
+        return yield* record(claim, {
+          commandId: attempt.commandId,
+          state: "succeeded",
+          reason: null,
+          receipt: null,
+          result: { publish: result },
+        });
+      }),
+    );
+  }, Effect.mapError(operationError));
   const confirmCancel = Effect.fn("DispatchStore.confirmCancel")(function* (claim: DispatchClaim) {
     return yield* sql.withTransaction(
       Effect.gen(function* () {
@@ -536,7 +578,33 @@ const make = Effect.gen(function* () {
       }),
     );
   }, Effect.mapError(operationError));
+  const startTriggered = Effect.fn("DispatchStore.startTriggered")(function* (
+    input: typeof StartAutomationRun.Type,
+    workerId: string,
+    binding: unknown,
+    trigger: { eventId: string; bindingId: string; generation: number; identity: unknown },
+  ) {
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const eligible =
+          yield* sql`SELECT b.id FROM foundry_automation.trigger_bindings b JOIN foundry_automation.unattended_grants g ON g.binding_id=b.id AND g.generation=b.generation AND g.enabled JOIN foundry_automation.trigger_events e ON e.binding_id=b.id AND e.generation=b.generation JOIN foundry_automation.definition_versions d ON d.id=b.definition_version_id AND d.factory_id=b.factory_id WHERE b.id=${trigger.bindingId} AND b.generation=${trigger.generation} AND e.id=${trigger.eventId} AND e.state IN ('accepted','blocked') AND b.state='active' AND b.factory_id=${input.factoryId} AND b.workflow_version_id=${input.workflowVersionId} AND g.identity=${sql.json(trigger.identity)}::jsonb AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.workflow_versions) v WHERE v->>'versionId'=${input.workflowVersionId}) FOR UPDATE OF b,e`;
+        if (!eligible.length) return yield* new DispatchError({ reason: "conflict" });
+        yield* workflows.start(input);
+        yield* sql`INSERT INTO foundry_automation.trigger_admissions(run_id,event_id,binding_id,generation,identity) VALUES(${input.id},${trigger.eventId},${trigger.bindingId},${trigger.generation},${sql.json(trigger.identity)}) ON CONFLICT DO NOTHING`;
+        const saved = yield* enroll({
+          factoryId: input.factoryId,
+          runId: input.id,
+          workerId,
+          binding,
+        });
+        yield* sql`UPDATE foundry_automation.trigger_events SET state='admitted',reason=NULL,run_id=${input.id} WHERE id=${trigger.eventId}`;
+        return saved;
+      }),
+    );
+  }, Effect.mapError(operationError));
   return DispatchStore.of({
+    startTriggered,
+    completePublish,
     archiveCursor,
     projectQuestions,
     answers,

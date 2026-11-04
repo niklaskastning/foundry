@@ -19,6 +19,8 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Unattended from "./Unattended.ts";
 import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -142,13 +144,24 @@ const makeClient = RpcClient.make(WsRpcGroup);
 type Client = Effect.Success<typeof makeClient>;
 const make = Effect.gen(function* () {
   const gateway = yield* GatewayGrants.GatewayGrants;
+  const unattended = yield* Effect.serviceOption(Unattended.Unattended);
   const authorize = Effect.fn("WorkerTransport.authorize")(
     (request: HttpServerRequest.HttpServerRequest, target: Target) =>
       gateway.authorizeAutomation(request, target),
     Effect.mapError(transportError),
   );
   const call = Effect.fn("WorkerTransport.call")(
-    function* <A, E>(identity: WorkerIdentity, operation: (client: Client) => Effect.Effect<A, E>) {
+    function* <A, E>(
+      identity: WorkerIdentity,
+      operation: (client: Client) => Effect.Effect<A, E>,
+      scope?: { commandId: string; projectId?: string; previousCommandId?: string },
+    ) {
+      const authorization = GatewayGrants.isUnattendedIdentity(identity)
+        ? Option.isSome(unattended)
+          ? unattended.value.validate(identity, scope)
+          : Effect.fail(new FoundryGatewayError({ code: "forbidden" }))
+        : undefined;
+      if (authorization) yield* authorization;
       const sockets = yield* socketPair();
       const protocol = Layer.effect(
         RpcClient.Protocol,
@@ -166,7 +179,7 @@ const make = Effect.gen(function* () {
       return yield* operation(client).pipe(
         Effect.raceFirst(
           gateway
-            .openAutomation(identity, sockets.gateway)
+            .openAutomation(identity, sockets.gateway, authorization)
             .pipe(Effect.andThen(Effect.fail(new FoundryGatewayError({ code: "unavailable" })))),
         ),
       );
@@ -189,28 +202,43 @@ const make = Effect.gen(function* () {
       call(identity, (client) => client["foundry.workerStatus"]({})),
     ),
     launch: Effect.fn("WorkerTransport.launch")((identity, input) =>
-      call(identity, (client) => client["foundry.workerLaunch"](input)),
+      call(identity, (client) => client["foundry.workerLaunch"](input), {
+        commandId: input.commandId,
+        projectId: input.projectId,
+        ...(input.previousExecution
+          ? { previousCommandId: input.previousExecution.commandId }
+          : {}),
+      }),
     ),
     read: Effect.fn("WorkerTransport.read")((identity, input) =>
-      call(identity, (client) =>
-        client["foundry.workerRead"](input).pipe(
-          Effect.catchTags({
-            FoundryWorkerReadError: (error) =>
-              error.code === "not_found" ? Effect.succeed(null) : Effect.fail(error),
-          }),
-        ),
+      call(
+        identity,
+        (client) =>
+          client["foundry.workerRead"](input).pipe(
+            Effect.catchTags({
+              FoundryWorkerReadError: (error) =>
+                error.code === "not_found" ? Effect.succeed(null) : Effect.fail(error),
+            }),
+          ),
+        { commandId: input.commandId },
       ),
     ),
     answer: Effect.fn("WorkerTransport.answer")((identity, input) =>
-      call(identity, (client) =>
-        client["orchestration.dispatchCommand"]({ ...input, type: "runtime-request.respond" }),
-      ).pipe(Effect.asVoid),
+      GatewayGrants.isUnattendedIdentity(identity)
+        ? Effect.fail(new WorkerTransportError({ reason: "forbidden" }))
+        : call(identity, (client) =>
+            client["orchestration.dispatchCommand"]({ ...input, type: "runtime-request.respond" }),
+          ).pipe(Effect.asVoid),
     ),
     cancel: Effect.fn("WorkerTransport.cancel")((identity, input) =>
-      call(identity, (client) => client["foundry.workerCancel"](input)),
+      call(identity, (client) => client["foundry.workerCancel"](input), {
+        commandId: input.launchCommandId,
+      }),
     ),
     renew: Effect.fn("WorkerTransport.renew")((identity, input) =>
-      call(identity, (client) => client["foundry.workerRenew"](input)),
+      call(identity, (client) => client["foundry.workerRenew"](input), {
+        commandId: input.commandId,
+      }),
     ),
   });
 });

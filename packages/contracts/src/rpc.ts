@@ -1,4 +1,10 @@
 import {
+  AutomationTriggerCommand,
+  AutomationTriggerQuery,
+  AutomationTriggerResult,
+  AutomationTriggerError,
+} from "./automation/trigger.ts";
+import {
   AutomationApplicationQuery,
   AutomationApplicationCommand,
   AutomationApplicationResult,
@@ -466,6 +472,8 @@ export const WS_METHODS = {
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
   assetsCreateUrl: "assets.createUrl",
+  foundryAutomationTriggerQuery: "foundry.automationTriggerQuery",
+  foundryAutomationTriggerCommand: "foundry.automationTriggerCommand",
   foundryAutomationQuery: "foundry.automationQuery",
   foundryAutomationCommand: "foundry.automationCommand",
   foundryAutomationControl: "foundry.automationControl",
@@ -1438,6 +1446,16 @@ const WsAgentSessionsImportRpc = Rpc.make(WS_METHODS.agentSessionsImport, {
   ]),
 });
 
+const WsAutomationTriggerQueryRpc = Rpc.make(WS_METHODS.foundryAutomationTriggerQuery, {
+  payload: AutomationTriggerQuery,
+  success: AutomationTriggerResult,
+  error: Schema.Union([AutomationTriggerError, EnvironmentAuthorizationError]),
+});
+const WsAutomationTriggerCommandRpc = Rpc.make(WS_METHODS.foundryAutomationTriggerCommand, {
+  payload: AutomationTriggerCommand,
+  success: AutomationTriggerResult,
+  error: Schema.Union([AutomationTriggerError, EnvironmentAuthorizationError]),
+});
 const WsAutomationQueryRpc = Rpc.make(WS_METHODS.foundryAutomationQuery, {
   payload: AutomationApplicationQuery,
   success: AutomationApplicationResult,
@@ -2229,6 +2247,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
   WsAssetsCreateUrlRpc,
+  WsAutomationTriggerQueryRpc,
+  WsAutomationTriggerCommandRpc,
   WsAutomationQueryRpc,
   WsAutomationCommandRpc,
   WsAutomationControlRpc,

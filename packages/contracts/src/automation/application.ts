@@ -109,6 +109,14 @@ export const AutomationApplicationResult = Schema.Union([
   }),
   Schema.Struct({
     kind: Schema.Literal("attempt"),
+    publish: Schema.optional(
+      Schema.Struct({
+        number: Schema.Int,
+        url: Schema.String,
+        commitSha: Schema.String,
+        operationKey: Schema.String,
+      }),
+    ),
     execution: Schema.NullOr(FoundryWorkerExecution),
     artifacts: Schema.Array(FoundryArtifactManifest),
   }),
