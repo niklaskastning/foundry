@@ -32,7 +32,6 @@ import {
   type FoundryWorkerExecution,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
-import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -704,11 +703,8 @@ export const layer = Layer.effect(
           yield* verifyHandoff(input, workspace);
           const attachments = yield* materializeArtifacts(input, ids.threadId);
           const execution = yield* executions.reserve(input.commandId, ids.threadId);
-          if (
-            execution.stopRequested !== 0 ||
-            execution.state !== "active" ||
-            execution.expiresAt <= (yield* Clock.currentTimeMillis)
-          )
+          // Uncertain retries may recover receipts; ExecutionStore.starting still fences native entry.
+          if (execution.stopRequested === 1 && execution.writerEnded === 1)
             return yield* failure("launch_failed");
           const reservation = yield* workspaceGate.reserve({
             commandId: input.commandId,

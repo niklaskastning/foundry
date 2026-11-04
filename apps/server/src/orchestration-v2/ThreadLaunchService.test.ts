@@ -2748,9 +2748,24 @@ it.effect.each([
       if (Result.isSuccess(recoveredRead))
         assert.equal(recoveredRead.success.receipt.threadId, ids.threadId);
     }
-    const first = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
-      worker.launch(workerInput),
-    ).pipe(Effect.provide(workerLayer()));
+    const first = yield* Effect.gen(function* () {
+      const worker = yield* WorkerLaunch.WorkerLaunch;
+      const receipt = yield* worker.launch(workerInput);
+      if (failurePoint === "before-commit") {
+        const store = yield* ExecutionStore.ExecutionStore;
+        const row = yield* store.read(workerInput.commandId);
+        assert.equal(row?.stopRequested, 1);
+        assert.isFalse(yield* store.renew(workerInput.commandId, row!.generation));
+        assert.isFalse(
+          yield* store.starting({
+            threadId: receipt.threadId,
+            providerThreadId: ProviderThreadId.make("must-not-revive"),
+            runOrdinal: 1,
+          }),
+        );
+      }
+      return receipt;
+    }).pipe(Effect.provide(workerLayer()));
     const settings = yield* ServerSettings.ServerSettingsService;
     yield* settings.updateSettings({
       projectSettingsOverrides: {
