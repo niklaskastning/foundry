@@ -1517,7 +1517,7 @@ try {
       factoryVersionId: "p19-version",
       steps: [
         { id: "approve", kind: "approval", prompt: "Review revision", dependsOn: [] },
-        { id: "publish", kind: "publish", target: "pull_request", dependsOn: ["approve"] },
+        { id: "handoff", kind: "approval", prompt: "Review handoff", dependsOn: ["approve"] },
       ],
     }),
   );
