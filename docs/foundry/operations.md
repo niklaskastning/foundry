@@ -2,7 +2,7 @@
 
 Foundry serves the shared Web client and T3 backend at `http://127.0.0.1:3783`. The existing host `cloudflared` service should route `foundry.heavenforgeprod.com` to that origin. Keep Cloudflare Access enabled for this hostname, including HTTP and WebSocket paths. Do not expose port 3783 or PostgreSQL publicly.
 
-This isolated Main serves the instance registry, gateway, confirmed artifacts and thread archives. Instance PostgreSQL uses `fork_connect` with its own migrations; local T3 state remains in the separate SQLite store. Automation retains its separate database/migrations and is not activated by this profile. No application receives the database administrator credential. Owner roles cannot log in; the migration login stays disabled outside an explicit migration. The dedicated host worker is managed separately.
+This isolated Main serves the instance registry, gateway, confirmed artifacts and thread archives. Instance PostgreSQL uses `fork_connect` with its own migrations; local T3 state remains in the separate SQLite store. Automation retains its separate database/migrations and requires the explicit activation described below. No application receives the database administrator credential. Owner roles cannot log in; the migration login stays disabled outside an explicit migration. The dedicated host worker is managed separately.
 
 ## Development-VPS authorization
 
@@ -679,7 +679,7 @@ Durchgehende Main-/Client-Integration, Browser-Nachweis der Content-Isolation un
 
 ### Device-Freigaben und aktive Gateway-Sessions
 
-Instanzschema 5 trennt `clientAccess`, `automationExecution` und `sandboxProvisioning` pro Device mit eigener Generation. Die Migration erhält den bisherigen Client-Zugang registrierter, nicht widerrufener Devices; neue Enrollments erhalten nur `clientAccess`. Automation und Sandbox-Provisionierung bleiben deaktiviert und können über die API nicht freigegeben werden. Die Device-Registrierung und ihr dauerhafter Widerruf bleiben getrennt von dieser wiedererteilbaren Client-Freigabe.
+Instanzschema 5 trennt `clientAccess`, `automationExecution` und `sandboxProvisioning` pro Device mit eigener Generation. Die Migration erhält den bisherigen Client-Zugang registrierter, nicht widerrufener Devices; neue Enrollments erhalten nur `clientAccess`. Automation wird getrennt über die Device-Einstellungen oder den lokalen Betreiberbefehl freigegeben; Sandbox-Provisionierung bleibt gesperrt. Die Device-Registrierung und ihr dauerhafter Widerruf bleiben getrennt von dieser wiedererteilbaren Client-Freigabe.
 
 Am bestehenden Gateway sind POST `/api/foundry/gateway/grants/readAccess` (`deviceId`) und `/api/foundry/gateway/grants/updateAccess` (`deviceId`, `kind: "clientAccess"`, `enabled`, aktuelle `generation`) verfügbar. Beide benötigen die bestätigte Foundry-Session, Origin/CSRF und eine Main-T3-Session mit `access:write`. Jede erfolgreiche Änderung erhöht die Generation; ein veralteter Schreibstand wird abgewiesen. Die Verbindungseinstellungen bieten die interaktive Bedienung bei beworbener Capability `foundry.device-catalog`. Bestehendes `/remove` entfernt dagegen nur einen kurzlebigen Gateway-Grant dieser Client-Session.
 
@@ -691,7 +691,7 @@ Migration und Widerruf sind auf isoliertem Zustand zu prüfen, nicht als Image-o
 
 Mit aktiviertem Stream-Gateway bewirbt Main zusätzlich `foundry.device-catalog`. Nach bestätigter Instanzanmeldung und einer Main-T3-Session öffnet `/settings/connections` den Katalog. `Refresh devices` liest den aktuellen Stand; die Liste behält Offline-Geräte. Die Auswahl öffnet vorhandene Projekt-/Threadansichten über Main, ohne weiteres Pairing je Client/Device. Sie bleibt innerhalb dieses Browser-Tabs gespeichert; Wechsel und Trennen verwenden die bestehende Connection-Registry. Nach dem Trennen gibt es keinen automatischen Rückfall auf die direkte Main-Verbindung. Bereits gespeicherte persönliche T3-Verbindungen werden nicht überschrieben.
 
-Die Liste erfordert `orchestration:read`, Verwaltung zusätzlich `access:write`. Client-Zugriff lässt sich auch offline entziehen und erneut freigeben; `Revoke registration` beendet die Registrierung dauerhaft. Für eine neue Maschine zuerst mit der vorhandenen CLI den öffentlichen Device-Request erstellen, dessen Environment-ID und Public Key in den Einstellungen bestätigen und die kurzlebige Approval-Datei sicher zur Maschine übertragen. Der private Device-Schlüssel bleibt dort. Automation und Sandbox-Ausführung sind keine Katalogaktionen.
+Die Liste erfordert `orchestration:read`, Verwaltung zusätzlich `access:write`. Client-Zugriff lässt sich auch offline entziehen und erneut freigeben; `Revoke registration` beendet die Registrierung dauerhaft. Für eine neue Maschine zuerst mit der vorhandenen CLI den öffentlichen Device-Request erstellen, dessen Environment-ID und Public Key in den Einstellungen bestätigen und die kurzlebige Approval-Datei sicher zur Maschine übertragen. Der private Device-Schlüssel bleibt dort. Automation wird getrennt freigegeben und benötigt weiterhin die explizite Main-Konfiguration; Sandbox-Ausführung ist keine Katalogaktion.
 
 Vor einem Instanzwechsel führt `Manage instance sign-in` den lokalen Disconnect samt Registry-Aufräumen aus. Andere Clients behalten ihre eigene Auswahl, verlieren aber bei serverseitigem Entzug gemäß P11 den Zugriff. Die sichtbare Liste wird ausdrücklich aktualisiert; der Connection-Supervisor bleibt die einzige Reconnect-Steuerung.
 
@@ -748,7 +748,7 @@ Option bleibt der Checkout-Modus erhalten. Beide Modi benutzen dasselbe dauerhaf
 Journal pro Worker. Die reale G3-Abnahme ist im [aktuellen Plan](implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen)
 mit Evidence in PR #45 festgehalten. Die Factory-Aktivierung bleibt gesondert.
 
-## Automation-Persistenz und begrenzter Dispatch (P18a/P18b/P47/P19)
+## Automation-Persistenz, manueller Start und Steuerung (P18a/P18b/P47/P19–P21/P49)
 
 `apps/server/src/automation/` speichert gepinnte Runs und Definitionen. P19 ergänzt
 einen standardmäßig deaktivierten Scheduler im bestehenden Main-Prozess. Das
@@ -823,9 +823,9 @@ FOUNDRY_TEST_PG_BIN=/path/to/postgresql/bin vp run --filter t3 test:automation-p
 
 ### P19 gezielt aktivieren
 
-P19 besitzt keine Run-Steuerungsoberfläche. Pause/Resume/Cancel/Retry und Freigaben
-folgen in P20, manuelle Run-Ansicht in P21. Approval- und Publish-Steps warten;
-fachliche Fehler werden nicht wiederholt und halten den Worker-Slot konservativ.
+Die Factory-Ansichten bieten manuelle Starts, Run-Steuerung und eine persönliche
+Inbox. Fachliche Fehler werden nicht automatisch wiederholt; Publish-Steps besitzen
+eine revisionsgebundene Entscheidung, aber noch keinen GitHub-Publish-Adapter.
 Es gibt genau einen konfigurierten Worker und höchstens einen aktiven Run darauf.
 
 Vor Aktivierung eine separate Automation-Datenbank mit eigenem Migrator und
@@ -838,17 +838,38 @@ der gemeinsame Deployment-Lock; Instanzschema 7 und lokales T3-SQLite bleiben ge
 
 Die Main-Runtime verlangt bei `FOUNDRY_AUTOMATION_ENABLED=true` zusätzlich:
 
-- `FOUNDRY_AUTOMATION_DATABASE_URL`: separater Runtime-Pool, Schema 4;
+- `FOUNDRY_AUTOMATION_DATABASE_URL`: separater Runtime-Pool, Schema 5;
 - `FOUNDRY_AUTOMATION_TARGET`: JSON mit genau `deviceId`, `environmentId` und
   `allowedRunIds` (explizite eigene Fixture-Runs, höchstens 100);
 - den vorhandenen Gateway-/Artefaktbetrieb sowie eine bewusst erteilte
   `automationExecution`-Device-Freigabe zusätzlich zu `clientAccess`.
 
-Die bisherige Connections-Oberfläche vergibt diese Automation-Freigabe nicht.
+Die Automation-Freigabe ist in Connections getrennt von Client-Zugang sichtbar.
 Kein Flag, allgemeines Capability-Bit oder Deployment aktiviert bestehende Runs.
-Der installierte VPS-Updater kennt das deaktivierte Profil; ein aktiviertes Profil
-benötigt eine passende ausdrücklich konfigurierte Betreiberinstallation, keine
-ungeprüften zusätzlichen Variablen im bisherigen Updater.
+Ein Produktstart speichert eine ausdrückliche, dauerhafte Zulassung zusammen mit
+Run und Receipt; er erfordert eine aktuell aktive Definition und explizite
+Projekt-/Workerbindung. Die P19-Allowlist bleibt ausschließlich für den begrenzten
+Fixture-Enroll-Pfad bestehen.
+
+Auf der Entwicklungs-VPS aktiviert der geprüfte Betreiberpfad das Profil nach dem
+Image-Update ausdrücklich:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py automation enable <device-id> <environment-id>
+```
+
+Er sperrt den bestehenden Deployment-Lock, verifiziert die eigene leere
+`fork_automation`, provisioniert getrennte Rollen, migriert auf Schema 5 und schaltet
+den Migrator wieder auf NOLOGIN. Die Automation-Freigabe wird über denselben
+DeviceGrants-Service mit erwarteter Generation vergeben. Das Profil konfiguriert
+genau diesen Worker mit leerer Fixture-Allowlist. Bestehende Runs werden nicht
+zugelassen. Keine Credentials in Shell-Argumente oder Logs übernehmen.
+
+Das `automation-*/manifest.json` hält vorheriges Profil und Grant fest. Fehler stellen
+das Profil sowie den früheren Freigabewert mit neuer Generation wieder her;
+nicht bestätigbare Recovery lässt Main gestoppt. Die separate migrierte Datenbank
+bleibt inaktiv. Bei späteren Updates gehört sie zum Recovery-Bundle; Schema 5 darf
+nicht durch einen reinen Image-Downgrade auf Schema-4-Code zurückgesetzt werden.
 
 Für einen bereits über P18/P47 angelegten und freigegebenen Run nimmt der interne
 Service beziehungsweise `POST /api/foundry/automation/dispatch` den Vorgang
@@ -864,7 +885,7 @@ Die Bindung pinnt Provider-Modell, Projekt, Device- und Grant-Generationen sowie
 bestehende Sessionreferenzen. Sie speichert keine Credentials und verlängert keine
 Anmeldung. Logout, Refresh, Ablauf oder Widerruf blockieren weitere Zugriffe und
 Lease-Erneuerungen; die lokale Worker-Lease bleibt maßgeblich. P19 ersetzt dabei
-keinen Writer. Wiederaufnahme mit neuer Benutzerfreigabe gehört zu P20.
+keinen Writer. Wiederaufnahme benötigt aktuelle Benutzerautorisierung; alte Session- oder Grant-Generationen werden nicht wiederbelebt.
 
 Der Scheduler findet offene Arbeit nach Neustart aus PostgreSQL wieder. Claims
 werden vor Worker-/Archivzugriff committet; abgelaufene Claimgenerationen dürfen

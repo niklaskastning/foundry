@@ -725,6 +725,7 @@ try {
         environmentId: registered.environmentId,
         revoked: false,
         clientAccess: { enabled: true, generation: 1 },
+        automationExecution: { enabled: false, generation: 1 },
       },
     ]);
     NodeAssert.deepEqual(
@@ -756,11 +757,39 @@ try {
     await NodeAssert.rejects(
       grantCall((service) => service.update({ ...access, enabled: true }, operatorId)),
     );
-    for (const kind of ["automationExecution", "sandboxProvisioning"]) {
-      await NodeAssert.rejects(
-        grantCall((service) => service.update({ ...access, kind, enabled: true }, operatorId)),
-      );
-    }
+    await NodeAssert.rejects(
+      grantCall((service) =>
+        service.update({ ...access, kind: "sandboxProvisioning", enabled: true }, operatorId),
+      ),
+    );
+    const automation = initialGrants.find((grant) => grant.kind === "automationExecution")!;
+    const automationEnabled = await grantCall((service) =>
+      service.update({ ...automation, enabled: true }, operatorId),
+    );
+    NodeAssert.equal(automationEnabled.enabled, true);
+    NodeAssert.equal(automationEnabled.generation, automation.generation + 1);
+    await NodeAssert.rejects(
+      grantCall((service) => service.update({ ...automation, enabled: false }, operatorId)),
+    );
+    await NodeAssert.rejects(
+      grantCall((service) =>
+        service.update(
+          { ...automationEnabled, enabled: false },
+          "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        ),
+      ),
+    );
+    const automationDisabled = await grantCall((service) =>
+      service.update({ ...automationEnabled, enabled: false }, operatorId),
+    );
+    NodeAssert.equal(automationDisabled.generation, automationEnabled.generation + 1);
+    NodeAssert.equal(automationDisabled.enabled, false);
+    NodeAssert.equal(
+      (await grantCall((service) => service.read(registered.deviceId, operatorId))).find(
+        (grant) => grant.kind === "clientAccess",
+      )?.generation,
+      disabled.generation,
+    );
     const restored = await grantCall((service) =>
       service.update({ ...disabled, enabled: true }, operatorId),
     );
@@ -787,7 +816,9 @@ try {
       (await grantCall((service) => service.read(registered.deviceId, operatorId))).filter(
         (g) => g.kind !== "clientAccess",
       ),
-      initialGrants.filter((g) => g.kind !== "clientAccess"),
+      initialGrants
+        .filter((g) => g.kind !== "clientAccess")
+        .map((grant) => (grant.kind === "automationExecution" ? automationDisabled : grant)),
     );
     await report(
       "PASS P11 PostgreSQL: separated grant kinds, durable revoke/regrant generations, stale update rejection, operator isolation and idempotent migration",
@@ -880,6 +911,9 @@ try {
     const revoked = await deviceCall((registry) => registry.get(registered.deviceId));
     NodeAssert.equal(revoked.revoked, true);
     NodeAssert.equal(revoked.generation, 2);
+    await NodeAssert.rejects(
+      grantCall((service) => service.update({ ...automationDisabled, enabled: true }, operatorId)),
+    );
     NodeAssert.equal(
       (await deviceCall((registry) => registry.list(operatorId))).find(
         (device) => device.deviceId === registered.deviceId,

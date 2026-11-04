@@ -28,6 +28,122 @@ def main_container():
 
 
 class ActivationTest(unittest.TestCase):
+    def test_automation_profile_requires_separate_database_and_explicit_empty_admission(self):
+        secret = 'a' * 64
+        base = {
+            'FOUNDRY_INSTANCE_STORE':'postgres','FOUNDRY_ACCESS_ENABLED':'true',
+            'FOUNDRY_INSTANCE_DATABASE_URL':f'postgresql://foundry_instance_runtime:{secret}@postgres:5432/fork_connect',
+            'FOUNDRY_ACCESS_ISSUER':activate.ISSUER,'FOUNDRY_ACCESS_AUDIENCE':secret,'FOUNDRY_PUBLIC_ORIGIN':activate.ORIGIN,
+            **dict.fromkeys(activate.GATEWAY_FLAGS,'true'),'FOUNDRY_ARTIFACTS_ENABLED':'true',
+            'FOUNDRY_AUTOMATION_ENABLED':'true',
+            'FOUNDRY_AUTOMATION_DATABASE_URL':f'postgresql://foundry_automation_runtime:{secret}@postgres:5432/fork_automation',
+            'FOUNDRY_AUTOMATION_TARGET':json.dumps({'deviceId':'a'*8+'-'+ 'a'*4+'-'+ 'a'*4+'-'+ 'a'*4+'-'+ 'a'*12,'environmentId':'b'*8+'-'+ 'b'*4+'-'+ 'b'*4+'-'+ 'b'*4+'-'+ 'b'*12,'allowedRunIds':[]}),
+        }
+        for change in [None, 'database', 'role', 'partial', 'artifact', 'old-runs', 'target-field']:
+            with self.subTest(change=change):
+                values = dict(base)
+                if change == 'database': values['FOUNDRY_AUTOMATION_DATABASE_URL'] = values['FOUNDRY_INSTANCE_DATABASE_URL']
+                if change == 'role': values['FOUNDRY_AUTOMATION_DATABASE_URL'] = values['FOUNDRY_AUTOMATION_DATABASE_URL'].replace('runtime','migrator')
+                if change == 'partial': del values['FOUNDRY_AUTOMATION_TARGET']
+                if change == 'artifact': del values['FOUNDRY_ARTIFACTS_ENABLED']
+                if change in ['old-runs','target-field']:
+                    target = json.loads(values['FOUNDRY_AUTOMATION_TARGET'])
+                    if change == 'old-runs': target['allowedRunIds'] = ['legacy']
+                    else: target['workerPool'] = '*'
+                    values['FOUNDRY_AUTOMATION_TARGET'] = json.dumps(target)
+                text = ''.join(f'{key}={value}\n' for key,value in values.items())
+                if change is None: self.assertEqual(activate.parse_runtime(text),values)
+                else:
+                    with self.assertRaises(RuntimeError): activate.parse_runtime(text)
+
+    def test_automation_grant_activation_and_recovery_use_the_service_at_current_generation(self):
+        device_id = '22222222-2222-4222-8222-222222222222'
+        environment_id = '33333333-3333-4333-8333-333333333333'
+        instance_id = '11111111-1111-4111-8111-111111111111'
+        for initial_enabled, failure in [(False,None),(True,None),(False,'grant-before'),(False,'grant-after'),(False,'verify'),(True,'verify'),(False,'recovery')]:
+            with self.subTest(initial_enabled=initial_enabled,failure=failure), tempfile.TemporaryDirectory() as directory:
+                config, state = Path(directory)/'config', Path(directory)/'state'
+                config.mkdir(); state.mkdir()
+                secret = 'a'*64
+                values = {'FOUNDRY_INSTANCE_STORE':'postgres','FOUNDRY_ACCESS_ENABLED':'true',
+                    'FOUNDRY_INSTANCE_DATABASE_URL':f'postgresql://foundry_instance_runtime:{secret}@postgres:5432/fork_connect',
+                    'FOUNDRY_ACCESS_ISSUER':activate.ISSUER,'FOUNDRY_ACCESS_AUDIENCE':secret,'FOUNDRY_PUBLIC_ORIGIN':activate.ORIGIN,
+                    **dict.fromkeys(activate.GATEWAY_FLAGS,'true'),'FOUNDRY_ARTIFACTS_ENABLED':'true'}
+                original = ''.join(f'{key}={value}\n' for key,value in values.items())
+                (config/'access-runtime.env').write_text(original)
+                (config/'access-compose.json').write_text('{}')
+                previous = {'automationEnabled':False,'artifactsEnabled':True,'image':activate.REGISTRY+'@'+DIGEST,'revision':REVISION,'instanceId':instance_id}
+                grant = {'enabled':initial_enabled,'generation':7,'deviceGeneration':2,'instanceId':instance_id,
+                    'operatorId':'44444444-4444-4444-8444-444444444444','environmentId':environment_id,'clientEnabled':True}
+                before = dict(grant)
+                calls = []
+                running = True
+                statuses = 0
+                def status(expected_schema=None):
+                    nonlocal statuses
+                    statuses += 1
+                    if statuses == 2 and failure in ['verify','recovery']: raise RuntimeError('verification failed')
+                    return {**previous,'automationEnabled':'FOUNDRY_AUTOMATION_ENABLED=true' in (config/'access-runtime.env').read_text()}
+                def sql(statement,database='fork_connect'):
+                    self.assertNotIn('UPDATE foundry_instance.device_grants',statement)
+                    if "'database', current_database()" in statement:
+                        return json.dumps({'database':'fork_automation','owner':'foundry_automation_owner','objects':0,'schemas':0,'roles':0})
+                    if "'enabled',g.enabled" in statement: return json.dumps(grant)
+                    return ''
+                def docker(*args,**kwargs):
+                    nonlocal running
+                    if args[0] == 'stop': running=False
+                    return ''
+                def start_main():
+                    nonlocal running
+                    running=True
+                def cli(image,env_file,*args):
+                    calls.append(args)
+                    self.assertFalse(running)
+                    if args[0] != 'automation-access': return
+                    self.assertEqual(args[args.index('--device-id')+1],device_id)
+                    self.assertEqual(args[args.index('--environment-id')+1],environment_id)
+                    self.assertEqual(int(args[args.index('--generation')+1]),grant['generation'])
+                    enabled = args[args.index('--enabled')+1] == 'true'
+                    if enabled and failure == 'grant-before': raise RuntimeError('service rejected before commit')
+                    if not enabled and failure == 'recovery': raise RuntimeError('recovery service unavailable')
+                    grant['enabled']=enabled; grant['generation']+=1
+                    if enabled and failure == 'grant-after': raise RuntimeError('service response lost after commit')
+                with patch.object(activate,'CONFIG',config),patch.object(activate,'STATE',state), \
+                     patch.object(activate,'active_status',status),patch.object(activate,'inspect',return_value={}), \
+                     patch.object(activate,'check_postgres'),patch.object(activate,'sql',sql), \
+                     patch.object(activate,'docker',docker),patch.object(activate,'start_main',start_main), \
+                     patch.object(activate,'run_cli',cli),patch('sys.stdout',io.StringIO()),patch('sys.stderr',io.StringIO()):
+                    if failure:
+                        with self.assertRaises(RuntimeError): activate.enable_automation(device_id,environment_id)
+                    else: activate.enable_automation(device_id,environment_id)
+                backup=next(state.iterdir())
+                self.assertEqual(json.loads((backup/'manifest.json').read_text())['previousAutomationGrant'],before)
+                self.assertEqual((backup/'success').exists(),failure is None)
+                self.assertFalse((backup/'migration.env').exists())
+                if failure:
+                    self.assertEqual((config/'access-runtime.env').read_text(),original)
+                    self.assertEqual(grant['enabled'],True if failure == 'recovery' else initial_enabled)
+                    self.assertEqual(running,failure != 'recovery')
+                else:
+                    self.assertTrue(grant['enabled']); self.assertTrue(running)
+                access_calls=[call for call in calls if call[0]=='automation-access']
+                if initial_enabled: self.assertEqual(access_calls,[])
+                elif failure in ['grant-after','verify','recovery']: self.assertEqual(len(access_calls),2)
+                else: self.assertEqual(len(access_calls),1)
+
+    def test_automation_target_requires_verified_owner_instance_and_current_grant(self):
+        device_id='22222222-2222-4222-8222-222222222222'
+        environment_id='33333333-3333-4333-8333-333333333333'
+        instance_id='11111111-1111-4111-8111-111111111111'
+        grant={'enabled':False,'generation':1,'deviceGeneration':1,'instanceId':instance_id,
+            'operatorId':'44444444-4444-4444-8444-444444444444','environmentId':environment_id,'clientEnabled':True}
+        for value in ['',json.dumps({**grant,'instanceId':'foreign'}),json.dumps({**grant,'environmentId':'foreign'}),json.dumps({**grant,'generation':0})]:
+            with self.subTest(value=value),patch.object(activate,'sql',return_value=value):
+                with self.assertRaises(RuntimeError): activate.automation_grant(device_id,environment_id,instance_id)
+        with patch.object(activate,'sql',return_value=json.dumps(grant)):
+            self.assertEqual(activate.automation_grant(device_id,environment_id,instance_id),grant)
+
     def test_active_status_is_read_only_and_rejects_drift_without_disclosing_secrets(self):
         for drift in [None, 'environment', 'compose', 'schema', 'identity', 'migrator', 'permissions', 'gateway-on', 'gateway-v6', 'gateway-v7', 'gateway-capability', 'gateway-schema', 'artifacts-on', 'artifacts-v7', 'archive-missing', 'artifacts-missing', 'artifacts-schema']:
             with self.subTest(drift=drift), tempfile.TemporaryDirectory() as directory:

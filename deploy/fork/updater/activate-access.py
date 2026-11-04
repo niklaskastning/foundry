@@ -33,6 +33,7 @@ GATEWAY_CAPABILITIES = {
 }
 ARTIFACT_FLAG = 'FOUNDRY_ARTIFACTS_ENABLED'
 ARTIFACT_TRANSFER = {'protocolVersion': '1', 'chunkBytes': 262144, 'maxBytes': 52428800}
+AUTOMATION_KEYS = {'FOUNDRY_AUTOMATION_ENABLED', 'FOUNDRY_AUTOMATION_DATABASE_URL', 'FOUNDRY_AUTOMATION_TARGET'}
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': '/root'}
 
 
@@ -93,7 +94,18 @@ def parse_runtime(text):
     if any(len(entry) != 2 for entry in entries) or len(dict(entries)) != len(entries):
         raise RuntimeError('Unexpected active runtime configuration.')
     values = dict(entries)
-    extra = set(values) - expected - {ARTIFACT_FLAG}
+    extra = set(values) - expected - {ARTIFACT_FLAG} - AUTOMATION_KEYS
+    automation = AUTOMATION_KEYS.intersection(values)
+    if automation:
+        if (automation != AUTOMATION_KEYS or values['FOUNDRY_AUTOMATION_ENABLED'] != 'true'
+                or values.get(ARTIFACT_FLAG) != 'true'
+                or not re.fullmatch(r'postgresql://foundry_automation_runtime:[a-f0-9]{64}@postgres:5432/fork_automation', values['FOUNDRY_AUTOMATION_DATABASE_URL'])):
+            raise RuntimeError('Automation requires its complete separate database profile.')
+        target = json.loads(values['FOUNDRY_AUTOMATION_TARGET'])
+        if (set(target) != {'deviceId', 'environmentId', 'allowedRunIds'}
+                or any(not isinstance(target[key], str) or not re.fullmatch(r'[a-f0-9-]{36}', target[key]) for key in ['deviceId', 'environmentId'])
+                or target['allowedRunIds'] != []):
+            raise RuntimeError('Product automation requires one explicit worker and no legacy fixture allowlist.')
     if extra and (extra != set(GATEWAY_FLAGS) or any(values[key] != 'true' for key in GATEWAY_FLAGS)):
         raise RuntimeError('Supply either no gateway flags or the complete enabled gateway profile.')
     if ARTIFACT_FLAG in values and (values[ARTIFACT_FLAG] != 'true' or extra != set(GATEWAY_FLAGS)):
@@ -163,7 +175,13 @@ def active_status(expected_schema=None):
     if descriptor.get('threadArchive') != ({'protocolVersion': '1', 'pageSize': 50}
             if artifacts_enabled and database['version'] == 7 else None):
         raise RuntimeError('Thread archive metadata differs from the configured profile or schema.')
-    return {'gatewayEnabled': gateway_enabled, 'artifactsEnabled': artifacts_enabled, 'revision': revision, 'image': configured_image, 'schemaVersion': database['version'],
+    automation_enabled = values.get('FOUNDRY_AUTOMATION_ENABLED') == 'true'
+    if descriptor.get('automation') != ({'protocolVersion': '1'} if automation_enabled else None):
+        raise RuntimeError('Automation capability differs from configured profile.')
+    if automation_enabled:
+        if sql("BEGIN READ ONLY; SELECT version FROM foundry_automation.schema_version; COMMIT;", database='fork_automation') != '5':
+            raise RuntimeError('Automation schema is incompatible.')
+    return {'automationEnabled': automation_enabled, 'gatewayEnabled': gateway_enabled, 'artifactsEnabled': artifacts_enabled, 'revision': revision, 'image': configured_image, 'schemaVersion': database['version'],
             'instanceId': INSTANCE, 'environmentId': ENVIRONMENT, 'ready': True,
             'operatorBound': True, 'migratorLogin': False, 'configurationMatches': True,
             'upgradePerformed': False}
@@ -255,6 +273,8 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archi
         save(backup / 'state.tar', 'cp', f'{MAIN}:/var/lib/foundry/.', '-')
         save(backup / 'workspaces.tar', 'cp', f'{MAIN}:/workspaces/.', '-')
         save(backup / 'fork_connect.dump', 'exec', POSTGRES, 'pg_dump', '-U', 'foundry_admin', '-Fc', 'fork_connect')
+        if previous.get('automationEnabled'):
+            save(backup / 'fork_automation.dump', 'exec', POSTGRES, 'pg_dump', '-U', 'foundry_admin', '-Fc', 'fork_automation')
         save(backup / 'roles.sql', 'exec', POSTGRES, 'pg_dumpall', '-U', 'foundry_admin', '--roles-only')
         docker('exec', '-i', POSTGRES, 'pg_restore', '--list', data=(backup / 'fork_connect.dump').read_bytes())
         if sql("SELECT count(*) FROM pg_stat_activity WHERE datname='fork_connect' AND pid<>pg_backend_pid();") != '0':
@@ -307,9 +327,9 @@ def check_postgres(current):
         raise RuntimeError('PostgreSQL is not the expected private Foundry deployment.')
 
 
-def sql(statement):
+def sql(statement, database='fork_connect'):
     return docker('exec', '-i', POSTGRES, 'psql', '-X', '-qAt', '--set', 'ON_ERROR_STOP=1',
-                  '-U', 'foundry_admin', '-d', 'fork_connect', data=statement.encode())
+                  '-U', 'foundry_admin', '-d', database, data=statement.encode())
 
 
 def check_empty_database():
@@ -481,15 +501,130 @@ def activate(digest, revision):
         raise
 
 
+
+def automation_grant(device_id, environment_id, instance_id):
+    row = sql(f"""BEGIN READ ONLY; SELECT json_build_object(
+      'enabled',g.enabled,'generation',g.generation,'deviceGeneration',d.generation,
+      'instanceId',d.instance_id,'operatorId',d.operator_id,'environmentId',d.environment_id,
+      'clientEnabled',c.enabled)
+      FROM foundry_instance.devices d
+      JOIN foundry_instance.instance i ON i.instance_id=d.instance_id
+      JOIN foundry_instance.operator_binding b ON b.singleton=i.singleton AND b.operator_id=d.operator_id
+      JOIN foundry_instance.device_grants g ON g.device_id=d.device_id AND g.kind='automationExecution'
+      JOIN foundry_instance.device_grants c ON c.device_id=d.device_id AND c.kind='clientAccess'
+      WHERE d.device_id='{device_id}' AND d.environment_id='{environment_id}' AND NOT d.revoked; COMMIT;""")
+    if not row:
+        raise RuntimeError('The selected worker is not owned by the verified instance operator.')
+    grant = json.loads(row)
+    if (grant.get('instanceId') != instance_id or grant.get('environmentId') != environment_id
+            or type(grant.get('enabled')) is not bool or type(grant.get('clientEnabled')) is not bool or type(grant.get('generation')) is not int
+            or grant['generation'] < 1 or type(grant.get('deviceGeneration')) is not int
+            or grant['deviceGeneration'] < 1 or not re.fullmatch(r'[a-f0-9-]{36}',grant.get('operatorId',''))):
+        raise RuntimeError('The selected worker grant does not match the verified instance binding.')
+    return grant
+
+
+def change_automation_grant(image, device_id, environment_id, expected, enabled):
+    run_cli(image, CONFIG / 'access-runtime.env', 'automation-access', '--base-dir', '/var/lib/foundry',
+            '--device-id', device_id, '--environment-id', environment_id,
+            '--generation', str(expected['generation']), '--enabled', str(enabled).lower())
+    current = automation_grant(device_id, environment_id, expected['instanceId'])
+    if (current != {**expected,'enabled':enabled,'generation':expected['generation']+1}):
+        raise RuntimeError('Automation grant service did not confirm the expected generation.')
+    return current
+
+
+def enable_automation(device_id, environment_id):
+    if any(not re.fullmatch(r'[a-f0-9-]{36}', value) for value in [device_id, environment_id]):
+        raise ValueError('Supply explicit device and environment UUIDs.')
+    previous = active_status(expected_schema=7)
+    if previous.get('automationEnabled') or not previous['artifactsEnabled']:
+        raise RuntimeError('Automation must be inactive and archive transfers enabled.')
+    check_postgres(inspect(POSTGRES))
+    state = json.loads(sql("""BEGIN READ ONLY; SELECT json_build_object(
+      'database', current_database(),
+      'owner', (SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname=current_database()),
+      'objects', (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname !~ '^pg_' AND n.nspname<>'information_schema'),
+      'schemas', (SELECT count(*) FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname NOT IN ('public','information_schema')),
+      'roles', (SELECT count(*) FROM pg_roles WHERE rolname IN ('foundry_automation_runtime','foundry_automation_migrator'))); COMMIT;""", database='fork_automation'))
+    if state != {'database':'fork_automation','owner':'foundry_automation_owner','objects':0,'schemas':0,'roles':0}:
+        raise RuntimeError('Expected the verified empty Automation database and absent runtime roles.')
+    previous_grant = automation_grant(device_id, environment_id, previous['instanceId'])
+    if not previous_grant['clientEnabled']:
+        raise RuntimeError('The selected worker requires its independent client access grant.')
+    backup = Path(tempfile.mkdtemp(prefix='automation-', dir=STATE))
+    write_private(backup / 'manifest.json', json.dumps({'previous':previous,'targetRevision':previous['revision'],'automationSchema':5,'previousAutomationGrant':previous_grant,'recovery':'Restore previous runtime profile and selected worker grant through automation-access at its current generation; keep separate Automation database inactive. No image downgrade.'},indent=2)+'\n')
+    for name in ['access-runtime.env','access-compose.json']:
+        write_private(backup / name, (CONFIG / name).read_text())
+    runtime_password, migration_password = secrets.token_hex(32), secrets.token_hex(32)
+    migration_file = backup / 'migration.env'
+    docker('stop','--time','60',MAIN)
+    grant_change_attempted = False
+    expected_grant = previous_grant
+    try:
+        sql(f"""BEGIN;
+          CREATE ROLE foundry_automation_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '{migration_password}';
+          CREATE ROLE foundry_automation_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '{runtime_password}';
+          REVOKE ALL ON DATABASE fork_automation FROM PUBLIC;
+          REVOKE ALL ON SCHEMA public FROM PUBLIC;
+          GRANT CONNECT,CREATE ON DATABASE fork_automation TO foundry_automation_migrator;
+          GRANT CONNECT ON DATABASE fork_automation TO foundry_automation_runtime; COMMIT;""", database='fork_automation')
+        write_private(migration_file, f'FOUNDRY_AUTOMATION_MIGRATION_URL=postgresql://foundry_automation_migrator:{migration_password}@postgres:5432/fork_automation\n')
+        try:
+            run_cli(previous['image'],migration_file,'automation-migrate','--database','fork_automation','--runtime-role','foundry_automation_runtime')
+        finally:
+            sql('ALTER ROLE foundry_automation_migrator NOLOGIN PASSWORD NULL;')
+            migration_file.unlink(missing_ok=True)
+        if not previous_grant['enabled']:
+            grant_change_attempted = True
+            expected_grant = change_automation_grant(previous['image'],device_id,environment_id,previous_grant,True)
+        target = json.dumps({'deviceId':device_id,'environmentId':environment_id,'allowedRunIds':[]},separators=(',',':'))
+        text = (backup / 'access-runtime.env').read_text() + f'FOUNDRY_AUTOMATION_ENABLED=true\nFOUNDRY_AUTOMATION_DATABASE_URL=postgresql://foundry_automation_runtime:{runtime_password}@postgres:5432/fork_automation\nFOUNDRY_AUTOMATION_TARGET={target}\n'
+        parse_runtime(text)
+        candidate = backup / 'candidate-runtime.env'
+        write_private(candidate,text)
+        os.replace(candidate,CONFIG / 'access-runtime.env')
+        start_main()
+        result = active_status(expected_schema=7)
+        current_grant = automation_grant(device_id,environment_id,previous['instanceId'])
+        if current_grant != expected_grant:
+            raise RuntimeError('The configured automation worker grant is not enabled.')
+        write_private(backup / 'success',previous['revision']+'\n')
+        print(json.dumps({**result,'recovery':str(backup),'existingRunsActivated':False,'automationGrantGeneration':current_grant['generation']},indent=2))
+    except BaseException:
+        docker('stop','--time','60',MAIN)
+        rollback = backup / 'rollback-runtime.env'
+        write_private(rollback,(backup / 'access-runtime.env').read_text())
+        os.replace(rollback,CONFIG / 'access-runtime.env')
+        try:
+            if grant_change_attempted:
+                current_grant = automation_grant(device_id,environment_id,previous['instanceId'])
+                if current_grant != previous_grant:
+                    if current_grant != {**previous_grant,'enabled':True,'generation':previous_grant['generation']+1}:
+                        raise RuntimeError('Worker grant changed independently; automatic recovery will not overwrite it.')
+                    change_automation_grant(previous['image'],device_id,environment_id,current_grant,previous_grant['enabled'])
+            start_main()
+            restored = active_status(expected_schema=7)
+            if any(restored[key] != previous[key] for key in ['automationEnabled','image','revision','instanceId']):
+                raise RuntimeError('The inactive runtime profile could not be verified after recovery.')
+        except BaseException:
+            docker('stop','--time','60',MAIN)
+            print(f'Main stays stopped; restore the recorded worker grant and inactive runtime profile using {backup}.',file=sys.stderr)
+            raise
+        print(f'Automation remains inactive and the prior worker grant state is restored. Recovery: {backup}',file=sys.stderr)
+        raise
+
 def main(args):
-    if args not in [['preflight'], ['status'], ['gateway', 'enable'], ['gateway', 'disable'], ['artifacts', 'enable'], ['artifacts', 'disable']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade', 'upgrade-artifacts', 'upgrade-archive', 'update']):
+    if not (len(args) == 4 and args[:2] == ['automation', 'enable']) and args not in [['preflight'], ['status'], ['gateway', 'enable'], ['gateway', 'disable'], ['artifacts', 'enable'], ['artifacts', 'disable']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade', 'upgrade-artifacts', 'upgrade-archive', 'update']):
         raise ValueError('Usage: foundry-activate-access status | preflight | gateway|artifacts enable|disable | activate|upgrade|upgrade-artifacts|upgrade-archive|update sha256:<digest> <source-sha>')
     if os.geteuid() != 0:
         raise RuntimeError('This operation requires the administrator; no sudo grant is installed.')
     os.umask(0o077)
     with (STATE / 'lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if args == ['status']:
+        if args[:2] == ['automation','enable']:
+            enable_automation(*args[2:])
+        elif args == ['status']:
             print(json.dumps(active_status(), indent=2))
         elif args[0] in ['gateway', 'artifacts']:
             gateway(args[1] == 'enable', artifacts=args[0] == 'artifacts')
