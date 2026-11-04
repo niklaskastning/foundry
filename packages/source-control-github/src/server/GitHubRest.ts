@@ -5,9 +5,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/http";
+import { HttpClient, HttpClientRequest } from "effect/http";
+import * as Redacted from "effect/Redacted";
+import { sendAuthenticated } from "./GitHubHttp.ts";
 
-import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
 import * as GitHubAppSignIn from "./GitHubAppSignIn.ts";
 import * as GitHubCredentials from "./GitHubCredentials.ts";
 import * as GitHubQuota from "./GitHubQuota.ts";
@@ -143,29 +144,12 @@ export const make = Effect.gen(function* () {
       },
       (headers) =>
         Effect.gen(function* () {
-          const response: HttpClientResponse.HttpClientResponse = yield* httpClient
-            .execute(input.request.pipe(HttpClientRequest.setHeaders(headers)))
-            .pipe(
-              // Client spans expose SHAs and branches through url.full/url.query.
-              Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
-            );
-          const collected = yield* collectUint8StreamText({
-            stream: response.stream,
-            maxBytes: input.maxResponseBytes,
-          }).pipe(
-            Effect.catchIf(
-              (error) => error.reason._tag === "EmptyBodyError",
-              () => Effect.succeed({ text: "", truncated: false, invalidUtf8: false }),
-            ),
-          );
-          const { status, headers: responseHeaders } = response;
-          const answer = {
-            status,
-            headers: responseHeaders,
-            body: collected.text,
-            truncated: collected.truncated,
-            invalidUtf8: collected.invalidUtf8,
-          };
+          const answer = yield* sendAuthenticated(httpClient, {
+            request: input.request,
+            authorization: Redacted.make(headers.authorization!),
+            headers,
+            maxResponseBytes: input.maxResponseBytes,
+          });
           return classify({ answer, acceptNotModified: input.acceptNotModified });
         }).pipe(
           Effect.mapError(

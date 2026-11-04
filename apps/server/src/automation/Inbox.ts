@@ -88,7 +88,15 @@ const make = Effect.gen(function* () {
                 AND decision.result_revision=o.result_revision AND decision.revision=(
                   SELECT max(latest.revision) FROM foundry_automation.run_decisions latest
                   WHERE latest.run_id=o.run_id AND latest.step_id=decision.step_id)),s.step::text,
-          'Approval: ' || o.title,COALESCE(s.step->>'prompt','Review the current result before publication.')
+          'Approval: ' || o.title,CASE WHEN s.step->>'kind'='publish' THEN
+            COALESCE((SELECT 'Publish commit ' || (a.result->'execution'->'lifecycle'->'manifest'->'publishEvidence'->>'commitSha')
+              || ' to ' || (a.result->'execution'->'lifecycle'->'manifest'->'publishEvidence'->>'repository')
+              || '. Review the confirmed checks and bundle in the run result before approving.'
+              FROM foundry_automation.step_attempts a WHERE a.run_id=o.run_id
+                AND a.result->'execution'->'lifecycle'->'manifest'->'publishEvidence' IS NOT NULL
+              ORDER BY a.ordinal DESC,a.attempt_number DESC LIMIT 1),
+              'No confirmed publish commit. Publishing stays blocked until matching commit and test evidence exists.')
+            ELSE COALESCE(s.step->>'prompt','Review the current result before publication.') END
         FROM owned o CROSS JOIN LATERAL (
           SELECT step,ordinality FROM jsonb_array_elements(o.steps) WITH ORDINALITY AS steps(step,ordinality)
           WHERE NOT EXISTS (SELECT 1 FROM foundry_automation.step_attempts a

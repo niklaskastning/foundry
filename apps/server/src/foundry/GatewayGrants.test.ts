@@ -5,6 +5,7 @@ import { expect, it } from "@effect/vitest";
 import {
   ORCHESTRATION_PROTOCOL_VERSION,
   EnvironmentId,
+  ProjectId,
   FoundryInstanceId,
   FoundryDeviceId,
   FoundryAuthError,
@@ -911,4 +912,67 @@ it.effect("reads Automation ownership with a read-only session while the device 
       (yield* f.grants.identityForRead(f.request(f.read.token)).pipe(Effect.result))._tag,
     ).toBe("Failure");
   }).pipe(Effect.scoped),
+);
+
+it.effect.each(["delegation", "device", "access", "automation"] as const)(
+  "keeps explicit unattended authority session-independent and revokes %s",
+  (action) =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const client = yield* f.sessions.issue({
+        scopes: ["orchestration:read", "orchestration:operate"],
+        subject: "unattended-owner",
+        method: "bearer-access-token",
+      });
+      f.setAutomation(true);
+      const manual = yield* f.grants.authorizeAutomation(f.request(client.token), f.target);
+      const identity = {
+        authority: "unattended" as const,
+        instanceId: manual.instanceId,
+        operatorId: manual.operatorId,
+        deviceId: manual.deviceId,
+        environmentId: manual.environmentId,
+        deviceGeneration: manual.deviceGeneration,
+        accessGeneration: manual.accessGeneration,
+        automationGeneration: manual.automationGeneration,
+        bindingId: "binding",
+        bindingGeneration: 1,
+        projectId: ProjectId.make("explicit-project"),
+        workflowVersionId: "pinned-workflow",
+      };
+      const socket = Socket.make({ reader: Effect.die("unused"), writer: Effect.die("unused") });
+      let granted = true;
+      let checks = 0;
+      const authorize = Effect.suspend(() => {
+        checks++;
+        return granted ? Effect.void : Effect.fail(new FoundryGatewayError({ code: "forbidden" }));
+      });
+      let frameCheck: Effect.Effect<void, FoundryGatewayError> = Effect.die("not opened");
+      f.setStream((grant, validate) => {
+        expect(grant.clientSessionId).toBe("automation:binding");
+        frameCheck = validate;
+        return validate;
+      });
+      expect((yield* f.grants.openAutomation(identity, socket).pipe(Effect.result))._tag).toBe(
+        "Failure",
+      );
+      yield* f.sessions.revoke(client.sessionId);
+      f.logout();
+      yield* TestClock.adjust("11 minutes");
+      yield* f.grants.openAutomation(identity, socket, authorize);
+      expect(checks).toBeGreaterThan(1);
+      if (action === "delegation") granted = false;
+      else if (action === "device") f.revoke();
+      else if (action === "access") {
+        f.setAccess(false);
+        f.setAccess(true);
+      } else {
+        f.setAutomation(false);
+        f.setAutomation(true);
+      }
+      expect((yield* frameCheck.pipe(Effect.result))._tag).toBe("Failure");
+      expect(
+        (yield* f.grants.openAutomation(identity, socket, authorize).pipe(Effect.result))._tag,
+      ).toBe("Failure");
+    }).pipe(Effect.scoped),
 );

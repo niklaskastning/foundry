@@ -100,9 +100,24 @@ export function validateFactoryFiles(
     referenced.add(workflow.file);
     const decoded = parse(workflow.file, content, decodeWorkflow);
     if (Result.isFailure(decoded)) return Result.fail(decoded.failure);
+    const steps = decoded.success.steps;
+    const publishIndex = steps.findIndex((step) => step.kind === "publish");
+    if (
+      publishIndex >= 0 &&
+      (publishIndex !== steps.length - 1 ||
+        steps.findLast((step) => step.kind === "agent" || step.kind === "test")?.kind !== "test")
+    )
+      return Result.fail([
+        {
+          file: workflow.file,
+          path: ["steps"],
+          message:
+            "Publishing requires one final publish step after a test; only approval steps may follow that test.",
+        },
+      ]);
     workflows.push({
       id: workflow.id,
-      steps: decoded.success.steps.map((step) => ({
+      steps: steps.map((step) => ({
         ...step,
         dependsOn: [...step.dependsOn].sort(),
       })),

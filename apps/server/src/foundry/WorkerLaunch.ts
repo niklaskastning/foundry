@@ -1,3 +1,5 @@
+import * as WorkerPublishEvidence from "./WorkerPublishEvidence.ts";
+import { FoundryPublishRequest } from "@t3tools/contracts";
 import { WorkspaceGate } from "./workspaces/WorkspaceGate.ts";
 import * as ProviderSessions from "../orchestration-v2/ProviderSessionManager.ts";
 import * as RuntimePolicy from "../orchestration-v2/RuntimePolicy.ts";
@@ -68,7 +70,7 @@ export function workerLaunchIds(input: FoundryWorkerLaunchInput, binding: string
   return {
     commandId: CommandId.make(`foundry-launch:${key}`),
     threadId: ThreadId.make(
-      `foundry-launch:${digest(JSON.stringify([1, key, binding, input.projectId, input.title, input.model, input.prompt, ...(input.workspaceMode === "worktree" ? ["worktree"] : []), ...(input.previousExecution ? [input.previousExecution.commandId, input.previousExecution.generation] : []), ...(input.inputArtifacts?.length ? [input.inputArtifacts.map((item) => [item.reference.instanceId, item.reference.artifactId, item.reference.owner.environmentId, item.reference.owner.threadId, item.name, item.mimeType, item.sizeBytes, item.sha256])] : [])]))}`,
+      `foundry-launch:${digest(JSON.stringify([1, key, binding, input.projectId, input.title, input.model, input.prompt, ...(input.workspaceMode === "worktree" ? ["worktree"] : []), ...(input.previousExecution ? [input.previousExecution.commandId, input.previousExecution.generation] : []), ...(input.publishEvidence ? [input.publishEvidence] : []), ...(input.inputArtifacts?.length ? [input.inputArtifacts.map((item) => [item.reference.instanceId, item.reference.artifactId, item.reference.owner.environmentId, item.reference.owner.threadId, item.name, item.mimeType, item.sizeBytes, item.sha256])] : [])]))}`,
     ),
   };
 }
@@ -120,6 +122,7 @@ export const layer = Layer.effect(
     const checkpoints = yield* CheckpointStore.CheckpointStore;
     const handoffs = yield* Semaphore.make(1);
     const launchLane = yield* Semaphore.make(1);
+    const evidenceLane = yield* Semaphore.make(1);
     const publication = yield* ArtifactPublication.ArtifactPublication;
     const config = yield* Effect.serviceOption(ServerConfig.ServerConfig);
     const renew = Effect.fn("WorkerLaunch.renew")(
@@ -273,14 +276,55 @@ export const layer = Layer.effect(
               .pipe(Effect.orElseSucceed(() => false)));
           const stopped = row.stopRequested === 1 || run.status !== "completed";
           if (ready || stopped) {
-            yield* executions.finish(input.commandId, row.generation, {
-              generation: row.generation,
-              runId: run.id,
-              checkpointId: ready ? checkpoint.id : null,
-              checkpointRef: ready ? checkpoint.ref : null,
-              outcome: stopped ? "stopped" : "completed",
-            });
-            row = yield* executions.read(input.commandId);
+            yield* evidenceLane
+              .withPermit(
+                Effect.gen(function* () {
+                  const latest = yield* executions.read(input.commandId);
+                  if (!latest || latest.manifest !== null) {
+                    row = latest;
+                    return;
+                  }
+                  const publishRequest =
+                    config._tag === "Some"
+                      ? yield* WorkerPublishEvidence.readRequest(
+                          config.value.stateDir,
+                          input.commandId,
+                          FoundryPublishRequest,
+                        )
+                      : null;
+                  const publishResult =
+                    ready && !stopped && publishRequest && config._tag === "Some"
+                      ? yield* WorkerPublishEvidence.capture({
+                          cwd: scope.cwd,
+                          checkpointRef: checkpoint.ref,
+                          request: publishRequest,
+                          commandId: input.commandId,
+                          threadId: receipt.threadId,
+                          attachmentsDir: config.value.attachmentsDir,
+                        }).pipe(
+                          Effect.map((publishEvidence) => ({ publishEvidence })),
+                          Effect.catch((error) =>
+                            Effect.succeed({
+                              publishEvidenceFailure:
+                                error._tag === "WorkerPublishError"
+                                  ? error.reason
+                                  : ("unavailable" as const),
+                            }),
+                          ),
+                        )
+                      : {};
+                  yield* executions.finish(input.commandId, latest.generation, {
+                    generation: latest.generation,
+                    runId: run.id,
+                    checkpointId: ready ? checkpoint.id : null,
+                    checkpointRef: ready ? checkpoint.ref : null,
+                    outcome: stopped ? "stopped" : "completed",
+                    ...publishResult,
+                  });
+                  row = yield* executions.read(input.commandId);
+                }),
+              )
+              .pipe(Effect.uninterruptible);
           }
         }
         const lifecycle = row
@@ -702,6 +746,14 @@ export const layer = Layer.effect(
             return yield* failure("handoff_unavailable");
           yield* verifyHandoff(input, workspace);
           const attachments = yield* materializeArtifacts(input, ids.threadId);
+          if (input.publishEvidence) {
+            if (config._tag === "None") return yield* failure("launch_failed");
+            yield* WorkerPublishEvidence.saveRequest(
+              config.value.stateDir,
+              input.commandId,
+              input.publishEvidence,
+            );
+          }
           const execution = yield* executions.reserve(input.commandId, ids.threadId);
           // Uncertain retries may recover receipts; ExecutionStore.starting still fences native entry.
           if (execution.stopRequested === 1 && execution.writerEnded === 1)

@@ -6,6 +6,7 @@ import {
   AuthAccessWriteScope,
   AuthSessionId,
   EnvironmentId,
+  ProjectId,
   FoundryInstanceId,
   FoundryDeviceId,
   FoundryDeviceApproval,
@@ -59,7 +60,26 @@ const denied = () => new FoundryGatewayError({ code: "forbidden" });
 const invalid = () => new FoundryGatewayError({ code: "invalid_request" });
 type Request = HttpServerRequest.HttpServerRequest;
 
-export const AutomationGatewayIdentity = Schema.Struct({
+const AutomationIdentityFields = {
+  instanceId: FoundryInstanceId,
+  operatorId: Schema.String,
+  deviceId: FoundryDeviceId,
+  environmentId: EnvironmentId,
+  deviceGeneration: Schema.Int,
+  accessGeneration: Schema.Int,
+  automationGeneration: Schema.Int,
+};
+export const UnattendedGatewayIdentity = Schema.Struct({
+  ...AutomationIdentityFields,
+  authority: Schema.Literal("unattended"),
+  bindingId: Schema.String,
+  bindingGeneration: Schema.Int,
+  projectId: ProjectId,
+  workflowVersionId: Schema.String,
+});
+export type UnattendedGatewayIdentity = typeof UnattendedGatewayIdentity.Type;
+export const isUnattendedIdentity = Schema.is(UnattendedGatewayIdentity);
+export const ManualAutomationGatewayIdentity = Schema.Struct({
   instanceId: FoundryInstanceId,
   operatorId: Schema.String,
   deviceId: FoundryDeviceId,
@@ -70,6 +90,10 @@ export const AutomationGatewayIdentity = Schema.Struct({
   clientSessionId: AuthSessionId,
   foundrySessionHash: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/)),
 });
+export const AutomationGatewayIdentity = Schema.Union([
+  ManualAutomationGatewayIdentity,
+  UnattendedGatewayIdentity,
+]);
 export type AutomationGatewayIdentity = typeof AutomationGatewayIdentity.Type;
 
 export class GatewayGrants extends Context.Service<
@@ -123,6 +147,7 @@ export class GatewayGrants extends Context.Service<
     readonly openAutomation: (
       identity: AutomationGatewayIdentity,
       socket: Socket.Socket,
+      unattendedAuthorization?: Effect.Effect<void, FoundryGatewayError>,
     ) => Effect.Effect<void, FoundryGatewayError>;
     readonly projects: (
       request: Request,
@@ -363,23 +388,41 @@ const make = Effect.gen(function* () {
   });
   const validateAutomation = Effect.fn("GatewayGrants.validateAutomation")(function* (
     identity: AutomationGatewayIdentity,
+    unattendedAuthorization?: Effect.Effect<void, FoundryGatewayError>,
   ) {
     if (!streamsEnabled) return yield* denied();
-    const foundry = yield* sessions
-      .inspectReference(identity.foundrySessionHash)
-      .pipe(Effect.mapError(denied));
-    if (foundry.instanceId !== identity.instanceId || foundry.operatorId !== identity.operatorId)
-      return yield* denied();
-    const clients = yield* clientSessions
-      .listActive()
-      .pipe(Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })));
-    const client = clients.find((entry) => entry.sessionId === identity.clientSessionId);
-    if (
-      !client ||
-      !client.scopes.includes("orchestration:read") ||
-      !client.scopes.includes("orchestration:operate")
-    )
-      return yield* denied();
+    const credentials = yield* Effect.gen(function* () {
+      if (isUnattendedIdentity(identity)) {
+        if (!unattendedAuthorization) return yield* denied();
+        yield* unattendedAuthorization;
+        const expiresAt = (yield* Clock.currentTimeMillis) + 60_000;
+        // This transport subject is not a user session; its authority is checked on every frame.
+        return {
+          foundry: { expiresAt },
+          client: {
+            sessionId: AuthSessionId.make(`automation:${identity.bindingId}`),
+            subject: `automation:${identity.bindingId}`,
+            expiresAt: DateTime.makeUnsafe(expiresAt),
+          },
+        };
+      }
+      const foundry = yield* sessions
+        .inspectReference(identity.foundrySessionHash)
+        .pipe(Effect.mapError(denied));
+      if (foundry.instanceId !== identity.instanceId || foundry.operatorId !== identity.operatorId)
+        return yield* denied();
+      const clients = yield* clientSessions
+        .listActive()
+        .pipe(Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })));
+      const client = clients.find((entry) => entry.sessionId === identity.clientSessionId);
+      if (
+        !client ||
+        !client.scopes.includes("orchestration:read") ||
+        !client.scopes.includes("orchestration:operate")
+      )
+        return yield* denied();
+      return { foundry, client };
+    });
     yield* access.check(identity.deviceId, identity.operatorId, identity.accessGeneration);
     yield* automationAccess(identity.deviceId, identity.operatorId, identity.automationGeneration);
     const lease = yield* channels.current(identity.deviceId).pipe(Effect.mapError(denied));
@@ -391,13 +434,14 @@ const make = Effect.gen(function* () {
       !lease.rpcStream
     )
       return yield* denied();
-    return { foundry, client, lease };
+    return { ...credentials, lease };
   });
   const openAutomation = Effect.fn("GatewayGrants.openAutomation")(function* (
     identity: AutomationGatewayIdentity,
     socket: Socket.Socket,
+    unattendedAuthorization?: Effect.Effect<void, FoundryGatewayError>,
   ) {
-    const { foundry, client, lease } = yield* validateAutomation(identity);
+    const { foundry, client, lease } = yield* validateAutomation(identity, unattendedAuthorization);
     const expiresAt = Math.min(
       (yield* Clock.currentTimeMillis) + 60_000,
       foundry.expiresAt,
@@ -414,7 +458,7 @@ const make = Effect.gen(function* () {
       instanceId: identity.instanceId,
       origin,
       operatorId: identity.operatorId,
-      clientSessionId: identity.clientSessionId,
+      clientSessionId: client.sessionId,
       subject: client.subject,
       generation: identity.deviceGeneration,
       channelGeneration: lease.channelGeneration,
@@ -422,7 +466,7 @@ const make = Effect.gen(function* () {
     };
     // clientAccess authorizes the existing transport; Automation additionally checks its own grant.
     const check = Effect.gen(function* () {
-      const current = yield* validateAutomation(identity);
+      const current = yield* validateAutomation(identity, unattendedAuthorization);
       if (
         current.lease.channelGeneration !== grant.channelGeneration ||
         grant.expiresAt <= (yield* Clock.currentTimeMillis)

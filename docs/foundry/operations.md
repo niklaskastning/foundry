@@ -838,7 +838,7 @@ der gemeinsame Deployment-Lock; Instanzschema 7 und lokales T3-SQLite bleiben ge
 
 Die Main-Runtime verlangt bei `FOUNDRY_AUTOMATION_ENABLED=true` zusätzlich:
 
-- `FOUNDRY_AUTOMATION_DATABASE_URL`: separater Runtime-Pool, Schema 5;
+- `FOUNDRY_AUTOMATION_DATABASE_URL`: separater Runtime-Pool, Schema 6;
 - `FOUNDRY_AUTOMATION_TARGET`: JSON mit genau `deviceId`, `environmentId` und
   `allowedRunIds` (explizite eigene Fixture-Runs, höchstens 100);
 - den vorhandenen Gateway-/Artefaktbetrieb sowie eine bewusst erteilte
@@ -870,6 +870,62 @@ das Profil sowie den früheren Freigabewert mit neuer Generation wieder her;
 nicht bestätigbare Recovery lässt Main gestoppt. Die separate migrierte Datenbank
 bleibt inaktiv. Bei späteren Updates gehört sie zum Recovery-Bundle; Schema 5 darf
 nicht durch einen reinen Image-Downgrade auf Schema-4-Code zurückgesetzt werden.
+
+Der aktive Entwicklungsstand wird von Automation-Schema 5 auf 6 über denselben
+intern sperrenden Betreiberpfad aktualisiert:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-automation sha256:<image-digest> <source-sha>
+```
+
+Dieser Pfad verlangt das aktive Schema-5-Profil, stoppt Main, sichert zusätzlich die
+separate Automation-Datenbank und migriert sie mit dem Zielimage. Der Migrator wird
+anschließend wieder gesperrt. Bei Fehlschlag umfasst Recovery auch diese Datenbank;
+kein Image-only-Downgrade. Der Aufruf aktiviert keine Trigger. Für spätere Updates
+innerhalb Schema 6 bleibt `update` der passende Pfad.
+
+### GitHub- und Zeitplan-Eingänge
+
+Unter Factory → Triggers zunächst eine inaktive Bindung an die aktive Definition,
+das Repository und ein ausdrücklich ausgewähltes Worker-Projekt speichern. Erst
+„Authorize and activate“ erteilt unbeaufsichtigte Ausführung. Diese Autorisierung
+enthält keine alte Benutzersession; Device-, Client-Access- und Automation-Generationen
+werden weiterhin aktuell geprüft. Pause behält oder verwirft wartende Eingänge nach
+Auswahl, Widerruf sperrt die Bindung. Die technische Eingangshistorie ist getrennt von
+der persönlichen Inbox für Entscheidungen und Fragen.
+
+GitHub-Polling verwendet ausschließlich die zentrale GitHub-App-Verbindung
+`github-app`, eine erlaubte numerische Repository-ID und ein ausdrückliches Opt-in-Label.
+Bestehende Issues werden bei Aktivierung als Baseline angenommen, ohne Runs zu starten.
+Pro Binding-Generation und Issue entsteht höchstens ein fachlicher Start; spätere
+Kommentare oder Inhaltsänderungen erzeugen keinen weiteren. Polling kann kurzlebige
+Label-/Ereignisfolgen zwischen Abfragen nicht rekonstruieren.
+
+Die App-Konfiguration liegt im vorhandenen Main-SecretStore unter
+`foundry-github-app`: App-ID, Installation-ID, privater Schlüssel, Grant-Generation
+und erlaubte Repositories mit numerischer ID, `owner/name`, Factory-Bindungsschlüssel
+und Basisbranch. Der Betreiber installiert die App ausschließlich in ausgewählten
+Repositories mit Issues lesen, Contents schreiben und Pull requests schreiben
+(Metadata lesen). Keine persönlichen `gh`-Tokens in die Runtime übernehmen.
+Private Schlüssel nur über das Secret-Verfahren liefern; niemals in Chat, Befehlsargumenten
+oder Logs. Änderungen der Autorisierung erhöhen die Generation; Entfernen der
+Konfiguration sperrt den Zugang. Eine allgemeine Provider-/MCP-Verwaltung ist nicht enthalten.
+
+Publishing benötigt einen sauberen Commit nach bestätigtem Writer-Ende, passende
+Checkpoint-Tree-Identität, zentral bestätigte Artefakte und erfolgreiche konfigurierte
+Checks im isolierten Checkout genau dieses Commits. Check-Kommandos müssen ihre
+Dependencies dort selbst bereitstellen. Die Freigabe bindet Run-Revision und
+Ergebnisstand; sie ist keine allgemeine Push-Erlaubnis. Main überträgt das verifizierte
+Git-Bundle und reconciliert den PR über den dauerhaften Operationsschlüssel. Der
+Publish-Step führt weder Merge noch Deployment aus.
+
+Zeitpläne verwenden lokale Uhrzeit, Wochentage und eine explizite IANA-Zeitzone.
+Nicht existierende DST-Uhrzeiten entfallen; doppelte Uhrzeiten gelten nur beim ersten
+Vorkommen. Der erste Termin liegt nach Aktivierung. Verpasste Termine werden verworfen,
+nur zuletzt oder begrenzt (höchstens zehn) nachgeholt; der gespeicherte Cursor springt
+anschließend in die Zukunft. Ein Zähler dokumentiert ausgelassene Terminbereiche.
+Überlappende Runs warten oder werden gemäß Bindung übersprungen. Bestehende T3 Scheduled
+Tasks bleiben getrennt und dürfen nicht zusätzlich denselben Workflow starten.
 
 Für einen bereits über P18/P47 angelegten und freigegebenen Run nimmt der interne
 Service beziehungsweise `POST /api/foundry/automation/dispatch` den Vorgang

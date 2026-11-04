@@ -56,7 +56,7 @@ const make = Effect.gen(function* () {
           const versions = yield* sql<{
             version: number;
           }>`SELECT version FROM foundry_automation.schema_version`;
-          if (versions.length !== 1 || ![1, 2, 3, 4, 5].includes(versions[0]?.version ?? 0))
+          if (versions.length !== 1 || ![1, 2, 3, 4, 5, 6].includes(versions[0]?.version ?? 0))
             return yield* new AutomationMigrationError({ reason: "schema_incompatible" });
           if (versions[0]?.version === 1) {
             yield* sql`ALTER TABLE foundry_automation.work_items ADD CONSTRAINT work_items_factory_id_id_key UNIQUE(factory_id,id)`;
@@ -93,6 +93,17 @@ const make = Effect.gen(function* () {
             yield* sql`CREATE TABLE foundry_automation.inbox_commands (id text PRIMARY KEY,operator_id text NOT NULL,payload jsonb NOT NULL,receipt jsonb NOT NULL)`;
             yield* sql`UPDATE foundry_automation.schema_version SET version=5`;
           }
+          if ((versions[0]?.version ?? 0) < 6) {
+            yield* sql`CREATE TABLE foundry_automation.trigger_bindings (id text PRIMARY KEY, factory_id text NOT NULL REFERENCES foundry_automation.factories(id), generation integer NOT NULL DEFAULT 1 CHECK(generation>0), instance_id text NOT NULL, operator_id text NOT NULL, definition_version_id text NOT NULL, workflow_version_id text NOT NULL REFERENCES foundry_automation.workflow_versions(id), repository text NOT NULL, source jsonb NOT NULL, target jsonb NOT NULL, state text NOT NULL DEFAULT 'inactive' CHECK(state IN ('inactive','baselining','active','paused','revoked')), activated_at bigint, next_due_at bigint, next_poll_at bigint NOT NULL DEFAULT 0, cursor jsonb, failures integer NOT NULL DEFAULT 0, reason text, skipped_ranges integer NOT NULL DEFAULT 0, FOREIGN KEY(factory_id,definition_version_id) REFERENCES foundry_automation.definition_versions(factory_id,id))`;
+            yield* sql`CREATE TABLE foundry_automation.unattended_grants (binding_id text PRIMARY KEY REFERENCES foundry_automation.trigger_bindings(id), generation integer NOT NULL CHECK(generation>0), enabled boolean NOT NULL DEFAULT true, identity jsonb NOT NULL, authorized_at timestamptz NOT NULL DEFAULT clock_timestamp())`;
+            yield* sql`CREATE TABLE foundry_automation.trigger_events (id text PRIMARY KEY, binding_id text NOT NULL REFERENCES foundry_automation.trigger_bindings(id), generation integer NOT NULL CHECK(generation>0), deduplication_key text NOT NULL, source text NOT NULL CHECK(source IN ('github_issue','schedule')), external_id text NOT NULL, revision text NOT NULL, title text NOT NULL, occurred_at bigint NOT NULL, received_at bigint NOT NULL, next_attempt_at bigint NOT NULL DEFAULT 0, payload jsonb NOT NULL, state text NOT NULL CHECK(state IN ('accepted','admitted','baseline','blocked','discarded','skipped')), reason text, run_id text UNIQUE REFERENCES foundry_automation.runs(id), UNIQUE(binding_id,generation,deduplication_key))`;
+            yield* sql`CREATE INDEX trigger_events_pending ON foundry_automation.trigger_events(binding_id,received_at,id) WHERE state IN ('accepted','blocked')`;
+            yield* sql`CREATE TABLE foundry_automation.trigger_admissions (run_id text PRIMARY KEY REFERENCES foundry_automation.runs(id), event_id text NOT NULL UNIQUE REFERENCES foundry_automation.trigger_events(id), binding_id text NOT NULL REFERENCES foundry_automation.trigger_bindings(id), generation integer NOT NULL, identity jsonb NOT NULL)`;
+            yield* sql`CREATE TABLE foundry_automation.trigger_commands (id text PRIMARY KEY, payload jsonb NOT NULL, result jsonb NOT NULL, instance_id text NOT NULL, operator_id text NOT NULL)`;
+            yield* sql`CREATE TABLE foundry_automation.publish_operations (operation_key text PRIMARY KEY, run_id text NOT NULL REFERENCES foundry_automation.runs(id), step_id text NOT NULL, commit_sha text NOT NULL, result_revision integer NOT NULL, repository text NOT NULL, request jsonb NOT NULL, state text NOT NULL DEFAULT 'pending', result jsonb, UNIQUE(run_id,step_id,result_revision))`;
+            yield* sql`UPDATE foundry_automation.schema_version SET version=6`;
+          }
+          yield* sql`GRANT SELECT, INSERT, UPDATE ON foundry_automation.trigger_bindings, foundry_automation.unattended_grants, foundry_automation.trigger_events, foundry_automation.trigger_admissions, foundry_automation.trigger_commands, foundry_automation.publish_operations TO ${sql(runtimeRole)}`;
           yield* sql`GRANT USAGE ON SCHEMA foundry_automation TO ${sql(runtimeRole)}`;
           yield* sql`GRANT SELECT ON ALL TABLES IN SCHEMA foundry_automation TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT ON foundry_automation.factories, foundry_automation.versions, foundry_automation.work_items, foundry_automation.commands TO ${sql(runtimeRole)}`;

@@ -45,7 +45,40 @@ export class FoundryWorkerError extends Schema.TaggedError<FoundryWorkerError>()
   { code: Schema.Literals(["not_enabled", "probe_failed"]) },
 ) {}
 
+const PublishRepository = Schema.String.check(
+  Schema.isPattern(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+);
+const PublishSha = Schema.String.check(Schema.isPattern(/^[a-f0-9]{40}$/));
+const PublishCheck = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  command: TrimmedNonEmptyString,
+  cwd: TrimmedNonEmptyString,
+});
+export const FoundryPublishRequest = Schema.Struct({
+  repository: PublishRepository,
+  baseBranch: TrimmedNonEmptyString,
+  checks: Schema.Array(PublishCheck).check(Schema.isMinLength(1), Schema.isMaxLength(100)),
+});
+export const FoundryPublishEvidence = Schema.Struct({
+  sourceCwd: TrimmedNonEmptyString,
+  repository: PublishRepository,
+  baseBranch: TrimmedNonEmptyString,
+  commitSha: PublishSha,
+  treeSha: PublishSha,
+  checks: Schema.Array(
+    Schema.Struct({
+      ...PublishCheck.fields,
+      relativeCwd: TrimmedNonEmptyString,
+      exitCode: Schema.Literal(0),
+      commitSha: PublishSha,
+      treeSha: PublishSha,
+    }),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(100)),
+  bundle: FoundryArtifactManifest,
+});
+export type FoundryPublishEvidence = typeof FoundryPublishEvidence.Type;
 export const FoundryWorkerLaunchInput = Schema.Struct({
+  publishEvidence: Schema.optional(FoundryPublishRequest),
   inputArtifacts: Schema.optional(
     Schema.Array(FoundryArtifactManifest).check(Schema.isMaxLength(100)),
   ),
@@ -84,6 +117,10 @@ export class FoundryWorkerLaunchError extends Schema.TaggedError<FoundryWorkerLa
 ) {}
 
 export const FoundryWorkerManifest = Schema.Struct({
+  publishEvidenceFailure: Schema.optional(
+    Schema.Literals(["dirty_commit", "test_failed", "changed_commit", "unavailable"]),
+  ),
+  publishEvidence: Schema.optional(FoundryPublishEvidence),
   archive: Schema.optional(
     Schema.Struct({
       instanceId: FoundryInstanceId,

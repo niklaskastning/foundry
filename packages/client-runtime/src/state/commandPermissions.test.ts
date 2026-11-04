@@ -549,6 +549,7 @@ it.effect.each([
   WS_METHODS.foundryWorkerStatus,
   WS_METHODS.foundryWorkerRead,
   WS_METHODS.foundryWorkerFollow,
+  WS_METHODS.foundryAutomationTriggerQuery,
   WS_METHODS.foundryAutomationQuery,
   WS_METHODS.foundryAutomationInboxQuery,
   WS_METHODS.foundryAutomationInboxMark,
@@ -577,34 +578,44 @@ it.effect.each([
   ),
 );
 
-it.effect.each(["createFactory", "activateDefinition"])(
-  "%s requires management permission rather than execution permission",
-  (op) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* setup;
-        const command = createCommandPermissions(runtime, WS_METHODS.foundryAutomationCommand);
-        registry.set(sessions(env), AsyncResult.success(grant(true)));
-        expect(registry.get(command.permissionAtom(env, { op }))).toBe(false);
-        expect(
-          (yield* command.authorize(registry, env, { op }).pipe(Effect.flip)).requiredPermission,
-        ).toBe(AuthAccessWriteScope);
-        registry.set(
-          sessions(env),
-          AsyncResult.success({
-            ...grant(false),
-            scopes: [AuthAccessWriteScope],
-            permissions: [AuthAccessWriteScope],
-          }),
-        );
-        expect(registry.get(command.permissionAtom(env, { op }))).toBe(true);
-        yield* command.authorize(registry, env, { op });
+it.effect.each([
+  "createFactory",
+  "activateDefinition",
+  "create",
+  "activate",
+  "deactivate",
+  "revoke",
+])("%s requires management permission rather than execution permission", (op) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      const method = ["createFactory", "activateDefinition"].includes(op)
+        ? WS_METHODS.foundryAutomationCommand
+        : WS_METHODS.foundryAutomationTriggerCommand;
+      const command = createCommandPermissions(runtime, method);
+      registry.set(sessions(env), AsyncResult.success(grant(true)));
+      expect(registry.get(command.permissionAtom(env, { op }))).toBe(false);
+      expect(
+        (yield* command.authorize(registry, env, { op }).pipe(Effect.flip)).requiredPermission,
+      ).toBe(AuthAccessWriteScope);
+      registry.set(
+        sessions(env),
+        AsyncResult.success({
+          ...grant(false),
+          scopes: [AuthAccessWriteScope],
+          permissions: [AuthAccessWriteScope],
+        }),
+      );
+      expect(registry.get(command.permissionAtom(env, { op }))).toBe(true);
+      yield* command.authorize(registry, env, { op });
+      if (method === WS_METHODS.foundryAutomationCommand) {
         expect(registry.get(command.permissionAtom(env, { op: "start" }))).toBe(false);
         expect(
           (yield* command.authorize(registry, env, { op: "start" }).pipe(Effect.flip))
             .requiredPermission,
         ).toBe(AuthOrchestrationOperateScope);
-        expect(registry.get(command.permissionAtom(other, { op }))).toBe(false);
-      }),
-    ),
+      }
+      expect(registry.get(command.permissionAtom(other, { op }))).toBe(false);
+    }),
+  ),
 );

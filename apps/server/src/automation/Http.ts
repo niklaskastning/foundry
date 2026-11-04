@@ -1,4 +1,6 @@
 import {
+  AutomationTriggerQuery,
+  AutomationTriggerCommand,
   AutomationApplicationQuery,
   AutomationApplicationCommand,
   AutomationControlCommand,
@@ -8,6 +10,7 @@ import {
 import * as Application from "./Application.ts";
 import * as Control from "./Control.ts";
 import * as Inbox from "./Inbox.ts";
+import * as Triggers from "./Triggers.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -21,6 +24,7 @@ export const layer = Layer.unwrap(
     const application = yield* Application.Application;
     const control = yield* Control.Control;
     const inbox = yield* Inbox.Inbox;
+    const triggers = yield* Triggers.Triggers;
     const route = <A, I, E>(
       path: string,
       schema: Schema.Codec<A, I>,
@@ -48,6 +52,7 @@ export const layer = Layer.unwrap(
                   error !== null &&
                   "_tag" in error &&
                   [
+                    "AutomationTriggerError",
                     "AutomationApplicationError",
                     "AutomationControlError",
                     "AutomationInboxError",
@@ -65,6 +70,8 @@ export const layer = Layer.unwrap(
         ),
       );
     return Layer.mergeAll(
+      route("triggers/query", AutomationTriggerQuery, triggers.query),
+      route("triggers/command", AutomationTriggerCommand, triggers.command),
       route("query", AutomationApplicationQuery, application.query),
       route("command", AutomationApplicationCommand, application.command),
       route("control", AutomationControlCommand, control.execute),

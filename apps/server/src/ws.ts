@@ -1,4 +1,5 @@
 import {
+  AutomationTriggerError,
   AutomationApplicationError,
   AutomationControlError,
   AutomationInboxError,
@@ -2864,6 +2865,10 @@ export const layerWsRpc = (
         [WS_METHODS.attachmentsCreateUploadUrl]: (input) => issueAttachmentUploadUrl(input),
         [WS_METHODS.attachmentsDelete]: (input) => assetTransfer.remove(input.attachmentId),
         // Automation HTTP requests reauthenticate both sessions and CSRF for every operation.
+        [WS_METHODS.foundryAutomationTriggerQuery]: () =>
+          Effect.fail(new AutomationTriggerError({ code: "unavailable" })),
+        [WS_METHODS.foundryAutomationTriggerCommand]: () =>
+          Effect.fail(new AutomationTriggerError({ code: "unavailable" })),
         [WS_METHODS.foundryAutomationQuery]: () =>
           Effect.fail(new AutomationApplicationError({ code: "unavailable" })),
         [WS_METHODS.foundryAutomationCommand]: () =>

@@ -249,6 +249,32 @@ function AttemptResult({
       {error ? <p role="alert">{error}</p> : null}
       {result?.kind === "attempt" ? (
         <>
+          {result.publish ? (
+            <p className="text-sm">
+              <a className="underline" href={result.publish.url} target="_blank" rel="noreferrer">
+                Pull request #{result.publish.number}
+              </a>{" "}
+              · Commit {result.publish.commitSha}
+            </p>
+          ) : null}
+          {result.execution?.lifecycle?.manifest?.publishEvidence ? (
+            <div className="space-y-1 text-sm">
+              <p>
+                Verified publish commit:{" "}
+                {result.execution.lifecycle.manifest.publishEvidence.commitSha}
+              </p>
+              <p>
+                Repository: {result.execution.lifecycle.manifest.publishEvidence.repository} · Base:{" "}
+                {result.execution.lifecycle.manifest.publishEvidence.baseBranch}
+              </p>
+              <p>
+                Confirmed checks:{" "}
+                {result.execution.lifecycle.manifest.publishEvidence.checks
+                  .map((check) => check.id)
+                  .join(", ")}
+              </p>
+            </div>
+          ) : null}
           <p className="text-sm">Worker run: {result.execution?.run.status ?? "No final result"}</p>
           <p className="text-sm">
             Checkpoint: {result.execution?.run.checkpointId ?? "Unconfirmed"}

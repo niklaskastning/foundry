@@ -159,6 +159,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.filesystemGetMetadata]: "workspace",
   [WS_METHODS.agentSessionsScan]: "workspace",
   [WS_METHODS.agentSessionsImport]: "workspace",
+  [WS_METHODS.foundryAutomationTriggerQuery]: "foundry",
+  [WS_METHODS.foundryAutomationTriggerCommand]: "foundry",
   [WS_METHODS.foundryAutomationQuery]: "foundry",
   [WS_METHODS.foundryAutomationCommand]: "foundry",
   [WS_METHODS.foundryAutomationControl]: "foundry",

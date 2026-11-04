@@ -54,6 +54,20 @@ describe("canonical factory definitions", () => {
     expect(Result.isSuccess(alternative)).toBe(true);
     if (Result.isFailure(alternative)) throw new Error("Expected equivalent YAML");
     expect(canonicalFactoryJson(alternative.success)).toBe(canonicalFactoryJson(first.success));
+    for (const content of [
+      "steps: [{id: agent, kind: agent, dependsOn: [], prompt: Work}]\n",
+      "steps: [{id: approval, kind: approval, dependsOn: [], prompt: Review}]\n",
+      files()[1]!.content +
+        "  - {id: approval, kind: approval, dependsOn: [check], prompt: Review}\n" +
+        "  - {id: publish, kind: publish, dependsOn: [approval], target: pull_request}\n",
+    ]) {
+      const supported = files();
+      supported[1]!.content = content;
+      const parsed = validateFactoryFiles(supported);
+      expect(Result.isSuccess(parsed)).toBe(true);
+      if (Result.isFailure(parsed)) throw new Error("Expected supported workflow");
+      expect(validateFactoryFiles(exportFactoryFiles(parsed.success))).toEqual(parsed);
+    }
   });
 
   it.each([
@@ -89,6 +103,10 @@ describe("canonical factory definitions", () => {
     "unsupported-resource",
     "step-script",
     "cycle",
+    "publish-no-test",
+    "publish-not-last",
+    "publish-repeat",
+    "publish-after-agent",
     "aliases",
     "duplicate-key",
     "unsupported-tag",
@@ -112,6 +130,19 @@ describe("canonical factory definitions", () => {
       );
     if (failure === "cycle")
       input[1]!.content = input[1]!.content.replace("dependsOn: []", "dependsOn: [check]");
+    const publish = "  - {id: publish, kind: publish, dependsOn: [check], target: pull_request}\n";
+    if (failure === "publish-no-test")
+      input[1]!.content =
+        "steps: [{id: publish, kind: publish, dependsOn: [], target: pull_request}]\n";
+    if (failure === "publish-not-last")
+      input[1]!.content +=
+        publish + "  - {id: later, kind: test, dependsOn: [publish], checkId: integration}\n";
+    if (failure === "publish-repeat")
+      input[1]!.content +=
+        publish + "  - {id: later, kind: publish, dependsOn: [publish], target: pull_request}\n";
+    if (failure === "publish-after-agent")
+      input[1]!.content +=
+        "  - {id: later, kind: agent, dependsOn: [check], prompt: Work}\n" + publish;
     if (failure === "aliases") input[1]!.content = "steps: &loop [*loop]\n";
     if (failure === "duplicate-key") input[0]!.content += "factoryId: private-fixture-value\n";
     if (failure === "unsupported-tag") input[0]!.content = "!execute private-fixture-value\n";
@@ -122,7 +153,7 @@ describe("canonical factory definitions", () => {
     expect(result.failure.length).toBeGreaterThan(0);
     expect(result.failure[0]?.file).toBeTruthy();
     expect(JSON.stringify(result.failure)).not.toContain("private-fixture-value");
-    if (failure === "cycle")
+    if (failure === "cycle" || failure.startsWith("publish-"))
       expect(result.failure[0]).toMatchObject({ file: "custom/build.yaml", path: ["steps"] });
     if (failure === "unknown-field")
       expect(result.failure[0]).toMatchObject({ file: "factory.yaml", path: ["credentials"] });

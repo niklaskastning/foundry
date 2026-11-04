@@ -35,6 +35,7 @@ import * as Schema from "effect/Schema";
 import * as Artifacts from "../foundry/Artifacts.ts";
 import * as ThreadArchive from "../foundry/ThreadArchive.ts";
 import * as DispatchStore from "./DispatchStore.ts";
+import * as Publish from "./Publish.ts";
 import * as Scheduler from "./Scheduler.ts";
 import * as WorkerTransport from "./WorkerTransport.ts";
 import { decideStep } from "./stepDecision.ts";
@@ -257,6 +258,19 @@ it("requires matching final worker, checkpoint, archive and test evidence", () =
     assert.notEqual(result.state, "succeeded");
     assert.equal(result.reason, reason);
   }
+  for (const reason of ["dirty_commit", "changed_commit", "test_failed", "unavailable"] as const) {
+    const result = decideStep({
+      ...good,
+      execution: {
+        ...good.execution,
+        lifecycle: {
+          ...good.execution.lifecycle!,
+          manifest: { ...good.execution.lifecycle!.manifest!, publishEvidenceFailure: reason },
+        },
+      },
+    });
+    assert.deepEqual(result, { state: "failed", reason: `publish_${reason}` });
+  }
   const testEvent = good.events[3]!;
   assert.equal(testEvent.event.type, "turn-item.updated");
   if (
@@ -421,6 +435,8 @@ it.effect(
         answers: () => Effect.succeed([]),
         answerDelivered: () => Effect.void,
         startManual: () => unsupported,
+        startTriggered: () => unsupported,
+        completePublish: () => unsupported,
         permitted: () => Effect.succeed(false),
         admission: () => unsupported,
         canLaunch: () => Effect.succeed(mode === "active"),
@@ -660,6 +676,7 @@ it.effect(
                   environmentId: proof.identity.environmentId,
                   allowedRunIds: [run.run.id],
                 }),
+                Layer.mock(Publish.Publish)({ prepareEvidence: () => Effect.succeed(null) }),
                 NodeCrypto.layer,
               ),
             ),

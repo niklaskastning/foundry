@@ -1,6 +1,7 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useSearch, Link } from "@tanstack/react-router";
 import { FactoryNavigation, useAutomationAvailable } from "./FactoryNavigation";
+import { hasConfirmedAutomationView } from "./pageMode";
 import { lazy, Suspense, useState } from "react";
 import { AsyncResult } from "effect/reactivity";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -46,6 +47,10 @@ export function FoundryPage() {
       ...(state?.binding ? { candidate: state.binding } : {}),
     });
     if (AsyncResult.isSuccess(result)) {
+      if (!state.confirmed && hasConfirmedAutomationView(search.view, result.value)) {
+        window.location.assign(window.location.href);
+        return;
+      }
       setState(result.value);
       setOrigin(result.value.binding?.origin ?? window.location.origin);
       setMessage(result.value.message);
@@ -69,7 +74,7 @@ export function FoundryPage() {
     }
   }
 
-  if (automationAvailable && state.binding && search.view)
+  if (automationAvailable && state.binding && hasConfirmedAutomationView(search.view, state))
     return (
       <div className="h-dvh min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both bg-background text-foreground p-4">
         <div className="mx-auto max-w-6xl space-y-4">

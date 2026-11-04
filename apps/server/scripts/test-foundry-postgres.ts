@@ -1,6 +1,9 @@
 import { verifyGateway } from "./foundry-gateway-integration.ts";
 import * as Schema from "effect/Schema";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Option from "effect/Option";
+import * as AutomationDatabase from "../src/automation/AutomationDatabase.ts";
+import * as AutomationMigrations from "../src/automation/AutomationMigrations.ts";
 import * as FoundryRuntime from "../src/foundry/Runtime.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- This standalone integration harness owns its temporary PostgreSQL child and filesystem.
 // @effect-diagnostics globalProcess:off -- The harness accepts a PostgreSQL binary directory, never connection credentials.
@@ -938,6 +941,43 @@ try {
     await deviceHandler.dispose();
   }
   await NodeFSP.writeFile(NodePath.join(home, "userdata", "environment-id"), mainEnvironmentId);
+  for (const statement of [
+    "CREATE ROLE automation_migrate LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+    "CREATE ROLE automation_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+    "CREATE DATABASE fork_automation OWNER automation_migrate",
+    "REVOKE ALL ON DATABASE fork_automation FROM PUBLIC",
+    "GRANT CONNECT ON DATABASE fork_automation TO automation_runtime",
+  ])
+    await query(statement, "fixture_admin", "postgres");
+  await query("REVOKE ALL ON SCHEMA public FROM PUBLIC", "fixture_admin", "fork_automation");
+  await run(
+    AutomationMigrations.AutomationMigrations.pipe(
+      Effect.flatMap((service) => service.migrate("automation_runtime")),
+      Effect.provide(
+        AutomationMigrations.layer.pipe(
+          Layer.provide(
+            AutomationDatabase.layer({
+              path,
+              username: "automation_migrate",
+              database: "fork_automation",
+            }),
+          ),
+        ),
+      ),
+    ),
+  );
+  await query("ALTER ROLE automation_migrate NOLOGIN", "fixture_admin", "postgres");
+  NodeAssert.equal(
+    (
+      await query(
+        "SELECT version FROM foundry_automation.schema_version",
+        "automation_runtime",
+        "fork_automation",
+      )
+    )[0]?.version,
+    6,
+  );
+
   for (const [
     enabled,
     enrollmentEnabled,
@@ -946,17 +986,39 @@ try {
     gatewayEnabled,
     streamsEnabled,
     artifactsEnabled,
+    automationEnabled,
   ] of [
-    [false, false, false, false, false, false, false],
-    [true, false, false, false, false, false, false],
-    [true, true, false, false, false, false, false],
-    [true, true, true, false, false, false, false],
-    [true, true, true, true, false, false, false],
-    [true, true, true, true, true, false, false],
-    [true, true, true, true, true, true, false],
-    [true, true, true, true, true, true, true],
+    [false, false, false, false, false, false, false, false],
+    [true, false, false, false, false, false, false, false],
+    [true, true, false, false, false, false, false, false],
+    [true, true, true, false, false, false, false, false],
+    [true, true, true, true, false, false, false, false],
+    [true, true, true, true, true, false, false, false],
+    [true, true, true, true, true, true, false, false],
+    [true, true, true, true, true, true, true, false],
+    [true, true, true, true, true, true, true, true],
   ] as const) {
-    const runtimeRoutes = FoundryRuntime.layer.pipe(
+    const runtimeClients: EnvironmentAuth.IssuedBearerSession[] = [];
+    const sessionFixture = automationEnabled
+      ? Layer.effectDiscard(
+          Effect.gen(function* () {
+            const auth = yield* EnvironmentAuth.EnvironmentAuth;
+            const secrets = yield* ServerSecretStore.ServerSecretStore;
+            NodeAssert.equal(Option.isNone(yield* secrets.get("foundry-github-app")), true);
+            runtimeClients.push(
+              yield* auth.issueSession({ subject: "runtime-read", scopes: ["orchestration:read"] }),
+            );
+            runtimeClients.push(
+              yield* auth.issueSession({
+                subject: "runtime-management",
+                scopes: ["orchestration:read", "access:write"],
+              }),
+            );
+          }),
+        )
+      : Layer.empty;
+    const runtimeRoutes = Layer.merge(FoundryRuntime.layer, sessionFixture).pipe(
+      Layer.provide(ServerSecretStore.layer),
       Layer.provide(
         EnvironmentAuth.layer.pipe(
           Layer.provide(SqlitePersistence.layerMemory),
@@ -978,6 +1040,13 @@ try {
             FOUNDRY_HTTP_GATEWAY_ENABLED: String(gatewayEnabled),
             FOUNDRY_STREAM_GATEWAY_ENABLED: String(streamsEnabled),
             FOUNDRY_ARTIFACTS_ENABLED: String(artifactsEnabled),
+            FOUNDRY_AUTOMATION_ENABLED: String(automationEnabled),
+            FOUNDRY_AUTOMATION_DATABASE_URL: `postgresql://automation_runtime@localhost/fork_automation?host=${encodeURIComponent(root)}`,
+            FOUNDRY_AUTOMATION_TARGET: JSON.stringify({
+              deviceId: "99999999-9999-4999-8999-999999999999",
+              environmentId: "runtime-worker-not-connected",
+              allowedRunIds: [],
+            }),
             FOUNDRY_INSTANCE_STORE: "postgres",
             FOUNDRY_INSTANCE_DATABASE_URL: `postgresql://foundry_runtime@localhost/fork_connect?host=${encodeURIComponent(root)}`,
             FOUNDRY_ACCESS_ISSUER: accessConfig.issuer,
@@ -1060,6 +1129,117 @@ try {
         }),
       );
       NodeAssert.equal(enrollment.status, enrollmentEnabled ? 403 : 404);
+      const triggerQuery = await runtimeHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/automation/triggers/query`, {
+          method: "POST",
+          headers: { origin: accessConfig.origin, "content-type": "application/json" },
+          body: JSON.stringify({ op: "bindings", limit: 50 }),
+        }),
+      );
+      NodeAssert.equal(triggerQuery.status, automationEnabled ? 409 : 404);
+      if (automationEnabled) {
+        now = Math.floor((await run(Clock.currentTimeMillis)) / 1000) * 1000;
+        const provision = HttpRouter.toWebHandler(authRoutes, { disableLogger: true });
+        let currentSession: Awaited<ReturnType<typeof issued>>;
+        try {
+          currentSession = await issued(
+            await provision.handler(
+              new Request(`${accessConfig.origin}/api/foundry/auth/login`, {
+                method: "POST",
+                headers: {
+                  origin: accessConfig.origin,
+                  "content-type": "application/json",
+                  "cf-access-jwt-assertion": await sign(),
+                },
+              }),
+              testContext,
+            ),
+          );
+        } finally {
+          await provision.dispose();
+        }
+        NodeAssert.equal(runtimeClients.length, 2);
+        const authenticated = (
+          endpoint: string,
+          payload: unknown,
+          clientIndex = 0,
+          extra: Record<string, string> = {},
+        ) =>
+          runtimeHandler.handler(
+            new Request(`${accessConfig.origin}/api/foundry/automation/${endpoint}`, {
+              method: "POST",
+              headers: {
+                origin: accessConfig.origin,
+                host: new URL(accessConfig.origin).host,
+                "x-forwarded-proto": "https",
+                "content-type": "application/json",
+                cookie: currentSession.cookie,
+                "x-foundry-csrf": currentSession.csrf,
+                authorization: `Bearer ${runtimeClients[clientIndex]!.token}`,
+                ...extra,
+              },
+              body: JSON.stringify(payload),
+            }),
+          );
+        const bindings = await authenticated("triggers/query", { op: "bindings", limit: 50 });
+        NodeAssert.equal(bindings.status, 200);
+        NodeAssert.deepEqual(await bindings.json(), { kind: "bindings", items: [], next: null });
+        const factories = await authenticated("query", { op: "factories", limit: 50 });
+        NodeAssert.equal(factories.status, 200);
+        NodeAssert.deepEqual(await factories.json(), { kind: "factories", items: [], next: null });
+        const denied = await authenticated("triggers/command", {
+          op: "revoke",
+          commandId: "runtime-denied",
+          bindingId: "missing",
+          generation: 1,
+        });
+        NodeAssert.equal(denied.status, 409);
+        NodeAssert.deepEqual(await denied.json(), {
+          _tag: "AutomationTriggerError",
+          code: "forbidden",
+        });
+        const authorized = await authenticated(
+          "triggers/command",
+          { op: "revoke", commandId: "runtime-authorized", bindingId: "missing", generation: 1 },
+          1,
+        );
+        NodeAssert.equal(authorized.status, 409);
+        NodeAssert.deepEqual(await authorized.json(), {
+          _tag: "AutomationTriggerError",
+          code: "not_found",
+        });
+        NodeAssert.equal(
+          (
+            await authenticated("triggers/query", { op: "bindings", limit: 50 }, 0, {
+              "x-foundry-csrf": "invalid",
+            })
+          ).status,
+          409,
+        );
+        NodeAssert.equal(
+          (
+            await query(
+              "SELECT count(*)::int AS count FROM foundry_automation.trigger_events",
+              "automation_runtime",
+              "fork_automation",
+            )
+          )[0]?.count,
+          0,
+        );
+        NodeAssert.equal(
+          (
+            await query(
+              "SELECT count(*)::int AS count FROM foundry_automation.runs",
+              "automation_runtime",
+              "fork_automation",
+            )
+          )[0]?.count,
+          0,
+        );
+        await report(
+          "PASS enabled production Automation runtime: separate schema-6 database and restricted roles; current Foundry/T3 sessions read empty bindings/factories; read scope cannot mutate, management scope reaches domain validation; invalid CSRF rejected; no GitHub App configuration, worker or provider execution.",
+        );
+      }
       const login = await runtimeHandler.handler(
         new Request(`${accessConfig.origin}/api/foundry/auth/login`, {
           method: "POST",
