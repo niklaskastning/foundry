@@ -2,6 +2,8 @@ import type { Atom } from "effect/reactivity";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
+  AutomationTriggerResult,
+  AutomationTriggerError,
   AutomationApplicationResult,
   AutomationApplicationError,
   AutomationControlSnapshot,
@@ -74,6 +76,28 @@ export function makeAutomationCommands<R, E>(
         AutomationApplicationError,
         applicationFailure,
         applicationDenied,
+      ),
+    }),
+    triggerQuery: createEnvironmentRpcCommand(runtime, {
+      label: "foundry:automation:trigger-query",
+      tag: "foundry.automationTriggerQuery",
+      execute: endpoint(
+        "triggers/query",
+        AutomationTriggerResult,
+        AutomationTriggerError,
+        () => new AutomationTriggerError({ code: "unavailable" }),
+        () => new AutomationTriggerError({ code: "forbidden" }),
+      ),
+    }),
+    triggerCommand: createEnvironmentRpcCommand(runtime, {
+      label: "foundry:automation:trigger-command",
+      tag: "foundry.automationTriggerCommand",
+      execute: endpoint(
+        "triggers/command",
+        AutomationTriggerResult,
+        AutomationTriggerError,
+        () => new AutomationTriggerError({ code: "unavailable" }),
+        () => new AutomationTriggerError({ code: "forbidden" }),
       ),
     }),
     control: createEnvironmentRpcCommand(runtime, {

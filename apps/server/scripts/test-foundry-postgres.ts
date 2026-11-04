@@ -957,6 +957,7 @@ try {
     [true, true, true, true, true, true, true],
   ] as const) {
     const runtimeRoutes = FoundryRuntime.layer.pipe(
+      Layer.provide(ServerSecretStore.layer),
       Layer.provide(
         EnvironmentAuth.layer.pipe(
           Layer.provide(SqlitePersistence.layerMemory),

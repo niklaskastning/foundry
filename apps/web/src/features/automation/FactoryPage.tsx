@@ -11,6 +11,7 @@ import { Input } from "../../components/ui/input";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { automationCommands } from "./commands";
 import { useAutomationQuery } from "./useAutomationQuery";
+import { TriggerPanel } from "./TriggerPanel";
 import { DefinitionEditor } from "./DefinitionEditor";
 import { RunDetail } from "./RunDetail";
 import { RunList } from "./RunList";
@@ -251,7 +252,7 @@ function FactoryDetail({
     op: "factory",
     factoryId,
   });
-  const [tab, setTab] = useState<"definition" | "work" | "runs">(
+  const [tab, setTab] = useState<"definition" | "work" | "runs" | "triggers">(
     initialWorkItemId ? "work" : "definition",
   );
   const [workItemId, setWorkItemId] = useState<string | null>(initialWorkItemId ?? null);
@@ -305,7 +306,7 @@ function FactoryDetail({
       {error ? <p role="alert">{error}</p> : null}
       <h1 className="text-xl font-semibold">{detail?.factory.name ?? factoryId}</h1>
       <nav aria-label="Selected factory" className="flex gap-2">
-        {(["definition", "work", "runs"] as const).map((value) => (
+        {(["definition", "work", "runs", "triggers"] as const).map((value) => (
           <Button
             key={value}
             variant={tab === value ? "default" : "outline"}
@@ -336,6 +337,14 @@ function FactoryDetail({
           }
           active={detail.active}
           onActivated={refresh}
+        />
+      ) : null}
+      {tab === "triggers" ? (
+        <TriggerPanel
+          environmentId={environmentId}
+          factoryId={factoryId}
+          active={detail?.active ?? null}
+          onOpenRun={onOpenRun}
         />
       ) : null}
       {tab === "runs" ? (

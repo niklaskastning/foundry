@@ -43,6 +43,11 @@ export const decideStep = (input: {
     execution.run.checkpointId !== manifest.checkpointId
   )
     return { state: "finalizing", reason: "checkpoint_pending" };
+  if (manifest.publishEvidenceFailure)
+    return {
+      state: "failed",
+      reason: `publish_${manifest.publishEvidenceFailure}`,
+    };
   const final = manifest.archive;
   if (
     !final ||

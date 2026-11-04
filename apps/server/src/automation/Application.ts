@@ -33,10 +33,20 @@ const decodeCommand = Schema.decodeEffect(AutomationApplicationCommand, {
   onExcessProperty: "error",
 });
 const decodeResult = Schema.decodeUnknownEffect(
-  Schema.Struct({
-    execution: Schema.NullOr(FoundryWorkerExecution),
-    artifacts: Schema.Array(FoundryArtifactManifest),
-  }),
+  Schema.Union([
+    Schema.Struct({
+      execution: Schema.NullOr(FoundryWorkerExecution),
+      artifacts: Schema.Array(FoundryArtifactManifest),
+    }),
+    Schema.Struct({
+      publish: Schema.Struct({
+        number: Schema.Int,
+        url: Schema.String,
+        commitSha: Schema.String,
+        operationKey: Schema.String,
+      }),
+    }),
+  ]),
 );
 const error = (cause: unknown) => {
   if (isApplicationError(cause)) return cause;
@@ -209,7 +219,10 @@ const make = Effect.gen(function* () {
           }>`SELECT result FROM foundry_automation.step_attempts WHERE run_id=${input.runId} AND command_id=${input.commandId}`;
           if (!rows[0]) return yield* new AutomationApplicationError({ code: "not_found" });
           const parsed = yield* decodeResult(rows[0].result ?? { execution: null, artifacts: [] });
-          return { kind: "attempt" as const, ...parsed };
+          return {
+            kind: "attempt" as const,
+            ...("publish" in parsed ? { ...parsed, execution: null, artifacts: [] } : parsed),
+          };
         }
       }
     });

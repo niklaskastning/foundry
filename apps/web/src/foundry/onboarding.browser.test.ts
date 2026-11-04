@@ -2,6 +2,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { FoundryOnboarding } from "@t3tools/client-runtime/connection";
 import { executeInstanceOperation } from "./onboarding";
 import { readDeviceSelection, writeDeviceSelection } from "./selection";
+import { hasConfirmedAutomationView } from "./pageMode";
 
 it("keeps Main discovery when managing sign-in without a selected device, but preserves explicit disconnection", () => {
   const key = "foundry:selected-device:v1";
@@ -53,6 +54,11 @@ it("serializes shared-cookie refresh and removal across independent callers", as
     auth: { bootstrapMethods: ["one-time-token"], sessionMethods: ["browser-session-cookie"] },
   };
   const binding = FoundryOnboarding.verifyDescriptor(descriptor, window.location.origin).binding;
+  const inspected = { binding, confirmed: false, session: null, message: "Inspected" };
+  for (const view of ["factories", "runs", "inbox"]) {
+    expect(hasConfirmedAutomationView(view, inspected)).toBe(false);
+    expect(hasConfirmedAutomationView(view, { ...inspected, confirmed: true })).toBe(true);
+  }
   localStorage.setItem(key, JSON.stringify(binding));
   const entered = deferred();
   const release = deferred();

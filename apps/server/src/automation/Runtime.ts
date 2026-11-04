@@ -1,3 +1,13 @@
+import * as Triggers from "./Triggers.ts";
+import * as Unattended from "./Unattended.ts";
+import * as GitHubPolling from "./GitHubPolling.ts";
+import * as GitHubApp from "./GitHubApp.ts";
+import * as Publish from "./Publish.ts";
+import * as ScheduleTriggers from "./ScheduleTriggers.ts";
+import { nextScheduleOccurrence } from "./Schedule.ts";
+import * as DateTime from "effect/DateTime";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import { AutomationTriggerError } from "@t3tools/contracts";
 import * as AutomationHttp from "./Http.ts";
 import * as Application from "./Application.ts";
 import * as Control from "./Control.ts";
@@ -82,14 +92,24 @@ const routes = Layer.unwrap(
     );
   }),
 );
-const loop = Layer.effectDiscard(
+export const reconciliationLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const scheduler = yield* Scheduler.Scheduler;
-    yield* scheduler.tick.pipe(
-      Effect.catch(() => Effect.logWarning("Automation reconciliation unavailable")),
-      Effect.repeat(Schedule.spaced("5 seconds")),
-      Effect.forkScoped,
+    const triggers = yield* Triggers.Triggers;
+    const polling = yield* GitHubPolling.GitHubPolling;
+    const schedules = yield* ScheduleTriggers.ScheduleTriggers;
+    const start = Effect.fn("AutomationRuntime.reconcile")(<A, E>(tick: Effect.Effect<A, E>) =>
+      tick.pipe(
+        Effect.catch(() => Effect.logWarning("Automation reconciliation unavailable")),
+        Effect.repeat(Schedule.spaced("5 seconds")),
+        Effect.forkScoped,
+      ),
     );
+    // Slow external input must not delay the active writer's lease renewal.
+    yield* start(polling.tick);
+    yield* start(schedules.tick);
+    yield* start(triggers.tick);
+    yield* start(scheduler.tick);
   }),
 );
 
@@ -122,21 +142,42 @@ export const layer = Layer.unwrap(
           version: number;
           safe: boolean;
         }>`SELECT version, NOT (r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls OR has_schema_privilege(current_user,'foundry_automation','CREATE') OR has_database_privilege(current_user,current_database(),'CREATE')) AS safe FROM foundry_automation.schema_version,pg_roles r WHERE r.rolname=current_user`;
-        if (rows.length !== 1 || rows[0]?.version !== 5 || !rows[0].safe)
+        if (rows.length !== 1 || rows[0]?.version !== 6 || !rows[0].safe)
           return yield* new Scheduler.SchedulerError({ reason: "invalid_binding" });
       }),
     ).pipe(Layer.provide(database));
-    return Layer.mergeAll(routes, AutomationHttp.layer, loop).pipe(
+    return Layer.mergeAll(routes, AutomationHttp.layer, reconciliationLayer).pipe(
       Layer.provide(Application.layer),
+      Layer.provide(GitHubPolling.layer),
+      Layer.provide(ScheduleTriggers.layer),
+      Layer.provide(Triggers.layer),
       Layer.provide(Inbox.layer),
       Layer.provide(Control.layer),
       Layer.provide(Definitions.layer),
       Layer.provide(Scheduler.layer),
+      Layer.provide(Publish.layer),
+      Layer.provide(GitHubApp.layer),
       Layer.provide(WorkerTransport.layer),
+      Layer.provide(Unattended.layer),
       Layer.provide(DispatchStore.layer),
       Layer.provide(Workflows.layer),
       Layer.provide(Factories.layer),
       Layer.provide(Layer.succeed(Scheduler.SchedulerConfig, target)),
+      Layer.provide(
+        Layer.succeed(Triggers.TriggerConfig, {
+          ...target,
+          nextSchedule: Effect.fn("Triggers.TriggerConfig.nextSchedule")((config, now) =>
+            Effect.try({
+              try: () =>
+                DateTime.toEpochMillis(
+                  DateTime.makeUnsafe(nextScheduleOccurrence(config, DateTime.makeUnsafe(now))),
+                ),
+              catch: () => new AutomationTriggerError({ code: "invalid_input" }),
+            }),
+          ),
+        }),
+      ),
+      Layer.provide(FetchHttpClient.layer),
       Layer.provide(database),
       Layer.provide(ready),
     );
