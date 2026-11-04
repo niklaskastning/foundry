@@ -6,6 +6,8 @@ Stand: 4. November 2026. Planungsbaseline für [Architektur](architecture.md) un
 
 Die Häkchen bezeichnen den jeweils genannten Umfang. Offene Teilnachweise werden nicht durch einen Merge oder diese Statusübernahme geschlossen.
 
+Der zentrale Benutzerzugang ist noch ein Übergangsstand: Foundry-Anmeldung und eine separat autorisierte Main-T3-Sitzung werden gemeinsam geprüft. Worker-Zugriff benötigt kein eigenes Geräte-Pairing, reicht aber bisher nur die freigegebenen Thread-, Terminal- und Dateileserechte weiter; `settings:write` gehört noch nicht zum Gateway-Vertrag. Eine Anmeldung mit vollständig daraus abgeleiteten zentralen Benutzerrechten ist damit noch nicht abgenommen. Dies betrifft den Benutzerzugang, nicht die getrennte Provider-Autorisierung aus P14Z.
+
 - [x] **P01–P03 (Access-Modus):** Identität, Instanz-PostgreSQL und Access-Sessions implementiert und integriert; Integrationsstack [#29](https://github.com/niklaskastning/foundry/pull/29), erweiterte isolierte Nachweise [#30](https://github.com/niklaskastning/foundry/pull/30).
 - [x] **P04/P05 – Implementierung:** Windows-Access-Transport und Instanzeinstieg integriert. Diagnose und JSON-Decoder für gekoppelte T3-Sessions in [#42](https://github.com/niklaskastning/foundry/pull/42)/[#43](https://github.com/niklaskastning/foundry/pull/43) korrigiert; P05-Instanzwechsel bleibt ein eigener Live-Nachweis.
 - [x] **Windows-Session-Lebenszyklus:** Login, Check, Refresh vor Ablauf, vollständiger App-Neustart und Wiederanmeldung nach mindestens 16 Minuten ohne erneutes T3-Pairing bestätigt. [Evidence](https://github.com/niklaskastning/foundry/issues/13#issuecomment-6588567831); Build `41519672835`, Source `b57fbec08`. Die genaue Trennung von Foundry- und Access-Ablauf ist damit nicht belegt.
@@ -452,7 +454,7 @@ G1 wird pro Betriebsart abgenommen: zunächst **G1-Access** für unser Deploymen
 
 **Voraussetzungen:** P20, P47, P38b.
 
-**Ergebnis und Umfang:** Factory-Auswahl und Auftragsdetail, minimalen Formulareditor auf dem kanonischen Schema/Validator aus P47, Veröffentlichung, manuelles Starten und paginierte Run-/Step-Ansicht mit Thread-Links liefern; gleiche Rechte für Settings/Palette/MCP beachten.
+**Ergebnis und Umfang:** Factory-Auswahl und Auftragsdetail, minimalen Formulareditor als Entwicklungs-/Importübergang auf dem kanonischen Schema/Validator aus P47, explizite Snapshot-Aktivierung, manuelles Starten und paginierte Run-/Step-Ansicht mit Thread-Links liefern; gleiche Rechte für Settings/Palette/MCP beachten.
 
 **Abgrenzung:** Keine Canvas, kein neuer Provider und keine zweite Transkriptsynchronisation neben P38b.
 
@@ -504,11 +506,11 @@ G1 wird pro Betriebsart abgenommen: zunächst **G1-Access** für unser Deploymen
 
 **Voraussetzungen:** P47, P22, P23.
 
-**Ergebnis und Umfang:** Das separate Definitions-Repository als verbindlichen Git-Owner an Factory/Pfad/Branch binden, Commit synchronisieren und vollständige Definition validieren. Aktivierte PostgreSQL-Snapshots bleiben unveränderliche Laufzeit-/Historienkopien, keine zweite editierbare Konfigurationsquelle. UI zeigt Quelle, Diff, aktive Revision und Fehler; Git-Felder schreibgeschützt. Wechsel zwischen Foundry- und Git-Verwaltung sowie Aktivierung einer früheren gültigen Revision explizit machen.
+**Ergebnis und Umfang:** Das separate Definitions-Repository als verbindlichen Git-Owner an Factory/Pfad/Branch binden, Commit synchronisieren und vollständige Definition validieren. Aktivierte PostgreSQL-Snapshots bleiben unveränderliche Laufzeit-/Historienkopien, keine zweite editierbare Konfigurationsquelle. UI zeigt Quelle, Diff, aktive Revision und Fehler; Git-Felder schreibgeschützt. Der Git-Owner ist das dauerhafte Ziel, kein wählbarer Parallelmodus zu einer App-eigenen Definition. Bestehende manuelle Testdefinitionen mit explizitem Driftabgleich übernehmen; lokale Definitionsänderungen danach blockieren. Menschen und autorisierte Agenten bearbeiten dieselben Dateien über PRs; ein späterer UI-Editor erzeugt ebenfalls einen solchen PR. Betriebsbindungen, Trigger-Aktivierung/Pause und Run-Entscheidungen bleiben in der App konfigurierbar, ohne den Git-Inhalt zu überschreiben. Aktivierung einer früheren gültigen Git-Revision explizit machen.
 
 **Abgrenzung:** Ein Codehost zuerst: GitHub. Kein eigener gehosteter Git-Dienst und keine zusätzlichen automatischen CI-Jobs; Validierung in bestehende Checks oder lokal integrieren.
 
-**Gate P48 – Nachweis:** Doppelzustellung und Restart aktivieren einen Commit einmal. Ungültiger Commit bleibt inaktiv; ein verspäteter Sync überschreibt keine neuere Auswahl. Owner-Wechsel erkennt Drift; Rollback verändert keinen laufenden Run und umgeht keine aktuellen Grants.
+**Gate P48 – Nachweis:** Doppelzustellung und Restart aktivieren einen Commit einmal. Ungültiger Commit bleibt inaktiv; ein verspäteter Sync überschreibt keine neuere Auswahl. Übernahme manueller Testdefinitionen erkennt Drift; UI und API können Git-Definitionen nicht durch lokale Änderungen übersteuern. Mensch und Agent lesen denselben gepinnten Inhalt; Änderungen werden erst nach geprüftem Git-Commit aktiviert. Rollback verändert keinen laufenden Run und umgeht keine aktuellen Grants.
 
 ### P26 · Backup und isolierter Restore
 
@@ -658,7 +660,7 @@ G1 wird pro Betriebsart abgenommen: zunächst **G1-Access** für unser Deploymen
 
 **Voraussetzungen:** P48, P55, P56, P23.
 
-**Ergebnis und Umfang:** Explizit aktivierbare, begrenzte Fehlerauswertung erzeugt einen Auftrag und Vorschlags-PR für Code, Prompts, Skills oder Konfiguration. Fehlende/erledigte Fehlergruppen nicht erneut verarbeiten; manuell auslösbar und deaktivierbar.
+**Ergebnis und Umfang:** Explizit aktivierbare, begrenzte Auswertung von Beobachtungen und Evals erzeugt einen Auftrag und Vorschlags-PR. Verbesserungen an Factory-Workflows, Prompts, Skills oder Evaluationsdefinitionen gehen in das gemeinsame GitHub-Definitionsrepository; Änderungen am bearbeiteten Anwendungscode gehen in dessen Arbeitsrepository. Agenten verwenden dieselben lesbaren Definitionsdateien und denselben Review-Weg wie Menschen. Fehlende/erledigte Fehlergruppen nicht erneut verarbeiten; manuell auslösbar und deaktivierbar.
 
 **Abgrenzung:** Keine autonome Aktivierung, kein Auto-Merge und keine Budget-/Rechteänderung durch den Verbesserungsagenten.
 
