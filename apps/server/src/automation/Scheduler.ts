@@ -2,6 +2,10 @@
 import * as NodeCrypto from "node:crypto";
 import {
   CommandId,
+  ManualStart,
+  ThreadId,
+  RuntimeRequestId,
+  ProviderUserInputAnswers,
   ProjectId,
   FoundryWorkerExecution,
   FoundryWorkerLaunchInput,
@@ -67,7 +71,21 @@ export class SchedulerError extends Schema.TaggedError<SchedulerError>()("Schedu
     return `Automation scheduler failed (${this.reason}).`;
   }
 }
-const failure = (cause: unknown) => new SchedulerError({ reason: "unavailable", cause });
+const isSchedulerError = Schema.is(SchedulerError);
+const isDispatchError = Schema.is(DispatchStore.DispatchError);
+const isWorkerError = Schema.is(WorkerTransport.WorkerTransportError);
+const failure = (cause: unknown) =>
+  isSchedulerError(cause)
+    ? cause
+    : new SchedulerError({
+        reason:
+          isWorkerError(cause) && cause.reason === "forbidden"
+            ? "not_allowed"
+            : isDispatchError(cause) && cause.reason === "conflict"
+              ? "invalid_binding"
+              : "unavailable",
+        cause,
+      });
 const Receipt = Schema.Struct({
   receipt: FoundryWorkerLaunchReceipt,
   generation: Schema.Int,
@@ -83,6 +101,13 @@ const decodeEnroll = Schema.decodeEffect(EnrollDispatch, { onExcessProperty: "er
 const decodeBinding = Schema.decodeUnknownEffect(DispatchBinding);
 const decodeResult = Schema.decodeUnknownEffect(Result);
 const decodeLaunch = Schema.decodeUnknownEffect(FoundryWorkerLaunchInput);
+const Answer = Schema.Struct({
+  commandId: CommandId,
+  answers: ProviderUserInputAnswers,
+  identity: WorkerTransport.WorkerIdentity,
+});
+const decodeAnswer = Schema.decodeUnknownEffect(Answer);
+const decodeManualStart = Schema.decodeEffect(ManualStart, { onExcessProperty: "error" });
 const decodeReceipt = Schema.decodeUnknownEffect(Receipt);
 const encodeCommandKey = Schema.encodeEffect(
   Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.Int])),
@@ -91,6 +116,10 @@ const encodeCommandKey = Schema.encodeEffect(
 export class Scheduler extends Context.Service<
   Scheduler,
   {
+    readonly start: (
+      request: HttpServerRequest.HttpServerRequest,
+      input: ManualStart,
+    ) => Effect.Effect<DispatchStore.DispatchRun, SchedulerError>;
     readonly enroll: (
       request: HttpServerRequest.HttpServerRequest,
       input: typeof EnrollDispatch.Type,
@@ -113,7 +142,35 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const owner = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
   const workerId = config.deviceId;
-  const permitted = (runId: string) => config.allowedRunIds.includes(runId);
+  const permitted = (runId: string) =>
+    config.allowedRunIds.includes(runId) ? Effect.succeed(true) : store.permitted(runId);
+  const start = Effect.fn("Scheduler.start")(function* (
+    request: HttpServerRequest.HttpServerRequest,
+    raw: ManualStart,
+  ) {
+    const input = yield* decodeManualStart(raw);
+    const identity = yield* worker.authorize(request, config);
+    const binding = yield* decodeBinding({
+      identity,
+      projectId: input.projectId,
+      model: input.model,
+      checks: input.checks,
+      requiredArtifacts: input.requiredArtifacts,
+    });
+    return yield* store.startManual(
+      {
+        commandId: input.commandId,
+        id: input.id,
+        factoryId: input.factoryId,
+        workItemId: input.workItemId,
+        workflowVersionId: input.workflowVersionId,
+        revision: input.revision,
+      },
+      workerId,
+      binding,
+      identity,
+    );
+  }, Effect.mapError(failure));
   const verifyArtifact = Effect.fn("Scheduler.verifyArtifact")(function* (
     identity: WorkerTransport.WorkerIdentity,
     item: FoundryArtifactManifest,
@@ -147,7 +204,8 @@ const make = Effect.gen(function* () {
     raw: typeof EnrollDispatch.Type,
   ) {
     const input = yield* decodeEnroll(raw);
-    if (!permitted(input.runId)) return yield* new SchedulerError({ reason: "not_allowed" });
+    if (!(yield* permitted(input.runId)))
+      return yield* new SchedulerError({ reason: "not_allowed" });
     const identity = yield* worker.authorize(request, config);
     return yield* store.enroll({
       factoryId: input.factoryId,
@@ -167,7 +225,7 @@ const make = Effect.gen(function* () {
     factoryId: string,
     runId: string,
   ) {
-    if (!permitted(runId)) return yield* new SchedulerError({ reason: "not_allowed" });
+    if (!(yield* permitted(runId))) return yield* new SchedulerError({ reason: "not_allowed" });
     const identity = yield* worker.identityForRead(request);
     const saved = yield* store.read(factoryId, runId);
     const binding = yield* decodeBinding(saved.binding);
@@ -179,7 +237,7 @@ const make = Effect.gen(function* () {
     return saved;
   }, Effect.mapError(failure));
   const perform = Effect.fn("Scheduler.perform")(function* (claim: DispatchStore.DispatchClaim) {
-    if (!permitted(claim.run.id)) {
+    if (!(yield* permitted(claim.run.id))) {
       yield* store.wait(claim, "run_not_enabled");
       return;
     }
@@ -197,12 +255,40 @@ const make = Effect.gen(function* () {
       binding.identity.environmentId !== config.environmentId
     )
       return yield* new SchedulerError({ reason: "invalid_binding" });
-    const ordinal = claim.attempts.findIndex((attempt) => attempt.state !== "succeeded");
-    const index = ordinal < 0 ? claim.attempts.length : ordinal;
+    const attempts = [
+      ...new Map(claim.attempts.map((attempt) => [attempt.ordinal, attempt])).values(),
+    ];
+    if (claim.mode === "cancelled") return;
+    if (claim.mode === "cancel_requested" && !attempts.some((a) => a.state !== "succeeded")) {
+      yield* store.confirmCancel(claim);
+      return;
+    }
+    const ordinal = attempts.findIndex((attempt) => attempt.state !== "succeeded");
+    const index = ordinal < 0 ? attempts.length : ordinal;
     const step = claim.workflow.steps[index];
     if (!step) return;
     if (step.kind === "approval" || step.kind === "publish") {
-      yield* store.wait(claim, `${step.kind}_required`);
+      if (claim.mode === "cancel_requested") {
+        yield* store.confirmCancel(claim);
+        return;
+      }
+      if (!(yield* store.canLaunch(claim))) return;
+      if (!(yield* store.approved(claim, step.id))) {
+        yield* store.wait(claim, `${step.kind}_required`);
+        return;
+      }
+      if (step.kind === "publish") {
+        yield* store.wait(claim, "publish_adapter_unavailable");
+        return;
+      }
+      const approvalId = Hex.encode(
+        yield* crypto.digest(
+          "SHA-256",
+          new TextEncoder().encode(yield* encodeCommandKey([claim.run.id, index])),
+        ),
+      );
+      if (!(yield* store.completeApproval(claim, index, `automation:approval:${approvalId}`)))
+        yield* store.wait(claim, "approval_required");
       return;
     }
     const check =
@@ -211,8 +297,16 @@ const make = Effect.gen(function* () {
       yield* store.wait(claim, "check_not_configured");
       return;
     }
-    let attempt = claim.attempts[index];
+    let attempt = attempts[index];
     if (!attempt) {
+      if (!(yield* store.canLaunch(claim))) return;
+      const previousWorker = attempts.findLast((a) => a.result !== null)?.ordinal ?? -1;
+      for (const previous of claim.workflow.steps.slice(previousWorker + 1, index)) {
+        if (previous.kind === "approval" && !(yield* store.approved(claim, previous.id))) {
+          yield* store.wait(claim, "approval_revision_changed");
+          return;
+        }
+      }
       const digest = Hex.encode(
         yield* crypto.digest(
           "SHA-256",
@@ -220,7 +314,7 @@ const make = Effect.gen(function* () {
         ),
       );
       const commandId = CommandId.make(`automation:${digest}`);
-      const previous = claim.attempts[index - 1];
+      const previous = attempts.slice(0, index).findLast((a) => a.result !== null);
       const previousResult = previous ? yield* decodeResult(previous.result) : null;
       if (previousResult) {
         for (const item of previousResult.artifacts) {
@@ -260,9 +354,30 @@ const make = Effect.gen(function* () {
         yield* store.wait(claim, "accepted_attempt_missing");
         return;
       }
+      if (claim.mode === "cancel_requested") {
+        if (!(yield* store.confirmCancel(claim)))
+          yield* store.wait(claim, "cancel_delivery_uncertain");
+        return;
+      }
+      if (!(yield* store.canLaunch(claim))) {
+        yield* store.wait(claim, "paused");
+        return;
+      }
       const status = yield* worker.status(binding.identity);
       if (!status.providerReady || status.capacityAvailable !== true) {
         yield* store.wait(claim, "worker_not_ready");
+        return;
+      }
+      if (!(yield* store.beginDelivery(claim, attempt.commandId))) {
+        const current = yield* store.read(claim.run.factoryId, claim.run.id);
+        yield* store.wait(
+          claim,
+          current.mode === "paused"
+            ? "paused"
+            : current.mode === "cancel_requested"
+              ? "cancel_requested"
+              : "approval_revision_changed",
+        );
         return;
       }
       yield* worker.launch(binding.identity, request);
@@ -298,10 +413,58 @@ const make = Effect.gen(function* () {
         receipt,
         result: null,
       });
+    if (claim.mode === "cancel_requested") {
+      if (!lifecycle.writerEnded) {
+        const cancelId = Hex.encode(
+          yield* crypto.digest("SHA-256", new TextEncoder().encode(attempt.commandId)),
+        );
+        yield* worker.cancel(binding.identity, {
+          commandId: CommandId.make(`automation:cancel:${cancelId}`),
+          launchCommandId: request.commandId,
+        });
+        yield* store.wait(claim, "writer_end_pending");
+        return;
+      }
+      if (attempt.state !== "failed" && attempt.state !== "succeeded")
+        yield* store.record(claim, {
+          commandId: attempt.commandId,
+          state: "failed",
+          reason: "cancelled",
+          receipt,
+          result: { execution, artifacts: [] },
+        });
+      yield* store.confirmCancel(claim);
+      return;
+    }
     if (!lifecycle.manifest && ["active", "finalizing"].includes(lifecycle.state))
       yield* worker
         .renew(binding.identity, { commandId: request.commandId, generation: lifecycle.generation })
         .pipe(Effect.ignore);
+    yield* Effect.gen(function* () {
+      const after = yield* store.archiveCursor(attempt.commandId);
+      const page = yield* archive.read(binding.identity, {
+        owner: {
+          environmentId: binding.identity.environmentId,
+          threadId: execution.receipt.threadId,
+        },
+        after,
+        limit: 50,
+      });
+      yield* store.projectQuestions(claim, attempt.commandId, page.events);
+    }).pipe(Effect.ignore);
+    if (!lifecycle.writerEnded) {
+      for (const pending of yield* store.answers(claim.run.id)) {
+        if (pending.threadId !== execution.receipt.threadId) continue;
+        const answer = yield* decodeAnswer(pending.answer);
+        yield* worker.answer(answer.identity, {
+          commandId: answer.commandId,
+          threadId: ThreadId.make(pending.threadId),
+          requestId: RuntimeRequestId.make(pending.requestId),
+          answers: answer.answers,
+        });
+        yield* store.answerDelivered(claim.run.id, pending.requestId);
+      }
+    }
     const final = lifecycle.manifest?.archive;
     if (
       final &&
@@ -371,6 +534,7 @@ const make = Effect.gen(function* () {
         if (!(yield* verifyArtifact(binding.identity, item))) artifactsReady = false;
       }
     }
+    if (events.length) yield* store.projectQuestions(claim, attempt.commandId, events);
     const decision = decideStep({
       execution,
       archive: status,
@@ -406,6 +570,6 @@ const make = Effect.gen(function* () {
     );
     return true;
   }).pipe(Effect.mapError(failure));
-  return Scheduler.of({ enroll, read, tick });
+  return Scheduler.of({ start, enroll, read, tick });
 });
 export const layer = Layer.effect(Scheduler, make);

@@ -1,5 +1,12 @@
 import {
   FoundryGatewayError,
+  AuthOrchestrationOperateScope,
+  type CommandId,
+  type ThreadId,
+  type RuntimeRequestId,
+  type ProviderUserInputAnswers,
+  type FoundryWorkerCancelInput,
+  type FoundryWorkerCancellation,
   FoundryWorkerLaunchError,
   type FoundryWorkerExecution,
   type FoundryWorkerLaunchInput,
@@ -41,6 +48,9 @@ type Target = Pick<WorkerIdentity, "deviceId" | "environmentId">;
 export class WorkerTransport extends Context.Service<
   WorkerTransport,
   {
+    readonly identityForWrite: (
+      request: HttpServerRequest.HttpServerRequest,
+    ) => Effect.Effect<Pick<WorkerIdentity, "instanceId" | "operatorId">, WorkerTransportError>;
     readonly identityForRead: (
       request: HttpServerRequest.HttpServerRequest,
     ) => Effect.Effect<Pick<WorkerIdentity, "instanceId" | "operatorId">, WorkerTransportError>;
@@ -59,6 +69,19 @@ export class WorkerTransport extends Context.Service<
       identity: WorkerIdentity,
       input: FoundryWorkerReadInput,
     ) => Effect.Effect<FoundryWorkerExecution | null, WorkerTransportError>;
+    readonly answer: (
+      identity: WorkerIdentity,
+      input: {
+        commandId: CommandId;
+        threadId: ThreadId;
+        requestId: RuntimeRequestId;
+        answers: ProviderUserInputAnswers;
+      },
+    ) => Effect.Effect<void, WorkerTransportError>;
+    readonly cancel: (
+      identity: WorkerIdentity,
+      input: FoundryWorkerCancelInput,
+    ) => Effect.Effect<FoundryWorkerCancellation, WorkerTransportError>;
     readonly renew: (
       identity: WorkerIdentity,
       input: FoundryWorkerRenewInput,
@@ -153,6 +176,10 @@ const make = Effect.gen(function* () {
     Effect.mapError(transportError),
   );
   return WorkerTransport.of({
+    identityForWrite: Effect.fn("WorkerTransport.identityForWrite")(
+      (request) => gateway.identityForWrite(request, AuthOrchestrationOperateScope),
+      Effect.mapError(transportError),
+    ),
     identityForRead: Effect.fn("WorkerTransport.identityForRead")(
       (request) => gateway.identityForRead(request),
       Effect.mapError(transportError),
@@ -173,6 +200,14 @@ const make = Effect.gen(function* () {
           }),
         ),
       ),
+    ),
+    answer: Effect.fn("WorkerTransport.answer")((identity, input) =>
+      call(identity, (client) =>
+        client["orchestration.dispatchCommand"]({ ...input, type: "runtime-request.respond" }),
+      ).pipe(Effect.asVoid),
+    ),
+    cancel: Effect.fn("WorkerTransport.cancel")((identity, input) =>
+      call(identity, (client) => client["foundry.workerCancel"](input)),
     ),
     renew: Effect.fn("WorkerTransport.renew")((identity, input) =>
       call(identity, (client) => client["foundry.workerRenew"](input)),

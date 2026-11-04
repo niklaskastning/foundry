@@ -56,7 +56,7 @@ const make = Effect.gen(function* () {
           const versions = yield* sql<{
             version: number;
           }>`SELECT version FROM foundry_automation.schema_version`;
-          if (versions.length !== 1 || ![1, 2, 3, 4].includes(versions[0]?.version ?? 0))
+          if (versions.length !== 1 || ![1, 2, 3, 4, 5].includes(versions[0]?.version ?? 0))
             return yield* new AutomationMigrationError({ reason: "schema_incompatible" });
           if (versions[0]?.version === 1) {
             yield* sql`ALTER TABLE foundry_automation.work_items ADD CONSTRAINT work_items_factory_id_id_key UNIQUE(factory_id,id)`;
@@ -78,6 +78,21 @@ const make = Effect.gen(function* () {
             yield* sql`CREATE TABLE foundry_automation.dispatch_outbox (command_id text PRIMARY KEY REFERENCES foundry_automation.step_attempts(command_id), state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','delivered','confirmed')))`;
             yield* sql`UPDATE foundry_automation.schema_version SET version=4`;
           }
+          if ([1, 2, 3, 4].includes(versions[0]?.version ?? 0)) {
+            yield* sql`ALTER TABLE foundry_automation.dispatch_outbox DROP CONSTRAINT dispatch_outbox_state_check, ADD CONSTRAINT dispatch_outbox_state_check CHECK(state IN ('pending','sending','delivered','confirmed'))`;
+            yield* sql`ALTER TABLE foundry_automation.step_attempts DROP CONSTRAINT step_attempts_run_id_ordinal_key, ADD COLUMN attempt_number integer NOT NULL DEFAULT 0, ADD COLUMN archive_cursor integer NOT NULL DEFAULT 0, ADD CONSTRAINT step_attempts_run_step_attempt_key UNIQUE(run_id,ordinal,attempt_number)`;
+            yield* sql`CREATE TABLE foundry_automation.run_controls (run_id text PRIMARY KEY REFERENCES foundry_automation.dispatch_runs(run_id), revision integer NOT NULL DEFAULT 0, result_revision integer NOT NULL DEFAULT 0, mode text NOT NULL DEFAULT 'active' CHECK(mode IN ('active','paused','cancel_requested','cancelled')))`;
+            yield* sql`INSERT INTO foundry_automation.run_controls(run_id) SELECT run_id FROM foundry_automation.dispatch_runs`;
+            yield* sql`CREATE TABLE foundry_automation.control_commands (id text PRIMARY KEY REFERENCES foundry_automation.commands(id), receipt jsonb NOT NULL)`;
+            yield* sql`CREATE TABLE foundry_automation.run_decisions (command_id text PRIMARY KEY REFERENCES foundry_automation.commands(id), run_id text NOT NULL REFERENCES foundry_automation.runs(id), step_id text NOT NULL, revision integer NOT NULL, result_revision integer NOT NULL, approved boolean NOT NULL)`;
+            yield* sql`CREATE TABLE foundry_automation.run_questions (run_id text NOT NULL REFERENCES foundry_automation.runs(id), request_id text NOT NULL, thread_id text NOT NULL, payload jsonb NOT NULL, status text NOT NULL CHECK(status IN ('pending','answered','resolved')), answer jsonb, source_sequence bigint NOT NULL, PRIMARY KEY(run_id,request_id))`;
+            yield* sql`CREATE TABLE foundry_automation.manual_admissions (run_id text PRIMARY KEY REFERENCES foundry_automation.runs(id), command_id text NOT NULL UNIQUE REFERENCES foundry_automation.commands(id), identity jsonb NOT NULL)`;
+            yield* sql`CREATE TABLE foundry_automation.inbox_entries (id text PRIMARY KEY, instance_id text NOT NULL, operator_id text NOT NULL, factory_id text NOT NULL REFERENCES foundry_automation.factories(id), work_item_id text NOT NULL REFERENCES foundry_automation.work_items(id), run_id text NOT NULL REFERENCES foundry_automation.runs(id), kind text NOT NULL CHECK(kind IN ('question','answer','approval','blocker','error')), source_revision text NOT NULL, source jsonb NOT NULL, active boolean NOT NULL, updated_at timestamptz NOT NULL DEFAULT clock_timestamp())`;
+            yield* sql`CREATE INDEX inbox_entries_owner ON foundry_automation.inbox_entries(instance_id,operator_id,id)`;
+            yield* sql`CREATE TABLE foundry_automation.inbox_marks (operator_id text NOT NULL,item_id text NOT NULL REFERENCES foundry_automation.inbox_entries(id),source_revision text NOT NULL,is_read boolean NOT NULL DEFAULT false,is_done boolean NOT NULL DEFAULT false,PRIMARY KEY(operator_id,item_id,source_revision))`;
+            yield* sql`CREATE TABLE foundry_automation.inbox_commands (id text PRIMARY KEY,operator_id text NOT NULL,payload jsonb NOT NULL,receipt jsonb NOT NULL)`;
+            yield* sql`UPDATE foundry_automation.schema_version SET version=5`;
+          }
           yield* sql`GRANT USAGE ON SCHEMA foundry_automation TO ${sql(runtimeRole)}`;
           yield* sql`GRANT SELECT ON ALL TABLES IN SCHEMA foundry_automation TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT ON foundry_automation.factories, foundry_automation.versions, foundry_automation.work_items, foundry_automation.commands TO ${sql(runtimeRole)}`;
@@ -89,7 +104,10 @@ const make = Effect.gen(function* () {
           yield* sql`GRANT INSERT ON foundry_automation.dispatch_runs, foundry_automation.dispatch_workers, foundry_automation.step_attempts, foundry_automation.dispatch_outbox TO ${sql(runtimeRole)}`;
           yield* sql`GRANT UPDATE(state,reason) ON foundry_automation.dispatch_runs TO ${sql(runtimeRole)}`;
           yield* sql`GRANT UPDATE(run_id,claim_owner,claim_generation,lease_until) ON foundry_automation.dispatch_workers TO ${sql(runtimeRole)}`;
-          yield* sql`GRANT UPDATE(state,reason,receipt,result) ON foundry_automation.step_attempts TO ${sql(runtimeRole)}`;
+          yield* sql`GRANT UPDATE(state,reason,receipt,result,archive_cursor) ON foundry_automation.step_attempts TO ${sql(runtimeRole)}`;
+          yield* sql`GRANT INSERT, UPDATE ON foundry_automation.run_controls, foundry_automation.run_questions, foundry_automation.inbox_entries, foundry_automation.inbox_marks TO ${sql(runtimeRole)}`;
+          yield* sql`GRANT INSERT ON foundry_automation.control_commands, foundry_automation.run_decisions, foundry_automation.manual_admissions, foundry_automation.inbox_commands TO ${sql(runtimeRole)}`;
+          yield* sql`GRANT UPDATE(binding) ON foundry_automation.dispatch_runs TO ${sql(runtimeRole)}`;
           yield* sql`GRANT UPDATE(state) ON foundry_automation.dispatch_outbox TO ${sql(runtimeRole)}`;
         }),
       );
