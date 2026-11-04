@@ -7,8 +7,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest, FetchHttpClient } from "effect/http";
+import { sendAuthenticated } from "@t3tools/source-control-github/server/GitHubHttp";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 
 export class GitHubAppError extends Schema.TaggedError<GitHubAppError>()("GitHubAppError", {
@@ -163,7 +163,6 @@ export const layer = Layer.effect(
           `https://api.github.com/${path}`,
           {
             headers: {
-              authorization: `Bearer ${Redacted.value(token)}`,
               accept: "application/vnd.github+json",
               "x-github-api-version": "2022-11-28",
               "user-agent": "foundry-automation",
@@ -171,7 +170,11 @@ export const layer = Layer.effect(
           },
         );
         if (body !== undefined) req = yield* HttpClientRequest.bodyJson(req, body);
-        const response = yield* http.execute(req).pipe(
+        const response = yield* sendAuthenticated(http, {
+          request: req,
+          authorization: Redacted.make(`Bearer ${Redacted.value(token)}`),
+          maxResponseBytes: 2 * 1024 * 1024,
+        }).pipe(
           Effect.provideService(FetchHttpClient.RequestInit, {
             redirect: "manual",
             credentials: "omit",
@@ -203,20 +206,8 @@ export const layer = Layer.effect(
           return yield* denied();
         if (response.status === 422) return yield* conflict();
         if (response.status < 200 || response.status >= 300) return yield* unavailable();
-        const decoder = new TextDecoder();
-        const bytes = yield* response.stream.pipe(
-          Stream.runFoldEffect(
-            () => ({ text: "", size: 0 }),
-            (acc, part) =>
-              acc.size + part.length > 2 * 1024 * 1024
-                ? Effect.fail(unavailable())
-                : Effect.succeed({
-                    text: acc.text + decoder.decode(part, { stream: true }),
-                    size: acc.size + part.length,
-                  }),
-          ),
-        );
-        return yield* decodeJson(bytes.text + decoder.decode());
+        if (response.truncated || response.invalidUtf8) return yield* unavailable();
+        return yield* decodeJson(response.body);
       },
       Effect.timeout("20 seconds"),
       Effect.mapError((error) => (isGitHubAppError(error) ? error : unavailable())),
