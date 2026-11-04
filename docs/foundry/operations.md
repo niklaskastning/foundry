@@ -19,7 +19,7 @@ Der separate Linux-Host-Dienst hat einen [eigenen Installer und Betriebsweg](../
 This opt-in backend registers a device key and its first local environment. It does
 not connect that environment, provide gateway access or install an agent. The
 outstanding release gates and follow-up work are tracked in the
-[implementation plan](implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen). Do not activate it
+[guardrails plan](basic-leitplanken.md#bestehende-nachweise-und-offene-technische-abnahmen). Do not activate it
 on the existing production deployment as part of development testing.
 
 Use an isolated Main with PostgreSQL instance schema **7**, the existing operator
@@ -745,7 +745,7 @@ Replay-Prüfungen; Foundry-Launch verlangt weiterhin die gesonderte Provider-Bin
 eigenen verwalteten Worktree. Dafür muss eine erlaubte Wurzel das Quellrepository
 enthalten; Worktrees werden nicht innerhalb ihres Quell-Checkouts erzeugt. Ohne
 Option bleibt der Checkout-Modus erhalten. Beide Modi benutzen dasselbe dauerhafte
-Journal pro Worker. Die reale G3-Abnahme ist im [aktuellen Plan](implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen)
+Journal pro Worker. Die reale G3-Abnahme ist im [Leitplanken-Plan](basic-leitplanken.md#bestehende-nachweise-und-offene-technische-abnahmen)
 mit Evidence in PR #45 festgehalten. Die Factory-Aktivierung bleibt gesondert.
 
 ## Automation-Persistenz, manueller Start und Steuerung (P18a/P18b/P47/P19–P21/P49)
