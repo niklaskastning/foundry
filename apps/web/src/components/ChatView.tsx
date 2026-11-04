@@ -1,3 +1,4 @@
+import { FactoryRunReturn } from "../foundry/FactoryNavigation";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
@@ -3359,6 +3360,7 @@ export default function ChatView(props: ChatViewProps) {
             />
           </header>
         )}
+        {embedded ? null : <FactoryRunReturn />}
 
         <div className="relative flex min-h-0 min-w-0 flex-1">
           <ThreadFindCanvas

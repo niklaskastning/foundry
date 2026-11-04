@@ -2,6 +2,7 @@ import {
   ORCHESTRATION_PROTOCOL_QUERY_PARAM,
   ORCHESTRATION_PROTOCOL_VERSION,
   AuthOrchestrationReadScope,
+  type AuthEnvironmentScope,
   AuthAccessWriteScope,
   AuthSessionId,
   EnvironmentId,
@@ -74,6 +75,13 @@ export type AutomationGatewayIdentity = typeof AutomationGatewayIdentity.Type;
 export class GatewayGrants extends Context.Service<
   GatewayGrants,
   {
+    readonly identityForWrite: (
+      request: Request,
+      scope: AuthEnvironmentScope,
+    ) => Effect.Effect<
+      Pick<AutomationGatewayIdentity, "instanceId" | "operatorId">,
+      FoundryGatewayError
+    >;
     readonly identityForRead: (
       request: Request,
     ) => Effect.Effect<
@@ -209,6 +217,14 @@ const make = Effect.gen(function* () {
     if (grants.size >= 128) return yield* new FoundryGatewayError({ code: "capacity" });
     grants.set(grantId, { grant, binding: identity.foundry.csrfToken });
     return grant;
+  });
+  const identityForWrite = Effect.fn("GatewayGrants.identityForWrite")(function* (
+    request: Request,
+    scope: AuthEnvironmentScope,
+  ) {
+    const identity = yield* authenticate(request);
+    if (!identity.client.scopes.includes(scope)) return yield* denied();
+    return { instanceId: identity.foundry.instanceId, operatorId: identity.foundry.operatorId };
   });
   const identityForRead = Effect.fn("GatewayGrants.identityForRead")(function* (request: Request) {
     const identity = yield* authenticate(request);
@@ -527,6 +543,7 @@ const make = Effect.gen(function* () {
   });
   return GatewayGrants.of({
     identityForRead,
+    identityForWrite,
     catalog,
     approveDevice,
     revokeDevice,

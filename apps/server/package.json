@@ -34,7 +34,8 @@
     "test:foundry-postgres": "node scripts/test-foundry-postgres.ts",
     "test:foundry-archive": "node scripts/test-foundry-archive.ts",
     "test:foundry-artifacts": "node scripts/test-foundry-artifacts.ts",
-    "test:automation-postgres": "node scripts/test-automation-postgres.ts"
+    "test:automation-postgres": "node scripts/test-automation-postgres.ts",
+    "test:automation-inbox": "node scripts/test-automation-inbox.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.276",

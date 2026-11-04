@@ -23,7 +23,13 @@ type Operation =
   | { type: "disconnect" }
   | { type: "approve"; environmentId: string; publicKey: string }
   | { type: "revoke"; deviceId: FoundryDeviceId }
-  | { type: "access"; deviceId: FoundryDeviceId; generation: number; enabled: boolean };
+  | {
+      type: "access";
+      kind: "clientAccess" | "automationExecution";
+      deviceId: FoundryDeviceId;
+      generation: number;
+      enabled: boolean;
+    };
 
 async function client() {
   const state = await executeInstanceOperation({ operation: "session" });
@@ -128,7 +134,7 @@ export const deviceCommand = createRuntimeCommand(connectionAtomRuntime, {
           yield* run(() =>
             service.access({
               deviceId: input.deviceId,
-              kind: "clientAccess",
+              kind: input.kind,
               enabled: input.enabled,
               generation: input.generation,
             }),

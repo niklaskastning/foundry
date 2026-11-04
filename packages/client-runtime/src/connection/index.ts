@@ -28,3 +28,5 @@ export { orchestrationProtocolCompatibilityError } from "./compatibility.ts";
 export { OutdatedHostUpdateError } from "./outdatedHostUpdate.ts";
 
 export * as FoundryArchive from "./foundryArchive.ts";
+
+export * as FoundryMain from "./foundryMain.ts";

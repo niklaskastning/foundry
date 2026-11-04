@@ -289,7 +289,27 @@ it.effect(
       expect((yield* f.grants.revokeDevice(request, f.target).pipe(Effect.result))._tag).toBe(
         "Failure",
       );
+      const operator = yield* f.sessions.issue({
+        scopes: ["orchestration:operate"],
+        subject: "operator",
+        method: "bearer-access-token",
+      });
+      expect(
+        (yield* f.grants.identityForWrite(request, "orchestration:operate").pipe(Effect.result))
+          ._tag,
+      ).toBe("Failure");
       f.disconnect();
+      expect(
+        yield* f.grants.identityForWrite(f.request(operator.token), "orchestration:operate"),
+      ).toEqual(yield* f.grants.identityForRead(request));
+      expect(
+        (yield* f.grants
+          .identityForWrite(
+            f.request(operator.token, { "x-foundry-csrf": "wrong" }),
+            "orchestration:operate",
+          )
+          .pipe(Effect.result))._tag,
+      ).toBe("Failure");
       expect((yield* f.grants.catalog(request, {})).devices).toMatchObject([
         { online: false, rpcReady: false },
       ]);

@@ -375,6 +375,11 @@ it.effect(
       const launches: FoundryWorkerLaunchInput[] = [];
       const executions = new Map<string, FoundryWorkerExecution>();
       let generation = 0;
+      let mode: NonNullable<DispatchStore.DispatchRun["mode"]> = "active";
+      let renewals = 0;
+      let cancellations = 0;
+      let confirmedCancellations = 0;
+      let deliveryAllowed = true;
       let state: DispatchStore.DispatchState = "running";
       let reason: string | null = null;
       const run: DispatchStore.DispatchRun = {
@@ -411,11 +416,28 @@ it.effect(
       };
       const unsupported = Effect.die("Unexpected fixture operation");
       const store = DispatchStore.DispatchStore.of({
+        archiveCursor: () => Effect.succeed(0),
+        projectQuestions: () => Effect.void,
+        answers: () => Effect.succeed([]),
+        answerDelivered: () => Effect.void,
+        startManual: () => unsupported,
+        permitted: () => Effect.succeed(false),
+        admission: () => unsupported,
+        canLaunch: () => Effect.succeed(mode === "active"),
+        beginDelivery: () => Effect.succeed(mode === "active" && deliveryAllowed),
+        approved: () => Effect.succeed(false),
+        completeApproval: () => unsupported,
+        confirmCancel: () =>
+          Effect.sync(() => {
+            confirmedCancellations++;
+            return true;
+          }),
         enroll: () => unsupported,
         read: () => Effect.succeed({ ...run, state, reason, attempts: [...attempts] }),
         claimNext: ({ owner }) =>
           Effect.sync(() => ({
             ...run,
+            mode,
             state,
             reason,
             attempts: [...attempts],
@@ -449,6 +471,20 @@ it.effect(
         release: () => Effect.void,
       });
       const worker = WorkerTransport.WorkerTransport.of({
+        cancel: (_identity, input) =>
+          Effect.sync(() => {
+            cancellations++;
+            const execution = executions.get(input.launchCommandId)!;
+            return {
+              commandId: input.commandId,
+              launch: execution.receipt,
+              runId: execution.run.id,
+              status: "requested" as const,
+              sequence: 2,
+            };
+          }),
+        answer: () => unsupported,
+        identityForWrite: () => Effect.succeed(proof.identity),
         identityForRead: () => Effect.succeed(proof.identity),
         authorize: () => Effect.succeed(proof.identity),
         status: () =>
@@ -463,7 +499,10 @@ it.effect(
             activeRuns: 0,
           }),
         read: (_identity, input) => Effect.sync(() => executions.get(input.commandId) ?? null),
-        renew: () => Effect.void,
+        renew: () =>
+          Effect.sync(() => {
+            renewals++;
+          }),
         launch: (_identity, input) =>
           Effect.gen(function* () {
             launches.push(input);
@@ -527,6 +566,12 @@ it.effect(
         assert.equal(launches.length, 1);
         assert.equal(attempts[0]?.state, "running");
         assert.equal(attempts[0]?.reason, "writer_end_pending");
+        const renewalsBeforePause = renewals;
+        mode = "paused";
+        assert.isTrue(yield* scheduler.tick);
+        assert.equal(renewals, renewalsBeforePause + 1);
+        assert.equal(launches.length, 1);
+        mode = "active";
         const commandId = launches[0]!.commandId;
         const accepted = executions.get(commandId)!;
         executions.set(commandId, {
@@ -564,16 +609,43 @@ it.effect(
         assert.isTrue(yield* scheduler.tick);
         assert.equal(attempts[0]?.state, "succeeded");
         assert.equal(launches.length, 1);
+        mode = "paused";
+        assert.isTrue(yield* scheduler.tick);
+        assert.equal(launches.length, 1);
+        mode = "active";
         artifactMode = "changed";
         assert.isTrue(yield* scheduler.tick);
         assert.equal(reason, "handoff_artifact_pending");
         assert.equal(launches.length, 1);
         artifactMode = "ready";
+        deliveryAllowed = false;
+        assert.isTrue(yield* scheduler.tick);
+        assert.equal(launches.length, 1);
+        assert.equal(reason, "approval_revision_changed");
+        deliveryAllowed = true;
         assert.isTrue(yield* scheduler.tick);
         assert.equal(launches.length, 2);
         assert.notEqual(launches[1]?.commandId, commandId);
         assert.deepEqual(launches[1]?.previousExecution, { commandId, generation: 1 });
         assert.deepEqual(launches[1]?.inputArtifacts, [artifact]);
+        mode = "cancel_requested";
+        assert.isTrue(yield* scheduler.tick);
+        assert.equal(cancellations, 1);
+        assert.equal(confirmedCancellations, 0);
+        const second = executions.get(launches[1]!.commandId)!;
+        executions.set(second.receipt.commandId, {
+          ...second,
+          run: { ...second.run, status: "cancelled" },
+          lifecycle: {
+            ...proof.execution.lifecycle!,
+            state: "stopped",
+            manifest: { ...proof.execution.lifecycle!.manifest!, outcome: "stopped" },
+          },
+        });
+        assert.isTrue(yield* scheduler.tick);
+        assert.equal(confirmedCancellations, 1);
+        assert.equal(attempts[1]?.state, "failed");
+        assert.equal(launches.length, 2);
       }).pipe(
         Effect.provide(
           Scheduler.layer.pipe(

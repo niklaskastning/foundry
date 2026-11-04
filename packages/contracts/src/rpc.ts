@@ -1,3 +1,21 @@
+import {
+  AutomationApplicationQuery,
+  AutomationApplicationCommand,
+  AutomationApplicationResult,
+  AutomationApplicationError,
+} from "./automation/application.ts";
+import {
+  AutomationControlCommand,
+  AutomationControlSnapshot,
+  AutomationControlError,
+} from "./automation/control.ts";
+import {
+  AutomationInboxQuery,
+  AutomationInboxMark,
+  AutomationInboxPage,
+  AutomationInboxEntry,
+  AutomationInboxError,
+} from "./automation/inbox.ts";
 import { FoundryWorkerRenewInput, FoundryWorkerRenewError } from "./foundryWorker.ts";
 import {
   FoundryWorkerCancelInput,
@@ -448,6 +466,11 @@ export const WS_METHODS = {
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
   assetsCreateUrl: "assets.createUrl",
+  foundryAutomationQuery: "foundry.automationQuery",
+  foundryAutomationCommand: "foundry.automationCommand",
+  foundryAutomationControl: "foundry.automationControl",
+  foundryAutomationInboxQuery: "foundry.automationInboxQuery",
+  foundryAutomationInboxMark: "foundry.automationInboxMark",
   foundryWorkerRenew: "foundry.workerRenew",
   foundryWorkerCancel: "foundry.workerCancel",
   foundryWorkerFollow: "foundry.workerFollow",
@@ -1415,6 +1438,31 @@ const WsAgentSessionsImportRpc = Rpc.make(WS_METHODS.agentSessionsImport, {
   ]),
 });
 
+const WsAutomationQueryRpc = Rpc.make(WS_METHODS.foundryAutomationQuery, {
+  payload: AutomationApplicationQuery,
+  success: AutomationApplicationResult,
+  error: Schema.Union([AutomationApplicationError, EnvironmentAuthorizationError]),
+});
+const WsAutomationCommandRpc = Rpc.make(WS_METHODS.foundryAutomationCommand, {
+  payload: AutomationApplicationCommand,
+  success: AutomationApplicationResult,
+  error: Schema.Union([AutomationApplicationError, EnvironmentAuthorizationError]),
+});
+const WsAutomationControlRpc = Rpc.make(WS_METHODS.foundryAutomationControl, {
+  payload: AutomationControlCommand,
+  success: AutomationControlSnapshot,
+  error: Schema.Union([AutomationControlError, EnvironmentAuthorizationError]),
+});
+const WsAutomationInboxQueryRpc = Rpc.make(WS_METHODS.foundryAutomationInboxQuery, {
+  payload: AutomationInboxQuery,
+  success: AutomationInboxPage,
+  error: Schema.Union([AutomationInboxError, EnvironmentAuthorizationError]),
+});
+const WsAutomationInboxMarkRpc = Rpc.make(WS_METHODS.foundryAutomationInboxMark, {
+  payload: AutomationInboxMark,
+  success: AutomationInboxEntry,
+  error: Schema.Union([AutomationInboxError, EnvironmentAuthorizationError]),
+});
 const WsFoundryWorkerRenewRpc = Rpc.make(WS_METHODS.foundryWorkerRenew, {
   payload: FoundryWorkerRenewInput,
   success: Schema.Void,
@@ -2181,6 +2229,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
   WsAssetsCreateUrlRpc,
+  WsAutomationQueryRpc,
+  WsAutomationCommandRpc,
+  WsAutomationControlRpc,
+  WsAutomationInboxQueryRpc,
+  WsAutomationInboxMarkRpc,
   WsFoundryWorkerRenewRpc,
   WsFoundryWorkerCancelRpc,
   WsFoundryWorkerFollowRpc,

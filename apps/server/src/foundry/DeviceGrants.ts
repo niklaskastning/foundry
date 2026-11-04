@@ -74,7 +74,8 @@ const make = Effect.gen(function* () {
       const value = yield* decodeUpdate(input).pipe(
         Effect.mapError(() => new FoundryGatewayError({ code: "invalid_request" })),
       );
-      if (value.kind !== "clientAccess") return yield* forbidden();
+      if (value.kind !== "clientAccess" && value.kind !== "automationExecution")
+        return yield* forbidden();
       const instanceId = yield* identity.readIdentity;
       const rows =
         yield* sql`UPDATE foundry_instance.device_grants g SET enabled = ${value.enabled}, generation = g.generation + 1

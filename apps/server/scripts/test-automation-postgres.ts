@@ -16,12 +16,21 @@ import * as Migrations from "../src/automation/AutomationMigrations.ts";
 import * as Factories from "../src/automation/Factories.ts";
 import * as Workflows from "../src/automation/Workflows.ts";
 import * as Definitions from "../src/automation/Definitions.ts";
+import { applicationGates } from "./test-automation-application-gates.ts";
+import * as Control from "../src/automation/Control.ts";
+import {
+  FoundryArchiveEvent,
+  type AutomationControlCommand,
+  type StartAutomationRun,
+} from "@t3tools/contracts";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as DispatchStore from "../src/automation/DispatchStore.ts";
 import * as Scheduler from "../src/automation/Scheduler.ts";
 import * as WorkerTransport from "../src/automation/WorkerTransport.ts";
 import * as ThreadArchive from "../src/foundry/ThreadArchive.ts";
 import * as Artifacts from "../src/foundry/Artifacts.ts";
 import * as Schema from "effect/Schema";
+const decodeDispatchBinding = Schema.decodeUnknownSync(Scheduler.DispatchBinding);
 const bin = process.env.FOUNDRY_TEST_PG_BIN;
 NodeAssert.ok(
   bin,
@@ -276,7 +285,7 @@ try {
   const beforeUpgrade = await call((s) => s.readWorkItem("a", "w1"));
   // Reconstruct the deployed v1 schema around existing P18a data before testing its upgrade.
   for (const statement of [
-    "DROP TABLE foundry_automation.dispatch_outbox,foundry_automation.step_attempts,foundry_automation.dispatch_workers,foundry_automation.dispatch_runs",
+    "DROP TABLE foundry_automation.inbox_marks,foundry_automation.inbox_entries,foundry_automation.inbox_commands,foundry_automation.manual_admissions,foundry_automation.run_questions,foundry_automation.run_decisions,foundry_automation.control_commands,foundry_automation.run_controls,foundry_automation.dispatch_outbox,foundry_automation.step_attempts,foundry_automation.dispatch_workers,foundry_automation.dispatch_runs",
     "DROP TABLE foundry_automation.definition_heads,foundry_automation.definition_versions,foundry_automation.outbox,foundry_automation.runs,foundry_automation.workflow_versions",
     "ALTER TABLE foundry_automation.work_items DROP CONSTRAINT work_items_factory_id_id_key",
     "UPDATE foundry_automation.schema_version SET version=1",
@@ -286,7 +295,7 @@ try {
   NodeAssert.deepEqual(await call((s) => s.readWorkItem("a", "w1")), beforeUpgrade);
   NodeAssert.equal(
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
-    4,
+    5,
   );
   const definitions = await Promise.all(
     Array.from({ length: 8 }, () => workflowCall((s) => s.createVersion(workflow))),
@@ -471,7 +480,7 @@ try {
   NodeAssert.equal((await query("SELECT * FROM foundry_automation.runs")).length, 3);
   NodeAssert.equal((await call((s) => s.readWorkItem("a", "w1"))).state, "completed");
   for (const statement of [
-    "DROP TABLE foundry_automation.dispatch_outbox,foundry_automation.step_attempts,foundry_automation.dispatch_workers,foundry_automation.dispatch_runs",
+    "DROP TABLE foundry_automation.inbox_marks,foundry_automation.inbox_entries,foundry_automation.inbox_commands,foundry_automation.manual_admissions,foundry_automation.run_questions,foundry_automation.run_decisions,foundry_automation.control_commands,foundry_automation.run_controls,foundry_automation.dispatch_outbox,foundry_automation.step_attempts,foundry_automation.dispatch_workers,foundry_automation.dispatch_runs",
     "DROP TABLE foundry_automation.definition_heads,foundry_automation.definition_versions",
     "UPDATE foundry_automation.schema_version SET version=2",
   ])
@@ -735,7 +744,7 @@ try {
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
     99,
   );
-  await query("UPDATE foundry_automation.schema_version SET version=4", "automation_migrator");
+  await query("UPDATE foundry_automation.schema_version SET version=5", "automation_migrator");
   await run(migration);
   const preservedQueries = [
     "SELECT * FROM foundry_automation.definition_versions ORDER BY id",
@@ -748,7 +757,7 @@ try {
   const schema3Data = await Promise.all(preservedQueries.map((statement) => query(statement)));
   NodeAssert.ok(schema3Data.every((rows) => rows.length > 0));
   await query(
-    "DROP TABLE foundry_automation.dispatch_outbox,foundry_automation.step_attempts,foundry_automation.dispatch_workers,foundry_automation.dispatch_runs",
+    "DROP TABLE foundry_automation.inbox_marks,foundry_automation.inbox_entries,foundry_automation.inbox_commands,foundry_automation.manual_admissions,foundry_automation.run_questions,foundry_automation.run_decisions,foundry_automation.control_commands,foundry_automation.run_controls,foundry_automation.dispatch_outbox,foundry_automation.step_attempts,foundry_automation.dispatch_workers,foundry_automation.dispatch_runs",
     "automation_migrator",
   );
   await query("UPDATE foundry_automation.schema_version SET version=3", "automation_migrator");
@@ -760,7 +769,7 @@ try {
   await run(migration);
   NodeAssert.equal(
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
-    4,
+    5,
   );
   NodeAssert.deepEqual(
     await Promise.all(preservedQueries.map((statement) => query(statement))),
@@ -953,8 +962,22 @@ try {
     ),
     "conflict",
   );
+  await failure(
+    dispatchCall((s) =>
+      s.prepare(finalizationRecovery, {
+        ordinal: 1,
+        commandId: "stale-result-step",
+        request: { checkId: "fixture-check" },
+      }),
+    ),
+    "stale_claim",
+  );
+  const nextStepClaim = {
+    ...finalizationRecovery,
+    ...(await dispatchCall((store) => store.read("p19", "p19-run"))),
+  };
   await dispatchCall((s) =>
-    s.prepare(finalizationRecovery, {
+    s.prepare(nextStepClaim, {
       ordinal: 1,
       commandId: "dispatch-test",
       request: { checkId: "fixture-check" },
@@ -988,8 +1011,12 @@ try {
   NodeAssert.equal(successClaim.run.id, "p19-success");
   for (const ordinal of [0, 1]) {
     const commandId = `success-${ordinal}`;
+    const currentSuccessClaim = {
+      ...successClaim,
+      ...(await dispatchCall((store) => store.read("p19", "p19-success"))),
+    };
     await dispatchCall((store) =>
-      store.prepare(successClaim, { ordinal, commandId, request: { ordinal } }),
+      store.prepare(currentSuccessClaim, { ordinal, commandId, request: { ordinal } }),
     );
     await dispatchCall((store) =>
       store.record(successClaim, {
@@ -1045,6 +1072,9 @@ try {
     Effect.die("Unexpected network-lock fixture operation"),
   );
   const networkWorker = WorkerTransport.WorkerTransport.of({
+    cancel: unused,
+    answer: unused,
+    identityForWrite: unused,
     identityForRead: unused,
     authorize: unused,
     launch: unused,
@@ -1128,11 +1158,838 @@ try {
     "worker_not_ready",
   );
   for (const statement of [
-    "UPDATE foundry_automation.dispatch_runs SET binding='{}'",
     "UPDATE foundry_automation.step_attempts SET request='{}'",
     "DELETE FROM foundry_automation.dispatch_outbox",
   ])
     await NodeAssert.rejects(query(statement, "automation_runtime"));
+  const controlBinding = Schema.decodeSync(Scheduler.DispatchBinding)({
+    ...networkBinding,
+    identity: { ...networkBinding.identity, deviceId: "33333333-3333-4333-8333-333333333333" },
+  });
+  let controlIdentity = controlBinding.identity;
+  let canOperate = true;
+  let controlWorkerOnline = true;
+  const controlWorker = WorkerTransport.WorkerTransport.of({
+    ...networkWorker,
+    identityForRead: Effect.fn("fixture.controlIdentityRead")(() =>
+      Effect.succeed(controlIdentity),
+    ),
+    identityForWrite: Effect.fn("fixture.controlIdentityWrite")(function* () {
+      if (!canOperate)
+        return yield* new WorkerTransport.WorkerTransportError({ reason: "forbidden" });
+      return controlIdentity;
+    }),
+    authorize: Effect.fn("fixture.controlAuthorize")(function* () {
+      if (!controlWorkerOnline)
+        return yield* new WorkerTransport.WorkerTransportError({ reason: "unavailable" });
+      if (!canOperate)
+        return yield* new WorkerTransport.WorkerTransportError({ reason: "forbidden" });
+      return controlIdentity;
+    }),
+  });
+  const controlCall = <A, E>(f: (service: Control.Control["Service"]) => Effect.Effect<A, E>) =>
+    run(
+      Control.Control.pipe(
+        Effect.flatMap(f),
+        Effect.provide(
+          Control.layer.pipe(
+            Layer.provide(DispatchStore.layer),
+            Layer.provide(Workflows.layer),
+            Layer.provide(Factories.layer),
+            Layer.provide(db("automation_runtime")),
+            Layer.provide(Layer.succeed(WorkerTransport.WorkerTransport, controlWorker)),
+            Layer.provide(
+              Layer.succeed(Scheduler.SchedulerConfig, { ...controlIdentity, allowedRunIds: [] }),
+            ),
+            Layer.provide(NodeCrypto.layer),
+          ),
+        ),
+      ),
+    );
+  const controlRequest = HttpServerRequest.fromWeb(new Request("http://127.0.0.1/"));
+  const preparedControls = new Map<string, Promise<typeof StartAutomationRun.Type>>();
+  const controlInput = (id: string, workflowVersionId = "p19-flow") => {
+    let prepared = preparedControls.get(id);
+    if (!prepared) {
+      prepared = (async () => {
+        const workflow = await workflowCall((service) =>
+          service.readVersion("p19", workflowVersionId),
+        );
+        const current = await definitionCall((service) => service.active("p19"));
+        const definition = await definitionCall((service) =>
+          service.activate({
+            commandId: `${id}:activate`,
+            factoryId: "p19",
+            scopeVersionId: "p19-version",
+            expectedVersionId: Option.isSome(current) ? current.value.id : null,
+            files: exportFactoryFiles({
+              schemaVersion: 1,
+              factoryId: "p19",
+              repositories: ["fixture"],
+              workflows: [{ id: "main", steps: workflow.steps }],
+            }),
+            source: { kind: "files", reference: "p20-own-fixture" },
+          }),
+        );
+        return {
+          commandId: id,
+          id,
+          factoryId: "p19",
+          workItemId: "p19-work",
+          workflowVersionId: definition.workflowVersions[0]!.versionId,
+          revision: "input-v1",
+        };
+      })();
+      preparedControls.set(id, prepared);
+    }
+    return prepared;
+  };
+  const startControl = async (id: string, workflowVersionId = "p19-flow") => {
+    const input = await controlInput(id, workflowVersionId);
+    return dispatchCall((service) =>
+      service.startManual(input, controlIdentity.deviceId, controlBinding, controlIdentity),
+    );
+  };
+  const executeControl = (input: AutomationControlCommand) =>
+    controlCall((s) => s.execute(controlRequest, input));
+  const readControl = (runId: string) => controlCall((s) => s.read(controlRequest, "p19", runId));
+  const command = (
+    runId: string,
+    commandId: string,
+    expectedRevision: number,
+    action: "pause" | "resume" | "cancel" | "retry",
+  ) => ({ factoryId: "p19", runId, commandId, expectedRevision, action });
+  const inactiveStart = {
+    commandId: "inactive-product-start",
+    id: "inactive-product-start",
+    factoryId: "p19",
+    workItemId: "p19-work",
+    workflowVersionId: "p19-flow",
+    revision: "pinned",
+  };
+  await failure(
+    dispatchCall((service) =>
+      service.startManual(inactiveStart, controlIdentity.deviceId, controlBinding, controlIdentity),
+    ),
+    "conflict",
+  );
+  NodeAssert.equal(
+    (await query("SELECT id FROM foundry_automation.runs WHERE id='inactive-product-start'"))
+      .length,
+    0,
+  );
+  NodeAssert.equal(
+    (await query("SELECT id FROM foundry_automation.commands WHERE id='inactive-product-start'"))
+      .length,
+    0,
+  );
+  await failure(
+    dispatchCall((service) =>
+      service.startManual(
+        { ...inactiveStart, commandId: "p19-inactive", id: "p19-inactive" },
+        controlIdentity.deviceId,
+        controlBinding,
+        controlIdentity,
+      ),
+    ),
+    "conflict",
+  );
+  await Promise.all(Array.from({ length: 4 }, () => startControl("p20-pause")));
+  NodeAssert.equal(
+    (await query("SELECT * FROM foundry_automation.manual_admissions WHERE run_id='p20-pause'"))
+      .length,
+    1,
+  );
+  NodeAssert.equal(await dispatchCall((s) => s.permitted("p19-inactive")), false);
+  NodeAssert.equal(await dispatchCall((s) => s.permitted("p20-pause")), true);
+  const firstControlInput = await controlInput("p20-pause");
+  await failure(
+    dispatchCall((s) =>
+      s.startManual(
+        firstControlInput,
+        controlIdentity.deviceId,
+        { ...controlBinding, model: "different" },
+        controlIdentity,
+      ),
+    ),
+    "conflict",
+  );
+  const pauseCommand = command("p20-pause", "pause-1", 0, "pause");
+  const paused = await Promise.all(Array.from({ length: 4 }, () => executeControl(pauseCommand)));
+  NodeAssert.ok(paused.every((result) => result.state === "paused" && result.revision === 1));
+  await NodeAssert.rejects(executeControl(command("p20-pause", "stale-resume", 0, "resume")));
+  await NodeAssert.rejects(executeControl({ ...pauseCommand, action: "cancel" }));
+  const pausedClaim = await dispatchCall((s) =>
+    s.claimNext({ workerId: controlIdentity.deviceId, owner: "p20-owner", leaseMillis: 60000 }),
+  );
+  NodeAssert.ok(pausedClaim);
+  NodeAssert.equal(await dispatchCall((s) => s.canLaunch(pausedClaim)), false);
+  await failure(
+    dispatchCall((s) =>
+      s.prepare(pausedClaim, { ordinal: 0, commandId: "pause-launch", request: {} }),
+    ),
+    "invalid_step",
+  );
+  await dispatchCall((s) => s.release(pausedClaim));
+  await stop();
+  await start();
+  NodeAssert.deepEqual(await executeControl(pauseCommand), paused[0]);
+  canOperate = false;
+  await NodeAssert.rejects(executeControl(command("p20-pause", "revoked-resume", 1, "resume")));
+  canOperate = true;
+  controlIdentity = { ...controlIdentity, automationGeneration: 2 };
+  await NodeAssert.rejects(executeControl(command("p20-pause", "old-generation", 1, "resume")));
+  controlIdentity = controlBinding.identity;
+  NodeAssert.equal(
+    (await executeControl(command("p20-pause", "resume-1", 1, "resume"))).state,
+    "running",
+  );
+  controlWorkerOnline = false;
+  controlIdentity = Schema.decodeSync(WorkerTransport.WorkerIdentity)({
+    ...controlIdentity,
+    clientSessionId: "fresh-cancel-session",
+    foundrySessionHash: "b".repeat(43),
+  });
+  NodeAssert.equal(
+    (await executeControl(command("p20-pause", "cancel-1", 2, "cancel"))).state,
+    "cancel_requested",
+  );
+  const cancellationBinding = async () =>
+    decodeDispatchBinding((await dispatchCall((s) => s.read("p19", "p20-pause"))).binding);
+  NodeAssert.deepEqual((await cancellationBinding()).identity, controlBinding.identity);
+  controlWorkerOnline = true;
+  controlIdentity = { ...controlIdentity, automationGeneration: 2 };
+  await NodeAssert.rejects(
+    executeControl(command("p20-pause", "cancel-new-generation", 3, "cancel")),
+  );
+  controlIdentity = { ...controlIdentity, automationGeneration: 1 };
+  const recoveredCancel = command("p20-pause", "cancel-fresh-session", 3, "cancel");
+  const recoveredReceipt = await executeControl(recoveredCancel);
+  NodeAssert.equal(recoveredReceipt.state, "cancel_requested");
+  NodeAssert.deepEqual((await cancellationBinding()).identity, controlIdentity);
+  controlIdentity = Schema.decodeSync(WorkerTransport.WorkerIdentity)({
+    ...controlIdentity,
+    clientSessionId: "newer-session",
+  });
+  NodeAssert.deepEqual(await executeControl(recoveredCancel), recoveredReceipt);
+  NodeAssert.equal((await cancellationBinding()).identity.clientSessionId, "fresh-cancel-session");
+  controlIdentity = controlBinding.identity;
+  const cancellationClaim = await dispatchCall((s) =>
+    s.claimNext({ workerId: controlIdentity.deviceId, owner: "p20-owner", leaseMillis: 60000 }),
+  );
+  NodeAssert.ok(cancellationClaim);
+  NodeAssert.equal(await dispatchCall((s) => s.confirmCancel(cancellationClaim)), true);
+  NodeAssert.equal((await readControl("p20-pause")).state, "cancelled");
+  await startControl("p20-delivery");
+  const deliveryClaim = await dispatchCall((s) =>
+    s.claimNext({
+      workerId: controlIdentity.deviceId,
+      owner: "delivery-owner",
+      leaseMillis: 60000,
+    }),
+  );
+  NodeAssert.ok(deliveryClaim);
+  const launchRequest = {
+    commandId: "p20-native-launch",
+    projectId: controlBinding.projectId,
+    title: "P20 own fixture",
+    model: "fixture",
+    prompt: "test",
+  };
+  await dispatchCall((s) =>
+    s.prepare(deliveryClaim, {
+      ordinal: 0,
+      commandId: launchRequest.commandId,
+      request: launchRequest,
+    }),
+  );
+  NodeAssert.equal(
+    await dispatchCall((s) => s.beginDelivery(deliveryClaim, launchRequest.commandId)),
+    true,
+  );
+  await executeControl(command("p20-delivery", "delivery-cancel", 0, "cancel"));
+  NodeAssert.equal(await dispatchCall((s) => s.confirmCancel(deliveryClaim)), false);
+  NodeAssert.equal((await readControl("p20-delivery")).state, "cancel_requested");
+  const stoppedResult = {
+    execution: {
+      receipt: {
+        commandId: launchRequest.commandId,
+        threadId: "p20-thread",
+        acceptedAt: "2026-11-04T00:00:00Z",
+        sequence: 1,
+      },
+      run: { id: "p20-native", status: "cancelled", checkpointId: null },
+      lifecycle: {
+        generation: 1,
+        expiresAt: 0,
+        state: "stopped",
+        writerEnded: true,
+        manifest: {
+          generation: 1,
+          runId: "p20-native",
+          checkpointId: null,
+          checkpointRef: null,
+          outcome: "stopped",
+        },
+      },
+    },
+    artifacts: [],
+  };
+  await dispatchCall((s) =>
+    s.record(deliveryClaim, {
+      commandId: launchRequest.commandId,
+      state: "failed",
+      reason: "cancelled",
+      receipt: null,
+      result: stoppedResult,
+    }),
+  );
+  NodeAssert.equal(await dispatchCall((s) => s.confirmCancel(deliveryClaim)), true);
+  await workflowCall((s) =>
+    s.createVersion({
+      commandId: "p20-final-flow",
+      id: "p20-final-flow",
+      factoryId: "p19",
+      factoryVersionId: "p19-version",
+      steps: [{ id: "final", kind: "agent", prompt: "finish", dependsOn: [] }],
+    }),
+  );
+  for (const action of ["pause", "cancel"] as const) {
+    const id = `p20-final-${action}`;
+    await startControl(id, "p20-final-flow");
+    const terminalClaim = await dispatchCall((s) =>
+      s.claimNext({
+        workerId: controlIdentity.deviceId,
+        owner: `terminal-${action}`,
+        leaseMillis: 60000,
+      }),
+    );
+    NodeAssert.ok(terminalClaim);
+    await dispatchCall((s) =>
+      s.prepare(terminalClaim, {
+        ordinal: 0,
+        commandId: id,
+        request: { ...launchRequest, commandId: id },
+      }),
+    );
+    await executeControl(command(id, `terminal-control-${action}`, 0, action));
+    await dispatchCall((s) =>
+      s.record(terminalClaim, {
+        commandId: id,
+        state: "succeeded",
+        reason: null,
+        receipt: null,
+        result: stoppedResult,
+      }),
+    );
+    if (action === "cancel") {
+      NodeAssert.equal((await readControl(id)).state, "cancel_requested");
+      NodeAssert.equal(
+        (
+          await query(
+            `SELECT run_id FROM foundry_automation.dispatch_workers WHERE worker_id='${controlIdentity.deviceId}'`,
+          )
+        )[0]?.run_id,
+        id,
+      );
+      NodeAssert.equal(await dispatchCall((s) => s.confirmCancel(terminalClaim)), true);
+      NodeAssert.equal((await readControl(id)).state, "cancelled");
+    } else NodeAssert.equal((await readControl(id)).state, "succeeded");
+  }
+  await workflowCall((s) =>
+    s.createVersion({
+      commandId: "p20-approval-flow",
+      id: "p20-approval-flow",
+      factoryId: "p19",
+      factoryVersionId: "p19-version",
+      steps: [
+        { id: "approve", kind: "approval", prompt: "Review revision", dependsOn: [] },
+        { id: "publish", kind: "publish", target: "pull_request", dependsOn: ["approve"] },
+      ],
+    }),
+  );
+  await startControl("p20-approval", "p20-approval-flow");
+  const oldProductRun = await startControl("p20-pause");
+  NodeAssert.equal(oldProductRun.run.workflowVersionId, firstControlInput.workflowVersionId);
+  await failure(
+    dispatchCall((service) =>
+      service.startManual(
+        { ...firstControlInput, id: "stale-product-start", commandId: "stale-product-start" },
+        controlIdentity.deviceId,
+        controlBinding,
+        controlIdentity,
+      ),
+    ),
+    "conflict",
+  );
+  NodeAssert.equal(
+    (await query("SELECT id FROM foundry_automation.runs WHERE id='stale-product-start'")).length,
+    0,
+  );
+  await run(
+    Console.log(
+      "PASS P20 manual activation: never-activated and superseded workflow versions reject atomically; existing inactive runs remain unadmitted; accepted start receipts replay against pinned versions after reactivation.",
+    ),
+  );
+  const approvalCommand = {
+    factoryId: "p19",
+    runId: "p20-approval",
+    commandId: "approval-1",
+    expectedRevision: 0,
+    action: "approve" as const,
+    stepId: "approve",
+    resultRevision: 0,
+  };
+  NodeAssert.equal((await executeControl(approvalCommand)).revision, 1);
+  NodeAssert.equal((await executeControl(approvalCommand)).revision, 1);
+  const approvalClaim = await dispatchCall((s) =>
+    s.claimNext({
+      workerId: controlIdentity.deviceId,
+      owner: "approval-owner",
+      leaseMillis: 60000,
+    }),
+  );
+  NodeAssert.ok(approvalClaim);
+  NodeAssert.equal(await dispatchCall((s) => s.approved(approvalClaim, "approve")), true);
+  await executeControl(command("p20-approval", "approval-pause", 1, "pause"));
+  NodeAssert.equal(await dispatchCall((s) => s.approved(approvalClaim, "approve")), true);
+  NodeAssert.equal(
+    await dispatchCall((s) => s.completeApproval(approvalClaim, 0, "paused-approval")),
+    false,
+  );
+  await executeControl(command("p20-approval", "approval-resume", 2, "resume"));
+  NodeAssert.equal(await dispatchCall((s) => s.approved(approvalClaim, "approve")), true);
+  await query(
+    "UPDATE foundry_automation.run_controls SET revision=revision+1,result_revision=result_revision+1 WHERE run_id='p20-approval'",
+    "automation_migrator",
+  );
+  NodeAssert.equal(await dispatchCall((s) => s.approved(approvalClaim, "approve")), false);
+  NodeAssert.equal(
+    await dispatchCall((s) => s.completeApproval(approvalClaim, 0, "changed-approval")),
+    false,
+  );
+  await NodeAssert.rejects(executeControl({ ...approvalCommand, commandId: "stale-approval" }));
+  await executeControl(command("p20-approval", "approval-cancel", 4, "cancel"));
+  NodeAssert.equal(await dispatchCall((s) => s.confirmCancel(approvalClaim)), true);
+  await workflowCall((s) =>
+    s.createVersion({
+      commandId: "p20-double-flow",
+      id: "p20-double-flow",
+      factoryId: "p19",
+      factoryVersionId: "p19-version",
+      steps: [
+        { id: "first-review", kind: "approval", prompt: "First reviewer", dependsOn: [] },
+        {
+          id: "second-review",
+          kind: "approval",
+          prompt: "Second reviewer",
+          dependsOn: ["first-review"],
+        },
+        {
+          id: "implementation",
+          kind: "agent",
+          prompt: "Implement after both reviews",
+          dependsOn: ["second-review"],
+        },
+      ],
+    }),
+  );
+  await startControl("p20-double", "p20-double-flow");
+  const doubleClaim = await dispatchCall((s) =>
+    s.claimNext({ workerId: controlIdentity.deviceId, owner: "double-owner", leaseMillis: 60000 }),
+  );
+  NodeAssert.ok(doubleClaim);
+  const doubleDecision = (
+    commandId: string,
+    stepId: string,
+    expectedRevision: number,
+    action: "approve" | "reject" = "approve",
+  ) => ({
+    factoryId: "p19",
+    runId: "p20-double",
+    commandId,
+    stepId,
+    expectedRevision,
+    action,
+    resultRevision: 0,
+  });
+  await executeControl(doubleDecision("double-first", "first-review", 0));
+  NodeAssert.equal(
+    await dispatchCall((s) => s.completeApproval(doubleClaim, 0, "double-first-attempt")),
+    true,
+  );
+  await executeControl(doubleDecision("double-second", "second-review", 1));
+  NodeAssert.equal(await dispatchCall((s) => s.approved(doubleClaim, "first-review")), true);
+  NodeAssert.equal(await dispatchCall((s) => s.approved(doubleClaim, "second-review")), true);
+  await executeControl(doubleDecision("double-second-reject", "second-review", 2, "reject"));
+  NodeAssert.equal(
+    await dispatchCall((s) => s.completeApproval(doubleClaim, 1, "double-second-attempt")),
+    false,
+  );
+  NodeAssert.equal(
+    (
+      await query(
+        "SELECT command_id FROM foundry_automation.step_attempts WHERE command_id='double-second-attempt'",
+      )
+    ).length,
+    0,
+  );
+  await executeControl(doubleDecision("double-second-again", "second-review", 3));
+  await query(
+    "CREATE FUNCTION foundry_automation.reject_approval_finish() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected approval completion failure'; END $$",
+    "automation_migrator",
+  );
+  await query(
+    "CREATE TRIGGER reject_approval_finish BEFORE UPDATE ON foundry_automation.step_attempts FOR EACH ROW EXECUTE FUNCTION foundry_automation.reject_approval_finish()",
+    "automation_migrator",
+  );
+  await NodeAssert.rejects(
+    dispatchCall((s) => s.completeApproval(doubleClaim, 1, "double-second-attempt")),
+  );
+  NodeAssert.equal(
+    (
+      await query(
+        "SELECT command_id FROM foundry_automation.step_attempts WHERE command_id='double-second-attempt'",
+      )
+    ).length,
+    0,
+  );
+  NodeAssert.equal(
+    (
+      await query(
+        "SELECT command_id FROM foundry_automation.dispatch_outbox WHERE command_id='double-second-attempt'",
+      )
+    ).length,
+    0,
+  );
+  await query(
+    "DROP TRIGGER reject_approval_finish ON foundry_automation.step_attempts",
+    "automation_migrator",
+  );
+  await query("DROP FUNCTION foundry_automation.reject_approval_finish()", "automation_migrator");
+  NodeAssert.equal(
+    await dispatchCall((s) => s.completeApproval(doubleClaim, 1, "double-second-attempt")),
+    true,
+  );
+  NodeAssert.equal(
+    await dispatchCall((s) => s.completeApproval(doubleClaim, 1, "double-second-attempt")),
+    true,
+  );
+  const doubleLaunch = { ...launchRequest, commandId: "double-launch" };
+  await dispatchCall((s) =>
+    s.prepare(doubleClaim, {
+      ordinal: 2,
+      commandId: doubleLaunch.commandId,
+      request: doubleLaunch,
+    }),
+  );
+  await executeControl(doubleDecision("double-first-reject", "first-review", 4, "reject"));
+  NodeAssert.equal(
+    await dispatchCall((s) => s.beginDelivery(doubleClaim, doubleLaunch.commandId)),
+    false,
+  );
+  await executeControl(doubleDecision("double-first-again", "first-review", 5));
+  NodeAssert.equal(
+    await dispatchCall((s) => s.beginDelivery(doubleClaim, doubleLaunch.commandId)),
+    true,
+  );
+  await dispatchCall((s) =>
+    s.record(doubleClaim, {
+      commandId: doubleLaunch.commandId,
+      state: "succeeded",
+      reason: null,
+      receipt: null,
+      result: stoppedResult,
+    }),
+  );
+  await run(
+    Console.log(
+      "PASS P20 consecutive approvals: independent reviewed-result approvals survive another decision; newest rejection fences atomic consumption and prepared dispatch; injected completion failure rolls back approval attempt and outbox; duplicate consumption is idempotent.",
+    ),
+  );
+  await startControl("p20-retry");
+  const retryClaim = await dispatchCall((s) =>
+    s.claimNext({ workerId: controlIdentity.deviceId, owner: "retry-owner", leaseMillis: 60000 }),
+  );
+  NodeAssert.ok(retryClaim);
+  await dispatchCall((s) =>
+    s.prepare(retryClaim, {
+      ordinal: 0,
+      commandId: "retry-original",
+      request: { ...launchRequest, commandId: "retry-original" },
+    }),
+  );
+  await dispatchCall((s) =>
+    s.record(retryClaim, {
+      commandId: "retry-original",
+      state: "failed",
+      reason: "worker_failed",
+      receipt: null,
+      result: {
+        ...stoppedResult,
+        execution: {
+          ...stoppedResult.execution,
+          receipt: { ...stoppedResult.execution.receipt, commandId: "retry-original" },
+        },
+      },
+    }),
+  );
+  const beforeRetry = await readControl("p20-retry");
+  await executeControl(command("p20-retry", "retry-1", beforeRetry.revision, "retry"));
+  const retried = await dispatchCall((s) => s.read("p19", "p20-retry"));
+  NodeAssert.equal(retried.attempts.length, 2);
+  NodeAssert.equal(retried.attempts[0]?.state, "failed");
+  NodeAssert.equal(retried.attempts[1]?.attemptNumber, 1);
+  NodeAssert.equal(retried.attempts[1]?.state, "pending");
+  NodeAssert.notEqual(retried.attempts[0]?.commandId, retried.attempts[1]?.commandId);
+  await executeControl(command("p20-retry", "retry-1", beforeRetry.revision, "retry"));
+  NodeAssert.equal((await dispatchCall((s) => s.read("p19", "p20-retry"))).attempts.length, 2);
+  NodeAssert.equal(
+    DispatchStore.writerEnded({
+      ...stoppedResult,
+      execution: {
+        ...stoppedResult.execution,
+        lifecycle: { ...stoppedResult.execution.lifecycle, writerEnded: false },
+      },
+    }),
+    false,
+  );
+  NodeAssert.equal(
+    DispatchStore.writerEnded({
+      ...stoppedResult,
+      execution: {
+        ...stoppedResult.execution,
+        lifecycle: {
+          ...stoppedResult.execution.lifecycle,
+          manifest: { ...stoppedResult.execution.lifecycle.manifest, generation: 2 },
+        },
+      },
+    }),
+    false,
+  );
+  await run(
+    Console.log(
+      "PASS P20 PostgreSQL: atomic persistent manual admission; conflicting start binding; four concurrent command retries; stale revision/conflicting command; pause suppresses prepare; restart receipt; revoked auth and old generations; cancel before delivery and lost-response sending; positive writer-stop fence; revision-bound approval invalidation; explicit retry retains failed history and creates exactly one new attempt.",
+    ),
+  );
+  const questionEvents = Schema.decodeSync(Schema.Array(FoundryArchiveEvent))([
+    {
+      sequence: 1,
+      sourceSequence: 1,
+      event: {
+        id: "q-request",
+        threadId: "p20-thread",
+        occurredAt: "2026-11-04T00:00:00Z",
+        type: "runtime-request.updated",
+        payload: {
+          id: "p20-question",
+          nodeId: "q-node",
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: "user_input",
+          status: "pending",
+          responseCapability: { type: "message" },
+          createdAt: "2026-11-04T00:00:00Z",
+          resolvedAt: null,
+        },
+      },
+    },
+    {
+      sequence: 2,
+      sourceSequence: 2,
+      event: {
+        id: "q-item",
+        threadId: "p20-thread",
+        occurredAt: "2026-11-04T00:00:00Z",
+        type: "turn-item.updated",
+        payload: {
+          id: "q-item",
+          threadId: "p20-thread",
+          runId: "p20-native",
+          nodeId: "q-node",
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 0,
+          status: "running",
+          title: null,
+          startedAt: null,
+          completedAt: null,
+          updatedAt: "2026-11-04T00:00:00Z",
+          type: "user_input_request",
+          requestId: "p20-question",
+          questions: [
+            {
+              id: "choice",
+              header: "Choice",
+              question: "Choose explicitly",
+              options: [{ label: "yes", description: "Proceed" }],
+              allowCustomAnswer: false,
+              required: true,
+            },
+          ],
+        },
+      },
+    },
+  ]);
+  const answerLaunch = retried.attempts[1]!.commandId;
+  await dispatchCall((store) =>
+    store.record(retryClaim, {
+      commandId: answerLaunch,
+      state: "running",
+      reason: "worker_result_pending",
+      receipt: {
+        receipt: { ...stoppedResult.execution.receipt, commandId: answerLaunch },
+        generation: 1,
+        runId: stoppedResult.execution.run.id,
+      },
+      result: null,
+    }),
+  );
+  const beforeQuestion = await readControl("p20-retry");
+  await dispatchCall((s) => s.projectQuestions(retryClaim, answerLaunch, questionEvents));
+  const questionRevision = await readControl("p20-retry");
+  NodeAssert.equal(questionRevision.revision, beforeQuestion.revision + 1);
+  NodeAssert.equal(await dispatchCall((s) => s.archiveCursor(answerLaunch)), 2);
+  await dispatchCall((s) => s.projectQuestions(retryClaim, answerLaunch, questionEvents));
+  NodeAssert.equal((await readControl("p20-retry")).revision, questionRevision.revision);
+  const answerCommand = {
+    factoryId: "p19",
+    runId: "p20-retry",
+    commandId: "answer-1",
+    expectedRevision: questionRevision.revision,
+    action: "answer" as const,
+    requestId: "p20-question",
+    resultRevision: questionRevision.resultRevision,
+    answers: { choice: "yes" },
+  };
+  await NodeAssert.rejects(
+    executeControl({ ...answerCommand, expectedRevision: beforeQuestion.revision }),
+  );
+  await NodeAssert.rejects(
+    executeControl({ ...answerCommand, commandId: "invalid-answer", answers: { choice: "other" } }),
+  );
+  await executeControl(answerCommand);
+  NodeAssert.equal((await dispatchCall((s) => s.answers("p20-retry"))).length, 1);
+  await stop();
+  await start();
+  await executeControl(answerCommand);
+  NodeAssert.equal((await dispatchCall((s) => s.answers("p20-retry"))).length, 1);
+  await dispatchCall((s) => s.answerDelivered("p20-retry", "p20-question"));
+  NodeAssert.equal((await dispatchCall((s) => s.answers("p20-retry"))).length, 0);
+  const rollbackRevision = await readControl("p20-retry");
+  await query(
+    "CREATE FUNCTION foundry_automation.reject_control_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected control receipt failure'; END $$",
+    "automation_migrator",
+  );
+  await query(
+    "CREATE TRIGGER reject_control_receipt BEFORE INSERT ON foundry_automation.control_commands FOR EACH ROW EXECUTE FUNCTION foundry_automation.reject_control_receipt()",
+    "automation_migrator",
+  );
+  await NodeAssert.rejects(
+    executeControl(command("p20-retry", "atomic-pause", rollbackRevision.revision, "pause")),
+  );
+  NodeAssert.deepEqual(await readControl("p20-retry"), rollbackRevision);
+  NodeAssert.equal(
+    (await query("SELECT id FROM foundry_automation.commands WHERE id='atomic-pause'")).length,
+    0,
+  );
+  await query(
+    "DROP TRIGGER reject_control_receipt ON foundry_automation.control_commands",
+    "automation_migrator",
+  );
+  await query("DROP FUNCTION foundry_automation.reject_control_receipt()", "automation_migrator");
+  await run(
+    Console.log(
+      "PASS P20 questions: ordered archive projection, duplicate delivery, revision invalidation, rejected invalid answer, durable answer intent/restart/receipt, separate native delivery acknowledgement; injected receipt failure rolls back control revision and intent atomically.",
+    ),
+  );
+  await query(
+    "INSERT INTO foundry_automation.run_questions(run_id,request_id,thread_id,payload,status,source_sequence) SELECT run_id,'old-question',thread_id,jsonb_set(payload,'{request,id}','\"old-question\"'),'pending',source_sequence+1 FROM foundry_automation.run_questions WHERE run_id='p20-retry' AND request_id='p20-question'",
+    "automation_migrator",
+  );
+  await dispatchCall((store) =>
+    store.record(retryClaim, {
+      commandId: answerLaunch,
+      state: "failed",
+      reason: "worker_failed",
+      receipt: null,
+      result: {
+        ...stoppedResult,
+        execution: {
+          ...stoppedResult.execution,
+          receipt: { ...stoppedResult.execution.receipt, commandId: answerLaunch },
+        },
+      },
+    }),
+  );
+  const failedQuestion = await readControl("p20-retry");
+  await NodeAssert.rejects(
+    executeControl({
+      ...answerCommand,
+      commandId: "answer-ended-attempt",
+      requestId: "old-question",
+      expectedRevision: failedQuestion.revision,
+      resultRevision: failedQuestion.resultRevision,
+    }),
+  );
+  await executeControl(
+    command("p20-retry", "retry-after-question", failedQuestion.revision, "retry"),
+  );
+  const nextQuestion = await readControl("p20-retry");
+  await NodeAssert.rejects(
+    executeControl({
+      ...answerCommand,
+      commandId: "answer-old-attempt",
+      requestId: "old-question",
+      expectedRevision: nextQuestion.revision,
+      resultRevision: nextQuestion.resultRevision,
+    }),
+  );
+  const newestAttempt = (await dispatchCall((store) => store.read("p19", "p20-retry"))).attempts.at(
+    -1,
+  )!;
+  await dispatchCall((store) =>
+    store.record(retryClaim, {
+      commandId: newestAttempt.commandId,
+      state: "running",
+      reason: "worker_result_pending",
+      receipt: {
+        receipt: {
+          ...stoppedResult.execution.receipt,
+          commandId: newestAttempt.commandId,
+          threadId: "p20-retry-new-thread",
+        },
+        generation: 1,
+        runId: stoppedResult.execution.run.id,
+      },
+      result: null,
+    }),
+  );
+  await NodeAssert.rejects(
+    executeControl({
+      ...answerCommand,
+      commandId: "answer-other-thread",
+      requestId: "old-question",
+      expectedRevision: nextQuestion.revision,
+      resultRevision: nextQuestion.resultRevision,
+    }),
+  );
+  NodeAssert.equal(
+    (
+      await query(
+        "SELECT answer FROM foundry_automation.run_questions WHERE run_id='p20-retry' AND request_id='old-question'",
+      )
+    )[0]?.answer,
+    null,
+  );
+  await run(
+    Console.log(
+      "PASS P20 stale questions: ended attempt, unaccepted retry and replacement thread cannot receive an answer to the previous attempt's question.",
+    ),
+  );
+  await run(applicationGates(db("automation_runtime")));
   await run(
     Console.log(
       "PASS P18a/P18b/P47 isolated PostgreSQL: idempotent factories/workflows/runs; pinned versions/repository/revisions; atomic run/outbox and definition activation; canonical import/export; hash/provenance; version conflicts; invalid definitions preserve active version; v1/v2/v3 upgrades and PostgreSQL restart; immutable runtime history. P19 opt-in enrollment, concurrent claims, restart and stale-lease fencing, immutable requests/receipts, atomic attempt/outbox rollback, reconciliation, failed-step blocking and sequential completion; claim locks released before transport. No live runtime activation.",
