@@ -87,9 +87,9 @@ export function FoundryPage() {
                     `/foundry?view=runs&factoryId=${encodeURIComponent(factoryId)}&runId=${encodeURIComponent(runId)}`,
                   )
                 }
-                onNavigateWorkItem={(factoryId) =>
+                onNavigateWorkItem={(factoryId,workItemId) =>
                   window.location.assign(
-                    `/foundry?view=factories&factoryId=${encodeURIComponent(factoryId)}`,
+                    `/foundry?view=factories&factoryId=${encodeURIComponent(factoryId)}&workItemId=${encodeURIComponent(workItemId)}`,
                   )
                 }
               />

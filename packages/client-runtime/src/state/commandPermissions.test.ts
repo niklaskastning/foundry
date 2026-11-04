@@ -152,6 +152,8 @@ describe("command permissions", () => {
     WS_METHODS.foundryWorkerLaunch,
     WS_METHODS.foundryWorkerRenew,
     WS_METHODS.foundryWorkerCancel,
+    WS_METHODS.foundryAutomationCommand,
+    WS_METHODS.foundryAutomationControl,
   ])("uses the target grant for both availability and execution of %s", (method) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -547,6 +549,9 @@ it.effect.each([
   WS_METHODS.foundryWorkerStatus,
   WS_METHODS.foundryWorkerRead,
   WS_METHODS.foundryWorkerFollow,
+  WS_METHODS.foundryAutomationQuery,
+  WS_METHODS.foundryAutomationInboxQuery,
+  WS_METHODS.foundryAutomationInboxMark,
 ])("%s requires read permission on its destination", (method) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -570,4 +575,36 @@ it.effect.each([
       expect(registry.get(command.permissionAtom(other))).toBe(false);
     }),
   ),
+);
+
+it.effect.each(["createFactory", "activateDefinition"])(
+  "%s requires management permission rather than execution permission",
+  (op) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const command = createCommandPermissions(runtime, WS_METHODS.foundryAutomationCommand);
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(command.permissionAtom(env, { op }))).toBe(false);
+        expect(
+          (yield* command.authorize(registry, env, { op }).pipe(Effect.flip)).requiredPermission,
+        ).toBe(AuthAccessWriteScope);
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthAccessWriteScope],
+            permissions: [AuthAccessWriteScope],
+          }),
+        );
+        expect(registry.get(command.permissionAtom(env, { op }))).toBe(true);
+        yield* command.authorize(registry, env, { op });
+        expect(registry.get(command.permissionAtom(env, { op: "start" }))).toBe(false);
+        expect(
+          (yield* command.authorize(registry, env, { op: "start" }).pipe(Effect.flip))
+            .requiredPermission,
+        ).toBe(AuthOrchestrationOperateScope);
+        expect(registry.get(command.permissionAtom(other, { op }))).toBe(false);
+      }),
+    ),
 );
