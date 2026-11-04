@@ -1,3 +1,6 @@
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { useSearch, Link } from "@tanstack/react-router";
+import { FactoryNavigation, useAutomationAvailable } from "./FactoryNavigation";
 import { lazy, Suspense, useState } from "react";
 import { AsyncResult } from "effect/reactivity";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -21,7 +24,15 @@ const ArtifactLibrary = lazy(() =>
   import("./ArtifactLibrary").then((module) => ({ default: module.ArtifactLibrary })),
 );
 
+const FactoryPage = lazy(() =>
+  import("../features/automation/FactoryPage").then((module) => ({ default: module.FactoryPage })),
+);
+const InboxPage = lazy(() =>
+  import("../features/automation/InboxPage").then((module) => ({ default: module.InboxPage })),
+);
 export function FoundryPage() {
+  const search = useSearch({ from: "/foundry" });
+  const automationAvailable = useAutomationAvailable();
   const [origin, setOrigin] = useState(window.location.origin);
   const [state, setState] = useState<OnboardingResult>(initialState);
   const [message, setMessage] = useState(state.message);
@@ -58,9 +69,47 @@ export function FoundryPage() {
     }
   }
 
+  if (automationAvailable && state.binding && search.view)
+    return (
+      <div className="h-full overflow-y-auto scrollbar-gutter-both bg-background text-foreground p-4">
+        <div className="mx-auto max-w-6xl space-y-4">
+          <div className="flex items-center justify-between">
+            <FactoryNavigation />
+            <Link to="/">Back to threads</Link>
+          </div>
+          <Suspense fallback={<p>Loading…</p>}>
+            {search.view === "inbox" ? (
+              <InboxPage
+                environmentId={state.binding.mainEnvironmentId}
+                {...(search.factoryId ? { factoryId: search.factoryId } : {})}
+                onNavigateRun={(factoryId, runId) =>
+                  window.location.assign(
+                    `/foundry?view=runs&factoryId=${encodeURIComponent(factoryId)}&runId=${encodeURIComponent(runId)}`,
+                  )
+                }
+                onNavigateWorkItem={(factoryId) =>
+                  window.location.assign(
+                    `/foundry?view=factories&factoryId=${encodeURIComponent(factoryId)}`,
+                  )
+                }
+              />
+            ) : (
+              <FactoryPage
+                key={`${search.view}:${search.factoryId}:${search.runId}`}
+                environmentId={state.binding.mainEnvironmentId}
+                initialView={search.view === "runs" ? "runs" : "factories"}
+                {...(search.factoryId ? { factoryId: search.factoryId } : {})}
+                {...(search.runId ? { initialRunId: search.runId } : {})}
+              />
+            )}
+          </Suspense>
+        </div>
+      </div>
+    );
   return (
     <StandalonePage>
       <div className="space-y-5">
+        <FactoryNavigation />
         <div>
           <h1 className="text-xl font-semibold">Foundry instance</h1>
           <p className="mt-2 text-sm text-muted-foreground">
@@ -172,7 +221,18 @@ export function FoundryPage() {
         {state?.session && state.artifactsAvailable && !nativeTransport ? (
           <Suspense fallback={<p className="text-sm">Loading files…</p>}>
             <ArtifactLibrary />
-            {state.archivesAvailable ? <ThreadArchiveLibrary /> : null}
+            {state.archivesAvailable ? (
+              <ThreadArchiveLibrary
+                {...(search.archiveEnvironmentId && search.archiveThreadId
+                  ? {
+                      initialOwner: {
+                        environmentId: EnvironmentId.make(search.archiveEnvironmentId),
+                        threadId: ThreadId.make(search.archiveThreadId),
+                      },
+                    }
+                  : {})}
+              />
+            ) : null}
           </Suspense>
         ) : null}
       </div>
