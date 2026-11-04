@@ -195,7 +195,7 @@ export function DefinitionEditor({
                 </label>
               ) : (
                 <p className="text-sm">
-                  Pull request publication requires a future publishing adapter.
+                  Publishes the tested commit as a pull request after approval for that revision.
                 </p>
               )}
               <Button

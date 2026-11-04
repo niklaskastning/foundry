@@ -907,8 +907,9 @@ und erlaubte Repositories mit numerischer ID, `owner/name`, Factory-Bindungsschl
 und Basisbranch. Der Betreiber installiert die App ausschließlich in ausgewählten
 Repositories mit Issues lesen, Contents schreiben und Pull requests schreiben
 (Metadata lesen). Keine persönlichen `gh`-Tokens in die Runtime übernehmen.
-Private Schlüssel nur über das Secret-Verfahren liefern; niemals in Chat, Befehlsargumenten
-oder Logs. Änderungen der Autorisierung erhöhen die Generation; Entfernen der
+Private Schlüssel als PEM mit erhaltenen Zeilenumbrüchen über das Secret-Verfahren
+liefern; vor Übernahme die Signaturfähigkeit der Node-Laufzeit prüfen. Niemals in Chat,
+Befehlsargumenten oder Logs ausgeben. Änderungen der Autorisierung erhöhen die Generation; Entfernen der
 Konfiguration sperrt den Zugang. Eine allgemeine Provider-/MCP-Verwaltung ist nicht enthalten.
 
 Publishing benötigt einen sauberen Commit nach bestätigtem Writer-Ende, passende
