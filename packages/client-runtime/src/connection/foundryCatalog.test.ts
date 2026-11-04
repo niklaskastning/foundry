@@ -34,6 +34,18 @@ it("rechecks catalog identity, online status and permissions before selecting a 
   expect(restoreDeviceSelection(selection, binding, binding.origin)?.[0]?.target.deviceId).toBe(
     deviceId,
   );
+  expect(restoreDeviceSelection(selection, binding, binding.origin)).toMatchObject([
+    { _tag: "FoundryConnectionRegistration", target: { environmentId: "worker" } },
+    {
+      _tag: "PrimaryConnectionRegistration",
+      target: {
+        _tag: "PrimaryConnectionTarget",
+        environmentId: "main",
+        httpBaseUrl: "https://main.example/",
+        wsBaseUrl: "wss://main.example/",
+      },
+    },
+  ]);
   expect(restoreDeviceSelection(null, binding, binding.origin)).toBeUndefined();
   expect(restoreDeviceSelection("null", binding, binding.origin)).toEqual([]);
   expect(restoreDeviceSelection("broken", binding, binding.origin)).toEqual([]);
