@@ -70,7 +70,7 @@ const make = Effect.gen(function* () {
   }, Effect.mapError(operationError));
   const readRun = Effect.fn("Workflows.readRun")(function* (factoryId: string, id: string) {
     const rows =
-      yield* sql<AutomationRun>`SELECT id,factory_id AS "factoryId",work_item_id AS "workItemId",workflow_version_id AS "workflowVersionId",factory_version_id AS "factoryVersionId",repository,revision,state FROM foundry_automation.runs WHERE factory_id=${factoryId} AND id=${id}`;
+      yield* sql<AutomationRun>`SELECT r.id,r.factory_id AS "factoryId",r.work_item_id AS "workItemId",r.workflow_version_id AS "workflowVersionId",r.factory_version_id AS "factoryVersionId",r.repository,r.revision,COALESCE(d.state,r.state) AS state FROM foundry_automation.runs r LEFT JOIN foundry_automation.dispatch_runs d ON d.run_id=r.id WHERE r.factory_id=${factoryId} AND r.id=${id}`;
     if (!rows[0]) return yield* new Factories.AutomationError({ reason: "not_found" });
     return rows[0];
   }, Effect.mapError(operationError));

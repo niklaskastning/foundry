@@ -6,11 +6,16 @@ import {
   ThreadId,
   IsoDateTime,
   NonNegativeInt,
+  PositiveInt,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import * as Schema from "effect/Schema";
 import { OrchestrationV2RunStatus } from "./orchestrationV2.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { FoundryInstanceId } from "./foundry.ts";
+import { FoundryDeviceId } from "./foundryDevices.ts";
+import { FoundryArchiveOwner } from "./foundryArchive.ts";
+import { FoundryArtifactManifest } from "./foundryArtifact.ts";
 
 export const FoundryWorkerStatus = Schema.Struct({
   online: Schema.Literal(true),
@@ -41,7 +46,13 @@ export class FoundryWorkerError extends Schema.TaggedError<FoundryWorkerError>()
 ) {}
 
 export const FoundryWorkerLaunchInput = Schema.Struct({
+  inputArtifacts: Schema.optional(
+    Schema.Array(FoundryArtifactManifest).check(Schema.isMaxLength(100)),
+  ),
   workspaceMode: Schema.optional(Schema.Literals(["checkout", "worktree"])),
+  previousExecution: Schema.optional(
+    Schema.Struct({ commandId: CommandId, generation: NonNegativeInt }),
+  ),
   commandId: CommandId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
@@ -66,11 +77,23 @@ export class FoundryWorkerLaunchError extends Schema.TaggedError<FoundryWorkerLa
       "provider_not_ready",
       "command_conflict",
       "launch_failed",
+      "handoff_unavailable",
+      "handoff_changed",
     ]),
   },
 ) {}
 
 export const FoundryWorkerManifest = Schema.Struct({
+  archive: Schema.optional(
+    Schema.Struct({
+      instanceId: FoundryInstanceId,
+      deviceId: FoundryDeviceId,
+      deviceGeneration: PositiveInt,
+      owner: FoundryArchiveOwner,
+      cursor: PositiveInt,
+      sourceSequence: PositiveInt,
+    }),
+  ),
   generation: NonNegativeInt,
   runId: RunId,
   checkpointId: Schema.NullOr(CheckpointId),

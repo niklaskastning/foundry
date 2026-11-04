@@ -59,6 +59,8 @@ const fixture = Effect.gen(function* () {
   let foundryActive = true;
   let accessGeneration = 1;
   let accessEnabled = true;
+  let automationEnabled = false;
+  let automationGeneration = 1;
   let databaseHangs = false;
   let stream: DeviceChannel.DeviceChannel["Service"]["stream"] = () => Effect.void;
   const expiresAt = (yield* Clock.currentTimeMillis) + 600_000;
@@ -102,8 +104,12 @@ const fixture = Effect.gen(function* () {
               ["clientAccess", "automationExecution", "sandboxProvisioning"].map((kind) => ({
                 deviceId: device.deviceId,
                 kind: kind as "clientAccess" | "automationExecution" | "sandboxProvisioning",
-                generation: accessGeneration,
-                enabled: kind === "clientAccess" && accessEnabled,
+                generation:
+                  kind === "automationExecution" ? automationGeneration : accessGeneration,
+                enabled:
+                  kind === "automationExecution"
+                    ? automationEnabled
+                    : kind === "clientAccess" && accessEnabled,
               })),
             ),
           update: () => Effect.die("not used"),
@@ -121,6 +127,20 @@ const fixture = Effect.gen(function* () {
       Layer.provide(Layer.succeed(DeviceConfig.StreamGatewayEnabled, true)),
       Layer.provide(
         Layer.succeed(FoundrySessions.FoundrySessions, {
+          reference: (token) =>
+            token === "foundry-fixture" && foundryActive
+              ? Effect.succeed("h".repeat(43))
+              : Effect.fail(new FoundryAuthError({ code: "invalid_session" })),
+          inspectReference: (hash) =>
+            Effect.gen(function* () {
+              if (
+                hash !== "h".repeat(43) ||
+                !foundryActive ||
+                expiresAt <= (yield* Clock.currentTimeMillis)
+              )
+                return yield* new FoundryAuthError({ code: "invalid_session" });
+              return { instanceId: device.instanceId, operatorId: "operator", expiresAt };
+            }),
           inspect: (token) =>
             (token === "foundry-fixture" || token === "foundry-fixture-other") && foundryActive
               ? Effect.succeed({
@@ -203,6 +223,10 @@ const fixture = Effect.gen(function* () {
     setAccess: (enabled: boolean) => {
       accessEnabled = enabled;
       accessGeneration++;
+    },
+    setAutomation: (enabled: boolean) => {
+      automationEnabled = enabled;
+      automationGeneration++;
     },
     hangDatabase: () => {
       databaseHangs = true;
@@ -428,7 +452,7 @@ it.effect(
       });
       const jwk = publicKey.export({ format: "jwk" }) as DpopPublicJwk;
       const session = yield* f.sessions.issue({
-        scopes: ["orchestration:read"],
+        scopes: ["orchestration:read", "orchestration:operate"],
         method: "bearer-access-token",
         proofKeyThumbprint: computeDpopJwkThumbprint(jwk),
       });
@@ -457,6 +481,29 @@ it.effect(
         (yield* f.grants.create(f.request(session.token, headers), f.input).pipe(Effect.result))
           ._tag,
       ).toBe("Failure");
+      f.setAutomation(true);
+      const automationPayload = encode({
+        htm: "POST",
+        htu: `${origin}/api/foundry/gateway/grants/create`,
+        jti: "automation-enroll",
+        iat: Math.floor((yield* Clock.currentTimeMillis) / 1000),
+        ath: computeDpopAccessTokenHash(session.token),
+      });
+      const automationUnsigned = `${header}.${automationPayload}`;
+      const automationProof = `${automationUnsigned}.${NodeCrypto.sign("sha256", Buffer.from(automationUnsigned), { key: privateKey, dsaEncoding: "ieee-p1363" }).toString("base64url")}`;
+      const automationRequest = f.request(session.token, {
+        authorization: `DPoP ${session.token}`,
+        dpop: automationProof,
+      });
+      const identity = yield* f.grants.authorizeAutomation(automationRequest, f.target);
+      expect(
+        (yield* f.grants.authorizeAutomation(automationRequest, f.target).pipe(Effect.result))._tag,
+      ).toBe("Failure");
+      const socket = Socket.make({ reader: Effect.die("unused"), writer: Effect.die("unused") });
+      f.setStream((_, validate) => validate);
+      yield* f.grants.openAutomation(identity, socket);
+      f.reconnect();
+      yield* f.grants.openAutomation(identity, socket);
     }).pipe(Effect.scoped),
 );
 
@@ -743,4 +790,105 @@ it.effect.each(["grant-remove", "device-access", "database-hang"] as const)(
       }
       expect((yield* f.grants.inspect(request, lookup).pipe(Effect.result))._tag).toBe("Failure");
     }).pipe(Effect.scoped),
+);
+
+it.effect.each([
+  "automation-disabled",
+  "automation-reenabled",
+  "client-revoked",
+  "foundry-logout",
+  "device-revoked",
+  "client-access-reenabled",
+  "foundry-expired",
+] as const)("revalidates persisted Automation authority after %s", (action) =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    const client = yield* f.sessions.issue({
+      scopes: ["orchestration:read", "orchestration:operate"],
+      subject: "automation-owner",
+      method: "bearer-access-token",
+    });
+    const request = f.request(client.token);
+    expect((yield* f.grants.authorizeAutomation(request, f.target).pipe(Effect.result))._tag).toBe(
+      "Failure",
+    );
+    f.setAutomation(true);
+    expect(
+      (yield* f.grants.authorizeAutomation(f.request(f.read.token), f.target).pipe(Effect.result))
+        ._tag,
+    ).toBe("Failure");
+    const identity = yield* f.grants.authorizeAutomation(request, f.target);
+    const socket = Socket.make({ reader: Effect.die("unused"), writer: Effect.die("unused") });
+    let opened = 0;
+    f.setStream((grant, validate) =>
+      validate.pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            expect(grant).toMatchObject({
+              clientSessionId: client.sessionId,
+              generation: identity.deviceGeneration,
+            });
+            opened++;
+          }),
+        ),
+      ),
+    );
+    yield* f.grants.openAutomation(identity, socket);
+    f.reconnect();
+    yield* f.grants.openAutomation(identity, socket);
+    expect(opened).toBe(2);
+    switch (action) {
+      case "automation-disabled":
+        f.setAutomation(false);
+        break;
+      case "automation-reenabled":
+        f.setAutomation(false);
+        f.setAutomation(true);
+        break;
+      case "client-revoked":
+        yield* f.sessions.revoke(client.sessionId);
+        break;
+      case "foundry-logout":
+        f.logout();
+        break;
+      case "device-revoked":
+        f.revoke();
+        break;
+      case "client-access-reenabled":
+        f.setAccess(false);
+        f.setAccess(true);
+        break;
+      case "foundry-expired":
+        yield* TestClock.adjust("11 minutes");
+        break;
+    }
+    expect((yield* f.grants.openAutomation(identity, socket).pipe(Effect.result))._tag).toBe(
+      "Failure",
+    );
+    expect(opened).toBe(2);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("reads Automation ownership with a read-only session while the device is offline", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    f.disconnect();
+    const identity = yield* f.grants.identityForRead(f.request(f.read.token));
+    expect(identity).toEqual({
+      instanceId: "22222222-2222-4222-8222-222222222222",
+      operatorId: "operator",
+    });
+    const writer = yield* f.sessions.issue({
+      scopes: ["orchestration:operate"],
+      subject: "writer",
+      method: "bearer-access-token",
+    });
+    expect(
+      (yield* f.grants.identityForRead(f.request(writer.token)).pipe(Effect.result))._tag,
+    ).toBe("Failure");
+    f.logout();
+    expect(
+      (yield* f.grants.identityForRead(f.request(f.read.token)).pipe(Effect.result))._tag,
+    ).toBe("Failure");
+  }).pipe(Effect.scoped),
 );

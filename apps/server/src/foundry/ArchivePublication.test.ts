@@ -142,7 +142,16 @@ it.effect(
           type: "thread.metadata-updated" as const,
         };
         yield* store.append({ events: [last] });
-        assert.isTrue((yield* publication!.reconcile(next.threadId)).complete);
+        const confirmation = yield* publication!.reconcile(next.threadId);
+        assert.deepInclude(confirmation, {
+          complete: true,
+          instanceId: device.instanceId,
+          deviceId: device.deviceId,
+          deviceGeneration: device.generation,
+          owner: { environmentId: device.environmentId, threadId: next.threadId },
+          confirmedCursor: 3,
+          confirmedSourceSequence: 5,
+        });
         assert.deepEqual(
           batches
             .filter((batch) => batch.owner.threadId === next.threadId)

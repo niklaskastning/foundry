@@ -10,8 +10,17 @@ import {
   ProviderSessionId,
   ProviderTurnId,
   RunAttemptId,
+  FoundryArtifactId,
+  FoundryInstanceId,
+  EnvironmentId,
+  FoundryArtifactError,
+  type FoundryArtifactManifest,
+  VcsProcessExitError,
 } from "@t3tools/contracts";
 import * as ExecutionStore from "../foundry/ExecutionStore.ts";
+import * as ArtifactPublication from "../foundry/ArtifactPublication.ts";
+import { WorkspaceGate } from "../foundry/workspaces/WorkspaceGate.ts";
+import type { WriterBinding } from "../foundry/workspaces/ReservationStore.ts";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as EventStore from "./EventStore.ts";
 import * as WorkerLaunch from "../foundry/WorkerLaunch.ts";
@@ -2418,6 +2427,10 @@ function workerLayer(
   providerReady = true,
   enabled = true,
   checkpointExists = false,
+  checkpointOverrides: Partial<CheckpointStore.CheckpointStore["Service"]> = {},
+  filesystemLayer: Layer.Layer<FileSystem.FileSystem> = FileSystem.layerNoop({
+    realPath: (path) => Effect.succeed(path),
+  }),
 ) {
   return WorkerLaunch.layer.pipe(
     Layer.provide(RuntimePolicy.layer),
@@ -2431,6 +2444,7 @@ function workerLayer(
         diffCheckpoints: () => Effect.succeed(""),
         listAuthoredPaths: () => Effect.succeed(new Set<string>()),
         deleteCheckpointRefs: () => Effect.void,
+        ...checkpointOverrides,
       }),
     ),
     Layer.provide(EventStore.layer),
@@ -2446,7 +2460,7 @@ function workerLayer(
           }),
         ),
         Path.layer,
-        FileSystem.layerNoop({ realPath: (path) => Effect.succeed(path) }),
+        filesystemLayer,
         Layer.succeed(WorkerReadiness, {
           read: () =>
             Effect.succeed({
@@ -2734,9 +2748,24 @@ it.effect.each([
       if (Result.isSuccess(recoveredRead))
         assert.equal(recoveredRead.success.receipt.threadId, ids.threadId);
     }
-    const first = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
-      worker.launch(workerInput),
-    ).pipe(Effect.provide(workerLayer()));
+    const first = yield* Effect.gen(function* () {
+      const worker = yield* WorkerLaunch.WorkerLaunch;
+      const receipt = yield* worker.launch(workerInput);
+      if (failurePoint === "before-commit") {
+        const store = yield* ExecutionStore.ExecutionStore;
+        const row = yield* store.read(workerInput.commandId);
+        assert.equal(row?.stopRequested, 1);
+        assert.isFalse(yield* store.renew(workerInput.commandId, row!.generation));
+        assert.isFalse(
+          yield* store.starting({
+            threadId: receipt.threadId,
+            providerThreadId: ProviderThreadId.make("must-not-revive"),
+            runOrdinal: 1,
+          }),
+        );
+      }
+      return receipt;
+    }).pipe(Effect.provide(workerLayer()));
     const settings = yield* ServerSettings.ServerSettingsService;
     yield* settings.updateSettings({
       projectSettingsOverrides: {
@@ -3055,10 +3084,176 @@ it.effect(
   },
 );
 
-it.effect.each(["absent", "missing", "error", "stale", "missing-object", "ready"] as const)(
+it.effect(
+  "worker materializes required artifacts with new thread ownership before accepting a turn",
+  () => {
+    const harness = makeHarness();
+    const bytes = new TextEncoder().encode("required result\n");
+    const source: FoundryArtifactManifest = {
+      reference: {
+        instanceId: FoundryInstanceId.make("11111111-1111-4111-8111-111111111111"),
+        artifactId: FoundryArtifactId.make("22222222-2222-4222-8222-222222222222"),
+        owner: { environmentId: EnvironmentId.make("worker"), threadId: ThreadId.make("previous") },
+      },
+      name: "result.txt",
+      mimeType: "text/plain",
+      sizeBytes: bytes.length,
+      sha256: "a".repeat(64),
+    };
+    let mode = "unavailable";
+    let downloads = 0;
+    const publication = Layer.effect(
+      ArtifactPublication.ArtifactPublication,
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        return ArtifactPublication.ArtifactPublication.of({
+          download: () => {
+            downloads++;
+            return mode === "unavailable"
+              ? Effect.fail(new FoundryArtifactError({ code: "unavailable" }))
+              : Effect.succeed({
+                  manifest: mode === "changed" ? { ...source, sha256: "b".repeat(64) } : source,
+                  bytes,
+                });
+          },
+          publishAttachment: (threadId, attachment) =>
+            Effect.gen(function* () {
+              const target = resolveAttachmentPath({
+                attachmentsDir: config.attachmentsDir,
+                attachment,
+              });
+              assert.isNotNull(target);
+              assert.deepEqual(yield* fs.readFile(target!), bytes);
+              return {
+                ...attachment,
+                foundryArtifact: {
+                  ...source,
+                  reference: {
+                    ...source.reference,
+                    artifactId: FoundryArtifactId.make("33333333-3333-4333-8333-333333333333"),
+                    owner: { ...source.reference.owner, threadId: ThreadId.make(threadId) },
+                  },
+                },
+              };
+            }).pipe(Effect.mapError(() => new FoundryArtifactError({ code: "unavailable" }))),
+        });
+      }),
+    );
+    const files = ServerConfig.layerTest(process.cwd(), {
+      prefix: "worker-artifact-handoff-",
+    }).pipe(Layer.provideMerge(NodeServices.layer));
+    const workerFiles = Layer.effect(
+      FileSystem.FileSystem,
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        return {
+          ...fs,
+          realPath: (path: string) => (path === "/repo" ? Effect.succeed(path) : fs.realPath(path)),
+        };
+      }),
+    ).pipe(Layer.provide(NodeServices.layer));
+    return Effect.gen(function* () {
+      const worker = yield* WorkerLaunch.WorkerLaunch;
+      const store = yield* ExecutionStore.ExecutionStore;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const input = {
+        ...workerInput,
+        commandId: CommandId.make("artifact-handoff"),
+        inputArtifacts: [source],
+      };
+      assert.equal((yield* worker.launch(input).pipe(Effect.flip)).code, "handoff_unavailable");
+      assert.isUndefined(yield* store.read(input.commandId));
+      mode = "changed";
+      assert.equal((yield* worker.launch(input).pipe(Effect.flip)).code, "handoff_changed");
+      assert.isUndefined(yield* store.read(input.commandId));
+      mode = "ready";
+      const receipt = yield* worker.launch(input);
+      const records = yield* threads.getThreadRecords(receipt.threadId, ["messages"]);
+      const attachment = records.messages[0]?.attachments[0];
+      assert.isDefined(attachment);
+      assert.equal(attachment!.foundryArtifact?.reference.owner.threadId, receipt.threadId);
+      assert.notEqual(
+        attachment!.foundryArtifact?.reference.artifactId,
+        source.reference.artifactId,
+      );
+      assert.deepEqual(
+        yield* fs.readFile(
+          resolveAttachmentPath({
+            attachmentsDir: config.attachmentsDir,
+            attachment: attachment!,
+          })!,
+        ),
+        bytes,
+      );
+      const before = downloads;
+      assert.deepEqual(yield* worker.launch(input), receipt);
+      assert.equal(downloads, before);
+      assert.equal(
+        (yield* worker
+          .launch({ ...input, inputArtifacts: [{ ...source, sha256: "b".repeat(64) }] })
+          .pipe(Effect.flip)).code,
+        "command_conflict",
+      );
+    }).pipe(
+      Effect.provide(
+        workerLayer(["/repo"], true, true, false, {}, workerFiles).pipe(
+          Layer.provideMerge(harness.layer),
+          Layer.provide(publication),
+          Layer.provideMerge(files),
+        ),
+      ),
+    );
+  },
+);
+
+it.effect.each([
+  "absent",
+  "missing",
+  "error",
+  "stale",
+  "missing-object",
+  "ready",
+  "other-workspace",
+] as const)(
   "worker completion waits for writer evidence and a ready checkpoint with Git object: %s",
   (checkpointState) => {
     const harness = makeHarness();
+    let handoffDiff = "";
+    let captureFails = false;
+    let checkpointAvailable = checkpointState !== "missing-object";
+    const temporaryRefs = new Set<string>();
+    let lastTemporaryRef: string | undefined;
+    let diffCalls = 0;
+    let changeAfterReservation = false;
+    const bindings: WriterBinding[] = [];
+    const released: string[] = [];
+    const gate = Layer.succeed(WorkspaceGate, {
+      installReconciler: () => Effect.void,
+      prepare: () => Effect.succeed(true),
+      starting: () => Effect.succeed(true),
+      bindings: Effect.succeed(bindings),
+      reserve: (input) =>
+        Effect.sync(() => {
+          bindings.push({
+            requestId: input.commandId,
+            commandId: input.commandId,
+            threadId: input.threadId,
+            generation: input.generation,
+            runId: null,
+            attemptId: null,
+            closed: 0,
+            verified: 0,
+          });
+          return null;
+        }),
+      confirm: (requestId) =>
+        Effect.sync(() => {
+          released.push(requestId);
+        }),
+    });
     return Effect.gen(function* () {
       const worker = yield* WorkerLaunch.WorkerLaunch;
       const threads = yield* ThreadManagement.ThreadManagementService;
@@ -3113,7 +3308,7 @@ it.effect.each(["absent", "missing", "error", "stale", "missing-object", "ready"
                 kind: "root_run",
                 ordinalWithinParent: 0,
                 advancesAppRunCount: true,
-                cwd: "/repo",
+                cwd: checkpointState === "other-workspace" ? "/other-repo" : "/repo",
                 createdAt: now,
               },
             },
@@ -3132,7 +3327,10 @@ it.effect.each(["absent", "missing", "error", "stale", "missing-object", "ready"
                 ordinalWithinScope: 1,
                 appRunOrdinal: 1,
                 ref: CheckpointRef.make("refs/checkpoints/worker-result"),
-                status: checkpointState === "missing-object" ? "ready" : checkpointState,
+                status:
+                  checkpointState === "missing-object" || checkpointState === "other-workspace"
+                    ? "ready"
+                    : checkpointState,
                 files: [],
                 capturedAt: now,
               },
@@ -3141,7 +3339,7 @@ it.effect.each(["absent", "missing", "error", "stale", "missing-object", "ready"
         });
       }
       result = yield* worker.read({ commandId: workerInput.commandId });
-      if (checkpointState === "ready") {
+      if (checkpointState === "ready" || checkpointState === "other-workspace") {
         assert.equal(result.lifecycle?.state, "completed");
         assert.deepInclude(result.lifecycle?.manifest, {
           checkpointId,
@@ -3149,18 +3347,170 @@ it.effect.each(["absent", "missing", "error", "stale", "missing-object", "ready"
           outcome: "completed",
         });
         assert.deepEqual(yield* worker.read({ commandId: workerInput.commandId }), result);
+        const next = {
+          ...workerInput,
+          commandId: CommandId.make("worker-handoff"),
+          previousExecution: { commandId: workerInput.commandId, generation: row!.generation },
+        };
+        if (checkpointState === "other-workspace") {
+          assert.equal((yield* worker.launch(next).pipe(Effect.flip)).code, "handoff_unavailable");
+          assert.equal(temporaryRefs.size, 0);
+          return;
+        }
+        for (const invalid of [
+          {
+            ...next,
+            previousExecution: { ...next.previousExecution, generation: row!.generation + 1 },
+          },
+          { ...next, workspaceMode: "worktree" as const },
+        ]) {
+          assert.equal(
+            (yield* worker
+              .launch({
+                ...invalid,
+                commandId: CommandId.make(
+                  `invalid-handoff-${invalid.previousExecution.generation}-${"workspaceMode" in invalid ? invalid.workspaceMode : "checkout"}`,
+                ),
+              })
+              .pipe(Effect.flip)).code,
+            "handoff_unavailable",
+          );
+        }
+        checkpointAvailable = false;
+        assert.equal((yield* worker.launch(next).pipe(Effect.flip)).code, "handoff_unavailable");
+        checkpointAvailable = true;
+        captureFails = true;
+        assert.equal((yield* worker.launch(next).pipe(Effect.flip)).code, "handoff_unavailable");
+        assert.equal(temporaryRefs.size, 0);
+        captureFails = false;
+        // Model a crash after capture: the retry must remove the pre-existing snapshot too.
+        temporaryRefs.add(lastTemporaryRef!);
+        handoffDiff = "modified working tree";
+        assert.equal((yield* worker.launch(next).pipe(Effect.flip)).code, "handoff_changed");
+        assert.equal(temporaryRefs.size, 0);
+        handoffDiff = "";
+        diffCalls = 0;
+        changeAfterReservation = true;
+        const raced = { ...next, commandId: CommandId.make("handoff-raced") };
+        assert.equal((yield* worker.launch(raced).pipe(Effect.flip)).code, "handoff_changed");
+        assert.deepEqual(released, [raced.commandId]);
+        const fenced = yield* store.read(raced.commandId);
+        assert.deepInclude(fenced, { stopRequested: 1, writerEnded: 1, manifest: null });
+        changeAfterReservation = false;
+        assert.equal((yield* worker.launch(raced).pipe(Effect.flip)).code, "launch_failed");
+        assert.isFalse(
+          yield* store.starting({
+            threadId: fenced!.threadId,
+            providerThreadId: ProviderThreadId.make("must-not-start"),
+            runOrdinal: 1,
+          }),
+        );
+        assert.equal(
+          (yield* worker.read({ commandId: raced.commandId }).pipe(Effect.flip)).code,
+          "not_found",
+        );
+        const nextReceipt = yield* worker.launch(next);
+        assert.notEqual(nextReceipt.threadId, receipt.threadId);
+        assert.equal(temporaryRefs.size, 0);
+        assert.deepEqual(yield* worker.launch(next), nextReceipt);
+        assert.equal(
+          (yield* worker
+            .launch({
+              ...next,
+              previousExecution: { ...next.previousExecution, generation: row!.generation + 1 },
+            })
+            .pipe(Effect.flip)).code,
+          "command_conflict",
+        );
       } else {
         assert.equal(result.lifecycle?.state, "finalizing");
         assert.isNull(result.lifecycle?.manifest);
       }
     }).pipe(
       Effect.provide(
-        workerLayer(["/repo"], true, true, checkpointState !== "missing-object").pipe(
-          Layer.provideMerge(harness.layer),
-        ),
+        workerLayer(["/repo"], true, true, checkpointState !== "missing-object", {
+          hasCheckpointRef: () => Effect.succeed(checkpointAvailable),
+          captureCheckpoint: ({ checkpointRef }) =>
+            Effect.gen(function* () {
+              temporaryRefs.add(checkpointRef);
+              lastTemporaryRef = checkpointRef;
+              if (captureFails)
+                return yield* new VcsProcessExitError({
+                  operation: "capture",
+                  command: "git",
+                  cwd: "/repo",
+                  exitCode: 1,
+                  detail: "fixture failure",
+                });
+            }),
+          diffCheckpoints: () =>
+            Effect.sync(() => {
+              diffCalls++;
+              return changeAfterReservation && diffCalls === 2
+                ? "changed after reservation"
+                : handoffDiff;
+            }),
+          deleteCheckpointRefs: ({ checkpointRefs }) =>
+            Effect.sync(() => {
+              for (const ref of checkpointRefs) temporaryRefs.delete(ref);
+            }),
+        }).pipe(Layer.provide(gate), Layer.provideMerge(harness.layer)),
       ),
     );
   },
+);
+
+it.effect(
+  "worker releases an expired prelaunch reservation without inventing a completed run",
+  () =>
+    Effect.gen(function* () {
+      const released = yield* Deferred.make<string>();
+      const bindings: WriterBinding[] = [];
+      const gate = Layer.succeed(WorkspaceGate, {
+        installReconciler: () => Effect.void,
+        prepare: () => Effect.succeed(true),
+        starting: () => Effect.succeed(true),
+        bindings: Effect.succeed(bindings),
+        reserve: () => Effect.succeed(null),
+        confirm: (requestId) => Deferred.succeed(released, requestId).pipe(Effect.asVoid),
+      });
+      yield* Effect.gen(function* () {
+        const worker = yield* WorkerLaunch.WorkerLaunch;
+        const store = yield* ExecutionStore.ExecutionStore;
+        const commandId = CommandId.make("crashed-before-thread");
+        const threadId = ThreadId.make("foundry-launch:crashed-before-thread");
+        const row = yield* store.reserve(commandId, threadId);
+        bindings.push({
+          requestId: "reservation-before-thread",
+          commandId,
+          threadId,
+          generation: row.generation,
+          runId: null,
+          attemptId: null,
+          closed: 0,
+          verified: 0,
+        });
+        yield* TestClock.adjust("60 seconds");
+        assert.equal(yield* Deferred.await(released), "reservation-before-thread");
+        assert.deepInclude(yield* store.read(commandId), {
+          writerEnded: 1,
+          stopRequested: 1,
+          manifest: null,
+        });
+        assert.equal((yield* worker.read({ commandId }).pipe(Effect.flip)).code, "not_found");
+        assert.isFalse(
+          yield* store.starting({
+            threadId,
+            providerThreadId: ProviderThreadId.make("forbidden-start"),
+            runOrdinal: 1,
+          }),
+        );
+      }).pipe(
+        Effect.provide(
+          workerLayer().pipe(Layer.provide(gate), Layer.provideMerge(makeHarness().layer)),
+        ),
+      );
+    }),
 );
 
 it.effect("running worker cancel remains uncertain until confirmed writing end", () => {

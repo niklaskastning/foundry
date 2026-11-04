@@ -56,7 +56,7 @@ const make = Effect.gen(function* () {
           const versions = yield* sql<{
             version: number;
           }>`SELECT version FROM foundry_automation.schema_version`;
-          if (versions.length !== 1 || ![1, 2, 3].includes(versions[0]?.version ?? 0))
+          if (versions.length !== 1 || ![1, 2, 3, 4].includes(versions[0]?.version ?? 0))
             return yield* new AutomationMigrationError({ reason: "schema_incompatible" });
           if (versions[0]?.version === 1) {
             yield* sql`ALTER TABLE foundry_automation.work_items ADD CONSTRAINT work_items_factory_id_id_key UNIQUE(factory_id,id)`;
@@ -70,6 +70,14 @@ const make = Effect.gen(function* () {
             yield* sql`CREATE TABLE foundry_automation.definition_heads (factory_id text PRIMARY KEY REFERENCES foundry_automation.factories(id), version_id text NOT NULL, FOREIGN KEY(factory_id,version_id) REFERENCES foundry_automation.definition_versions(factory_id,id))`;
             yield* sql`UPDATE foundry_automation.schema_version SET version=3`;
           }
+          if ([1, 2, 3].includes(versions[0]?.version ?? 0)) {
+            yield* sql`CREATE TABLE foundry_automation.dispatch_runs (run_id text PRIMARY KEY REFERENCES foundry_automation.runs(id), worker_id text NOT NULL, binding jsonb NOT NULL, state text NOT NULL DEFAULT 'running' CHECK(state IN ('running','waiting','failed','succeeded')), reason text, enrolled_at timestamptz NOT NULL DEFAULT clock_timestamp())`;
+            yield* sql`CREATE INDEX dispatch_runs_ready ON foundry_automation.dispatch_runs(worker_id,enrolled_at,run_id) WHERE state IN ('running','waiting')`;
+            yield* sql`CREATE TABLE foundry_automation.dispatch_workers (worker_id text PRIMARY KEY, run_id text REFERENCES foundry_automation.dispatch_runs(run_id), claim_owner text, claim_generation integer NOT NULL DEFAULT 0, lease_until timestamptz NOT NULL DEFAULT '-infinity')`;
+            yield* sql`CREATE TABLE foundry_automation.step_attempts (command_id text PRIMARY KEY, run_id text NOT NULL REFERENCES foundry_automation.dispatch_runs(run_id), ordinal integer NOT NULL CHECK(ordinal>=0), request jsonb NOT NULL, state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','running','waiting','finalizing','failed','succeeded')), reason text, receipt jsonb, result jsonb, UNIQUE(run_id,ordinal))`;
+            yield* sql`CREATE TABLE foundry_automation.dispatch_outbox (command_id text PRIMARY KEY REFERENCES foundry_automation.step_attempts(command_id), state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','delivered','confirmed')))`;
+            yield* sql`UPDATE foundry_automation.schema_version SET version=4`;
+          }
           yield* sql`GRANT USAGE ON SCHEMA foundry_automation TO ${sql(runtimeRole)}`;
           yield* sql`GRANT SELECT ON ALL TABLES IN SCHEMA foundry_automation TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT ON foundry_automation.factories, foundry_automation.versions, foundry_automation.work_items, foundry_automation.commands TO ${sql(runtimeRole)}`;
@@ -78,6 +86,11 @@ const make = Effect.gen(function* () {
           yield* sql`GRANT UPDATE(version_id) ON foundry_automation.definition_heads TO ${sql(runtimeRole)}`;
           yield* sql`GRANT UPDATE(archived) ON foundry_automation.factories TO ${sql(runtimeRole)}`;
           yield* sql`GRANT UPDATE(state) ON foundry_automation.work_items TO ${sql(runtimeRole)}`;
+          yield* sql`GRANT INSERT ON foundry_automation.dispatch_runs, foundry_automation.dispatch_workers, foundry_automation.step_attempts, foundry_automation.dispatch_outbox TO ${sql(runtimeRole)}`;
+          yield* sql`GRANT UPDATE(state,reason) ON foundry_automation.dispatch_runs TO ${sql(runtimeRole)}`;
+          yield* sql`GRANT UPDATE(run_id,claim_owner,claim_generation,lease_until) ON foundry_automation.dispatch_workers TO ${sql(runtimeRole)}`;
+          yield* sql`GRANT UPDATE(state,reason,receipt,result) ON foundry_automation.step_attempts TO ${sql(runtimeRole)}`;
+          yield* sql`GRANT UPDATE(state) ON foundry_automation.dispatch_outbox TO ${sql(runtimeRole)}`;
         }),
       );
     },

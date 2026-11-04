@@ -3,6 +3,8 @@ import {
   FoundryArchiveStatus,
   FoundryArchiveEvent,
   type ThreadId,
+  type FoundryDeviceId,
+  type FoundryInstanceId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -19,9 +21,14 @@ import { archiveEvent } from "./archiveEvent.ts";
 
 export class ArchivePublication extends Context.Reference<
   | {
-      readonly reconcile: (
-        threadId: ThreadId,
-      ) => Effect.Effect<{ readonly complete: boolean }, FoundryArchiveError>;
+      readonly reconcile: (threadId: ThreadId) => Effect.Effect<
+        FoundryArchiveStatus & {
+          readonly instanceId: FoundryInstanceId;
+          readonly deviceId: FoundryDeviceId;
+          readonly deviceGeneration: number;
+        },
+        FoundryArchiveError
+      >;
     }
   | undefined
 >("t3/foundry/ArchivePublication", { defaultValue: () => undefined }) {}
@@ -112,7 +119,21 @@ export const layer = Layer.effect(
           cursor = status.confirmedCursor;
           sourceSequence = status.confirmedSourceSequence;
         } while (cursor < sourceHead);
-        return status;
+        if (
+          status.owner.environmentId !== owner.environmentId ||
+          status.owner.threadId !== threadId ||
+          status.sourceHead !== sourceHead ||
+          status.sourceComplete !== sourceComplete ||
+          status.confirmedCursor !== sourceHead ||
+          status.confirmedSourceSequence !== throughSequence
+        )
+          return yield* conflict();
+        return {
+          ...status,
+          instanceId: transport.device.instanceId,
+          deviceId: transport.device.deviceId,
+          deviceGeneration: transport.device.generation,
+        };
       },
       Effect.mapError((error) => (isArchiveError(error) ? error : unavailable())),
       lane.withPermits(1),

@@ -99,7 +99,7 @@ export const AutomationRun = Schema.Struct({
   factoryVersionId: Key,
   repository: Key,
   revision: Key,
-  state: Schema.Literal("pending"),
+  state: Schema.Literals(["pending", "running", "waiting", "failed", "succeeded"]),
 });
 export type AutomationRun = typeof AutomationRun.Type;
 export const StartAutomationRun = Schema.Struct({
