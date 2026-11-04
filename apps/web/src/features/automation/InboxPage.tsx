@@ -12,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../components/ui/select";
+import { environmentSession, sessionHasScope } from "../../state/session";
 import { automationCommands } from "./commands";
 import { InboxDetail } from "./InboxDetail";
 
@@ -27,6 +28,7 @@ export function InboxPage({
   onNavigateWorkItem?: (factoryId: string, workItemId: string) => void;
 }) {
   const registry = useContext(RegistryContext);
+  const session = useAtomValue(environmentSession.sessionStateAtom(environmentId));
   const canRead = useAtomValue(automationCommands.inboxQuery.permissionAtom(environmentId));
   const [kind, setKind] = useState<AutomationInboxQuery["kind"]>();
   const [status, setStatus] = useState<"open" | "done" | "all">("open");
@@ -39,13 +41,19 @@ export function InboxPage({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const selected = items.find((item) => item.id === selectedId);
+  const visibleItems = canRead && sessionHasScope(session, "orchestration:read") ? items : [];
+  const selected = visibleItems.find((item) => item.id === selectedId);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Reload durable inbox facts after navigation, browser reconnection, focus or an explicit refresh.
   useEffect(() => {
+    if (!canRead || !sessionHasScope(session, "orchestration:read")) return;
+    let inFlight = false;
     let disposed = false;
     let latest = generation;
     const load = async () => {
-      const sequence = ++latest;
+      if (inFlight || document.hidden) return;
+      inFlight = true;
+      latest = latest + 1;
+      const sequence = latest;
       setBusy(true);
       const input: AutomationInboxQuery = {
         status,
@@ -61,6 +69,7 @@ export function InboxPage({
         { environmentId, input },
         { reportFailure: false },
       );
+      inFlight = false;
       if (disposed || sequence !== latest) return;
       setBusy(false);
       if (AsyncResult.isSuccess(result)) {
@@ -69,18 +78,23 @@ export function InboxPage({
         setMessage("");
       } else setMessage("Inbox could not be loaded. Check your Main connection and refresh.");
     };
-    if (canRead) void load();
+    void load();
     window.addEventListener("focus", load);
     window.addEventListener("online", load);
+    document.addEventListener("visibilitychange", load);
+    const timer = window.setInterval(load, 5000);
     return () => {
       disposed = true;
       window.removeEventListener("focus", load);
       window.removeEventListener("online", load);
+      document.removeEventListener("visibilitychange", load);
+      window.clearInterval(timer);
     };
   }, [
     registry,
     environmentId,
     canRead,
+    session,
     factoryId,
     filterFactory,
     kind,
@@ -164,7 +178,7 @@ export function InboxPage({
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="space-y-3">
           <ul className="space-y-2" aria-label="Inbox items">
-            {items.map((item) => (
+            {visibleItems.map((item) => (
               <li key={item.id} className="rounded-lg border p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div>
@@ -185,7 +199,7 @@ export function InboxPage({
               </li>
             ))}
           </ul>
-          {canRead && !busy && items.length === 0 ? (
+          {canRead && !busy && visibleItems.length === 0 ? (
             <p className="text-sm text-muted-foreground">No matching inbox items.</p>
           ) : null}
           <div className="flex gap-2">

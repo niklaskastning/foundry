@@ -12,6 +12,8 @@ import { Button } from "../../components/ui/button";
 import { Textarea } from "../../components/ui/textarea";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { automationCommands } from "./commands";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { isDefinitiveAutomationFailure } from "./failures";
 import { randomUUID } from "../../lib/utils";
 
 const answerText = (value: unknown) => (typeof value === "string" ? value : "");
@@ -61,10 +63,15 @@ export function InboxDetail({
     if (AsyncResult.isSuccess(result)) {
       pendingMark.current = null;
       onChanged();
-    } else
+    } else {
+      if (isDefinitiveAutomationFailure(squashAtomCommandFailure(result))) {
+        pendingMark.current = null;
+        onChanged();
+      }
       setMessage(
         "The mark could not be saved. Retry sends the same command; refresh if this item changed.",
       );
+    }
   }
   async function decide(action: "approve" | "reject" | "answer") {
     if (inFlight.current || (pendingControl.current && pendingControl.current.action !== action))
@@ -96,10 +103,16 @@ export function InboxDetail({
       setPendingAction(null);
       setMessage("Decision recorded.");
       onChanged();
-    } else
+    } else {
+      if (isDefinitiveAutomationFailure(squashAtomCommandFailure(result))) {
+        pendingControl.current = null;
+        setPendingAction(null);
+        onChanged();
+      }
       setMessage(
         "Decision was not confirmed. Retry sends the same command. Refresh to inspect changed revisions or permissions.",
       );
+    }
   }
   return (
     <aside className="space-y-4 rounded-lg border p-4" aria-label="Inbox item details">
@@ -272,7 +285,7 @@ export function InboxDetail({
             variant="outline"
             onClick={() =>
               window.location.assign(
-                `/${encodeURIComponent(item.environmentId!)}/${encodeURIComponent(item.threadId!)}`,
+                `/${encodeURIComponent(item.environmentId!)}/${encodeURIComponent(item.threadId!)}?factoryId=${encodeURIComponent(item.factoryId)}&runId=${encodeURIComponent(item.runId)}`,
               )
             }
           >

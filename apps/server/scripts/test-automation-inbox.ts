@@ -187,11 +187,72 @@ try {
   await sql(
     `INSERT INTO foundry_automation.run_questions(run_id,request_id,thread_id,payload,status,source_sequence) VALUES('run','question','thread','{"questions":[{"id":"choice","header":"Choose","question":"Which fixture?","options":[]}]}','pending',1)`,
   );
+  NodeAssert.equal(
+    (await call((service) => service.query(request, { kind: "question" }))).items.length,
+    0,
+  );
+  await sql(
+    `INSERT INTO foundry_automation.step_attempts(command_id,run_id,ordinal,request,state,receipt) VALUES('question-attempt','run',0,'{}','waiting','{"receipt":{"threadId":"thread"}}')`,
+  );
+  NodeAssert.equal(
+    (await call((service) => service.query(request, { kind: "question" }))).items.length,
+    0,
+  );
+  await sql(
+    `UPDATE foundry_automation.run_questions SET payload=payload || '{"request":{"kind":"user_input","status":"pending","responseCapability":{"type":"not_resumable"}}}'::jsonb WHERE request_id='question'`,
+  );
+  NodeAssert.equal(
+    (await call((service) => service.query(request, { kind: "question" }))).items.length,
+    0,
+  );
+  await sql(
+    `UPDATE foundry_automation.run_questions SET payload=jsonb_set(payload,'{request,responseCapability,type}','"live"'::jsonb) WHERE request_id='question'`,
+  );
   const question = (await call((service) => service.query(request, { kind: "question" })))
     .items[0]!;
   NodeAssert.equal(question.questions[0]?.id, "choice");
   await sql(
-    `UPDATE foundry_automation.run_questions SET status='answered',answer='{"commandId":"answer","answers":{"choice":"Fixture A"},"identity":{"secret":"must-not-leak"}}',source_sequence=2 WHERE request_id='question'`,
+    `UPDATE foundry_automation.step_attempts SET result='{"execution":{"lifecycle":{"writerEnded":true}}}' WHERE command_id='question-attempt'`,
+  );
+  NodeAssert.equal(
+    (await call((service) => service.query(request, { kind: "question" }))).items.length,
+    0,
+  );
+  NodeAssert.equal(
+    (await call((service) => service.query(request, { kind: "question", status: "all" }))).items[0]
+      ?.active,
+    false,
+  );
+  await sql(
+    "UPDATE foundry_automation.step_attempts SET state='failed',result=NULL WHERE command_id='question-attempt'",
+  );
+  NodeAssert.equal(
+    (await call((service) => service.query(request, { kind: "question" }))).items.length,
+    0,
+  );
+  await sql(
+    `INSERT INTO foundry_automation.step_attempts(command_id,run_id,ordinal,attempt_number,request,state) VALUES('question-retry-attempt','run',0,1,'{}','pending')`,
+  );
+  NodeAssert.equal(
+    (await call((service) => service.query(request, { kind: "question" }))).items.length,
+    0,
+  );
+  await sql(
+    `UPDATE foundry_automation.step_attempts SET state='waiting',receipt='{"receipt":{"threadId":"retry-thread"}}' WHERE command_id='question-retry-attempt'`,
+  );
+  NodeAssert.equal(
+    (await call((service) => service.query(request, { kind: "question" }))).items.length,
+    0,
+  );
+  await sql(
+    `INSERT INTO foundry_automation.run_questions(run_id,request_id,thread_id,payload,status,source_sequence) SELECT run_id,'question-retry','retry-thread',payload,'pending',2 FROM foundry_automation.run_questions WHERE request_id='question'`,
+  );
+  const currentQuestions = await call((service) => service.query(request, { kind: "question" }));
+  NodeAssert.equal(currentQuestions.items.length, 1);
+  NodeAssert.equal(currentQuestions.items[0]?.requestId, "question-retry");
+
+  await sql(
+    `UPDATE foundry_automation.run_questions SET status='answered',answer='{"commandId":"answer","answers":{"choice":"Fixture A"},"identity":{"secret":"must-not-leak"}}',source_sequence=3 WHERE request_id='question-retry'`,
   );
   NodeAssert.equal(
     (await call((service) => service.query(request, { kind: "question" }))).items.length,
@@ -258,10 +319,34 @@ try {
   await sql("UPDATE foundry_automation.run_controls SET revision=2 WHERE run_id='run'");
   NodeAssert.equal(
     (await call((service) => service.query(request, { kind: "approval" }))).items.length,
+    0,
+  );
+  await sql("UPDATE foundry_automation.run_controls SET result_revision=2 WHERE run_id='run'");
+  NodeAssert.equal(
+    (await call((service) => service.query(request, { kind: "approval" }))).items.length,
     1,
   );
   await sql(
-    "INSERT INTO foundry_automation.step_attempts(command_id,run_id,ordinal,request,state) VALUES('approval-step','run',0,'{}','succeeded')",
+    "INSERT INTO foundry_automation.commands(id,kind,payload) VALUES('new-approval','fixture','{}'),('new-rejection','fixture','{}')",
+  );
+  await sql(
+    "INSERT INTO foundry_automation.run_decisions(command_id,run_id,step_id,revision,result_revision,approved) VALUES('new-approval','run','approve',3,2,true)",
+  );
+  await sql("UPDATE foundry_automation.run_controls SET revision=3 WHERE run_id='run'");
+  NodeAssert.equal(
+    (await call((service) => service.query(request, { kind: "approval" }))).items.length,
+    0,
+  );
+  await sql(
+    "INSERT INTO foundry_automation.run_decisions(command_id,run_id,step_id,revision,result_revision,approved) VALUES('new-rejection','run','approve',4,2,false)",
+  );
+  await sql("UPDATE foundry_automation.run_controls SET revision=4 WHERE run_id='run'");
+  NodeAssert.equal(
+    (await call((service) => service.query(request, { kind: "approval" }))).items.length,
+    1,
+  );
+  await sql(
+    "UPDATE foundry_automation.step_attempts SET state='succeeded' WHERE command_id='question-retry-attempt'",
   );
   await sql(
     "UPDATE foundry_automation.dispatch_runs SET reason='approval_revision_changed' WHERE run_id='run'",
@@ -272,7 +357,7 @@ try {
   );
   await Effect.runPromise(
     Console.log(
-      "Inbox PostgreSQL gates passed: two clients, idempotent receipts, done/undo separate from approval, ownership, stale revisions, owner question/answer reconciliation, pagination, rollback and database restart; zero worker/provider calls.",
+      "Inbox PostgreSQL gates passed: two clients, idempotent receipts, done/undo separate from approval, ownership, stale revisions, owner question/answer reconciliation, inactive old retry/writer-ended questions, pagination, rollback and database restart; zero worker/provider calls.",
     ),
   );
 } finally {

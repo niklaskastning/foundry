@@ -63,7 +63,15 @@ const make = Effect.gen(function* () {
       ), facts AS (
         SELECT o.*, 'question'::text AS kind,q.request_id AS source_key,q.thread_id AS source_thread,
           q.request_id,NULL::text AS step_id,q.payload->'questions' AS questions,NULL::jsonb AS answer,
-          q.status='pending' AND o.mode NOT IN ('cancelled','cancel_requested') AS active,
+          q.status='pending' AND COALESCE(q.payload->'request'->>'kind','')='user_input'
+            AND COALESCE(q.payload->'request'->>'status','')='pending'
+            AND COALESCE(q.payload->'request'->'responseCapability'->>'type','') IN ('live','message')
+            AND o.state NOT IN ('failed','succeeded') AND o.mode NOT IN ('cancelled','cancel_requested')
+            AND EXISTS (SELECT 1 FROM (SELECT a.state,a.receipt,a.result FROM foundry_automation.step_attempts a
+              WHERE a.run_id=o.run_id ORDER BY a.ordinal DESC,a.attempt_number DESC LIMIT 1) current_attempt
+              WHERE current_attempt.state IN ('pending','running','waiting','finalizing')
+                AND current_attempt.receipt->'receipt'->>'threadId'=q.thread_id
+                AND current_attempt.result#>'{execution,lifecycle,writerEnded}' IS DISTINCT FROM 'true'::jsonb) AS active,
           q.source_sequence::text || ':' || q.status AS fact_revision,
           'Question: ' || o.title AS fact_title,'A response is required in the linked agent thread.'::text AS detail
         FROM owned o JOIN foundry_automation.run_questions q ON q.run_id=o.run_id
@@ -77,7 +85,9 @@ const make = Effect.gen(function* () {
           o.mode NOT IN ('cancelled','cancel_requested') AND o.state='waiting'
             AND NOT EXISTS (SELECT 1 FROM foundry_automation.run_decisions decision
               WHERE decision.run_id=o.run_id AND decision.step_id=s.step->>'id' AND decision.approved
-                AND decision.revision=o.revision AND decision.result_revision=o.result_revision),s.step::text,
+                AND decision.result_revision=o.result_revision AND decision.revision=(
+                  SELECT max(latest.revision) FROM foundry_automation.run_decisions latest
+                  WHERE latest.run_id=o.run_id AND latest.step_id=decision.step_id)),s.step::text,
           'Approval: ' || o.title,COALESCE(s.step->>'prompt','Review the current result before publication.')
         FROM owned o CROSS JOIN LATERAL (
           SELECT step,ordinality FROM jsonb_array_elements(o.steps) WITH ORDINALITY AS steps(step,ordinality)
@@ -86,7 +96,9 @@ const make = Effect.gen(function* () {
           OR (o.reason='approval_revision_changed' AND step->>'kind'='approval'
             AND NOT EXISTS (SELECT 1 FROM foundry_automation.run_decisions decision
               WHERE decision.run_id=o.run_id AND decision.step_id=step->>'id' AND decision.approved
-                AND decision.revision=o.revision AND decision.result_revision=o.result_revision))
+                AND decision.result_revision=o.result_revision AND decision.revision=(
+                  SELECT max(latest.revision) FROM foundry_automation.run_decisions latest
+                  WHERE latest.run_id=o.run_id AND latest.step_id=decision.step_id)))
           ORDER BY ordinality LIMIT 1
         ) s
         WHERE s.step->>'kind' IN ('approval','publish')
@@ -168,7 +180,7 @@ const make = Effect.gen(function* () {
         const prior = yield* sql<{
           same: boolean;
           receipt: unknown;
-        }>`SELECT operator_id=${owner.operatorId} AND payload=${sql.json({ ...input, instanceId: owner.instanceId })}::jsonb AS same,receipt FROM foundry_automation.inbox_commands WHERE id=${input.commandId}`;
+        }>`SELECT c.kind='inbox.mark' AND r.operator_id=${owner.operatorId} AND c.payload=${sql.json({ ...input, instanceId: owner.instanceId })}::jsonb AS same,r.receipt FROM foundry_automation.commands c LEFT JOIN foundry_automation.inbox_commands r ON r.id=c.id WHERE c.id=${input.commandId}`;
         if (prior[0]) {
           if (!prior[0].same)
             return yield* new AutomationInboxError({ reason: "command_conflict" });
@@ -177,6 +189,10 @@ const make = Effect.gen(function* () {
         const entry = yield* read(owner, input.itemId);
         if (entry.sourceRevision !== input.sourceRevision)
           return yield* new AutomationInboxError({ reason: "stale_revision" });
+        const reserved =
+          yield* sql`INSERT INTO foundry_automation.commands(id,kind,payload) VALUES(${input.commandId},'inbox.mark',${sql.json({ ...input, instanceId: owner.instanceId })}) ON CONFLICT DO NOTHING RETURNING id`;
+        if (reserved.length !== 1)
+          return yield* new AutomationInboxError({ reason: "command_conflict" });
         const isRead =
           input.action === "read" ? true : input.action === "unread" ? false : entry.isRead;
         const isDone =
