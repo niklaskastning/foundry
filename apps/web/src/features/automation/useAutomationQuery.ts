@@ -31,7 +31,8 @@ export function useAutomationQuery(
     const load = async () => {
       if (inFlight || document.hidden) return;
       inFlight = true;
-      const sequence = ++latest;
+      latest = latest + 1;
+      const sequence = latest;
       setLoading(true);
       const response = await runAtomCommand(
         registry,

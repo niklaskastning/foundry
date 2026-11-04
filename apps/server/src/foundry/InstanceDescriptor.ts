@@ -1,3 +1,4 @@
+import * as Config from "effect/Config";
 import * as AccessConfig from "./AccessConfig.ts";
 import * as DeviceConfig from "./DeviceConfig.ts";
 import { FOUNDRY_ARTIFACT_CHUNK_BYTES, FOUNDRY_ARTIFACT_MAX_BYTES } from "@t3tools/contracts";
@@ -30,6 +31,9 @@ export class InstanceDescriptor extends Context.Service<
 >()("t3/foundry/InstanceDescriptor") {}
 
 const make = Effect.gen(function* () {
+  const automation = yield* Config.Boolean("FOUNDRY_AUTOMATION_ENABLED").pipe(
+    Config.withDefault(false),
+  );
   const enabled = yield* AccessConfig.AccessEnabled;
   const enrollment = yield* DeviceConfig.DeviceEnrollmentEnabled;
   const channel = yield* DeviceConfig.DeviceChannelEnabled;
@@ -74,6 +78,7 @@ const make = Effect.gen(function* () {
       instanceId: yield* identity.getOrCreate,
       mainEnvironmentId: yield* environment.getEnvironmentId,
       capabilities,
+      ...(automation ? { automation: { protocolVersion: "1" as const } } : {}),
       ...(artifacts
         ? {
             threadArchive: { protocolVersion: "1" as const, pageSize: 50 },

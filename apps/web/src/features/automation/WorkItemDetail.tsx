@@ -5,10 +5,12 @@ import { useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   ProjectId,
+  ManualStart,
   type AutomationApplicationCommand,
   type EnvironmentId,
   type FactoryDefinitionVersion,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -17,6 +19,8 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { automationCommands } from "./commands";
 import { useAutomationQuery } from "./useAutomationQuery";
 import { RunList } from "./RunList";
+
+const decodeManualStart = Schema.decodeUnknownSync(ManualStart, { onExcessProperty: "error" });
 
 export function WorkItemDetail({
   environmentId,
@@ -51,7 +55,7 @@ export function WorkItemDetail({
     try {
       input = pending ?? {
         op: "start",
-        input: {
+        input: decodeManualStart({
           commandId: randomUUID(),
           id: randomUUID(),
           factoryId,
@@ -62,10 +66,12 @@ export function WorkItemDetail({
           model,
           checks: JSON.parse(checks),
           requiredArtifacts: JSON.parse(artifacts),
-        },
+        }),
       };
     } catch {
-      setMessage("Checks and required artifacts must be valid JSON arrays.");
+      setMessage(
+        "Check the start fields. Checks require id, prompt, command and cwd; artifact bindings require stepId and names.",
+      );
       return;
     }
     setPending(input);
@@ -82,7 +88,7 @@ export function WorkItemDetail({
       onOpenRun(factoryId, result.value.run.id);
     } else
       setMessage(
-        "Start was not confirmed. Verify the worker/project binding and permissions. Retry keeps the original command and run ID.",
+        "Start was not confirmed. Verify the worker/project binding and permissions. Unconfirmed requests retain their command and run ID.",
       );
   }
   return (

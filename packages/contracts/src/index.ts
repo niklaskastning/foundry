@@ -81,3 +81,7 @@ export * from "./automation/factory.ts";
 export * from "./automation/definition.ts";
 export * from "./foundryArtifact.ts";
 export * from "./foundryArchive.ts";
+
+export * from "./automation/control.ts";
+export * from "./automation/application.ts";
+export * from "./automation/inbox.ts";

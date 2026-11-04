@@ -2,6 +2,7 @@ import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime"
 import { isDefinitiveAutomationFailure } from "./failures";
 import { randomUUID } from "../../lib/utils";
 import { useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import type { AutomationApplicationCommand, EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
@@ -146,7 +147,7 @@ function FactoryList({
       onOpen(response.value.factory.id);
     } else
       setMessage(
-        "Factory was not saved. Check permissions and repository scope; retry uses the same command.",
+        "Factory was not saved. Check permissions and repository scope; unconfirmed requests retain their command ID.",
       );
   }
   return (
@@ -296,7 +297,8 @@ function FactoryDetail({
       setPending(null);
       setWorkItemId(response.value.item.id);
       works.refresh();
-    } else setMessage("Work item could not be saved. Retry uses the same command.");
+    } else
+      setMessage("Work item could not be saved. Unconfirmed requests retain their command ID.");
   }
   return (
     <section className="space-y-4">
@@ -315,6 +317,13 @@ function FactoryDetail({
             {value === "work" ? "Work items" : value.charAt(0).toUpperCase() + value.slice(1)}
           </Button>
         ))}
+        <Link
+          className="self-center px-3 text-sm underline"
+          to="/foundry"
+          search={{ view: "inbox", factoryId }}
+        >
+          Inbox
+        </Link>
       </nav>
       {tab === "definition" && detail ? (
         <DefinitionEditor

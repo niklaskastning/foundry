@@ -20,7 +20,7 @@ Architektur und Deployment erklären **was und warum**; der Umsetzungsplan besit
 
 ## Vorhandener Stand und nächster Schritt
 
-Main, Instanz-PostgreSQL/Access, registrierter Linux-Worker und Gateway sind integriert. Windows/Electron und Firefox greifen auf denselben Worker zu. Windows-Login, Refresh, App-Neustart und Wiederanmeldung mit erhaltener T3-Kopplung sind praktisch bestätigt. Native Foundry-Anmeldung und Sandboxes bleiben geplant; der P19-Dispatcher ist ausdrücklich aktivierbar. Zentrale Anhänge sind mit P38a umgesetzt; PR #50 ergänzt fortlaufende Thread-Archive.
+Main, Instanz-PostgreSQL/Access, registrierter Linux-Worker und Gateway sind integriert. Windows/Electron und Firefox greifen auf denselben Worker zu. Windows-Login, Refresh, App-Neustart und Wiederanmeldung mit erhaltener T3-Kopplung sind praktisch bestätigt. Native Foundry-Anmeldung und Sandboxes bleiben geplant; die Automation mit manuellen Starts ist ausdrücklich aktivierbar. Zentrale Anhänge sind mit P38a umgesetzt; PR #50 ergänzt fortlaufende Thread-Archive.
 
 G3 ist funktional einschließlich realer Worker-Recovery bestätigt; P18b und P47 sind als inaktive Grundlagen integriert. P38a ist funktional abgenommen und auf der Entwicklungs-VPS aktiviert. **P38b: fortlaufende zentrale Thread-Archive** ist in [PR #50](https://github.com/niklaskastning/foundry/pull/50) implementiert; die funktionalen UI-/PostgreSQL-/Worker-Nachweise und das aktivierte Entwicklungsdeployment sind im Plan und PR belegt. PR #50 ist über `ba822a079` integriert. P19 ergänzt den explizit begrenzten sequenziellen Dispatch; sein Abnahme- und Betriebsstand steht im Plan. Factory-Definitionen liegen im separaten privaten Repository [foundry-definitions](https://github.com/niklaskastning/foundry-definitions); der App-Zugang folgt über P23/P48. Der [Umsetzungsplan](implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen) trennt erledigten Code von offenen G1-/G2- und Betriebsabnahmen. Agenten laufen auf dem dedizierten Worker.
 
@@ -31,3 +31,34 @@ Jedes Arbeitspaket erhält einen eigenen Branch, fokussierte Commits und einen P
 Die Maintainer-Vorgaben stehen in [AGENTS.md](../../AGENTS.md). Ein automatischer PR-Check, manuelle Artefakt-Builds bei Bedarf; keine zusätzliche CI-Matrix. Implementierungsnotizen und temporäre Versuchsergebnisse bleiben außerhalb des Repositories. Die ausdrücklich angeforderten Architektur-, Deployment- und Umsetzungsdokumente sind versionierte Ausnahmen davon.
 
 Das abgeschlossene [Issue #13](https://github.com/niklaskastning/foundry/issues/13) archiviert die bisherigen Integrations- und Windows-Nachweise. Offene Punkte wurden in den Umsetzungsplan übernommen. Die dauerhafte Freigabe für Deployments einschließlich offener PRs auf diesen Entwicklungs-VPS steht in [AGENTS.md](../../AGENTS.md#development-vps-and-agent-autonomy). Ein Deployment ersetzt keine Gate-Abnahme; ein Merge benötigt weiterhin einen ausdrücklichen Auftrag.
+
+## Manuell mit Factories arbeiten
+
+Bei aktivierter Automation öffnen **Factories**, **Runs** und **Inbox** in der
+Navigation, der Befehlspalette oder den Verbindungseinstellungen dieselben Ansichten.
+Foundry-Anmeldung und die T3-Verbindung zu Main sind beide erforderlich.
+
+Eine Factory legt Repository-Bindungsschlüssel fest. Im Auftragsdetail lässt sich die
+Definition als Formular bearbeiten oder als kanonischer Dateisatz importieren und
+exportieren. **Validate** prüft sie; Aktivieren veröffentlicht eine unveränderliche
+Definitionsversion für neue Starts. Es veröffentlicht keinen GitHub-PR. Bereits
+laufende Runs behalten ihre gepinnte Version.
+
+Für einen manuellen Start einen Auftrag, die aktive Workflow-Version und ausdrücklich
+das passende Projekt des konfigurierten Workers wählen. Projekt- und Providerbindung
+werden vor dem Start geprüft. Der Run bleibt nach Schließen des Browsers bestehen;
+Versuche und Ergebnisse lassen sich später in **Runs** öffnen. Größere Ausgaben werden
+erst auf Anforderung geladen. Bestätigte Thread-Archive und Anhänge bleiben über Main
+lesbar, auch wenn der Worker offline ist; fehlende Daten bleiben als unvollständig markiert.
+
+Pause verhindert neue Steps und lässt bereits zugestellte Arbeit auslaufen. Cancel
+fordert einen Stop an und ist erst nach bestätigtem Writer-Ende abgeschlossen. Ein
+bewusstes Retry legt einen neuen Versuch an und setzt einen sicher beendeten alten
+Writer voraus. Nach abgelaufener oder entzogener Anmeldung verlangt Resume aktuelle
+Autorisierung.
+
+Die persönliche Inbox zeigt vorhandene Fragen, Freigaben, Blocker und Fehler.
+**Done** und **Undo** organisieren die Inbox; sie genehmigen keine Arbeit. Eine
+Freigabe gilt für den angezeigten Eingabe- und Ergebnisstand. Bei geändertem Ergebnis
+neu laden und erneut entscheiden. Antworten werden ausdrücklich an die aktuell
+zuständige Frage gesendet; eine alte Frage kann keinen neuen Versuch steuern.

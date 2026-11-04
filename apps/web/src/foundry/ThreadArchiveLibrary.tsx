@@ -24,7 +24,9 @@ import { useRenderedAppearance } from "../hooks/useTheme";
 import { useAtomCommand } from "../state/use-atom-command";
 import { archiveListCommand, archiveReadCommand } from "./archives";
 
-export function ThreadArchiveLibrary() {
+export function ThreadArchiveLibrary({
+  initialOwner,
+}: { initialOwner?: FoundryArchiveOwner } = {}) {
   const list = useAtomCommand(archiveListCommand, { reportFailure: false });
   const read = useAtomCommand(archiveReadCommand, { reportFailure: false });
   const [items, setItems] = useState<ReadonlyArray<FoundryArchiveStatus>>([]);
@@ -87,6 +89,11 @@ export function ThreadArchiveLibrary() {
         Confirmed history stays available from Main when its device is offline or removed.
         Continuing work requires an available writer and workspace.
       </p>
+      {initialOwner ? (
+        <Button disabled={busy} onClick={() => void open(initialOwner)}>
+          Open linked thread archive
+        </Button>
+      ) : null}
       <ul className="space-y-2">
         {items.map((item) => (
           <li

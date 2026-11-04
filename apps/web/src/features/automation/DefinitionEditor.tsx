@@ -116,7 +116,7 @@ export function DefinitionEditor({
       onActivated();
     } else
       setMessage(
-        "Activation failed. Check your permissions and refresh the current version before editing. Retry sends the same command.",
+        "Activation failed. Check your permissions and refresh the current version before editing. Unconfirmed requests retain their command ID.",
       );
   }
   return (

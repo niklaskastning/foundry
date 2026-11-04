@@ -104,6 +104,7 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
   );
   return Effect.gen(function* () {
     const app = yield* Application.Application;
+    const sql = yield* Database.AutomationDatabase;
     const request = HttpServerRequest.fromWeb(
       new Request("http://fixture.invalid", { headers: { "x-fixture-scope": "access:write" } }),
     );
@@ -212,5 +213,27 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
         .pipe(Effect.flip)).code,
       "not_found",
     );
-  }).pipe(Effect.provide(layer));
+    yield* sql`INSERT INTO foundry_automation.runs(id,factory_id,work_item_id,workflow_version_id,factory_version_id,repository,revision,state) VALUES('p21-private-run','p21-a','p21-work',${active.version.workflowVersions[0]!.versionId},${active.version.factoryVersionId},'fixture-repo','input-1','pending')`;
+    const pendingRun = yield* app.query(operate, {
+      op: "run",
+      factoryId: "p21-a",
+      runId: "p21-private-run",
+    });
+    NodeAssert.equal(pendingRun.kind, "run");
+    if (pendingRun.kind === "run") NodeAssert.equal(pendingRun.control, null);
+    yield* sql`INSERT INTO foundry_automation.dispatch_runs(run_id,worker_id,binding) VALUES('p21-private-run','fixture-private-worker',${sql.json({ identity: { instanceId: identity.instanceId, operatorId: "another-operator" } })})`;
+    for (const query of [
+      { op: "run" as const, factoryId: "p21-a", runId: "p21-private-run" },
+      { op: "attempts" as const, factoryId: "p21-a", runId: "p21-private-run", limit: 20 },
+      {
+        op: "attempt" as const,
+        factoryId: "p21-a",
+        runId: "p21-private-run",
+        commandId: "private-attempt",
+      },
+    ])
+      NodeAssert.equal((yield* app.query(operate, query).pipe(Effect.flip)).code, "forbidden");
+    const hiddenRuns = yield* app.query(operate, { op: "runs", factoryId: "p21-a", limit: 20 });
+    if (hiddenRuns.kind === "runs") NodeAssert.equal(hiddenRuns.items.length, 0);
+  }).pipe(Effect.provide(Layer.merge(layer, database)));
 });

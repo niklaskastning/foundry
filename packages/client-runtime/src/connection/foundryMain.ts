@@ -48,7 +48,9 @@ const unavailable = () =>
   });
 
 const decodeJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
-export const make = Effect.fn("FoundryMain.make")(function* (options = { allowLoopback: false }) {
+export const make = Effect.fn("FoundryMain.make")(function* (
+  options: { allowLoopback: boolean; maxResponseBytes?: number } = { allowLoopback: false },
+) {
   const http = yield* HttpClient.HttpClient;
   const access = yield* FoundryInstanceSession;
   const signer = yield* Effect.serviceOption(ManagedRelay.ManagedRelayDpopSigner);
@@ -124,7 +126,11 @@ export const make = Effect.fn("FoundryMain.make")(function* (options = { allowLo
           Stream.runFoldEffect(
             () => ({ parts: [] as Uint8Array[], size: 0 }),
             (state, bytes) => {
-              if (state.size + bytes.byteLength > 512 * 1024) return Effect.fail(unavailable());
+              if (
+                state.size + bytes.byteLength >
+                Math.min(options.maxResponseBytes ?? 512 * 1024, 3 * 1024 * 1024)
+              )
+                return Effect.fail(unavailable());
               state.parts.push(bytes);
               state.size += bytes.byteLength;
               return Effect.succeed(state);

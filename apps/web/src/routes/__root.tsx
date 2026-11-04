@@ -50,6 +50,7 @@ import { useUiStateStore } from "../uiStateStore";
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
 import { GUEST_PAGE_PATH } from "../guestPage";
+import { isStandaloneFoundryPage } from "../foundry/pageMode";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 import { useHostedPromptLinkLanding } from "../components/promptLinks/HostedPromptLinkLanding";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
@@ -64,7 +65,10 @@ export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
     // Guest links open on the owner's tunnel host in a browser with no T3 session, and must
     // not trigger pairing or an environment connection.
-    if (location.pathname === GUEST_PAGE_PATH || location.pathname === "/foundry") {
+    if (
+      location.pathname === GUEST_PAGE_PATH ||
+      isStandaloneFoundryPage(location.pathname, location.searchStr)
+    ) {
       return {
         authGateState: {
           status: "guest",
@@ -141,7 +145,8 @@ function RootRouteView() {
 }
 
 function RootRouteBranch() {
-  const pathname = useLocation({ select: (location) => location.pathname });
+  const location = useLocation();
+  const pathname = location.pathname;
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
   // A sync IPC read; the setting only changes across a relaunch.
@@ -153,7 +158,9 @@ function RootRouteBranch() {
     authGateState.status === "hosted-static",
   );
 
-  if (pathname === GUEST_PAGE_PATH || pathname === "/foundry") return <Outlet />;
+  if (pathname === GUEST_PAGE_PATH || isStandaloneFoundryPage(pathname, location.searchStr)) {
+    return <Outlet />;
+  }
 
   if (pathname === "/pair" || pathname === "/connect" || pathname === "/connect-agent") {
     return <Outlet />;
@@ -228,7 +235,8 @@ function RootRouteErrorView({ error }: ErrorComponentProps) {
   const router = useRouter();
   const message = errorMessage(error);
   // Router pathname rather than window.location: desktop uses hash history, where the window path is always "/".
-  const pathname = useLocation({ select: (location) => location.pathname });
+  const location = useLocation();
+  const pathname = location.pathname;
   const report = errorReport(error, pathname);
 
   return (

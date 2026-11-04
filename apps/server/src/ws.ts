@@ -1,3 +1,8 @@
+import {
+  AutomationApplicationError,
+  AutomationControlError,
+  AutomationInboxError,
+} from "@t3tools/contracts";
 import { FoundryWorkerLaunchError, FoundryWorkerCancelError } from "@t3tools/contracts";
 import * as WorkerLaunch from "./foundry/WorkerLaunch.ts";
 import * as WorkerReadiness from "./foundry/WorkerReadiness.ts";
@@ -2858,6 +2863,17 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.attachmentsCreateUploadUrl]: (input) => issueAttachmentUploadUrl(input),
         [WS_METHODS.attachmentsDelete]: (input) => assetTransfer.remove(input.attachmentId),
+        // Automation HTTP requests reauthenticate both sessions and CSRF for every operation.
+        [WS_METHODS.foundryAutomationQuery]: () =>
+          Effect.fail(new AutomationApplicationError({ code: "unavailable" })),
+        [WS_METHODS.foundryAutomationCommand]: () =>
+          Effect.fail(new AutomationApplicationError({ code: "unavailable" })),
+        [WS_METHODS.foundryAutomationControl]: () =>
+          Effect.fail(new AutomationControlError({ code: "unavailable" })),
+        [WS_METHODS.foundryAutomationInboxQuery]: () =>
+          Effect.fail(new AutomationInboxError({ reason: "unavailable" })),
+        [WS_METHODS.foundryAutomationInboxMark]: () =>
+          Effect.fail(new AutomationInboxError({ reason: "unavailable" })),
         [WS_METHODS.foundryWorkerLaunch]: (input) =>
           startup.enqueueCommand(workerLaunch.launch(input)).pipe(
             Effect.catchTags({

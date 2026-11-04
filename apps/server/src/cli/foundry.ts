@@ -46,7 +46,7 @@ const migrateAutomation = Command.make("automation-migrate", {
           ),
         ),
       );
-      yield* Console.log("Automation schema 4 ready; no runs enrolled or started.");
+      yield* Console.log("Automation schema 5 ready; no runs enrolled or started.");
     }),
   ),
 );

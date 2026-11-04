@@ -32,9 +32,9 @@ const InboxPage = lazy(() =>
 );
 export function FoundryPage() {
   const search = useSearch({ from: "/foundry" });
-  const automationAvailable = useAutomationAvailable();
   const [origin, setOrigin] = useState(window.location.origin);
   const [state, setState] = useState<OnboardingResult>(initialState);
+  const automationAvailable = useAutomationAvailable(state.binding?.instanceId);
   const [message, setMessage] = useState(state.message);
   const [busy, setBusy] = useState(false);
   const run = useAtomCommand(instanceCommand, { reportFailure: false });
@@ -71,7 +71,7 @@ export function FoundryPage() {
 
   if (automationAvailable && state.binding && search.view)
     return (
-      <div className="h-full overflow-y-auto scrollbar-gutter-both bg-background text-foreground p-4">
+      <div className="h-dvh min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both bg-background text-foreground p-4">
         <div className="mx-auto max-w-6xl space-y-4">
           <div className="flex items-center justify-between">
             <FactoryNavigation />
@@ -87,7 +87,7 @@ export function FoundryPage() {
                     `/foundry?view=runs&factoryId=${encodeURIComponent(factoryId)}&runId=${encodeURIComponent(runId)}`,
                   )
                 }
-                onNavigateWorkItem={(factoryId,workItemId) =>
+                onNavigateWorkItem={(factoryId, workItemId) =>
                   window.location.assign(
                     `/foundry?view=factories&factoryId=${encodeURIComponent(factoryId)}&workItemId=${encodeURIComponent(workItemId)}`,
                   )
@@ -100,6 +100,7 @@ export function FoundryPage() {
                 initialView={search.view === "runs" ? "runs" : "factories"}
                 {...(search.factoryId ? { factoryId: search.factoryId } : {})}
                 {...(search.runId ? { initialRunId: search.runId } : {})}
+                {...(search.workItemId ? { initialWorkItemId: search.workItemId } : {})}
               />
             )}
           </Suspense>

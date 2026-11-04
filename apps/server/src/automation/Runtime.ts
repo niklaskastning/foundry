@@ -1,3 +1,8 @@
+import * as AutomationHttp from "./Http.ts";
+import * as Application from "./Application.ts";
+import * as Control from "./Control.ts";
+import * as Inbox from "./Inbox.ts";
+import * as Definitions from "./Definitions.ts";
 import { EnvironmentId, FoundryDeviceId } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
@@ -117,11 +122,15 @@ export const layer = Layer.unwrap(
           version: number;
           safe: boolean;
         }>`SELECT version, NOT (r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls OR has_schema_privilege(current_user,'foundry_automation','CREATE') OR has_database_privilege(current_user,current_database(),'CREATE')) AS safe FROM foundry_automation.schema_version,pg_roles r WHERE r.rolname=current_user`;
-        if (rows.length !== 1 || rows[0]?.version !== 4 || !rows[0].safe)
+        if (rows.length !== 1 || rows[0]?.version !== 5 || !rows[0].safe)
           return yield* new Scheduler.SchedulerError({ reason: "invalid_binding" });
       }),
     ).pipe(Layer.provide(database));
-    return Layer.merge(routes, loop).pipe(
+    return Layer.mergeAll(routes, AutomationHttp.layer, loop).pipe(
+      Layer.provide(Application.layer),
+      Layer.provide(Inbox.layer),
+      Layer.provide(Control.layer),
+      Layer.provide(Definitions.layer),
       Layer.provide(Scheduler.layer),
       Layer.provide(WorkerTransport.layer),
       Layer.provide(DispatchStore.layer),

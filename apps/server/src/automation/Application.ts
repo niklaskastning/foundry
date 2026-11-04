@@ -45,7 +45,11 @@ const error = (cause: unknown) => {
     if (reason === "forbidden" || reason === "not_allowed")
       return new AutomationApplicationError({ code: "forbidden" });
     if (reason === "not_found") return new AutomationApplicationError({ code: "not_found" });
-    if (reason === "invalid_input" || reason === "invalid_definition")
+    if (
+      reason === "invalid_input" ||
+      reason === "invalid_definition" ||
+      reason === "invalid_binding"
+    )
       return new AutomationApplicationError({ code: "invalid_input" });
     if (
       reason === "version_conflict" ||
@@ -100,7 +104,15 @@ const make = Effect.gen(function* () {
     const input = yield* decodeQuery(raw).pipe(
       Effect.mapError(() => new AutomationApplicationError({ code: "invalid_input" })),
     );
-    yield* worker.identityForRead(request);
+    const identity = yield* worker.identityForRead(request);
+    const ownedRun = Effect.fn("AutomationApplication.ownedRun")(function* (runId: string) {
+      const bindings = yield* sql<{
+        owned: boolean;
+      }>`SELECT binding->'identity'->>'instanceId'=${identity.instanceId} AND binding->'identity'->>'operatorId'=${identity.operatorId} AS owned FROM foundry_automation.dispatch_runs WHERE run_id=${runId}`;
+      if (bindings.length && !bindings[0]?.owned)
+        return yield* new AutomationApplicationError({ code: "forbidden" });
+      return bindings.length > 0;
+    });
     const result = yield* Effect.gen(function* () {
       switch (input.op) {
         case "workerBinding": {
@@ -159,7 +171,7 @@ const make = Effect.gen(function* () {
           };
         case "runs": {
           const rows =
-            yield* sql<AutomationRun>`SELECT r.id,r.factory_id AS "factoryId",r.work_item_id AS "workItemId",r.workflow_version_id AS "workflowVersionId",r.factory_version_id AS "factoryVersionId",r.repository,r.revision,CASE WHEN c.mode IS NOT NULL AND c.mode<>'active' THEN c.mode ELSE COALESCE(d.state,r.state) END AS state FROM foundry_automation.runs r LEFT JOIN foundry_automation.dispatch_runs d ON d.run_id=r.id LEFT JOIN foundry_automation.run_controls c ON c.run_id=r.id WHERE r.id>${input.after ?? ""} AND (${input.factoryId ?? null}::text IS NULL OR r.factory_id=${input.factoryId ?? null}) AND (${input.workItemId ?? null}::text IS NULL OR r.work_item_id=${input.workItemId ?? null}) AND (${input.state ?? null}::text IS NULL OR CASE WHEN c.mode IS NOT NULL AND c.mode<>'active' THEN c.mode ELSE COALESCE(d.state,r.state) END=${input.state ?? null}) ORDER BY r.id LIMIT ${input.limit + 1}`;
+            yield* sql<AutomationRun>`SELECT r.id,r.factory_id AS "factoryId",r.work_item_id AS "workItemId",r.workflow_version_id AS "workflowVersionId",r.factory_version_id AS "factoryVersionId",r.repository,r.revision,CASE WHEN c.mode IS NOT NULL AND c.mode<>'active' THEN c.mode ELSE COALESCE(d.state,r.state) END AS state FROM foundry_automation.runs r LEFT JOIN foundry_automation.dispatch_runs d ON d.run_id=r.id LEFT JOIN foundry_automation.run_controls c ON c.run_id=r.id WHERE r.id>${input.after ?? ""} AND (d.run_id IS NULL OR (d.binding->'identity'->>'instanceId'=${identity.instanceId} AND d.binding->'identity'->>'operatorId'=${identity.operatorId})) AND (${input.factoryId ?? null}::text IS NULL OR r.factory_id=${input.factoryId ?? null}) AND (${input.workItemId ?? null}::text IS NULL OR r.work_item_id=${input.workItemId ?? null}) AND (${input.state ?? null}::text IS NULL OR CASE WHEN c.mode IS NOT NULL AND c.mode<>'active' THEN c.mode ELSE COALESCE(d.state,r.state) END=${input.state ?? null}) ORDER BY r.id LIMIT ${input.limit + 1}`;
           const items = rows.slice(0, input.limit);
           return {
             kind: "runs" as const,
@@ -168,17 +180,17 @@ const make = Effect.gen(function* () {
           };
         }
         case "run": {
+          const enrolled = yield* ownedRun(input.runId);
           const run = yield* workflows.readRun(input.factoryId, input.runId);
           return {
             kind: "run" as const,
             run,
             workflow: yield* workflows.readVersion(input.factoryId, run.workflowVersionId),
-            control: yield* control
-              .read(request, input.factoryId, input.runId)
-              .pipe(Effect.orElseSucceed(() => null)),
+            control: enrolled ? yield* control.read(request, input.factoryId, input.runId) : null,
           };
         }
         case "attempts": {
+          yield* ownedRun(input.runId);
           yield* workflows.readRun(input.factoryId, input.runId);
           const rows =
             yield* sql<AutomationAttemptSummary>`SELECT a.command_id AS "commandId",a.ordinal,a.attempt_number AS "attemptNumber",a.state,a.reason,a.receipt->'receipt'->>'threadId' AS "threadId",d.binding->'identity'->>'environmentId' AS "environmentId",a.result IS NOT NULL AS "hasResult" FROM foundry_automation.step_attempts a JOIN foundry_automation.dispatch_runs d ON d.run_id=a.run_id WHERE a.run_id=${input.runId} AND a.command_id>${input.after ?? ""} ORDER BY a.command_id LIMIT ${input.limit + 1}`;
@@ -190,6 +202,7 @@ const make = Effect.gen(function* () {
           };
         }
         case "attempt": {
+          yield* ownedRun(input.runId);
           yield* workflows.readRun(input.factoryId, input.runId);
           const rows = yield* sql<{
             result: unknown;

@@ -112,6 +112,13 @@ export function DeviceCatalog() {
                 : "Offline"}{" "}
             · {device.clientAccess.enabled ? "Client access enabled" : "Client access disabled"}
           </p>
+          {device.automationExecution ? (
+            <p className="text-xs text-muted-foreground">
+              Automation execution {device.automationExecution.enabled ? "allowed" : "not allowed"}.
+              This is separate from client access. Only the configured worker can receive explicitly
+              started factory runs; permission does not start existing runs.
+            </p>
+          ) : null}
           <div className="flex flex-wrap gap-2">
             <Button
               disabled={
@@ -133,6 +140,7 @@ export function DeviceCatalog() {
                   onClick={() =>
                     void operate({
                       type: "access",
+                      kind: "clientAccess",
                       deviceId: device.deviceId,
                       enabled: !device.clientAccess.enabled,
                       generation: device.clientAccess.generation,
@@ -141,6 +149,25 @@ export function DeviceCatalog() {
                 >
                   {device.clientAccess.enabled ? "Disable client access" : "Enable client access"}
                 </Button>
+                {device.automationExecution ? (
+                  <Button
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() =>
+                      void operate({
+                        type: "access",
+                        kind: "automationExecution",
+                        deviceId: device.deviceId,
+                        enabled: !device.automationExecution!.enabled,
+                        generation: device.automationExecution!.generation,
+                      })
+                    }
+                  >
+                    {device.automationExecution.enabled
+                      ? "Revoke automation execution"
+                      : "Allow automation execution"}
+                  </Button>
+                ) : null}
                 <Button
                   variant="outline"
                   disabled={busy}

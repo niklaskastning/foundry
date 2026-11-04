@@ -37,6 +37,14 @@ export function RunDetail({
   const command = useAtomCommand(automationCommands.control, { reportFailure: false });
   const canControl = useAtomValue(automationCommands.control.permissionAtom(environmentId));
   const detail = run.result?.kind === "run" ? run.result : null;
+  const state = detail?.control?.state;
+  const terminal = state === "succeeded" || state === "cancelled";
+  const available = {
+    pause: !terminal && state !== "paused" && state !== "failed" && state !== "cancel_requested",
+    resume: state === "paused" || state === "waiting",
+    cancel: !terminal,
+    retry: state === "failed",
+  };
   async function act(action: "pause" | "resume" | "cancel" | "retry") {
     if (busy || !detail?.control) return;
     const input =
@@ -72,7 +80,7 @@ export function RunDetail({
       attempts.refresh();
     } else
       setMessage(
-        "The decision could not be saved. Refresh to check the current revision; retry preserves this command ID.",
+        "The decision could not be saved. Refresh to check the current revision; unconfirmed requests retain their command ID.",
       );
   }
   return (
@@ -96,7 +104,8 @@ export function RunDetail({
       {detail ? (
         <>
           <p className="text-sm">
-            {detail.control?.state ?? detail.run.state} · {detail.control?.reason ?? ""}
+            {detail.control?.state ?? detail.run.state}
+            {detail.control?.reason ? ` · ${detail.control.reason}` : ""}
           </p>
           <dl className="grid gap-1 text-sm">
             <div>Work item: {detail.run.workItemId}</div>
@@ -115,7 +124,7 @@ export function RunDetail({
               <Button
                 key={action}
                 variant={action === "cancel" ? "destructive" : "outline"}
-                disabled={busy || !canControl || !detail.control}
+                disabled={busy || !canControl || !detail.control || !available[action]}
                 onClick={() => void act(action)}
               >
                 {action.charAt(0).toUpperCase() + action.slice(1)}
@@ -147,7 +156,7 @@ export function RunDetail({
             {attempts.result.items.map((attempt) => (
               <li key={attempt.commandId} className="space-y-2 p-3">
                 <p className="text-sm">
-                  Step {attempt.ordinal + 1} · Attempt {attempt.attemptNumber} · {attempt.state}
+                  Step {attempt.ordinal + 1} · Attempt {attempt.attemptNumber + 1} · {attempt.state}
                   {attempt.reason ? ` · ${attempt.reason}` : ""}
                 </p>
                 <div className="flex flex-wrap gap-3 text-sm">
@@ -177,8 +186,9 @@ export function RunDetail({
                 </div>
                 {!attempt.hasResult ? (
                   <p className="text-xs text-muted-foreground">
-                    No confirmed final result. A running or completed turn alone does not prove
-                    writer shutdown or complete archival.
+                    {detail?.workflow.steps[attempt.ordinal]?.kind === "approval"
+                      ? "Human decision recorded; this step does not execute a provider turn."
+                      : "No confirmed final result. A running or completed turn alone does not prove writer shutdown or complete archival."}
                   </p>
                 ) : null}
               </li>

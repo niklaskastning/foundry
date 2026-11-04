@@ -15,6 +15,12 @@ import { WS_METHODS } from "./rpc.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [WS_METHODS.foundryAutomationQuery]: AuthOrchestrationReadScope,
+  [WS_METHODS.foundryAutomationCommand]: AuthOrchestrationOperateScope,
+  [WS_METHODS.foundryAutomationControl]: AuthOrchestrationOperateScope,
+  [WS_METHODS.foundryAutomationInboxQuery]: AuthOrchestrationReadScope,
+  [WS_METHODS.foundryAutomationInboxMark]: AuthOrchestrationReadScope,
+
   [WS_METHODS.foundryWorkerRenew]: AuthOrchestrationOperateScope,
   [WS_METHODS.foundryWorkerCancel]: AuthOrchestrationOperateScope,
   [WS_METHODS.foundryWorkerLaunch]: AuthOrchestrationOperateScope,
@@ -87,6 +93,14 @@ export function clientRpcRequiredScopes(
   method: string,
   input: unknown,
 ): readonly AuthEnvironmentScope[] {
+  if (
+    method === WS_METHODS.foundryAutomationCommand &&
+    typeof input === "object" &&
+    input !== null &&
+    "op" in input &&
+    (input.op === "createFactory" || input.op === "activateDefinition")
+  )
+    return [AuthAccessWriteScope];
   if (method === WS_METHODS.gitPreparePullRequestThread && input !== undefined) {
     const payload = decodePrepareThread(input);
     if (payload.mode === "worktree" && payload.threadId !== undefined)
