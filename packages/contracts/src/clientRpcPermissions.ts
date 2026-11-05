@@ -23,6 +23,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.foundryAutomationInboxQuery]: AuthOrchestrationReadScope,
   [WS_METHODS.foundryAutomationInboxMark]: AuthOrchestrationReadScope,
 
+  [WS_METHODS.foundryWorkerHandoffOpen]: AuthOrchestrationOperateScope,
+  [WS_METHODS.foundryWorkerHandoffFinish]: AuthOrchestrationOperateScope,
+  [WS_METHODS.foundryWorkerHandoffReopen]: AuthOrchestrationOperateScope,
   [WS_METHODS.foundryWorkerRenew]: AuthOrchestrationOperateScope,
   [WS_METHODS.foundryWorkerCancel]: AuthOrchestrationOperateScope,
   [WS_METHODS.foundryWorkerLaunch]: AuthOrchestrationOperateScope,

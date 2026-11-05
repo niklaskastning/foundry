@@ -237,11 +237,14 @@ const make = Effect.gen(function* () {
           runId: string | null;
         }>`SELECT run_id AS "runId" FROM foundry_automation.dispatch_workers WHERE worker_id=${input.workerId} AND lease_until<=clock_timestamp() FOR UPDATE SKIP LOCKED`;
         if (!slots[0]) return null;
+        const held =
+          yield* sql`SELECT h.id FROM foundry_automation.work_item_handoffs h JOIN foundry_automation.dispatch_runs d ON d.run_id=h.run_id WHERE d.worker_id=${input.workerId} AND h.state<>'returned'`;
+        if (held.length) return null;
         let runId = slots[0].runId;
         if (!runId) {
           const queued = yield* sql<{
             runId: string;
-          }>`SELECT run_id AS "runId" FROM foundry_automation.dispatch_runs WHERE worker_id=${input.workerId} AND state IN ('running','waiting') ORDER BY enrolled_at,run_id LIMIT 1`;
+          }>`SELECT d.run_id AS "runId" FROM foundry_automation.dispatch_runs d WHERE d.worker_id=${input.workerId} AND d.state IN ('running','waiting') AND NOT EXISTS (SELECT 1 FROM foundry_automation.work_item_handoffs h WHERE h.run_id=d.run_id) ORDER BY d.enrolled_at,d.run_id LIMIT 1`;
           runId = queued[0]?.runId ?? null;
         }
         if (!runId) return null;
@@ -438,7 +441,7 @@ const make = Effect.gen(function* () {
   }, Effect.mapError(operationError));
   const canLaunch = Effect.fn("DispatchStore.canLaunch")(function* (claim: DispatchClaim) {
     return (
-      (yield* sql`SELECT c.run_id FROM foundry_automation.run_controls c JOIN foundry_automation.dispatch_workers w ON w.run_id=c.run_id WHERE c.run_id=${claim.run.id} AND c.mode='active' AND w.claim_owner=${claim.owner} AND w.claim_generation=${claim.generation} AND w.lease_until>clock_timestamp()`)
+      (yield* sql`SELECT c.run_id FROM foundry_automation.run_controls c JOIN foundry_automation.dispatch_workers w ON w.run_id=c.run_id WHERE c.run_id=${claim.run.id} AND c.mode='active' AND w.claim_owner=${claim.owner} AND w.claim_generation=${claim.generation} AND w.lease_until>clock_timestamp() AND NOT EXISTS (SELECT 1 FROM foundry_automation.work_item_handoffs h JOIN foundry_automation.dispatch_runs d ON d.run_id=h.run_id WHERE h.run_id=c.run_id OR (d.worker_id=w.worker_id AND h.state<>'returned'))`)
         .length === 1
     );
   }, Effect.mapError(operationError));

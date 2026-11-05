@@ -1,3 +1,4 @@
+import * as Handoffs from "../src/automation/Handoffs.ts";
 import * as DefinitionSources from "../src/automation/DefinitionSources.ts";
 import * as GitHubApp from "../src/automation/GitHubApp.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- Assertions run inside the isolated PostgreSQL harness.
@@ -39,6 +40,15 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     operatorId: "fixture-operator",
   };
   const worker = WorkerTransport.WorkerTransport.of({
+    handoffOpen: Effect.fn("Fixture.handoffOpen")(() =>
+      Effect.die("Handoff not configured in this fixture"),
+    ),
+    handoffFinish: Effect.fn("Fixture.handoffFinish")(() =>
+      Effect.die("Handoff not configured in this fixture"),
+    ),
+    handoffReopen: Effect.fn("Fixture.handoffReopen")(() =>
+      Effect.die("Handoff not configured in this fixture"),
+    ),
     identityForRead: Effect.fn("ApplicationGate.readIdentity")(() => Effect.succeed(identity)),
     identityForWrite: Effect.fn("ApplicationGate.writeIdentity")(() => Effect.succeed(identity)),
     authorize: unused,
@@ -74,6 +84,7 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     }),
   );
   const layer = Application.layer.pipe(
+    Layer.provide(Layer.mock(Handoffs.Handoffs)({ query: unused, execute: unused })),
     Layer.provide(DefinitionSources.layer),
     Layer.provide(Layer.mock(GitHubApp.GitHubApp)({ binding: unused })),
     Layer.provide(

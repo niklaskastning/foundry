@@ -15,6 +15,8 @@ Stand: 5. November 2026. Dieser Plan beschreibt Produktfunktionen, ihre Reihenfo
 - [ ] **Zentrale Verbindungen P14Z:** Provider-, Source-Control- und MCP-Konten einmal in Foundry einrichten und auf Workern/Sandboxes nutzen.
 - [x] **P48 / funktionales G11:** Git-Quellbindung, lesende Synchronisierung, Driftabgleich, dauerhafte Git-Ownership und explizite Aktivierung/Rollback sind implementiert ([#57](https://github.com/niklaskastning/foundry/pull/57)). Isoliertes PostgreSQL bestätigt Import → Git-Änderung → ungültigen Folgecommit → Runs und Inbox-Entscheidungen mit erhaltenen alten Revisionen. Der gemeinsame lokale Browserpass bestätigt Quelle/Diff/Fehler, Übernahme und gepinnte Run-Herkunft mit Inbox-Entscheidung. Die Entwicklungs-VPS liest das private Definitionsrepository; die bestehende G4-Definition wurde unverändert über [Definitions-PR #1](https://github.com/niklaskastning/foundry-definitions/pull/1) übernommen. Kein neuer nativer Writer-, Windows- oder öffentlicher SSO-Nachweis.
 
+- [x] **P51 – Implementierung:** Aufträge im vorhandenen Workspace, auf Alternativbranch oder aus bestätigtem Git-Bundle in einen verknüpften T3-Thread übernehmen und mit neuer Revision zurückgeben. Der Folgelauf bleibt bis zur ausdrücklichen Fortsetzung pausiert. Persistenz-/Worker-Nachweise sind im Leitplanken-Plan getrennt vom lokalen UI-Pass und Entwicklungsdeployment geführt. P58 und das vollständige G12 bleiben offen; keine neue Provider-Freigabe.
+
 Der zentrale Benutzerzugang ist noch ein Übergangsstand: Foundry-Anmeldung und eine separat autorisierte Main-T3-Sitzung werden gemeinsam geprüft. Worker-Zugriff benötigt kein eigenes Geräte-Pairing, reicht aber bisher nur die freigegebenen Thread-, Terminal- und Dateileserechte weiter; `settings:write` gehört noch nicht zum Gateway-Vertrag. Eine Anmeldung mit vollständig daraus abgeleiteten zentralen Benutzerrechten ist damit noch nicht abgenommen. Dies betrifft den Benutzerzugang, nicht die getrennte Provider-Autorisierung aus P14Z.
 
 Die ausführlichen bisherigen Prüf- und Deploymentnachweise sind nach [Basic-Leitplanken](basic-leitplanken.md#bestehende-nachweise-und-offene-technische-abnahmen) verschoben. Offene Abnahmen werden durch diese Aufteilung nicht als erledigt markiert.
@@ -24,7 +26,7 @@ Die ausführlichen bisherigen Prüf- und Deploymentnachweise sind nach [Basic-Le
 1. **Worker:** P17 / G3 abschließen; die Basis P01–P16 ist integriert.
 2. **Factory-MVP:** P18a → P18b → P47 → P38a → P38b → P19 → P20 → P21 → P49 → P22 → P23 → P24 / G4. P22/P24 können nach P19 unabhängig vom UI-Anschluss entstehen.
 3. **Git-Verwaltung:** P48 / funktionales G11 abgeschlossen; Live-Import und isolierte funktionale Nachweise sind getrennt belegt.
-4. **Zusammenarbeit:** P51 → P58; P28 → P52; P29 → P50 → P53; danach P30/P31 / G6 und G12. P50 bleibt optional.
+4. **Zusammenarbeit:** P51 implementiert; P58 bleibt der nächste gesondert zu beauftragende Schnitt; P28 → P52; P29 → P50 → P53; danach P30/P31 / G6 und G12. P50 bleibt optional.
 5. **Qualitätsfunktionen:** P54 → P55 → P56 → P57 / G13. Dashboard, Scorers, Benchmarks und Verbesserungsvorschläge sind Produktfunktionen; technische Performance-Optimierung steht im separaten Plan.
 6. **Weitere Worker und Sandboxes:** P14Za vor zentral verbundenen zusätzlichen Workern; P32/P33 / G7, danach P34–P40 / G8. Dieser Pfad kann nach dem Factory-MVP parallel zur Zusammenarbeit entstehen.
 7. **Weitere Integrationen:** P25, P41–P43, P59/P60 / G9 und G14 nach Bedarf; P44/P45 / G10 für zusätzliche Anmeldeanbieter und Device-Gruppen.

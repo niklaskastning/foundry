@@ -65,6 +65,15 @@ const transport = (operatorId: string) =>
   Layer.succeed(
     WorkerTransport.WorkerTransport,
     WorkerTransport.WorkerTransport.of({
+      handoffOpen: Effect.fn("Fixture.handoffOpen")(() =>
+        Effect.die("Handoff not configured in this fixture"),
+      ),
+      handoffFinish: Effect.fn("Fixture.handoffFinish")(() =>
+        Effect.die("Handoff not configured in this fixture"),
+      ),
+      handoffReopen: Effect.fn("Fixture.handoffReopen")(() =>
+        Effect.die("Handoff not configured in this fixture"),
+      ),
       identityForRead: Effect.fn("InboxFixture.identityForRead")(function* () {
         if (operatorId === "denied")
           return yield* new WorkerTransport.WorkerTransportError({ reason: "forbidden" });

@@ -8,6 +8,7 @@ import { AsyncResult } from "effect/reactivity";
 import { Button } from "../../components/ui/button";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { automationCommands } from "./commands";
+import { HandoffList, TakeOverPanel } from "./HandoffPanel";
 import { useAutomationQuery } from "./useAutomationQuery";
 
 export function RunDetail({
@@ -183,6 +184,26 @@ export function RunDetail({
         <p role="status" className="text-sm">
           {message}
         </p>
+      ) : null}
+      {detail ? (
+        <>
+          <TakeOverPanel
+            environmentId={environmentId}
+            factoryId={factoryId}
+            runId={runId}
+            control={detail.control}
+            attempts={attempts.result?.kind === "attempts" ? attempts.result.items : []}
+            refresh={() => {
+              run.refresh();
+              attempts.refresh();
+            }}
+          />
+          <HandoffList
+            environmentId={environmentId}
+            factoryId={factoryId}
+            workItemId={detail.run.workItemId}
+          />
+        </>
       ) : null}
       <h3 className="font-medium">Step attempts</h3>
       {attempts.result?.kind === "attempts" ? (

@@ -1,4 +1,12 @@
 import {
+  FoundryWorkerHandoffError,
+  type FoundryWorkerHandoffOpen,
+  type FoundryWorkerHandoffFinish,
+  type FoundryWorkerHandoffReopen,
+  type FoundryWorkerHandoffReceipt,
+  type FoundryWorkerHandoffResult,
+} from "@t3tools/contracts";
+import {
   FoundryGatewayError,
   AuthOrchestrationOperateScope,
   type CommandId,
@@ -35,6 +43,7 @@ export class WorkerTransportError extends Schema.TaggedError<WorkerTransportErro
   {
     reason: Schema.Literals(["forbidden", "unavailable", "worker_rejected"]),
     workerCode: Schema.optional(FoundryWorkerLaunchError.fields.code),
+    handoffCode: Schema.optional(FoundryWorkerHandoffError.fields.code),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
@@ -50,6 +59,18 @@ type Target = Pick<WorkerIdentity, "deviceId" | "environmentId">;
 export class WorkerTransport extends Context.Service<
   WorkerTransport,
   {
+    readonly handoffOpen: (
+      identity: WorkerIdentity,
+      input: FoundryWorkerHandoffOpen,
+    ) => Effect.Effect<FoundryWorkerHandoffReceipt, WorkerTransportError>;
+    readonly handoffFinish: (
+      identity: WorkerIdentity,
+      input: FoundryWorkerHandoffFinish,
+    ) => Effect.Effect<FoundryWorkerHandoffResult, WorkerTransportError>;
+    readonly handoffReopen: (
+      identity: WorkerIdentity,
+      input: FoundryWorkerHandoffReopen,
+    ) => Effect.Effect<FoundryWorkerHandoffReceipt, WorkerTransportError>;
     readonly identityForWrite: (
       request: HttpServerRequest.HttpServerRequest,
     ) => Effect.Effect<Pick<WorkerIdentity, "instanceId" | "operatorId">, WorkerTransportError>;
@@ -94,15 +115,18 @@ export class WorkerTransport extends Context.Service<
 const unavailable = (cause: unknown) => new WorkerTransportError({ reason: "unavailable", cause });
 const isWorkerTransportError = Schema.is(WorkerTransportError);
 const isGatewayError = Schema.is(FoundryGatewayError);
+const isHandoffError = Schema.is(FoundryWorkerHandoffError);
 const isLaunchError = Schema.is(FoundryWorkerLaunchError);
 const transportError = (cause: unknown) =>
   isWorkerTransportError(cause)
     ? cause
-    : isGatewayError(cause) && cause.code === "forbidden"
-      ? new WorkerTransportError({ reason: "forbidden", cause })
-      : isLaunchError(cause)
-        ? new WorkerTransportError({ reason: "worker_rejected", workerCode: cause.code, cause })
-        : unavailable(cause);
+    : isHandoffError(cause)
+      ? new WorkerTransportError({ reason: "worker_rejected", handoffCode: cause.code, cause })
+      : isGatewayError(cause) && cause.code === "forbidden"
+        ? new WorkerTransportError({ reason: "forbidden", cause })
+        : isLaunchError(cause)
+          ? new WorkerTransportError({ reason: "worker_rejected", workerCode: cause.code, cause })
+          : unavailable(cause);
 
 const socketPair = Effect.fn("WorkerTransport.socketPair")(function* () {
   const left = yield* Queue.bounded<string | Uint8Array, Socket.SocketError>(16);
@@ -189,6 +213,21 @@ const make = Effect.gen(function* () {
     Effect.mapError(transportError),
   );
   return WorkerTransport.of({
+    handoffOpen: Effect.fn("WorkerTransport.handoffOpen")((identity, input) =>
+      GatewayGrants.isUnattendedIdentity(identity)
+        ? Effect.fail(new WorkerTransportError({ reason: "forbidden" }))
+        : call(identity, (client) => client["foundry.workerHandoffOpen"](input)),
+    ),
+    handoffFinish: Effect.fn("WorkerTransport.handoffFinish")((identity, input) =>
+      GatewayGrants.isUnattendedIdentity(identity)
+        ? Effect.fail(new WorkerTransportError({ reason: "forbidden" }))
+        : call(identity, (client) => client["foundry.workerHandoffFinish"](input)),
+    ),
+    handoffReopen: Effect.fn("WorkerTransport.handoffReopen")((identity, input) =>
+      GatewayGrants.isUnattendedIdentity(identity)
+        ? Effect.fail(new WorkerTransportError({ reason: "forbidden" }))
+        : call(identity, (client) => client["foundry.workerHandoffReopen"](input)),
+    ),
     identityForWrite: Effect.fn("WorkerTransport.identityForWrite")(
       (request) => gateway.identityForWrite(request, AuthOrchestrationOperateScope),
       Effect.mapError(transportError),

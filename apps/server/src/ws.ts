@@ -1,3 +1,5 @@
+import * as WorkerHandoff from "./foundry/WorkerHandoff.ts";
+import { FoundryWorkerHandoffError } from "@t3tools/contracts";
 import {
   AutomationTriggerError,
   AutomationApplicationError,
@@ -1357,6 +1359,7 @@ export const layerWsRpc = (
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const workerLaunch = yield* WorkerLaunch.WorkerLaunch;
+      const workerHandoff = yield* WorkerHandoff.WorkerHandoff;
       const workerReadiness = yield* WorkerReadiness.WorkerReadiness;
       const assetTransfer = yield* AssetTransfer.AssetTransfer;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -2891,6 +2894,27 @@ export const layerWsRpc = (
             Effect.catchTags({
               ServerRuntimeStartupError: () =>
                 Effect.fail(new FoundryWorkerCancelError({ code: "cancel_failed" })),
+            }),
+          ),
+        [WS_METHODS.foundryWorkerHandoffOpen]: (input) =>
+          startup.enqueueCommand(workerHandoff.open(input)).pipe(
+            Effect.catchTags({
+              ServerRuntimeStartupError: () =>
+                Effect.fail(new FoundryWorkerHandoffError({ code: "unavailable" })),
+            }),
+          ),
+        [WS_METHODS.foundryWorkerHandoffFinish]: (input) =>
+          startup.enqueueCommand(workerHandoff.finish(input)).pipe(
+            Effect.catchTags({
+              ServerRuntimeStartupError: () =>
+                Effect.fail(new FoundryWorkerHandoffError({ code: "unavailable" })),
+            }),
+          ),
+        [WS_METHODS.foundryWorkerHandoffReopen]: (input) =>
+          startup.enqueueCommand(workerHandoff.reopen(input)).pipe(
+            Effect.catchTags({
+              ServerRuntimeStartupError: () =>
+                Effect.fail(new FoundryWorkerHandoffError({ code: "unavailable" })),
             }),
           ),
         [WS_METHODS.foundryWorkerRenew]: (input) => workerLaunch.renew(input),

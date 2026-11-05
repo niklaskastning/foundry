@@ -56,7 +56,10 @@ const make = Effect.gen(function* () {
           const versions = yield* sql<{
             version: number;
           }>`SELECT version FROM foundry_automation.schema_version`;
-          if (versions.length !== 1 || ![1, 2, 3, 4, 5, 6, 7].includes(versions[0]?.version ?? 0))
+          if (
+            versions.length !== 1 ||
+            ![1, 2, 3, 4, 5, 6, 7, 8].includes(versions[0]?.version ?? 0)
+          )
             return yield* new AutomationMigrationError({ reason: "schema_incompatible" });
           if (versions[0]?.version === 1) {
             yield* sql`ALTER TABLE foundry_automation.work_items ADD CONSTRAINT work_items_factory_id_id_key UNIQUE(factory_id,id)`;
@@ -111,6 +114,14 @@ const make = Effect.gen(function* () {
             yield* sql`CREATE INDEX definition_sources_due ON foundry_automation.definition_sources(next_sync_at,factory_id) WHERE enabled`;
             yield* sql`UPDATE foundry_automation.schema_version SET version=7`;
           }
+          if ((versions[0]?.version ?? 0) < 8) {
+            yield* sql`CREATE TABLE foundry_automation.work_item_handoffs (id text PRIMARY KEY, factory_id text NOT NULL, work_item_id text NOT NULL, run_id text NOT NULL UNIQUE REFERENCES foundry_automation.runs(id), source_command_id text NOT NULL REFERENCES foundry_automation.step_attempts(command_id), instance_id text NOT NULL, operator_id text NOT NULL, environment_id text NOT NULL, generation integer NOT NULL DEFAULT 0 CHECK(generation>=0), base_revision text NOT NULL, state text NOT NULL CHECK(state IN ('opening','open','returning','returned')), mode text NOT NULL CHECK(mode IN ('existing','branch','archive')), open_request jsonb NOT NULL, receipt jsonb, result jsonb, continuation_run_id text REFERENCES foundry_automation.runs(id), FOREIGN KEY(factory_id,work_item_id) REFERENCES foundry_automation.work_items(factory_id,id))`;
+            yield* sql`CREATE UNIQUE INDEX work_item_handoffs_active ON foundry_automation.work_item_handoffs(work_item_id) WHERE state<>'returned'`;
+            yield* sql`CREATE INDEX work_item_handoffs_thread ON foundry_automation.work_item_handoffs(environment_id,(receipt->>'threadId'))`;
+            yield* sql`CREATE TABLE foundry_automation.handoff_commands (id text PRIMARY KEY, payload jsonb NOT NULL, handoff_id text NOT NULL REFERENCES foundry_automation.work_item_handoffs(id), receipt jsonb)`;
+            yield* sql`UPDATE foundry_automation.schema_version SET version=8`;
+          }
+          yield* sql`GRANT INSERT, UPDATE ON foundry_automation.work_item_handoffs, foundry_automation.handoff_commands TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT, UPDATE ON foundry_automation.definition_sources TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT ON foundry_automation.definition_git_revisions, foundry_automation.definition_source_commands TO ${sql(runtimeRole)}`;
           yield* sql`GRANT SELECT, INSERT, UPDATE ON foundry_automation.trigger_bindings, foundry_automation.unattended_grants, foundry_automation.trigger_events, foundry_automation.trigger_admissions, foundry_automation.trigger_commands, foundry_automation.publish_operations TO ${sql(runtimeRole)}`;

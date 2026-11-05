@@ -16,12 +16,46 @@ const WriterBinding = Schema.Struct({
   verified: Schema.Number,
 });
 export type WriterBinding = typeof WriterBinding.Type;
+const isWorkspaceError = Schema.is(FoundryWorkspaceError);
 const decodeBindings = Schema.decodeUnknownEffect(Schema.Array(WriterBinding));
 const decodeReservation = Schema.decodeUnknownEffect(FoundryWorkspaceReservation);
+
+export interface HandoffRow {
+  readonly id: string;
+  readonly threadId: string;
+  readonly workspacePath: string;
+  readonly state: "opening" | "open" | "closing" | "returned";
+  readonly payload: string;
+  readonly receipt: string | null;
+  readonly result: string | null;
+  readonly closingCommand: string | null;
+}
 
 export class ReservationStore extends Context.Service<
   ReservationStore,
   {
+    readonly handoff: (id: string) => Effect.Effect<HandoffRow | null, FoundryWorkspaceError>;
+    readonly hold: (input: HandoffRow) => Effect.Effect<boolean, FoundryWorkspaceError>;
+    readonly transitionHandoff: (
+      id: string,
+      from: HandoffRow["state"],
+      to: HandoffRow["state"],
+      value?: {
+        receipt?: string;
+        result?: string;
+        closingCommand?: string;
+        command?: { id: string; payload: string; result: string };
+      },
+    ) => Effect.Effect<boolean, FoundryWorkspaceError>;
+    readonly handoffAllowed: (
+      threadId: string,
+      cwd: string,
+    ) => Effect.Effect<boolean, FoundryWorkspaceError>;
+    readonly handoffCommand: (
+      commandId: string,
+      payload: string,
+      result?: string,
+    ) => Effect.Effect<string | null, FoundryWorkspaceError>;
     readonly bindings: Effect.Effect<ReadonlyArray<WriterBinding>, FoundryWorkspaceError>;
     readonly bind: (
       binding: Omit<WriterBinding, "runId" | "attemptId" | "closed" | "verified">,
@@ -38,6 +72,7 @@ export class ReservationStore extends Context.Service<
     ) => Effect.Effect<FoundryWorkspaceReservation, FoundryWorkspaceError>;
     readonly claim: (
       reservation: FoundryWorkspaceReservation,
+      threadId?: string,
     ) => Effect.Effect<boolean, FoundryWorkspaceError>;
     readonly setState: (
       requestId: string,
@@ -69,6 +104,12 @@ export const layer = (filename: string) =>
           CREATE TABLE IF NOT EXISTS writer_bindings (
             request_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, command_id TEXT, generation INTEGER,
             run_id TEXT, attempt_id TEXT, closed INTEGER NOT NULL DEFAULT 0, verified INTEGER NOT NULL DEFAULT 0);
+          CREATE TABLE IF NOT EXISTS handoffs (
+            id TEXT PRIMARY KEY, thread_id TEXT NOT NULL UNIQUE, workspace_path TEXT NOT NULL,
+            state TEXT NOT NULL, payload TEXT NOT NULL, receipt TEXT, result TEXT, closing_command TEXT);
+          CREATE UNIQUE INDEX IF NOT EXISTS active_handoff ON handoffs(workspace_path) WHERE state != 'returned';
+          CREATE UNIQUE INDEX IF NOT EXISTS single_handoff ON handoffs((1)) WHERE state != 'returned';
+          CREATE TABLE IF NOT EXISTS handoff_commands (id TEXT PRIMARY KEY, payload TEXT NOT NULL, result TEXT);
           CREATE UNIQUE INDEX IF NOT EXISTS active_writer ON reservations(workspace_path) WHERE state != 'released';`);
               if (
                 !connection
@@ -83,14 +124,20 @@ export const layer = (filename: string) =>
               throw cause;
             }
           },
-          catch: (cause) => new FoundryWorkspaceError({ code: "storage_failed", cause }),
+          catch: (cause) =>
+            isWorkspaceError(cause)
+              ? cause
+              : new FoundryWorkspaceError({ code: "storage_failed", cause }),
         }),
         (connection) => Effect.sync(() => connection.close()),
       );
       const io = <A>(operation: () => A) =>
         Effect.try({
           try: operation,
-          catch: (cause) => new FoundryWorkspaceError({ code: "storage_failed", cause }),
+          catch: (cause) =>
+            isWorkspaceError(cause)
+              ? cause
+              : new FoundryWorkspaceError({ code: "storage_failed", cause }),
         });
       const read = Effect.fn("ReservationStore.read")(function* (requestId: string) {
         const row = yield* io(() =>
@@ -113,7 +160,99 @@ export const layer = (filename: string) =>
         Effect.flatMap(decodeBindings),
         Effect.mapError((cause) => new FoundryWorkspaceError({ code: "storage_failed", cause })),
       );
+      const handoff = Effect.fn("ReservationStore.handoff")((id: string) =>
+        io(() => {
+          const row = db
+            .prepare(
+              "SELECT id,thread_id AS threadId,workspace_path AS workspacePath,state,payload,receipt,result,closing_command AS closingCommand FROM handoffs WHERE id=?",
+            )
+            .get(id);
+          return row ? (row as unknown as HandoffRow) : null;
+        }),
+      );
       return ReservationStore.of({
+        handoff,
+        hold: Effect.fn("ReservationStore.hold")((input) =>
+          io(
+            () =>
+              db
+                .prepare(
+                  "INSERT OR IGNORE INTO handoffs SELECT ?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM reservations WHERE state!='released')",
+                )
+                .run(
+                  input.id,
+                  input.threadId,
+                  input.workspacePath,
+                  input.state,
+                  input.payload,
+                  input.receipt,
+                  input.result,
+                  input.closingCommand,
+                ).changes === 1,
+          ),
+        ),
+        transitionHandoff: Effect.fn("ReservationStore.transitionHandoff")((id, from, to, value) =>
+          io(() => {
+            db.exec("BEGIN IMMEDIATE");
+            try {
+              const changed =
+                db
+                  .prepare(
+                    "UPDATE handoffs SET state=?,receipt=COALESCE(?,receipt),result=COALESCE(?,result),closing_command=COALESCE(?,closing_command) WHERE id=? AND state=?",
+                  )
+                  .run(
+                    to,
+                    value?.receipt ?? null,
+                    value?.result ?? null,
+                    value?.closingCommand ?? null,
+                    id,
+                    from,
+                  ).changes === 1;
+              if (changed && value?.command) {
+                const command = value.command;
+                const recorded = db
+                  .prepare(
+                    "UPDATE handoff_commands SET result=? WHERE id=? AND payload=? AND result IS NULL",
+                  )
+                  .run(command.result, command.id, command.payload).changes;
+                if (recorded !== 1) throw new FoundryWorkspaceError({ code: "request_conflict" });
+              }
+              db.exec("COMMIT");
+              return changed;
+            } catch (cause) {
+              db.exec("ROLLBACK");
+              throw cause;
+            }
+          }),
+        ),
+        handoffAllowed: Effect.fn("ReservationStore.handoffAllowed")((threadId, cwd) =>
+          io(
+            () =>
+              !db
+                .prepare(
+                  "SELECT 1 FROM handoffs WHERE (thread_id=? AND (state!='open' OR workspace_path!=?)) OR (state!='returned' AND (thread_id!=? OR state!='open')) LIMIT 1",
+                )
+                .get(threadId, cwd, threadId),
+          ),
+        ),
+        handoffCommand: Effect.fn("ReservationStore.handoffCommand")((commandId, payload, result) =>
+          io(() => {
+            db.prepare(
+              "INSERT OR IGNORE INTO handoff_commands(id,payload,result) VALUES(?,?,NULL)",
+            ).run(commandId, payload);
+            const row = db
+              .prepare("SELECT payload,result FROM handoff_commands WHERE id=?")
+              .get(commandId);
+            if (row?.payload !== payload)
+              throw new FoundryWorkspaceError({ code: "request_conflict" });
+            if (result !== undefined)
+              db.prepare("UPDATE handoff_commands SET result=? WHERE id=? AND result IS NULL").run(
+                result,
+                commandId,
+              );
+            return row.result === null ? null : String(row.result);
+          }),
+        ),
         bindings,
         bind: Effect.fn("ReservationStore.bind")((binding) =>
           io(() => {
@@ -140,7 +279,11 @@ export const layer = (filename: string) =>
             () =>
               db
                 .prepare(`UPDATE writer_bindings SET run_id=?, attempt_id=? WHERE request_id=? AND thread_id=? AND run_id IS NULL AND closed=0
-            AND EXISTS(SELECT 1 FROM reservations WHERE request_id=? AND state='ready')`)
+            AND EXISTS(SELECT 1 FROM reservations WHERE request_id=? AND state='ready')
+            AND NOT EXISTS(SELECT 1 FROM handoffs h JOIN reservations r ON r.request_id=writer_bindings.request_id
+              WHERE (h.thread_id=writer_bindings.thread_id AND (h.state!='open' OR h.workspace_path!=r.workspace_path))
+              OR (h.state!='returned' AND (h.thread_id!=writer_bindings.thread_id OR h.state!='open')))`)
+
                 .run(runId, attemptId ?? null, requestId, threadId, requestId).changes === 1,
           ),
         ),
@@ -152,16 +295,21 @@ export const layer = (filename: string) =>
           }),
         ),
         read,
-        claim: Effect.fn("ReservationStore.claim")((reservation) =>
+        claim: Effect.fn("ReservationStore.claim")((reservation, threadId) =>
           io(
             () =>
               db
-                .prepare("INSERT OR IGNORE INTO reservations VALUES (?, ?, ?, ?)")
+                .prepare(`INSERT OR IGNORE INTO reservations SELECT ?, ?, ?, ?
+                  WHERE NOT EXISTS(SELECT 1 FROM handoffs WHERE (thread_id=? AND (state!='open' OR workspace_path!=?))
+                    OR (state!='returned' AND (thread_id!=? OR state!='open')))`)
                 .run(
                   reservation.requestId,
                   reservation.workspacePath,
                   reservation.state,
                   JSON.stringify(reservation),
+                  threadId ?? "",
+                  reservation.workspacePath,
+                  threadId ?? "",
                 ).changes === 1,
           ),
         ),

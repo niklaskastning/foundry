@@ -1,3 +1,4 @@
+import * as Handoffs from "./Handoffs.ts";
 import * as DefinitionSources from "./DefinitionSources.ts";
 import {
   AutomationApplicationCommand,
@@ -89,6 +90,7 @@ export class Application extends Context.Service<
 
 const make = Effect.gen(function* () {
   const sql = yield* AutomationDatabase.AutomationDatabase;
+  const handoffs = yield* Handoffs.Handoffs;
   const factories = yield* Factories.Factories;
   const definitions = yield* Definitions.Definitions;
   const sources = yield* DefinitionSources.DefinitionSources;
@@ -136,6 +138,13 @@ const make = Effect.gen(function* () {
     });
     const result = yield* Effect.gen(function* () {
       switch (input.op) {
+        case "handoffs":
+          return { kind: "handoffs" as const, items: yield* handoffs.query(request, input) };
+        case "threadHandoff":
+          return {
+            kind: "handoff" as const,
+            handoff: (yield* handoffs.query(request, input))[0] ?? null,
+          };
         case "definitionSource":
           return {
             kind: "definitionSource" as const,
@@ -292,6 +301,10 @@ const make = Effect.gen(function* () {
       : "orchestration:operate";
     const identity = yield* gateway.identityForWrite(request, scope);
     switch (input.op) {
+      case "takeOver":
+      case "returnHandoff":
+      case "reopenHandoff":
+        return { kind: "handoff" as const, handoff: yield* handoffs.execute(request, input) };
       case "configureDefinitionSource":
         return {
           kind: "definitionSource" as const,

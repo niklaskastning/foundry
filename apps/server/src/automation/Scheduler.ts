@@ -29,6 +29,12 @@ import { decideStep } from "./stepDecision.ts";
 
 const Text = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(20_000));
 export const DispatchBinding = Schema.Struct({
+  previousHandoff: Schema.optional(
+    Schema.Struct({
+      handoffId: Text,
+      commitSha: Schema.String.check(Schema.isPattern(/^[a-f0-9]{40}$/)),
+    }),
+  ),
   identity: WorkerTransport.WorkerIdentity,
   triggerInput: Schema.optional(
     Schema.Struct({
@@ -392,6 +398,9 @@ const make = Effect.gen(function* () {
             : check!.prompt,
         workspaceMode: "checkout",
         ...(previousExecution ? { previousExecution } : {}),
+        ...(!previousExecution && binding.previousHandoff
+          ? { previousHandoff: binding.previousHandoff }
+          : {}),
         ...(previousResult?.artifacts.length ? { inputArtifacts: previousResult.artifacts } : {}),
       };
       attempt = yield* store.prepare(claim, { ordinal: index, commandId, request });

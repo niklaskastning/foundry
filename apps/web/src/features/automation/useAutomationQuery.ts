@@ -16,7 +16,7 @@ export function useAutomationQuery(
 ) {
   const registry = useContext(RegistryContext);
   const session = useAtomValue(environmentSession.sessionStateAtom(environmentId));
-  const live = input.op === "run" || input.op === "attempts";
+  const live = input.op === "run" || input.op === "attempts" || input.op === "handoffs";
   const [generation, setGeneration] = useState(0);
   const key = JSON.stringify({ input, generation });
   const [result, setResult] = useState<AutomationApplicationResult | null>(null);

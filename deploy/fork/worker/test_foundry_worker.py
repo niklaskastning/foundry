@@ -357,6 +357,14 @@ class WorkerInstallationTest(unittest.TestCase):
                 with closing(sqlite3.connect(database)) as connection, connection:
                     connection.execute("UPDATE foundry_executions SET writer_ended=1")
                 artifact_activation.quiescent()
+                with closing(sqlite3.connect(journal)) as connection, connection:
+                    connection.execute("CREATE TABLE handoffs(state TEXT)")
+                    connection.execute("INSERT INTO handoffs VALUES ('open')")
+                with self.assertRaisesRegex(RuntimeError, "handoff"):
+                    artifact_activation.quiescent()
+                with closing(sqlite3.connect(journal)) as connection, connection:
+                    connection.execute("UPDATE handoffs SET state='returned'")
+                artifact_activation.quiescent()
                 before = artifact_activation.schema()
                 with closing(sqlite3.connect(journal)) as connection, connection:
                     connection.execute("ALTER TABLE reservations ADD COLUMN next_generation INTEGER")

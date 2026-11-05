@@ -575,3 +575,110 @@ it.live("keeps unbound development workers on the ordinary interactive path", ()
     }).pipe(Effect.provide(inactive));
   }).pipe(Effect.provide(infrastructure), Effect.scoped),
 );
+
+it.live(
+  "holds a handoff between turns and fences closing, stale starts and returned threads durably",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const journal = ReservationStore.layer(`${f.temp}/handoff.sqlite`);
+      yield* Effect.gen(function* () {
+        const store = yield* ReservationStore.ReservationStore;
+        const service = yield* WorkspaceReservations.WorkspaceReservations;
+        const hold = {
+          id: "handoff",
+          threadId: "interactive",
+          workspacePath: f.repositoryPath,
+          state: "opening" as const,
+          payload: "request",
+          receipt: null,
+          result: null,
+          closingCommand: null,
+        };
+        const reservation = {
+          ...f.request("dispatch"),
+          workspacePath: f.repositoryPath,
+          baseCommit: "base",
+          branch: null,
+          state: "ready" as const,
+        };
+        const raced = yield* Effect.all(
+          [store.hold(hold), store.claim(reservation, "automation")],
+          { concurrency: "unbounded" },
+        );
+        assert.equal(raced.filter(Boolean).length, 1);
+        if (raced[1]) {
+          yield* store.setState("dispatch", "released");
+          assert.isTrue(yield* store.hold(hold));
+        }
+        assert.isFalse(yield* store.handoffAllowed("interactive", f.repositoryPath));
+        assert.isTrue(
+          yield* store.transitionHandoff("handoff", "opening", "open", { receipt: "receipt" }),
+        );
+        assert.isTrue(yield* store.handoffAllowed("interactive", f.repositoryPath));
+        assert.isFalse(yield* store.handoffAllowed("other", f.repositoryPath));
+        assert.equal(
+          (yield* service.reserve(f.request("other"), "other").pipe(Effect.flip)).code,
+          "writer_busy",
+        );
+        const manual = yield* service.reserve(f.request("manual"), "interactive");
+        yield* store.bind({
+          requestId: manual.requestId,
+          threadId: "interactive",
+          commandId: null,
+          generation: null,
+        });
+        assert.isTrue(
+          yield* store.transitionHandoff("handoff", "open", "closing", {
+            closingCommand: "finish",
+          }),
+        );
+        assert.isFalse(yield* store.enter(manual.requestId, "interactive", "late-run"));
+        yield* store.handoffCommand("reopen", "reopen-input");
+        assert.isTrue(
+          yield* store.transitionHandoff("handoff", "closing", "open", {
+            command: { id: "reopen", payload: "reopen-input", result: "receipt" },
+          }),
+        );
+        assert.equal(yield* store.handoffCommand("reopen", "reopen-input"), "receipt");
+        assert.isTrue(yield* store.enter(manual.requestId, "interactive", "run"));
+        assert.isFalse(yield* store.enter(manual.requestId, "interactive", "second-run"));
+        yield* store.confirm(manual.requestId);
+        yield* service.release(manual.requestId);
+        assert.isFalse(
+          yield* store.claim({ ...reservation, requestId: "between-turns" }, "automation"),
+        );
+        yield* store.transitionHandoff("handoff", "open", "closing", {
+          closingCommand: "finish-new",
+        });
+        yield* store.handoffCommand("finish-new", "finish-input");
+        assert.isTrue(
+          yield* store.transitionHandoff("handoff", "closing", "returned", {
+            result: "result",
+            command: { id: "finish-new", payload: "finish-input", result: "result" },
+          }),
+        );
+        assert.isFalse(yield* store.handoffAllowed("interactive", f.repositoryPath));
+        assert.isFalse(
+          yield* store.claim({ ...reservation, requestId: "late-interactive" }, "interactive"),
+        );
+        assert.isTrue(
+          yield* store.claim({ ...reservation, requestId: "next-automation" }, "automation"),
+        );
+      }).pipe(
+        Effect.provide(
+          WorkspaceReservations.layer([f.root]).pipe(
+            Layer.provideMerge(journal),
+            Layer.provide(WriterStopVerifier.layerBound.pipe(Layer.provide(journal))),
+          ),
+        ),
+        Effect.scoped,
+      );
+      yield* Effect.gen(function* () {
+        const store = yield* ReservationStore.ReservationStore;
+        assert.equal((yield* store.handoff("handoff"))?.state, "returned");
+        assert.equal(yield* store.handoffCommand("finish-new", "finish-input"), "result");
+        assert.isFalse(yield* store.handoffAllowed("interactive", f.repositoryPath));
+      }).pipe(Effect.provide(journal), Effect.scoped);
+    }).pipe(Effect.provide(infrastructure), Effect.scoped),
+);

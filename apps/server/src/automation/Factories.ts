@@ -221,6 +221,11 @@ const make = Effect.gen(function* () {
           const factory = yield* lockFactory(factoryId);
           if (factory.archived) return yield* new AutomationError({ reason: "archived" });
           yield* readWorkItem(factoryId, workItemId);
+          const handoff =
+            yield* sql`SELECT id FROM foundry_automation.work_item_handoffs WHERE work_item_id=${workItemId} AND state<>'returned'`.pipe(
+              Effect.mapError(storageError),
+            );
+          if (handoff.length) return yield* new AutomationError({ reason: "command_conflict" });
           return yield* start;
         }),
       )

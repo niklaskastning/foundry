@@ -78,6 +78,12 @@ export const FoundryPublishEvidence = Schema.Struct({
 });
 export type FoundryPublishEvidence = typeof FoundryPublishEvidence.Type;
 export const FoundryWorkerLaunchInput = Schema.Struct({
+  previousHandoff: Schema.optional(
+    Schema.Struct({
+      handoffId: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+      commitSha: PublishSha,
+    }),
+  ),
   publishEvidence: Schema.optional(FoundryPublishRequest),
   inputArtifacts: Schema.optional(
     Schema.Array(FoundryArtifactManifest).check(Schema.isMaxLength(100)),
