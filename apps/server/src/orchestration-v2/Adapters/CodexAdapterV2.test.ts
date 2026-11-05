@@ -6553,6 +6553,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         Effect.gen(function* () {
           const retriedTurnId = "native-capacity-recovered-parent";
           const retrying = yield* Deferred.make<void>();
+          const childWaiting = yield* Deferred.make<void>();
+          const releaseChild = yield* Deferred.make<void>();
           const entries: Array<CodexReplay.CodexAppServerReplayEntry> = [
             ...lateChildPrefix().spawned,
             {
@@ -6636,7 +6638,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               text: "CAPACITY_CHILD_DONE",
               turnId: RESUME_CHILD_TURN_1,
               completedAtMs: 1782622480000,
-              afterMs: 60_000,
             }),
             childTurnCompleted(RESUME_CHILD_TURN_1),
           ];
@@ -6650,6 +6651,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               event.turnItem.type === "error" &&
               event.turnItem.status === "running"
                 ? Deferred.succeed(retrying, undefined)
+                : Effect.void,
+            undefined,
+            undefined,
+            (entry) =>
+              entry.label === "item/completed/child-after-capacity"
+                ? Deferred.succeed(childWaiting, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseChild)),
+                  )
                 : Effect.void,
           );
           yield* harness.runtime.startTurn(
@@ -6669,7 +6678,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             const terminal = harness.terminalEvents()[0];
             if (terminal?.status === "failed") assert.isTrue(terminal.childTurnsContinue);
           }
-          yield* TestClock.adjust("60 seconds");
+          yield* Deferred.await(childWaiting);
+          yield* Deferred.succeed(releaseChild, undefined);
           yield* harness.until(
             () => harness.subagentUpdates().at(-1)?.subagent.status === "completed",
           );
