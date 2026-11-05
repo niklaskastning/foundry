@@ -133,7 +133,16 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
         read: Effect.fn("ApplicationGate.noControl")(() =>
           Effect.fail(new AutomationControlError({ code: "not_found" })),
         ),
-        readAuthorized: unused,
+        readAuthorized: Effect.fn("ApplicationGate.controlSnapshot")((_, factoryId, runId) =>
+          Effect.succeed({
+            factoryId,
+            runId,
+            revision: 0,
+            resultRevision: 0,
+            state: "running" as const,
+            reason: null,
+          }),
+        ),
         execute: unused,
       }),
     ),
@@ -547,6 +556,24 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     ]) {
       yield* sql`INSERT INTO foundry_automation.runs(id,factory_id,work_item_id,workflow_version_id,factory_version_id,repository,revision,state) VALUES(${id},'p21-a','p21-work',${active.version.workflowVersions[0]!.versionId},${active.version.factoryVersionId},'fixture-repo','input-1','pending')`;
       yield* sql`INSERT INTO foundry_automation.dispatch_runs(run_id,worker_id,binding,enrolled_at) VALUES(${id},'fixture-worker',${sql.json({ identity, projectId: "worker-project", model: "fixture", checks: [], requiredArtifacts: [] })},${when}::timestamptz)`;
+    }
+    const publicWorkers = [
+      {
+        deviceId: "22222222-2222-4222-8222-222222222222",
+        environmentId: "fixture-worker",
+        projectId: "worker-project",
+      },
+    ];
+    yield* sql`UPDATE foundry_automation.dispatch_runs SET binding=binding || ${sql.json({ workers: publicWorkers.map(({ projectId, ...target }) => ({ identity: { ...identity, ...target, deviceGeneration: 1, accessGeneration: 1, automationGeneration: 1, clientSessionId: "fixture-session", foundrySessionHash: "a".repeat(43) }, projectId })) })}::jsonb WHERE run_id='a-newer-run'`;
+    for (const runId of ["a-newer-run", "z-older-run"]) {
+      const detail = yield* app.query(operate, { op: "run", factoryId: "p21-a", runId });
+      NodeAssert.equal(detail.kind, "run");
+      if (detail.kind === "run") {
+        NodeAssert.deepEqual(
+          detail.executionBinding?.workers,
+          runId === "a-newer-run" ? publicWorkers : undefined,
+        );
+      }
     }
     const recent = yield* app.query(operate, {
       op: "runs",

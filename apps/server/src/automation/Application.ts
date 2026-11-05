@@ -43,7 +43,7 @@ const decodeDefaults = Schema.decodeUnknownEffect(FactoryExecutionDefaults);
 const decodeLaunch = Schema.decodeUnknownOption(FoundryWorkerLaunchInput);
 const decodeExecutionBinding = Schema.decodeUnknownEffect(
   Schema.Struct({
-    workers: ManualStart.fields.workers,
+    workers: Scheduler.DispatchBinding.fields.workers,
     projectId: ManualStart.fields.projectId,
     model: ManualStart.fields.model,
     checks: ManualStart.fields.checks,
@@ -121,7 +121,20 @@ const make = Effect.gen(function* () {
     const rows = yield* sql<{
       binding: unknown;
     }>`SELECT binding FROM foundry_automation.dispatch_runs WHERE run_id=${runId}`;
-    return rows[0] ? yield* decodeExecutionBinding(rows[0].binding) : null;
+    if (!rows[0]) return null;
+    const { workers, ...binding } = yield* decodeExecutionBinding(rows[0].binding);
+    return {
+      ...binding,
+      ...(workers
+        ? {
+            workers: workers.map(({ identity, projectId }) => ({
+              deviceId: identity.deviceId,
+              environmentId: identity.environmentId,
+              projectId,
+            })),
+          }
+        : {}),
+    };
   });
   const runDefinition = Effect.fn("AutomationApplication.runDefinition")(function* (
     factoryId: string,
