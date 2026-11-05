@@ -357,7 +357,10 @@ const make = Effect.gen(function* () {
     )
       return yield* fail("conflict");
     yield* confirmBundle(identity, result.bundle);
-    const cursor = yield* archive.cursor(identity, result.archive.owner);
+    const cursor = yield* archive.cursor(
+      { instanceId: identity.instanceId, operatorId: identity.operatorId },
+      result.archive.owner,
+    );
     if (
       !cursor.complete ||
       !cursor.sourceComplete ||
