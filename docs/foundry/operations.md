@@ -812,7 +812,28 @@ kanonische Semantik, Herkunft wird separat gespeichert. Ein identischer Retry
 liest seine ursprüngliche Revision auch nach späteren Aktivierungen. Eine alte
 Version wird für neue Starts durch Export und erneute Aktivierung mit aktuellem
 Basisabgleich wiedergewählt; bestehende Runs bleiben gepinnt. Definitionsaktivierung
-startet keine Ausführung. Git-Verwaltung folgt in P48.
+startet keine Ausführung.
+
+Für Git-Definitionen erhält `foundry-github-app` einen gesonderten Repository-Eintrag
+mit `purpose: "definitions"`; dieser erlaubt ausschließlich Definitionslesen mit
+`contents:read`, kein Issue-Polling oder Publishing. Die GitHub-App-Installation
+muss das Repository ebenfalls freigeben. Änderungen erhöhen die Konfigurationsgeneration;
+bestehende Quellbindungen verlangen anschließend ausdrückliche Reautorisierung.
+
+Unter Factory → Definition das Definitionsrepository, seine numerische ID, Branch
+und Verzeichnis binden. Bei bestehenden lokalen Definitionen wird die aktuelle
+Version samt Inhaltshash als Importbasis festgehalten. Die erste Git-Aktivierung
+verlangt gleiche Inhalte und unveränderte Basis. Bei Drift die Dateien im Repository
+angleichen oder ausdrücklich die aktuelle lokale Version als neue Importbasis wählen.
+Nach der Übernahme bleibt Git dauerhaft Owner; lokale Aktivierungsbefehle werden
+abgewiesen. Änderungen erfolgen per PR im Definitionsrepository.
+
+Synchronisierung liest und validiert einen konkreten Commit, aktiviert ihn aber nicht.
+Quelle und Revisionen zeigen Fehler, Dateien und Diff zur aktiven Version. Erst die
+explizite Aktivierung übernimmt die geprüfte Revision für neue Runs. Ein Rollback
+aktiviert eine frühere gültige Git-Revision mit aktuellen Rechten; bestehende Runs
+behalten ihren Snapshot. Hintergrundlesen lässt sich auch nach einem Rechtewiderruf
+pausieren. Betriebsbindungen und Trigger bleiben unabhängig in der App bedienbar.
 
 Der isolierte Nachweis verwendet ausschließlich einen temporären PostgreSQL-Cluster,
 keine vorhandenen Datenbanken oder persönlichen Provider-Zugänge:
@@ -838,7 +859,7 @@ der gemeinsame Deployment-Lock; Instanzschema 7 und lokales T3-SQLite bleiben ge
 
 Die Main-Runtime verlangt bei `FOUNDRY_AUTOMATION_ENABLED=true` zusätzlich:
 
-- `FOUNDRY_AUTOMATION_DATABASE_URL`: separater Runtime-Pool, Schema 6;
+- `FOUNDRY_AUTOMATION_DATABASE_URL`: separater Runtime-Pool, Schema 7;
 - `FOUNDRY_AUTOMATION_TARGET`: JSON mit genau `deviceId`, `environmentId` und
   `allowedRunIds` (explizite eigene Fixture-Runs, höchstens 100);
 - den vorhandenen Gateway-/Artefaktbetrieb sowie eine bewusst erteilte
@@ -871,18 +892,18 @@ nicht bestätigbare Recovery lässt Main gestoppt. Die separate migrierte Datenb
 bleibt inaktiv. Bei späteren Updates gehört sie zum Recovery-Bundle; Schema 5 darf
 nicht durch einen reinen Image-Downgrade auf Schema-4-Code zurückgesetzt werden.
 
-Der aktive Entwicklungsstand wird von Automation-Schema 5 auf 6 über denselben
+Der aktive Entwicklungsstand wird von Automation-Schema 6 auf 7 über denselben
 intern sperrenden Betreiberpfad aktualisiert:
 
 ```sh
 sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-automation sha256:<image-digest> <source-sha>
 ```
 
-Dieser Pfad verlangt das aktive Schema-5-Profil, stoppt Main, sichert zusätzlich die
+Dieser Pfad verlangt das aktive Schema-6-Profil, stoppt Main, sichert zusätzlich die
 separate Automation-Datenbank und migriert sie mit dem Zielimage. Der Migrator wird
 anschließend wieder gesperrt. Bei Fehlschlag umfasst Recovery auch diese Datenbank;
 kein Image-only-Downgrade. Der Aufruf aktiviert keine Trigger. Für spätere Updates
-innerhalb Schema 6 bleibt `update` der passende Pfad.
+innerhalb Schema 7 bleibt `update` der passende Pfad.
 
 ### GitHub- und Zeitplan-Eingänge
 
