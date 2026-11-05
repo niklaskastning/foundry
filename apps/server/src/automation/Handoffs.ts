@@ -39,6 +39,9 @@ const decodeExecution = Schema.decodeUnknownEffect(
 const decodeCommand = Schema.decodeEffect(AutomationHandoffCommand, { onExcessProperty: "error" });
 const decodeQuery = Schema.decodeEffect(AutomationHandoffQuery, { onExcessProperty: "error" });
 const decodeBytes = Schema.decodeEffect(Schema.Uint8ArrayFromBase64);
+const isNonWriterStep = Schema.is(
+  Schema.Struct({ kind: Schema.Literals(["approval", "publish"]) }),
+);
 const isError = Schema.is(AutomationApplicationError);
 const isWorkerError = Schema.is(WorkerTransport.WorkerTransportError);
 const fail = (code: AutomationApplicationError["code"]) => new AutomationApplicationError({ code });
@@ -239,7 +242,9 @@ const make = Effect.gen(function* () {
           if (
             deliveries.some(
               (attempt) =>
-                attempt.state !== "pending" && !DispatchStore.writerEnded(attempt.result),
+                attempt.state !== "pending" &&
+                !(attempt.state === "confirmed" && isNonWriterStep(attempt.request)) &&
+                !DispatchStore.writerEnded(attempt.result),
             )
           )
             return yield* fail("writer_not_ended");

@@ -275,6 +275,7 @@ export const handoffGates = Effect.fn("Handoffs.postgresGates")(function <E, E2>
             prompt: "Review fixture",
             dependsOn: ["implementation"],
           },
+          { id: "publish", kind: "publish", target: "pull_request", dependsOn: ["review"] },
         ],
       });
       yield* workflows.start({
@@ -395,6 +396,14 @@ export const handoffGates = Effect.fn("Handoffs.postgresGates")(function <E, E2>
       (sql) =>
         sql`INSERT INTO foundry_automation.dispatch_outbox(command_id,state) VALUES('p51-other-source','delivered')`,
     );
+    yield* query(
+      (sql) =>
+        sql`INSERT INTO foundry_automation.step_attempts(command_id,run_id,ordinal,request,state,result) VALUES('p51-review','p51-run',1,${sql.json({ kind: "approval" })},'succeeded',NULL),('p51-publish','p51-run',2,${sql.json({ kind: "publish" })},'succeeded',${sql.json({ publish: { number: 1, url: "https://fixture.invalid/pull/1", commitSha: "a".repeat(40), operationKey: "p51-publish" } })})`,
+    );
+    yield* query(
+      (sql) =>
+        sql`INSERT INTO foundry_automation.dispatch_outbox(command_id,state) VALUES('p51-review','confirmed'),('p51-publish','confirmed')`,
+    );
     NodeAssert.equal(
       (yield* failure(execute(take)))?.code,
       "writer_not_ended",
@@ -419,7 +428,11 @@ export const handoffGates = Effect.fn("Handoffs.postgresGates")(function <E, E2>
       Effect.provide(services),
     );
     NodeAssert.ok(staleClaim);
-    NodeAssert.equal((yield* failure(execute(take)))?.code, "unavailable");
+    NodeAssert.equal(
+      (yield* failure(execute(take)))?.code,
+      "unavailable",
+      "Confirmed approval and publish records have no writer and must allow worker delivery",
+    );
     NodeAssert.equal((yield* state())[0]?.state, "opening");
     NodeAssert.deepEqual((yield* state())[0]?.pendingCommands, [take]);
     yield* restart;
