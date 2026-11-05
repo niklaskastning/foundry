@@ -40,6 +40,11 @@ import * as WorkerTransport from "./WorkerTransport.ts";
 const Target = Schema.Struct({
   deviceId: FoundryDeviceId,
   environmentId: EnvironmentId,
+  workers: Schema.optional(
+    Schema.Array(Schema.Struct({ deviceId: FoundryDeviceId, environmentId: EnvironmentId })).check(
+      Schema.isMaxLength(8),
+    ),
+  ),
   allowedRunIds: Schema.Array(
     Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)),
   ).check(Schema.isMaxLength(100)),
@@ -149,7 +154,7 @@ export const layer = Layer.unwrap(
           version: number;
           safe: boolean;
         }>`SELECT version, NOT (r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls OR has_schema_privilege(current_user,'foundry_automation','CREATE') OR has_database_privilege(current_user,current_database(),'CREATE')) AS safe FROM foundry_automation.schema_version,pg_roles r WHERE r.rolname=current_user`;
-        if (rows.length !== 1 || rows[0]?.version !== 9 || !rows[0].safe)
+        if (rows.length !== 1 || rows[0]?.version !== 10 || !rows[0].safe)
           return yield* new Scheduler.SchedulerError({ reason: "invalid_binding" });
       }),
     ).pipe(Layer.provide(database));

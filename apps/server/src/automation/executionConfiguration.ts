@@ -31,6 +31,7 @@ export function executionConfigurationIssue(
   if (
     status &&
     (!status.providerReady ||
+      (workflow.execution !== undefined && status.parallelExecutionVersion !== 1) ||
       (agents.some((step) => step.resolved) && status.roleExecutionVersion !== 1))
   )
     return "worker_not_ready";

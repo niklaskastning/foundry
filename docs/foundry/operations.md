@@ -990,6 +990,37 @@ Betriebsnachweis. Recovery auf Schema-8-Code verlangt den koordinierten vorherig
 Daten-/State-Stand; kein reiner Image-Downgrade. Updates innerhalb Schema 9 nutzen
 wieder `update`. Windows-Bedienung und weitere Provider benötigen eigene Abnahmen.
 
+### Parallele Factory-Ausführung aktualisieren
+
+P29 benötigt weiterhin Instanzschema 8 und Automation-Schema 10. Den getesteten
+Worker zuerst installieren; `install STAGE --capacity 2` am bestehenden
+`deploy/fork/worker/activate-artifacts.py` aktiviert zwei Plätze im dauerhaften
+Workerprofil. Zulässig sind 1–8, ohne Option bleibt der bisherige Wert erhalten
+(bei älteren Profilen 1). Der Worker-Updater prüft den gemeldeten Wert vor dem
+Wiederverbinden und hält den bestehenden Deployment-Lock bis zur Verifikation.
+Die bereits gebundene Provideranmeldung bleibt unverändert.
+
+Danach das immutable Main-Image aus demselben getesteten Stand migrieren:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-factory-parallel sha256:<digest> <commit>
+```
+
+Der intern sperrende Pfad verlangt das aktive Automation-Schema 9, sichert den
+koordinierten vorherigen Stand und migriert bei gestopptem Main auf 10.
+`manifest.json` und `success` belegen Zielstand und Recovery-Verzeichnis.
+Ein Rückgang auf Schema-9-Code verlangt den koordinierten Daten-/State-Restore;
+ein reiner Image-Downgrade ist nicht sicher. Spätere Schema-10-Updates verwenden
+`update`. Die Worker-Konfigurationsrecovery ist nur bei unverändertem lokalem
+SQLite-Schema zulässig. Diese Lieferung ergänzt dort Migration 79 für dauerhafte
+Abbruchnachweise vor dem Workerstart; der Rückgang zum vorherigen Worker benötigt
+deshalb dessen gesicherten Datenstand, nicht nur die alte Dienstkonfiguration.
+
+`FOUNDRY_AUTOMATION_TARGET` behält den bisherigen Standardworker. Optional
+enthält `workers` bis zu acht zusätzliche, unterschiedliche Paare aus `deviceId`
+und `environmentId`. Diese Betriebsauswahl ersetzt weder die registrierte
+Instanz-/Betreiberzugehörigkeit noch aktuelle Device- und Automation-Freigaben.
+
 ### Versionierte Factory-HTTP-API (P58a)
 
 Bei aktivierter Automation stehen dieselben Benutzeroperationen unter

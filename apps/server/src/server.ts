@@ -611,7 +611,7 @@ const layerWorkerLaunch = WorkerLaunch.layer.pipe(
   Layer.provide(layerCheckpointStore),
   Layer.provide(EventStoreV2.layerFromOrchestrationEventStore),
   Layer.provide(CommandReceiptStore.layer),
-  Layer.provide(WorkerReadiness.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
+  Layer.provide(WorkerReadiness.layer.pipe(Layer.provide(layerExecutionStore))),
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
@@ -627,7 +627,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.provide(GitVcsDriver.layer),
     Layer.provide(RuntimeLayer.layerArchivePublication),
   ),
-  WorkerReadiness.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
+  WorkerReadiness.layer.pipe(Layer.provide(layerExecutionStore)),
   AssetTransfer.layer.pipe(Layer.provide(NativeAppIconResolver.layer)),
   AgentAwarenessRelay.layer,
   HeldHooksWaker.layer,

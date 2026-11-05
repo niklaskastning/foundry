@@ -23,7 +23,7 @@ MANIFEST = CONFIG + "/installation.json"
 
 
 def validate(config):
-    if set(config) - {"providerInstanceId", "artifactPublication"} != {"revision", "node", "origin", "port", "workspaceRoots", "cpuQuotaPercent", "memoryMaxMiB", "tasksMax", "accessFile"}:
+    if set(config) - {"providerInstanceId", "artifactPublication", "capacity"} != {"revision", "node", "origin", "port", "workspaceRoots", "cpuQuotaPercent", "memoryMaxMiB", "tasksMax", "accessFile"}:
         raise ValueError("Supply exactly the documented worker configuration fields")
     if not isinstance(config["revision"], str) or not re.fullmatch(r"[0-9a-f]{40}", config["revision"]):
         raise ValueError("A full release commit is required")
@@ -44,6 +44,8 @@ def validate(config):
         raise ValueError("Invalid provider instance binding")
     if "artifactPublication" in config and type(config["artifactPublication"]) is not bool:
         raise ValueError("Artifact publication needs an explicit boolean")
+    if "capacity" in config and (type(config["capacity"]) is not int or not 1 <= config["capacity"] <= 8):
+        raise ValueError("Worker capacity must be an integer from 1 to 8")
     return config
 
 
@@ -67,6 +69,7 @@ Environment=T3CODE_HOME={T3}
 Environment=PATH=/opt/foundry-worker/providers/bin:/usr/local/bin:/usr/bin:/bin
 Environment='FOUNDRY_WORKER_WORKSPACE_ROOTS={json.dumps(config["workspaceRoots"], separators=(",", ":"))}'
 Environment=FOUNDRY_WORKER_ENABLED=true
+Environment=FOUNDRY_WORKER_CAPACITY={config.get("capacity", 1)}
 Environment=FOUNDRY_WORKER_PROVIDER_INSTANCE_ID={config.get("providerInstanceId", "")}
 Environment=NODE_ENV=production
 Environment=T3CODE_TELEMETRY_ENABLED=false

@@ -44,6 +44,12 @@ Priorität haben große nutzbare Fähigkeiten. P17/G3, der sequenzielle Factory-
 
 P02, P11, P26, P27 und P46 sowie G5 werden im [Leitplanken-Plan](basic-leitplanken.md) geführt. Sie bilden keine eigene Etappe der Feature-Reihenfolge; notwendige technische Gates gelten weiterhin vor Aktivierung. P18 bezeichnet P18a/P18b; P38 umfasst P38a/P38b/P38c. **P49a/P49b** präzisieren den gelieferten Basisumfang und den noch offenen Arbeitsplatz innerhalb der bisherigen P49-ID.
 
+### Anschluss an die v3-Parallelitätslieferung: Definitionsmodell v4
+
+Das abgestimmte [v4-Zielmodell im Definitionsrepository](https://github.com/niklaskastning/foundry-definitions/blob/main/docs/definition-model.md) ([Spezifikations-PR #3](https://github.com/niklaskastning/foundry-definitions/pull/3)) ist die verbindliche Anschlussgrundlage für P28/P52/P29. Es trennt `workflows/`, `agents/`, vollständige Standard-Skillordner mit `SKILL.md` und `mcp/`; MCP-Dateien referenzieren Runtimeverbindungen, keine Secrets in Git. Additive Erweiterungen je Workflow/Step, Swarm-All/Quorum, strukturierte Resultate, typisierte Conditions, echte begrenzte Implement→Review→Fix→Review-Loops, explizite `workspace.from`-Checkpoints und verschachtelte Iterationsidentitäten gehören zu diesem nächsten Schnitt.
+
+V3 bleibt die kompatible Grundlage für statische DAGs, All-success-Zusammenführung und begrenzte Wiederholungen fehlgeschlagener Agent-Schritte. Technisches Retry ist kein Review/Fix-Loop. V4 wird erst nach Loader-/Validator-, Worker-/MCP- und Runtime-Abnahme gemäß der Spezifikation als aktivierbar geführt; bestehende Definitionen werden nicht umgedeutet. Die aktuelle Benutzeranleitung im Definitionsrepository beschreibt davon getrennt die tatsächlich unterstützten Versionen. Keine zweite konkurrierende Definitionssprache einführen.
+
 ### Abnahme der nächsten Lieferung
 
 P28/P52a/P49b werden als gemeinsamer Produktdurchstich abgenommen:
