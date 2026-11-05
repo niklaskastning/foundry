@@ -12,11 +12,13 @@ import { AsyncResult } from "effect/reactivity";
 import { Link } from "@tanstack/react-router";
 import { useWorkspaceNavigation } from "../../foundry/useWorkspaceNavigation";
 import { AttachmentFilePreview } from "../../components/files/AttachmentFilePreview";
+import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { automationCommands } from "./commands";
 import { HandoffList, TakeOverPanel } from "./HandoffPanel";
 import { useAutomationQuery } from "./useAutomationQuery";
+import { runTopology } from "./runTopology";
 
 export function RunDetail({
   environmentId,
@@ -42,14 +44,16 @@ export function RunDetail({
     ...(after ? { after } : {}),
   });
   const selected = navigation.search.attemptId;
-  const setSelected = (attemptId: string) => navigation.update({ attemptId });
+  const setSelected = (attemptId?: string) => navigation.update({ attemptId });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState<AutomationControlCommand | null>(null);
   const command = useAtomCommand(automationCommands.control, { reportFailure: false });
   const canControl = useAtomValue(automationCommands.control.permissionAtom(environmentId));
   const detail = run.result?.kind === "run" ? run.result : null;
-  const state = detail?.control?.state;
+  const topology = detail ? runTopology(detail.workflow) : null;
+  const execution = detail?.workflow.execution;
+  const state = detail?.control?.state ?? detail?.run.state;
   const terminal = state === "succeeded" || state === "cancelled";
   const available = {
     pause: !terminal && state !== "paused" && state !== "failed" && state !== "cancel_requested",
@@ -59,6 +63,14 @@ export function RunDetail({
   };
   async function act(action: "pause" | "resume" | "cancel" | "retry") {
     if (busy || !detail?.control) return;
+    if (
+      action === "cancel" &&
+      pending?.action !== "cancel" &&
+      !window.confirm(
+        "Request cancellation of this run? Work stops after the active writer confirms shutdown.",
+      )
+    )
+      return;
     const input =
       pending?.action === action
         ? pending
@@ -99,7 +111,7 @@ export function RunDetail({
     <section className="space-y-4" aria-label="Run detail">
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="ghost" onClick={onBack}>
-          Back to runs
+          {navigation.search.workItemId ? "Back to work item" : "Back to runs"}
         </Button>
         <Button
           variant="outline"
@@ -135,13 +147,82 @@ export function RunDetail({
           </Link>
         ) : null}
       </div>
+      {run.loading && !detail ? <p role="status">Loading run…</p> : null}
       {run.error || attempts.error ? <p role="alert">{run.error ?? attempts.error}</p> : null}
       {detail ? (
         <>
-          <p className="text-sm">
-            {detail.control?.state ?? detail.run.state}
-            {detail.control?.reason ? ` · ${detail.control.reason}` : ""}
-          </p>
+          <div className="flex flex-wrap items-start justify-between gap-4 rounded-lg border bg-card p-4">
+            <div className="space-y-2">
+              <Badge
+                size="lg"
+                variant={
+                  state === "succeeded"
+                    ? "success"
+                    : state === "failed"
+                      ? "error"
+                      : state === "waiting" || state === "paused"
+                        ? "warning"
+                        : "secondary"
+                }
+              >
+                {(state ?? detail.run.state).replaceAll("_", " ")}
+              </Badge>
+              <p className="text-sm">
+                {(detail.control?.reason === "repair_pending"
+                  ? "A failed branch is queued for a bounded repair attempt. The join waits for successful branch results."
+                  : detail.control?.reason === "repair_exhausted"
+                    ? "Automatic repair rounds are exhausted. Inspect failed attempts before deciding how to continue."
+                    : detail.control?.reason?.replaceAll("_", " ")) ??
+                  (state === "succeeded"
+                    ? "Execution completed. Review the step results below."
+                    : state === "failed"
+                      ? "Execution failed. Inspect the failed attempt before retrying."
+                      : state === "paused"
+                        ? "Execution is paused. Resume when ready, or take over in T3."
+                        : state === "waiting"
+                          ? "Execution is waiting. Review the current decisions and blockers."
+                          : state === "cancel_requested"
+                            ? "Stop requested. Waiting for writer shutdown confirmation."
+                            : state === "cancelled"
+                              ? "Execution was cancelled. The work item remains separate."
+                              : "Follow step progress below. Results appear after execution is confirmed.")}
+              </p>
+            </div>
+            <div className="text-sm text-muted-foreground">
+              <p>{detail.run.repository}</p>
+              <p>{detail.workflow.steps.length} workflow steps · Pinned configuration</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {(["pause", "resume", "cancel", "retry"] as const)
+              .filter((action) => available[action])
+              .map((action) => (
+                <Button
+                  key={action}
+                  variant={action === "cancel" ? "destructive" : "outline"}
+                  disabled={busy || !canControl || !detail.control || !available[action]}
+                  onClick={() => void act(action)}
+                >
+                  {action.charAt(0).toUpperCase() + action.slice(1)}
+                </Button>
+              ))}
+          </div>
+          {!canControl ? (
+            <p className="text-sm text-muted-foreground">
+              Your current session can review this run but cannot control execution.
+            </p>
+          ) : null}
+          {!terminal ? (
+            <p className="text-xs text-muted-foreground">
+              Pause prevents new steps while accepted work can finish. Cancel requests a stop;
+              confirmation waits for the writer to end. Retry creates a new attempt only when safe.
+            </p>
+          ) : null}
+          {detail.control?.state === "waiting" || detail.control?.reason ? (
+            <Link className="text-sm underline" to="/foundry" search={{ view: "inbox", factoryId }}>
+              Review questions, decisions and blockers in Inbox
+            </Link>
+          ) : null}
           <details className="rounded-lg border p-3">
             <summary className="cursor-pointer text-sm">
               Run identity, revisions and pinned source
@@ -195,27 +276,6 @@ export function RunDetail({
               )}
             </section>
           </details>
-          <div className="flex flex-wrap gap-2">
-            {(["pause", "resume", "cancel", "retry"] as const).map((action) => (
-              <Button
-                key={action}
-                variant={action === "cancel" ? "destructive" : "outline"}
-                disabled={busy || !canControl || !detail.control || !available[action]}
-                onClick={() => void act(action)}
-              >
-                {action.charAt(0).toUpperCase() + action.slice(1)}
-              </Button>
-            ))}
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Pause prevents new steps while accepted work can finish. Cancel requests a stop;
-            confirmation waits for the writer to end. Retry creates a new attempt only when safe.
-          </p>
-          {detail.control?.state === "waiting" || detail.control?.reason ? (
-            <Link className="text-sm underline" to="/foundry" search={{ view: "inbox", factoryId }}>
-              Review questions, decisions and blockers in Inbox
-            </Link>
-          ) : null}
         </>
       ) : null}
       {message ? (
@@ -223,18 +283,120 @@ export function RunDetail({
           {message}
         </p>
       ) : null}
-      <h3 className="font-medium">Steps and results</h3>
+      {topology && execution ? (
+        <section
+          className="space-y-4 rounded-lg border bg-card p-4"
+          aria-label="Parallel execution plan"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="font-semibold">Branches → join → follow-up</h3>
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="info">Up to {execution.maxParallelism} parallel steps</Badge>
+              <Badge variant="outline">
+                {execution.maxRepairRounds} repair rounds per failed branch
+              </Badge>
+            </div>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Dependencies from this run's pinned workflow. Independent steps may run together when
+            authorized worker capacity is available.
+          </p>
+          <div className="flex flex-wrap items-start gap-4">
+            {topology.levels.map((level, index) => (
+              <div key={level.join(":")} className="min-w-0 space-y-2">
+                <p className="text-xs text-muted-foreground">Dependency level {index + 1}</p>
+                <ul className="space-y-2">
+                  {level.map((id) => (
+                    <li key={id}>
+                      <a
+                        className="block break-words rounded-md border px-3 py-2 text-sm underline"
+                        href={`#run-step-${encodeURIComponent(id)}`}
+                      >
+                        {id}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+            <div className="min-w-0 space-y-2">
+              <p className="text-xs text-muted-foreground">All branches must succeed</p>
+              <a
+                className="block break-words rounded-md border px-3 py-2 text-sm font-medium underline"
+                href={`#run-step-${encodeURIComponent(topology.join.id)}`}
+              >
+                Join: {topology.join.id}
+              </a>
+            </div>
+            {topology.suffix.length ? (
+              <div className="min-w-0 space-y-2">
+                <p className="text-xs text-muted-foreground">Serial follow-up</p>
+                <ol className="space-y-2">
+                  {topology.suffix.map((step) => (
+                    <li key={step.id}>
+                      <a
+                        className="block break-words rounded-md border px-3 py-2 text-sm underline"
+                        href={`#run-step-${encodeURIComponent(step.id)}`}
+                      >
+                        {step.id} · {step.kind}
+                      </a>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            The join agent receives ordered branch summaries and artifact references. This does not
+            automatically merge Git branches. Attempt states below reflect the loaded page, not an
+            aggregate of all attempts.
+          </p>
+        </section>
+      ) : null}
+      <h3 className="text-lg font-semibold">Execution & results</h3>
       {detail && attempts.result?.kind === "attempts" ? (
         <>
           <ol className="space-y-3">
             {detail.workflow.steps.map((step, ordinal) => (
-              <li key={step.id} className="space-y-3 rounded-lg border p-4">
+              <li
+                key={step.id}
+                id={`run-step-${step.id}`}
+                className="min-w-0 scroll-mt-16 space-y-3 rounded-lg border bg-card p-4"
+              >
                 <h4 className="font-medium">
                   {ordinal + 1}. {step.id} ·{" "}
                   {step.kind === "agent" ? (step.resolved?.role?.name ?? "Agent") : step.kind}
                 </h4>
+                {execution ? (
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <Badge variant={step.id === execution.joinStepId ? "info" : "outline"}>
+                      {step.id === execution.joinStepId
+                        ? "Join"
+                        : topology && ordinal < topology.joinIndex
+                          ? "Branch"
+                          : "Serial follow-up"}
+                    </Badge>
+                    <span className="text-muted-foreground">
+                      {step.dependsOn.length ? "Depends on:" : "No step dependencies"}
+                    </span>
+                    {step.dependsOn.map((dependency) => (
+                      <a
+                        key={dependency}
+                        className="underline"
+                        href={`#run-step-${encodeURIComponent(dependency)}`}
+                      >
+                        {dependency}
+                      </a>
+                    ))}
+                  </div>
+                ) : null}
                 {step.kind === "agent" || step.kind === "approval" ? (
-                  <p className="whitespace-pre-wrap text-sm">{step.prompt}</p>
+                  <details className="text-sm">
+                    <summary className="cursor-pointer text-muted-foreground">
+                      Step instructions
+                    </summary>
+                    <p className="whitespace-pre-wrap break-words pt-2">{step.prompt}</p>
+                  </details>
                 ) : null}
                 {step.kind === "agent" && step.resolved ? (
                   <details className="text-sm">
@@ -262,9 +424,32 @@ export function RunDetail({
                     .filter((attempt) => attempt.ordinal === ordinal)
                     .map((attempt) => (
                       <div key={attempt.commandId} className="space-y-2 border-t pt-3">
-                        <p className="text-sm">
-                          Attempt {attempt.attemptNumber + 1} · {attempt.state.replaceAll("_", " ")}
-                          {attempt.reason ? ` · ${attempt.reason.replaceAll("_", " ")}` : ""}
+                        <div className="flex flex-wrap items-center gap-2 text-sm">
+                          <span className="font-medium">Attempt {attempt.attemptNumber + 1}</span>
+                          {execution && topology && ordinal < topology.joinIndex ? (
+                            <Badge variant="outline">
+                              {attempt.attemptNumber === 0
+                                ? "Initial execution"
+                                : `Repair round ${attempt.attemptNumber}`}
+                            </Badge>
+                          ) : null}
+                          <Badge variant={attempt.hasResult ? "secondary" : "info"}>
+                            {attempt.state.replaceAll("_", " ")}
+                          </Badge>
+                          {attempt.reason ? (
+                            <span className="text-muted-foreground">
+                              {attempt.reason.replaceAll("_", " ")}
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="break-all text-xs text-muted-foreground">
+                          {attempt.workerId ? <>Worker: {attempt.workerId} · </> : null}
+                          Environment: {attempt.environmentId ?? "Not assigned"}
+                          {attempt.capacityReleased === true
+                            ? " · Capacity released"
+                            : attempt.capacityReleased === false && attempt.workerId
+                              ? " · Capacity reserved"
+                              : ""}
                         </p>
                         <div className="flex flex-wrap gap-3 text-sm">
                           {attempt.threadId && attempt.environmentId ? (
@@ -283,10 +468,33 @@ export function RunDetail({
                               </a>
                             </>
                           ) : null}
-                          <Button variant="outline" onClick={() => setSelected(attempt.commandId)}>
-                            {attempt.hasResult ? "Inspect result & evidence" : "Inspect execution"}
+                          <Button
+                            variant="outline"
+                            aria-expanded={selected === attempt.commandId}
+                            aria-controls={`attempt-${attempt.commandId}`}
+                            onClick={() =>
+                              setSelected(
+                                selected === attempt.commandId ? undefined : attempt.commandId,
+                              )
+                            }
+                          >
+                            {selected === attempt.commandId
+                              ? "Close details"
+                              : attempt.hasResult
+                                ? "Review result & evidence"
+                                : "Inspect execution"}
                           </Button>
                         </div>
+                        {selected === attempt.commandId ? (
+                          <div id={`attempt-${attempt.commandId}`}>
+                            <AttemptResult
+                              environmentId={environmentId}
+                              factoryId={factoryId}
+                              runId={runId}
+                              commandId={attempt.commandId}
+                            />
+                          </div>
+                        ) : null}
                         {!attempt.hasResult ? (
                           <p className="text-xs text-muted-foreground">
                             {step.kind === "approval"
@@ -336,9 +544,10 @@ export function RunDetail({
           </div>
         </>
       ) : null}
-      {selected ? (
+      {selected &&
+      attempts.result?.kind === "attempts" &&
+      !attempts.result.items.some((attempt) => attempt.commandId === selected) ? (
         <AttemptResult
-          key={selected}
           environmentId={environmentId}
           factoryId={factoryId}
           runId={runId}
@@ -347,17 +556,24 @@ export function RunDetail({
       ) : null}
       {detail ? (
         <>
-          <TakeOverPanel
-            environmentId={environmentId}
-            factoryId={factoryId}
-            runId={runId}
-            control={detail.control}
-            attempts={attempts.result?.kind === "attempts" ? attempts.result.items : []}
-            refresh={() => {
-              run.refresh();
-              attempts.refresh();
-            }}
-          />
+          <details className="rounded-lg border p-4">
+            <summary className="cursor-pointer font-medium">
+              Continue this work interactively in T3
+            </summary>
+            <div className="pt-4">
+              <TakeOverPanel
+                environmentId={environmentId}
+                factoryId={factoryId}
+                runId={runId}
+                control={detail.control}
+                attempts={attempts.result?.kind === "attempts" ? attempts.result.items : []}
+                refresh={() => {
+                  run.refresh();
+                  attempts.refresh();
+                }}
+              />
+            </div>
+          </details>
           <HandoffList
             environmentId={environmentId}
             factoryId={factoryId}
@@ -387,7 +603,8 @@ export function AttemptResult({
     commandId,
   });
   return (
-    <section className="space-y-2 rounded border p-3" aria-label="Attempt result">
+    <section className="min-w-0 space-y-4 rounded-lg bg-muted/30 p-4" aria-label="Attempt result">
+      <h4 className="font-medium">Result & evidence</h4>
       {loading ? <p role="status">Loading result…</p> : null}
       {error ? <p role="alert">{error}</p> : null}
       {result?.kind === "attempt" ? (
@@ -402,6 +619,13 @@ export function AttemptResult({
                   Model: {result.launch.model} · Reasoning:{" "}
                   {result.launch.options?.reasoningEffort ?? "Provider default"}
                 </p>
+                <p className="break-all">
+                  Project: {result.launch.projectId} · Workspace mode:{" "}
+                  {result.launch.workspaceMode ?? "Not recorded"}
+                </p>
+                {result.launch.workspaceRevision ? (
+                  <p className="break-all">Workspace revision: {result.launch.workspaceRevision}</p>
+                ) : null}
                 <p className="whitespace-pre-wrap">{result.launch.prompt}</p>
               </div>
             </details>
@@ -437,23 +661,35 @@ export function AttemptResult({
               </ul>
             </div>
           ) : null}
+          {result.execution?.lifecycle?.manifest?.workspacePath ? (
+            <p className="break-all text-sm">
+              Workspace: {result.execution.lifecycle.manifest.workspacePath}
+            </p>
+          ) : null}
           <p className="text-sm">Worker run: {result.execution?.run.status ?? "No final result"}</p>
-          <p className="text-sm">
-            Checkpoint: {result.execution?.run.checkpointId ?? "Unconfirmed"}
-          </p>
-          <p className="text-sm">
-            Writer end: {result.execution?.lifecycle?.writerEnded ? "Confirmed" : "Unconfirmed"}
-          </p>
-          <p className="text-sm">
-            Archive:{" "}
-            {result.execution?.lifecycle?.manifest?.archive
-              ? `Confirmed through event ${result.execution.lifecycle.manifest.archive.cursor} (source ${result.execution.lifecycle.manifest.archive.sourceSequence})`
-              : "No final archive confirmation"}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            The central archive reports its own sequence completeness. Missing events or blobs
-            remain incomplete.
-          </p>
+          <details className="text-sm">
+            <summary className="cursor-pointer">
+              Checkpoint, writer shutdown & archive completeness
+            </summary>
+            <div className="space-y-2 break-all pt-2">
+              <p className="text-sm">
+                Checkpoint: {result.execution?.run.checkpointId ?? "Unconfirmed"}
+              </p>
+              <p className="text-sm">
+                Writer end: {result.execution?.lifecycle?.writerEnded ? "Confirmed" : "Unconfirmed"}
+              </p>
+              <p className="text-sm">
+                Archive:{" "}
+                {result.execution?.lifecycle?.manifest?.archive
+                  ? `Confirmed through event ${result.execution.lifecycle.manifest.archive.cursor} (source ${result.execution.lifecycle.manifest.archive.sourceSequence})`
+                  : "No final archive confirmation"}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                The central archive reports its own sequence completeness. Missing events or blobs
+                remain incomplete.
+              </p>
+            </div>
+          </details>
           {result.execution?.lifecycle?.manifest?.archive ? (
             <a
               className="text-sm underline"
@@ -462,7 +698,13 @@ export function AttemptResult({
               Open T3 thread to review changes
             </a>
           ) : null}
-          <ul>
+          <h5 className="text-sm font-medium">Artifacts</h5>
+          {result.artifacts.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No artifacts are available for this attempt.
+            </p>
+          ) : null}
+          <ul className="space-y-2">
             {result.artifacts.map((artifact) => (
               <li key={artifact.reference.artifactId} className="text-sm">
                 {artifact.name} · {artifact.sizeBytes} bytes ·{" "}

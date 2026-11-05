@@ -1,12 +1,12 @@
 # Foundry – Instanz-, Automation- und Ausführungsarchitektur
 
-Stand: 1. November 2026 · Planabgleich mit Fork-Stand `ba1ed2f4e` und öffentlicher Warp-Factories-Dokumentation
+Stand: 5. November 2026 · ursprünglicher Planabgleich mit Fork-Stand `ba1ed2f4e`, fortgeschrieben um die Nutzerentscheidung Factories-first
 
 Status: Zielarchitektur, keine pauschale Implementierungs- oder Produktionsfreigabe. Instanz-/Gateway-/Worker-Grundlagen und der sequenzielle Factory-Kern sind inzwischen integriert; der aktuelle Funktionsstand und offene Abnahmen stehen ausschließlich im [Umsetzungsplan](implementation-plan.md). Sandboxes und weitere Ausbaustufen bleiben geplant. Der [Warp-Abgleich vom 5. November](warp-comparison.md) ergänzt den ursprünglichen Referenzvergleich um Code- und Browserbefunde zu Funktionen und UI. Diese versionierten Entwurfsdokumente sind ausdrücklich angeforderte Projektdokumente.
 
 ## 1. Festgelegtes Ziel
 
-Foundry ist ein dauerhafter Fork von T3 Code. Eine **selbst gehostete Instanz mit einer Hauptdomain** bietet Web und Windows-Desktop Anmeldung, ein zentrales Device-Verzeichnis, Projekte, Automation und später manuell oder automatisch provisionierte Sandboxes. Der Benutzer trägt die Instanz-URL im Client ein; nach Anmeldung erscheinen die für ihn freigegebenen Environments ohne manuelles Pairing jedes Devices in jedem Client.
+Foundry ist ein dauerhafter Fork von T3 Code mit **Factories als Home und Hauptanwendung**. Aufträge organisieren die Arbeit; Chats sind deren interaktive Arbeitsdetails und bleiben zusätzlich separat erreichbar. Eine **selbst gehostete Instanz mit einer Hauptdomain** bietet Web und Windows-Desktop Anmeldung, ein zentrales Device-Verzeichnis, Projekte, Automation und später manuell oder automatisch provisionierte Sandboxes. Der Benutzer trägt die Instanz-URL im Client ein; nach Anmeldung erscheinen die für ihn freigegebenen Environments ohne manuelles Pairing jedes Devices in jedem Client.
 
 Für den Start gelten **eine Instanz, ein Betreiber und ein Benutzer**. Teams, Gruppen, mehrere Mandanten in einem Prozess, Federation und Enterprise-RBAC sind spätere Produktarbeit. Stabile Instanz-/Benutzer-/Device-Identitäten und getrennte Berechtigungsprüfungen verhindern, dass wir später globale Admin-Tokens oder E-Mail-Adressen als Besitzmodell migrieren müssen; eine vorsorgliche Enterprise-Plattform bauen wir nicht.
 
@@ -18,7 +18,7 @@ Das bisher geplante eigene Cloudflare-Worker-/Clerk-/Hyperdrive-Connect wird ers
 
 Die Betriebs- und Verbindungsdetails einschließlich Auth-Vertrag und Abnahmegates stehen in [Deployment-Plan](deployment.md); dieses Dokument besitzt Workflow- und Ausführungssemantik. Widersprüche werden in beiden Dokumenten geändert, nicht durch angehängte konkurrierende Entwürfe aufgelöst.
 
-**Erster Durchstich:** Instanz-URL im Windows-Client eingeben → anmelden → registriertes Linux-Device automatisch sehen → normalen Thread darauf öffnen. Erst danach folgt GitHub-Issue → Analyse → Implementierung → Prüfung → freigegebener PR. Doppelzustellungen und Neustarts dürfen keine zusätzlichen Attempts oder Veröffentlichungen auslösen.
+**Technische Grundlage:** Instanz-URL im Windows-Client eingeben → anmelden → registriertes Linux-Device sehen → dessen Threadzugriff prüfen. Der Produktweg führt danach von Home zur Factory und zum Auftrag, über Analyse → Implementierung → Prüfung zum freigegebenen PR; ein Thread wird bei Bedarf aus diesem Kontext geöffnet. Doppelzustellungen und Neustarts dürfen keine zusätzlichen Attempts oder Veröffentlichungen auslösen.
 
 ### Plattformen und Grenzen
 
@@ -489,17 +489,17 @@ Die Zeitleiste kann aufgezeichnete Nachrichten, Tools, Änderungen und Entscheid
 
 ## 12. Oberfläche und alle Zugangswege
 
-Die bestehende T3-Arbeitsoberfläche erhält den Bereich **Factories** neben der interaktiven Projekt-/Thread-Arbeit. „Automations“ bezeichnet darin die auslösenden Regeln und Workflows, nicht das ganze Produkt. Instanzwahl, Devices und normale Threads bleiben direkt zugänglich. Farben, Typografie, Abstände, Icons, Themes, Fokuszustände und UI-Komponenten kommen aus T3; kein zweites Design-System.
+**Factories ist die Hauptanwendung der Foundry-Instanz.** Home, Standardstart, neue Tabs und der Einstieg nach Anmeldung führen bei vorhandener Automation-Capability zur Factory-Arbeit. Die globale Navigation priorisiert Factories, Arbeit und Entscheidungen; Runs und Ressourcen sind nachgeordnet. Chats bleiben als Arbeitsdetails eines Auftrags sowie über einen sekundären Einstieg erreichbar. Direkte Threadlinks, Tastaturbefehle und standalone T3 ohne Foundry-Fähigkeit bleiben erhalten. Capability-/Auth-Laden zeigt keinen vorläufigen Chatstart; die Entscheidung folgt dem bestehenden Instanzmodell, keiner Deployment-URL. „Automations“ bezeichnet die auslösenden Regeln und Workflows. Farben, Typografie, Icons, Themes, Fokuszustände und UI-Komponenten kommen aus T3; kein zweites Design-System.
 
 Die Aufteilung orientiert sich an der [Warp-Dashboard-Dokumentation](https://docs.warp.dev/factories/factory-dashboard/) und ihren Agenten-/Dashboard-Screenshots. Geprüft wurden die öffentlich dokumentierten Ansichten, kein angemeldeter Live-Account. Die folgende Navigation ist unser Zielentwurf, keine exakte Abschrift der aktuellen Warp-App.
 
 | Ebene / Seite                 | Inhalt und wichtigste Wege                                                                                                                                                                                  |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Global: Neuer Auftrag         | Factory und Auftrag wählen; normale T3-Konversation bleibt eigener Einstieg. Koordinator erst anzeigen, wenn verfügbar.                                                                                     |
-| Global: Inbox                 | Handlungsbedarf über alle Factories; filterbare Liste und seitliches Detailpanel. Direkt antworten, konkrete Revision prüfen oder zum Auftrag/Thread wechseln.                                              |
+| Global: Factories / Arbeit    | Factories auswählen und als Arbeitsplatz öffnen; Arbeit führt zur passenden Factory und deren Aufträgen. Neue Aufträge im Factory-Kontext anlegen.                                                          |
+| Global: Entscheidungen        | Persönliche Inbox mit Handlungsbedarf über alle Factories; Kontext, Ergebnis und nächste Aktion zuerst. Direkt antworten, konkrete Revision prüfen oder zum Auftrag wechseln.                               |
 | Global: Runs                  | Filter nach Factory, Auftrag, Zustand, Agent und Device; paginierte Übersicht. WorkflowRun → Step/Attempt → bestehender T3-Thread.                                                                          |
 | Global: Ressourcen            | Devices/Worker/Pools, MCPs/Apps, Secrets und Connector-Verbindungen einmal verwalten; Factories erhalten ausdrückliche Bindings darauf.                                                                     |
-| Factory: Dashboard            | Überblick, offene Entscheidungen, PR-Aktivität, Durchlaufzeit, Qualität und Kosten mit Zeitraum und Links zu den zugrunde liegenden Runs.                                                                   |
+| Factory: Übersicht            | Offene Entscheidungen, Arbeit, aktive Ausführung und jüngste Ergebnisse zuerst. PR-/Qualitäts-/Kostenmetriken erst mit belegten Daten und ihrer eigenen Ausbaustufe.                                        |
 | Factory: Aufträge / Aktivität | Beständige WorkItems mit Quelle, Phase, Blockern, Revisionen und Ergebnis-PRs; Detail zeigt Gespräch, Spezifikation und Ausführungshistorie.                                                                |
 | Factory: Agenten              | Koordinator und Rollen als Liste; Detail mit Instruktionen, Automationen, Einstellungen und Versionen. Defaults und wirksame Overrides verständlich anzeigen.                                               |
 | Factory: Automationen         | Triggerliste mit Aktivierungsstatus; Detail für Quelle, Filter, Workflow, Dry Run und Zustellhistorie. Tabs für Workflows und später Webhooks; Workflow-Editor zunächst geordnete Step-Liste.               |
@@ -508,7 +508,7 @@ Die Aufteilung orientiert sich an der [Warp-Dashboard-Dokumentation](https://doc
 | Factory: Definition           | Dateibaum, Validierungsfehler, Versionsdiff, Quelle und aktive Revision. Definition aus Git lesbar mit Repository-/PR-Link; lokale Bearbeitung nur als dokumentierter Importübergang vor der Git-Übernahme. |
 | Factory: Einstellungen        | Name, Repository-Menge, Default-Runner, Bindings, Limits und Archivierung/Wiederherstellung. Historische Runs bleiben nachvollziehbar.                                                                      |
 
-Die Sidebar trennt globale Seiten und aufklappbare Factories; Breadcrumbs machen den aktuellen Scope sichtbar. Listen erhalten Suche/Filter und kompakte Statusanzeige, Detailseiten fachliche Tabs. Ein normaler Thread kann über einen Auftragsbezug zur Factory zurückführen. Neue Seiten werden mit ihrer Backend-Capability eingeführt; noch fehlende Funktionen erzeugen keine leeren Scheinangebote.
+Eine globale Navigation und eine kontextuelle Factory-Navigation machen den Scope sichtbar; identische Leisten werden nicht im Inhalt wiederholt. Listen erhalten Suche/Filter und kompakte Statusanzeige, Detailseiten fachliche Tabs. URL und History erhalten Factory, Auftrag, Run und Filter. Ein auftragsbezogener Thread führt in denselben Kontext zurück. Auftragslebenszyklus, Run-Steuerung und Inbox-Done/Undo bleiben fachlich getrennt. Neue Seiten werden mit ihrer Backend-Capability eingeführt; noch fehlende Funktionen erzeugen keine leeren Scheinangebote.
 
 Ein Run zeigt Trigger-Herkunft, Factory-/Workflow-Version, Repository-Menge, Step-Zustände, Versuche, Maschinen, Wartegründe und Ergebnisse. Von jedem Agent-Step führt ein Link in den vorhandenen Thread oder dessen Archiv. Ausgabe-Revision und zugehörige Freigabe bleiben sichtbar. Inbox-Lese-/Erledigtzustand verändert keine fachlichen Freigaben; veraltete Fragen verschwinden durch Abgleich mit ihrem Owner. Zurückgewiesene Spezifikationen bleiben überarbeitbar.
 

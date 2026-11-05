@@ -1,6 +1,7 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useWorkspaceNavigation } from "../../foundry/useWorkspaceNavigation";
 import { runStates } from "../../foundry/workspaceSearch";
+import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { ListFilters } from "./ListFilters";
 import { useAutomationQuery } from "./useAutomationQuery";
@@ -34,14 +35,22 @@ export function RunList({
   });
   return (
     <section className="space-y-3" aria-label="Runs">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-medium">{compact ? "Recent runs & results" : "Runs"}</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">{compact ? "Recent results" : "Runs"}</h2>
+          {!compact ? (
+            <p className="text-sm text-muted-foreground">
+              Follow execution, review results and resolve blocked work.
+            </p>
+          ) : null}
+        </div>
         <Button variant="outline" onClick={refresh}>
           Refresh runs
         </Button>
       </div>
       {!compact ? (
         <ListFilters
+          environmentId={environmentId}
           factoryId={filterFactory}
           {...(!factoryId
             ? {
@@ -61,14 +70,29 @@ export function RunList({
       {loading ? <p role="status">Loading runs…</p> : null}
       {result?.kind === "runs" ? (
         <>
-          <ul className="divide-y rounded-lg border">
+          <ul className="divide-y rounded-lg border bg-card">
             {result.items.map((run) => (
               <li key={run.id} className="flex flex-wrap items-center justify-between gap-2 p-3">
-                <div>
-                  <p className="text-sm font-medium">{run.workItemTitle ?? "Work item"}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {run.state.replaceAll("_", " ")} · {run.repository}
-                  </p>
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="break-words text-sm font-medium">
+                      {run.workItemTitle ?? "Work item"}
+                    </p>
+                    <Badge
+                      variant={
+                        run.state === "succeeded"
+                          ? "success"
+                          : run.state === "failed"
+                            ? "error"
+                            : run.state === "waiting" || run.state === "paused"
+                              ? "warning"
+                              : "secondary"
+                      }
+                    >
+                      {run.state.replaceAll("_", " ")}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground">{run.repository}</p>
                 </div>
                 <Button variant="ghost" onClick={() => onOpen(run.factoryId, run.id)}>
                   Open run
@@ -77,7 +101,10 @@ export function RunList({
             ))}
           </ul>
           {result.items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No runs match this selection.</p>
+            <p className="text-sm text-muted-foreground">
+              No runs match this selection. Start a workflow from a work item, or adjust the
+              filters.
+            </p>
           ) : null}
           {!compact ? (
             <div className="flex gap-2">

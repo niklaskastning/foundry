@@ -8,42 +8,51 @@ import { useAutomationQuery } from "../features/automation/useAutomationQuery";
 
 const decodeDescriptor = Schema.decodeUnknownSync(FoundryDescriptor);
 
-export function useAutomationAvailable(bindingOverride?: string) {
+export function useAutomationCapability(bindingOverride?: string) {
   const bindingId = bindingOverride ?? initialState().binding?.instanceId;
-  const [available, setAvailable] = useState(false);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Discover the connected Main capability before exposing automation navigation.
+  const [state, setState] = useState<{
+    bindingId: string | undefined;
+    status: "loading" | "available" | "unsupported" | "error";
+  }>({ bindingId, status: "loading" });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Discover the connected Main capability without exposing a different product during loading.
   useEffect(() => {
     const abort = new AbortController();
-    if (bindingId)
-      void fetch("/.well-known/foundry?protocolVersion=1", {
-        signal: abort.signal,
-        credentials: "same-origin",
-        cache: "no-store",
+    void fetch("/.well-known/foundry?protocolVersion=1", {
+      signal: abort.signal,
+      credentials: "same-origin",
+      cache: "no-store",
+    })
+      .then(async (response) => {
+        if (response.status === 404 || response.headers.get("content-type")?.includes("text/html"))
+          return false;
+        if (!response.ok) throw new Error("Discovery failed");
+        return decodeDescriptor(await response.json()).automation?.protocolVersion === "1";
       })
-        .then((response) => response.json())
-        .then((value: unknown) => {
-          const descriptor = decodeDescriptor(value);
-          if (!abort.signal.aborted) setAvailable(descriptor.automation?.protocolVersion === "1");
-        })
-        .catch(() => {});
+      .then((available) => {
+        if (!abort.signal.aborted)
+          setState({ bindingId, status: available ? "available" : "unsupported" });
+      })
+      .catch(() => {
+        if (!abort.signal.aborted) setState({ bindingId, status: "error" });
+      });
     return () => abort.abort();
   }, [bindingId]);
-  return available;
+  return state.bindingId === bindingId ? state.status : "loading";
+}
+export function useAutomationAvailable(bindingOverride?: string) {
+  return useAutomationCapability(bindingOverride) === "available";
 }
 export function FactoryNavigation() {
   const available = useAutomationAvailable();
   if (!available) return null;
   return (
-    <nav aria-label="Foundry instance" className="flex flex-wrap gap-3 px-2 py-2 text-sm">
-      <span className="text-muted-foreground">Instance</span>
-      <Link to="/foundry" search={{ view: "factories" }}>
-        Factories
-      </Link>
-      <Link to="/foundry" search={{ view: "runs" }}>
-        Runs
-      </Link>
-      <Link to="/foundry" search={{ view: "inbox" }}>
-        Inbox
+    <nav aria-label="Foundry instance" className="px-2 py-2 text-sm">
+      <Link
+        to="/foundry"
+        search={{ view: "factories" }}
+        className="block rounded-md px-2 py-2 font-medium hover:bg-accent"
+      >
+        ← Factory workspace
       </Link>
     </nav>
   );

@@ -1,3 +1,5 @@
+import type { EnvironmentId } from "@t3tools/contracts";
+import { useAutomationQuery } from "./useAutomationQuery";
 import { Input } from "../../components/ui/input";
 import {
   Select,
@@ -8,12 +10,14 @@ import {
 } from "../../components/ui/select";
 
 export function ListFilters<State extends string>({
+  environmentId,
   factoryId,
   onFactoryChange,
   state,
   states,
   onStateChange,
 }: {
+  environmentId: EnvironmentId;
   factoryId: string;
   onFactoryChange?: (value: string) => void;
   state: State;
@@ -22,16 +26,9 @@ export function ListFilters<State extends string>({
 }) {
   return (
     <div className="flex flex-wrap items-end gap-3">
-      <label className="block space-y-1">
-        <span className="text-xs text-muted-foreground">Factory</span>
-        <Input
-          aria-label="Filter by factory"
-          value={factoryId}
-          onChange={(event) => onFactoryChange?.(event.target.value)}
-          disabled={!onFactoryChange}
-          placeholder="All factories"
-        />
-      </label>
+      {onFactoryChange ? (
+        <FactoryFilter environmentId={environmentId} value={factoryId} onChange={onFactoryChange} />
+      ) : null}
       <div className="space-y-1">
         <p className="text-xs text-muted-foreground">State</p>
         <Select
@@ -52,6 +49,63 @@ export function ListFilters<State extends string>({
           </SelectContent>
         </Select>
       </div>
+    </div>
+  );
+}
+
+function FactoryFilter({
+  environmentId,
+  value,
+  onChange,
+}: {
+  environmentId: EnvironmentId;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const query = useAutomationQuery(environmentId, { op: "factories", limit: 50 });
+  const factories = query.result?.kind === "factories" ? query.result.items : [];
+  return (
+    <div className="space-y-1">
+      <p className="text-xs text-muted-foreground">Factory</p>
+      <Select
+        value={value}
+        onValueChange={(id) => {
+          if (id !== null) onChange(id);
+        }}
+      >
+        <SelectTrigger aria-label="Filter by factory">
+          <SelectValue>
+            {value
+              ? (factories.find((factory) => factory.id === value)?.name ?? value)
+              : "All factories"}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="">All factories</SelectItem>
+          {factories.map((factory) => (
+            <SelectItem key={factory.id} value={factory.id}>
+              {factory.name}
+            </SelectItem>
+          ))}
+          {value && !factories.some((factory) => factory.id === value) ? (
+            <SelectItem value={value}>{value}</SelectItem>
+          ) : null}
+        </SelectContent>
+      </Select>
+      {query.error || (query.result?.kind === "factories" && query.result.next) ? (
+        <details className="text-xs text-muted-foreground">
+          <summary className="cursor-pointer">Filter another factory by ID</summary>
+          <div className="pt-2">
+            <Input
+              aria-label="Factory ID"
+              value={value}
+              onChange={(event) => onChange(event.target.value)}
+              placeholder="Factory ID"
+            />
+          </div>
+          {query.error ? <p role="status">Factory names are unavailable. {query.error}</p> : null}
+        </details>
+      ) : null}
     </div>
   );
 }
