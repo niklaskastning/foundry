@@ -15,7 +15,7 @@ import * as Artifacts from "../foundry/Artifacts.ts";
 const decodeIdentity = Schema.decodeSync(WorkerTransport.WorkerIdentity);
 const decodeArtifact = Schema.decodeSync(FoundryArtifactManifest);
 const decodeExecution = Schema.decodeSync(FoundryWorkerExecution);
-function fixture() {
+function fixture(assignedWorker = false) {
   const bytes = new TextEncoder().encode("bounded fixture git bundle");
   const sha256 = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
   const identity = decodeIdentity({
@@ -104,7 +104,16 @@ function fixture() {
       ],
     },
     workerId: identity.deviceId,
-    binding: { identity, checks: [{ id: "check", command: "test -f checked", cwd: "/fixture" }] },
+    binding: {
+      identity: assignedWorker
+        ? {
+            ...identity,
+            deviceId: "44444444-4444-4444-8444-444444444444",
+            environmentId: "coordinator-worker",
+          }
+        : identity,
+      checks: [{ id: "check", command: "test -f checked", cwd: "/fixture" }],
+    },
     state: "running",
     reason: null,
     mode: "active",
@@ -113,6 +122,7 @@ function fixture() {
     attempts: [
       {
         commandId: "native-check",
+        ...(assignedWorker ? { workerId: identity.deviceId, workerBinding: { identity } } : {}),
         request: {},
         ordinal: 0,
         state: "succeeded",
@@ -141,17 +151,19 @@ function fixture() {
     ),
     Layer.provide(
       Layer.mock(WorkerTransport.WorkerTransport)({
-        status: () =>
-          Effect.succeed({
-            online: true,
-            providerInstanceId: null,
-            providerReady: true,
-            providerState: "ready",
-            version: null,
-            checkedAt: "2026-11-04T00:00:00Z",
-            capacityAvailable: true,
-            activeRuns: 0,
-          }),
+        status: (assignedIdentity) =>
+          assignedIdentity.deviceId !== identity.deviceId
+            ? Effect.fail(new WorkerTransport.WorkerTransportError({ reason: "forbidden" }))
+            : Effect.succeed({
+                online: true,
+                providerInstanceId: null,
+                providerReady: true,
+                providerState: "ready",
+                version: null,
+                checkedAt: "2026-11-04T00:00:00Z",
+                capacityAvailable: true,
+                activeRuns: 0,
+              }),
       }),
     ),
     Layer.provide(
@@ -231,6 +243,7 @@ function fixture() {
   );
   return {
     claim,
+    identity,
     execution,
     layer,
     keys,
@@ -246,7 +259,7 @@ function fixture() {
 }
 it.effect("reuses one durable publish operation after a lost answer and restart", () =>
   Effect.gen(function* () {
-    const test = fixture();
+    const test = fixture(true);
     const run = Effect.gen(function* () {
       const publisher = yield* Publish.Publish;
       return yield* publisher.execute(test.claim, "publish");
@@ -308,6 +321,25 @@ it.effect(
           })),
         });
         expect((yield* run.pipe(Effect.provide(test.layer))).state).toBe("waiting");
+      }
+      for (const identity of [
+        {
+          ...test.identity,
+          environmentId: "foreign-worker",
+        },
+        {
+          ...test.identity,
+          operatorId: "foreign-operator",
+        },
+      ]) {
+        test.setCurrent({
+          ...test.claim,
+          attempts: test.claim.attempts.map((attempt) => ({
+            ...attempt,
+            workerBinding: { identity },
+          })),
+        });
+        expect((yield* run.pipe(Effect.provide(test.layer), Effect.result))._tag).toBe("Failure");
       }
       expect(test.counts()).toEqual({ creations: 0, transfers: 0 });
     }),

@@ -39,7 +39,7 @@ class ActivationTest(unittest.TestCase):
             'FOUNDRY_AUTOMATION_DATABASE_URL':f'postgresql://foundry_automation_runtime:{secret}@postgres:5432/fork_automation',
             'FOUNDRY_AUTOMATION_TARGET':json.dumps({'deviceId':'a'*8+'-'+ 'a'*4+'-'+ 'a'*4+'-'+ 'a'*4+'-'+ 'a'*12,'environmentId':'b'*8+'-'+ 'b'*4+'-'+ 'b'*4+'-'+ 'b'*4+'-'+ 'b'*12,'allowedRunIds':[]}),
         }
-        for change in [None, 'database', 'role', 'partial', 'artifact', 'old-runs', 'target-field']:
+        for change in [None, 'database', 'role', 'partial', 'artifact', 'old-runs', 'target-field', 'pool', 'pool-duplicate', 'pool-default', 'pool-wildcard', 'pool-too-large']:
             with self.subTest(change=change):
                 values = dict(base)
                 if change == 'database': values['FOUNDRY_AUTOMATION_DATABASE_URL'] = values['FOUNDRY_INSTANCE_DATABASE_URL']
@@ -51,8 +51,17 @@ class ActivationTest(unittest.TestCase):
                     if change == 'old-runs': target['allowedRunIds'] = ['legacy']
                     else: target['workerPool'] = '*'
                     values['FOUNDRY_AUTOMATION_TARGET'] = json.dumps(target)
+                if change and change.startswith('pool'):
+                    target = json.loads(values['FOUNDRY_AUTOMATION_TARGET'])
+                    entry = {'deviceId':'11111111-1111-4111-8111-111111111111', 'environmentId':'22222222-2222-4222-8222-222222222222'}
+                    target['workers'] = [entry]
+                    if change == 'pool-duplicate': target['workers'].append(entry)
+                    if change == 'pool-default': target['workers'] = [{key:target[key] for key in ['deviceId','environmentId']}]
+                    if change == 'pool-wildcard': target['workers'][0]['deviceId'] = '*'
+                    if change == 'pool-too-large': target['workers'] = [entry] * 9
+                    values['FOUNDRY_AUTOMATION_TARGET'] = json.dumps(target)
                 text = ''.join(f'{key}={value}\n' for key,value in values.items())
-                if change is None: self.assertEqual(activate.parse_runtime(text),values)
+                if change in [None, 'pool']: self.assertEqual(activate.parse_runtime(text),values)
                 else:
                     with self.assertRaises(RuntimeError): activate.parse_runtime(text)
 
@@ -331,8 +340,9 @@ class ActivationTest(unittest.TestCase):
         for same_schema, artifact_schema, archive_schema, automation_schema, machine_schema, current_schema, failure in (
             [(False, artifact, False, False, False, 5 if artifact else 2, f) for artifact in [False, True] for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
             + [(True, False, False, False, False, schema, f) for schema in [5, 6, 7, 8] for f in [None, 'source', 'backup', 'connections', 'start', 'verify']]
+            + [(True, False, False, 10, False, 8, f) for f in [None, 'source', 'backup', 'connections', 'start', 'verify']]
             + [(False, False, True, False, False, 6, f) for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
-            + [(False, False, False, version, False, 7 if version == 8 else 8, f) for version in [8, 9] for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
+            + [(False, False, False, version, False, 7 if version == 8 else 8, f) for version in [8, 9, 10] for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
             + [(False, False, False, False, True, 7, f) for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'schema', 'start', 'verify']]
         ):
             with self.subTest(same_schema=same_schema, artifact_schema=artifact_schema, machine_schema=machine_schema, failure=failure), tempfile.TemporaryDirectory() as directory:
@@ -351,11 +361,11 @@ class ActivationTest(unittest.TestCase):
                     if machine_schema:
                         self.assertEqual(expected_automation_schema, 8)
                     if automation_schema:
-                        self.assertEqual(expected_automation_schema, automation_schema if len([a for a in actions if a[0] == 'status']) == 2 else automation_schema - 1)
+                        self.assertEqual(expected_automation_schema, automation_schema if len([a for a in actions if a[0] == 'status']) == 2 else None if same_schema else automation_schema - 1)
                     if len([a for a in actions if a[0] == 'status']) == 2 and failure == 'verify':
                         raise RuntimeError('verification failed')
                     candidate = len([a for a in actions if a[0] == 'status']) == 2
-                    return {'schemaVersion': target_schema if candidate else current_schema, 'automationEnabled': automation_schema or machine_schema, 'automationSchemaVersion': 8 if machine_schema else automation_schema if candidate and automation_schema else automation_schema - 1 if automation_schema else None,
+                    return {'schemaVersion': target_schema if candidate else current_schema, 'automationEnabled': automation_schema or machine_schema, 'automationSchemaVersion': 8 if machine_schema else automation_schema if (candidate or same_schema) and automation_schema else automation_schema - 1 if automation_schema else None,
                             'image': activate.REGISTRY + '@' + (DIGEST if candidate else 'sha256:' + 'c' * 64),
                             'revision': REVISION if candidate else 'd' * 40}
 
@@ -409,10 +419,10 @@ class ActivationTest(unittest.TestCase):
                      patch('sys.stderr', new=io.StringIO()):
                     if failure:
                         with self.assertRaises(RuntimeError):
-                            activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, machine_schema=machine_schema)
+                            activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, parallel_schema=automation_schema == 10 and not same_schema, machine_schema=machine_schema)
                     else:
-                        activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, machine_schema=machine_schema)
-                self.assertEqual(actions[0], ('status', current_schema if automation_schema else 7 if machine_schema else None if same_schema else 6 if archive_schema else 5 if artifact_schema else 2))
+                        activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, parallel_schema=automation_schema == 10 and not same_schema, machine_schema=machine_schema)
+                self.assertEqual(actions[0], ('status', None if same_schema else current_schema if automation_schema else 7 if machine_schema else None if same_schema else 6 if archive_schema else 5 if artifact_schema else 2))
                 self.assertEqual(running, failure in [None, 'source', 'backup', 'connections'])
                 altered = any(a[0] == 'sql' and 'LOGIN PASSWORD' in a[1] for a in actions)
                 if failure in ['source', 'backup', 'connections']:

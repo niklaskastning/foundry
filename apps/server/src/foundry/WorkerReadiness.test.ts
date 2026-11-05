@@ -15,7 +15,7 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
-import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ExecutionStore from "./ExecutionStore.ts";
 import { WorkerReadiness, layer, providerState } from "./WorkerReadiness.ts";
 
 const instanceId = ProviderInstanceId.make("codex-worker");
@@ -69,6 +69,7 @@ function fixture(input: {
   binding?: string;
   providers?: ReadonlyArray<ServerProvider>;
   runs?: number;
+  capacity?: number;
   countFails?: boolean;
   workspace?: string;
   projectEnabled?: boolean;
@@ -110,6 +111,7 @@ function fixture(input: {
               FOUNDRY_WORKER_WORKSPACE_ROOTS: JSON.stringify(["/allowed"]),
               FOUNDRY_WORKER_ENABLED: String(input.enabled ?? true),
               FOUNDRY_WORKER_PROVIDER_INSTANCE_ID: input.binding ?? instanceId,
+              FOUNDRY_WORKER_CAPACITY: String(input.capacity ?? 1),
             },
           }),
         ),
@@ -119,11 +121,10 @@ function fixture(input: {
             return Effect.succeed(input.providers ?? [ready]);
           },
         }),
-        Layer.mock(ProjectionStore.ProjectionStoreV2)({
-          countActiveRuns: () =>
-            input.countFails
-              ? Effect.fail(new ProjectionStore.ProjectionStoreSetupError({}))
-              : Effect.succeed(input.runs ?? 0),
+        Layer.mock(ExecutionStore.ExecutionStore)({
+          occupied: input.countFails
+            ? Effect.fail(new ExecutionStore.ExecutionStoreError({ cause: "fixture" }))
+            : Effect.succeed(input.runs ?? 0),
         }),
       ),
     ),
@@ -137,6 +138,18 @@ it.effect(
       for (const [input, expected] of [
         [{}, { providerReady: true, capacityAvailable: true, providerState: "ready" }],
         [{ runs: 1 }, { providerReady: true, capacityAvailable: false, activeRuns: 1 }],
+        [
+          { runs: 1, capacity: 2 },
+          { capacityAvailable: true, capacity: 2, occupied: 1, free: 1 },
+        ],
+        [
+          { runs: 2, capacity: 2 },
+          { capacityAvailable: false, capacity: 2, occupied: 2, free: 0 },
+        ],
+        [
+          { runs: 3, capacity: 2 },
+          { capacityAvailable: false, occupied: 3, free: 0 },
+        ],
         [
           { providers: [{ ...ready, auth: { status: "unauthenticated" as const } }] },
           { providerReady: false, capacityAvailable: true, providerState: "login_required" },
@@ -168,6 +181,8 @@ it.effect("rejects disabled workers and stale registry recovery", () =>
   Effect.gen(function* () {
     for (const [input, code] of [
       [{ enabled: false }, "not_enabled"],
+      [{ capacity: 0 }, "probe_failed"],
+      [{ capacity: 9 }, "probe_failed"],
       [{ providers: [{ ...ready, checkedAt: "1969-12-31T23:59:59.000Z" }] }, "probe_failed"],
     ] as const) {
       const error = yield* Effect.flatMap(WorkerReadiness, (service) => service.read()).pipe(

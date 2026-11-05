@@ -28,6 +28,9 @@ const Result = Schema.Struct({ execution: FoundryWorkerExecution });
 const isResult = Schema.is(Result);
 const decodeResult = Schema.decodeUnknownOption(Result);
 const decodeBinding = Schema.decodeUnknownEffect(Binding);
+const decodeAssignment = Schema.decodeUnknownEffect(
+  Schema.Struct({ identity: WorkerTransport.WorkerIdentity }),
+);
 const decodeBytes = Schema.decodeEffect(Schema.Uint8ArrayFromBase64);
 export class PublishError extends Schema.TaggedError<PublishError>()("PublishError", {
   reason: Schema.Literals([
@@ -107,6 +110,8 @@ const validateEvidence = (
   const evidence = execution.lifecycle?.manifest?.publishEvidence;
   if (
     !evidence ||
+    (claim.workflow.execution &&
+      evidence.sourceCwd !== execution.lifecycle?.manifest?.workspacePath) ||
     !execution.lifecycle?.writerEnded ||
     execution.lifecycle.manifest?.outcome !== "completed"
   )
@@ -129,7 +134,7 @@ const validateEvidence = (
   )
     return null;
   if (evidence.bundle.reference.owner.threadId !== execution.receipt.threadId) return null;
-  return evidence;
+  return { evidence, source: last! };
 };
 
 interface TransferInput {
@@ -300,14 +305,26 @@ export const serviceLayer = Layer.effect(
       const current = yield* store.read(claim.run.factoryId, claim.run.id);
       if (claim.resultRevision !== current.resultRevision)
         return yield* new PublishError({ reason: "approval_revision_changed" });
-      const evidence = validateEvidence(current, stepId, configured.checks);
-      if (!evidence)
+      const validated = validateEvidence(current, stepId, configured.checks);
+      if (!validated)
         return {
           state: "waiting" as const,
           reason: "test_evidence_mismatch",
           operationKey,
           result: null,
         };
+      const { evidence, source } = validated;
+      const identity = source.workerBinding
+        ? (yield* decodeAssignment(source.workerBinding)).identity
+        : configured.identity;
+      if (
+        identity.instanceId !== configured.identity.instanceId ||
+        identity.operatorId !== configured.identity.operatorId ||
+        (source.workerId && source.workerId !== identity.deviceId) ||
+        evidence.bundle.reference.instanceId !== identity.instanceId ||
+        evidence.bundle.reference.owner.environmentId !== identity.environmentId
+      )
+        return yield* new PublishError({ reason: "evidence_required" });
       const binding = yield* github.binding(claim.run.repository);
       if (binding.repository !== evidence.repository || binding.baseBranch !== evidence.baseBranch)
         return yield* new PublishError({ reason: "repository_denied" });
@@ -327,7 +344,7 @@ export const serviceLayer = Layer.effect(
           app.baseBranch !== binding.baseBranch
         )
           return yield* new PublishError({ reason: "grant_revoked" });
-        yield* worker.status(configured.identity);
+        yield* worker.status(identity);
       });
       yield* authorize();
       const request = { binding, evidence, stepId, resultRevision: current.resultRevision };
@@ -341,7 +358,7 @@ export const serviceLayer = Layer.effect(
         request,
       });
       if (saved) return { state: "published" as const, reason: null, operationKey, result: saved };
-      const stored = yield* artifacts.status(configured.identity, evidence.bundle.reference);
+      const stored = yield* artifacts.status(identity, evidence.bundle.reference);
       if (
         stored.state !== "published" ||
         stored.sha256 !== evidence.bundle.sha256 ||
@@ -351,7 +368,7 @@ export const serviceLayer = Layer.effect(
       const parts: Uint8Array[] = [];
       let offset = 0;
       while (offset < stored.sizeBytes) {
-        const chunk = yield* artifacts.read(configured.identity, {
+        const chunk = yield* artifacts.read(identity, {
           reference: evidence.bundle.reference,
           offset,
         });

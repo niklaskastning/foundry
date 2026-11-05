@@ -2437,6 +2437,7 @@ function workerLayer(
   filesystemLayer: Layer.Layer<FileSystem.FileSystem> = FileSystem.layerNoop({
     realPath: (path) => Effect.succeed(path),
   }),
+  capacity = 1,
 ) {
   return WorkerLaunch.layer.pipe(
     Layer.provide(
@@ -2484,6 +2485,7 @@ function workerLayer(
               checkedAt: "2026-01-01T00:00:00.000Z",
               capacityAvailable: true,
               activeRuns: 0,
+              capacity,
             }),
         }),
       ),
@@ -3059,8 +3061,25 @@ it.effect(
         commandId: CommandId.make("worker-cancel"),
         launchCommandId: workerInput.commandId,
       };
-      const missing = yield* worker.cancel(input).pipe(Effect.flip);
-      assert.equal(missing.code, "not_found");
+      const abandoned = {
+        commandId: CommandId.make("cancel-before-delivery"),
+        launchCommandId: CommandId.make("abandoned-launch"),
+      };
+      const missing = yield* worker.cancel(abandoned);
+      assert.equal(missing.status, "not_started");
+      assert.deepEqual(yield* worker.cancel(abandoned), missing);
+      assert.equal(
+        (yield* worker
+          .launch({ ...workerInput, commandId: abandoned.launchCommandId })
+          .pipe(Effect.flip)).code,
+        "capacity_unavailable",
+      );
+      assert.equal(
+        (yield* worker
+          .cancel({ ...abandoned, launchCommandId: workerInput.commandId })
+          .pipe(Effect.flip)).code,
+        "command_conflict",
+      );
       const launch = yield* worker.launch(workerInput);
       const original = yield* worker.read({ commandId: workerInput.commandId });
       const [first, concurrent] = yield* Effect.all([worker.cancel(input), worker.cancel(input)], {
@@ -3068,6 +3087,7 @@ it.effect(
       });
       assert.deepEqual(first, concurrent);
       assert.equal(first.status, "requested");
+      if (first.status === "not_started") throw new Error("Expected accepted run cancellation");
       assert.equal(first.runId, original.run.id);
       assert.deepEqual(first.launch, launch);
       assert.equal(
@@ -3119,7 +3139,13 @@ it.effect(
         .pipe(Effect.flip);
       assert.equal(conflict.code, "command_conflict");
       assert.deepEqual(yield* worker.read({ commandId: otherInput.commandId }), otherBefore);
-    }).pipe(Effect.provide(workerLayer().pipe(Layer.provideMerge(harness.layer))));
+    }).pipe(
+      Effect.provide(
+        workerLayer(undefined, undefined, undefined, undefined, undefined, undefined, 2).pipe(
+          Layer.provideMerge(harness.layer),
+        ),
+      ),
+    );
   },
 );
 

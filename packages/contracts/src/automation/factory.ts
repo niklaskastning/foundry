@@ -136,17 +136,66 @@ export const FactoryDefinitionSteps = Schema.Array(FactoryDefinitionStep).check(
   Schema.isMaxLength(100),
   sequential,
 );
+export const FactoryWorkflowExecution = Schema.Struct({
+  mode: Schema.Literal("parallel"),
+  maxParallelism: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 8 })),
+  maxRepairRounds: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 3 })),
+  join: Schema.Literal("all_succeeded"),
+  failurePolicy: Schema.Literal("repair_failed"),
+  joinStepId: Key,
+});
+
+export const factoryWorkflowExecutionCheck = Schema.makeFilter(
+  (workflow: {
+    readonly steps: ReadonlyArray<{
+      readonly id: string;
+      readonly kind: string;
+      readonly dependsOn: ReadonlyArray<string>;
+    }>;
+    readonly execution?: typeof FactoryWorkflowExecution.Type | undefined;
+  }) => {
+    if (!workflow.execution) return true;
+    if (workflow.steps.some((step) => step.dependsOn.length > 8)) return false;
+    const joinIndex = workflow.steps.findIndex(
+      (step) => step.id === workflow.execution!.joinStepId,
+    );
+    if (joinIndex < 2) return false;
+    const join = workflow.steps[joinIndex]!;
+    if (join.kind !== "agent" || join.dependsOn.length < 2) return false;
+    const ancestors = new Set(join.dependsOn);
+    for (let index = joinIndex - 1; index >= 0; index--) {
+      const step = workflow.steps[index]!;
+      if (step.kind !== "agent" || !ancestors.has(step.id)) return false;
+      for (const dependency of step.dependsOn) ancestors.add(dependency);
+    }
+    for (let index = joinIndex + 1; index < workflow.steps.length; index++) {
+      const step = workflow.steps[index]!;
+      if (
+        step.kind === "agent" ||
+        step.dependsOn.length !== 1 ||
+        step.dependsOn[0] !== workflow.steps[index - 1]!.id
+      )
+        return false;
+    }
+    return true;
+  },
+  {
+    message:
+      "Parallel workflows require agent branches converging on one explicit join, followed only by a serial test, approval or publish chain.",
+  },
+);
 export const AutomationWorkflowVersion = Schema.Struct({
   id: Key,
   factoryId: Key,
   factoryVersionId: Key,
   steps: SequentialSteps,
-});
+  execution: Schema.optional(FactoryWorkflowExecution),
+}).check(factoryWorkflowExecutionCheck);
 export type AutomationWorkflowVersion = typeof AutomationWorkflowVersion.Type;
 export const CreateAutomationWorkflowVersion = Schema.Struct({
   commandId: Key,
   ...AutomationWorkflowVersion.fields,
-});
+}).check(factoryWorkflowExecutionCheck);
 export const AutomationRun = Schema.Struct({
   id: Key,
   factoryId: Key,

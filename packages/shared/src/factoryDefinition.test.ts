@@ -265,6 +265,120 @@ describe("canonical factory definitions", () => {
     }
   });
 
+  it("pins bounded parallel policy and preserves role resolution through canonical export", () => {
+    const input = files();
+    input[0]!.content = input[0]!.content.replace("schemaVersion: 1", "schemaVersion: 3");
+    const execution = {
+      mode: "parallel",
+      maxParallelism: 2,
+      maxRepairRounds: 1,
+      join: "all_succeeded",
+      failurePolicy: "repair_failed",
+      joinStepId: "combine",
+    };
+    const steps = [
+      { id: "left", kind: "agent", dependsOn: [], prompt: "Build the left part" },
+      { id: "right", kind: "agent", dependsOn: [], prompt: "Build the right part" },
+      { id: "combine", kind: "agent", dependsOn: ["left", "right"], prompt: "Combine results" },
+      { id: "check", kind: "test", dependsOn: ["combine"], checkId: "unit" },
+      { id: "approve", kind: "approval", dependsOn: ["check"], prompt: "Review" },
+      { id: "publish", kind: "publish", dependsOn: ["approve"], target: "pull_request" },
+    ];
+    input[1]!.content = JSON.stringify({ execution, steps });
+    const parsed = validateFactoryFiles(input);
+    if (Result.isFailure(parsed)) throw new Error(JSON.stringify(parsed.failure));
+    expect(parsed.success.workflows[0]?.execution).toEqual(execution);
+    expect(validateFactoryFiles(exportFactoryFiles(parsed.success))).toEqual(parsed);
+    expect(resolveFactoryWorkflow(parsed.success, "main")[0]).toMatchObject({
+      id: "left",
+      resolved: { execution: { provider: "codex" } },
+    });
+    for (const maxParallelism of [1, 8]) {
+      input[1]!.content = JSON.stringify({ execution: { ...execution, maxParallelism }, steps });
+      expect(Result.isSuccess(validateFactoryFiles(input))).toBe(true);
+    }
+    for (const invalid of [
+      {
+        execution,
+        steps: [
+          ...Array.from({ length: 9 }, (_, index) => ({
+            id: `branch${index}`,
+            kind: "agent",
+            dependsOn: [],
+            prompt: "Work",
+          })),
+          {
+            id: "combine",
+            kind: "agent",
+            dependsOn: Array.from({ length: 9 }, (_, index) => `branch${index}`),
+            prompt: "Combine",
+          },
+        ],
+      },
+      { execution: { ...execution, maxParallelism: 0 }, steps },
+      { execution: { ...execution, maxParallelism: 9 }, steps },
+      { execution: { ...execution, maxParallelism: 1.5 }, steps },
+      { execution: { ...execution, maxRepairRounds: -1 }, steps },
+      { execution: { ...execution, maxRepairRounds: 4 }, steps },
+      { execution: { ...execution, join: "any_succeeded" }, steps },
+      { execution: { ...execution, failurePolicy: "ignore" }, steps },
+      { execution: { ...execution, joinStepId: "missing" }, steps },
+      { execution: { ...execution, joinStepId: "check" }, steps },
+      {
+        execution,
+        steps: steps.map((step) =>
+          step.id === "left" ? { ...step, dependsOn: ["combine"] } : step,
+        ),
+      },
+      {
+        execution,
+        steps: steps.map((step) =>
+          step.id === "right" ? { ...step, dependsOn: ["missing"] } : step,
+        ),
+      },
+      {
+        execution,
+        steps: steps.map((step) =>
+          step.id === "combine" ? { ...step, dependsOn: ["left", "left"] } : step,
+        ),
+      },
+      { execution, steps: [steps[0], { ...steps[1], id: "left" }, ...steps.slice(2)] },
+      {
+        execution,
+        steps: [{ id: "orphan", kind: "agent", dependsOn: [], prompt: "Lost" }, ...steps],
+      },
+      {
+        execution,
+        steps: [
+          ...steps.slice(0, 3),
+          { id: "late", kind: "agent", dependsOn: ["combine"], prompt: "Late" },
+        ],
+      },
+      {
+        execution,
+        steps: steps.map((step) =>
+          step.id === "approve" ? { ...step, dependsOn: ["left"] } : step,
+        ),
+      },
+    ]) {
+      input[1]!.content = JSON.stringify(invalid);
+      expect(Result.isFailure(validateFactoryFiles(input))).toBe(true);
+    }
+    for (const schemaVersion of [1, 2]) {
+      input[0]!.content = files()[0]!.content.replace(
+        "schemaVersion: 1",
+        `schemaVersion: ${schemaVersion}`,
+      );
+      input[1]!.content = JSON.stringify({ execution, steps });
+      expect(Result.isFailure(validateFactoryFiles(input))).toBe(true);
+      input[1]!.content = JSON.stringify({ steps });
+      const legacy = validateFactoryFiles(input);
+      if (Result.isFailure(legacy)) throw new Error(JSON.stringify(legacy.failure));
+      expect(legacy.success.workflows[0]?.execution).toBeUndefined();
+      expect(validateFactoryFiles(exportFactoryFiles(legacy.success))).toEqual(legacy);
+    }
+  });
+
   it.each([
     "missing",
     "duplicate-file",

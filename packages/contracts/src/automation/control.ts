@@ -1,5 +1,7 @@
 import * as Schema from "effect/Schema";
 import { StartAutomationRun } from "./factory.ts";
+import { FoundryDeviceId } from "../foundryDevices.ts";
+import { EnvironmentId } from "../baseSchemas.ts";
 import { ProjectId } from "../baseSchemas.ts";
 import { ProviderUserInputAnswers } from "../providerPolicy.ts";
 
@@ -54,9 +56,17 @@ export class AutomationControlError extends Schema.TaggedError<AutomationControl
   },
 ) {}
 const Text = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(20_000));
+export const AutomationWorkerTarget = Schema.Struct({
+  deviceId: FoundryDeviceId,
+  environmentId: EnvironmentId,
+  projectId: ProjectId,
+});
 export const ManualStart = Schema.Struct({
   ...StartAutomationRun.fields,
   projectId: ProjectId,
+  workers: Schema.optional(
+    Schema.Array(AutomationWorkerTarget).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
+  ),
   model: Key,
   checks: Schema.Array(Schema.Struct({ id: Text, prompt: Text, command: Text, cwd: Text })).check(
     Schema.isMaxLength(100),

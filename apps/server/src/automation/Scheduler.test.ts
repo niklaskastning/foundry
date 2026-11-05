@@ -32,6 +32,9 @@ import {
 } from "@t3tools/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -43,6 +46,8 @@ import * as Publish from "./Publish.ts";
 import * as Scheduler from "./Scheduler.ts";
 import * as WorkerTransport from "./WorkerTransport.ts";
 import { decideStep } from "./stepDecision.ts";
+
+const decodeDispatchBinding = Schema.decodeUnknownSync(Scheduler.DispatchBinding);
 
 const fixture = () => {
   const now = DateTime.makeUnsafe("2026-11-03T20:00:00Z");
@@ -231,6 +236,12 @@ it("requires matching final worker, checkpoint, archive and test evidence", () =
     ...good,
     execution: { ...good.execution, lifecycle: { ...lifecycle, ...change } },
   });
+  const isolated = {
+    ...withLifecycle({ manifest: { ...manifest, workspacePath: good.cwd } }),
+    cwd: ".",
+    workspaceRelative: true,
+  };
+  assert.deepEqual(decideStep(isolated), { state: "succeeded", reason: null });
   const cases: ReadonlyArray<readonly [Parameters<typeof decideStep>[0], string]> = [
     [withLifecycle({ writerEnded: false }), "writer_end_pending"],
     [withLifecycle({ manifest: null }), "worker_result_pending"],
@@ -256,6 +267,21 @@ it("requires matching final worker, checkpoint, archive and test evidence", () =
     [{ ...good, artifactsReady: false }, "artifacts_pending"],
     [{ ...good, command: "different-command" }, "test_result_pending"],
     [{ ...good, cwd: "/different-project" }, "test_result_pending"],
+    [{ ...good, cwd: ".", workspaceRelative: true }, "test_workspace_pending"],
+    [{ ...isolated, cwd: good.cwd }, "test_workspace_pending"],
+    [
+      {
+        ...isolated,
+        execution: {
+          ...good.execution,
+          lifecycle: {
+            ...lifecycle,
+            manifest: { ...manifest, workspacePath: "/another-worktree" },
+          },
+        },
+      },
+      "test_result_pending",
+    ],
   ];
   for (const [input, reason] of cases) {
     const result = decideStep(input);
@@ -362,6 +388,21 @@ it("requires matching final worker, checkpoint, archive and test evidence", () =
     events: [...good.events.slice(0, 3), wrappedCommand],
   };
   assert.deepEqual(decideStep(published), { state: "succeeded", reason: null });
+  for (const workspacePath of [good.cwd, "/other-source"]) {
+    const result = decideStep({
+      ...published,
+      workspaceRelative: true,
+      execution: {
+        ...published.execution,
+        lifecycle: {
+          ...published.execution.lifecycle,
+          manifest: { ...published.execution.lifecycle.manifest, workspacePath },
+        },
+      },
+    });
+    assert.equal(result.state, workspacePath === good.cwd ? "succeeded" : "finalizing");
+    assert.equal(result.reason, workspacePath === good.cwd ? null : "publish_evidence_mismatch");
+  }
   assert.equal(
     decideStep({
       ...good,
@@ -527,6 +568,11 @@ it.effect(
       let generation = 0;
       let mode: NonNullable<DispatchStore.DispatchRun["mode"]> = "active";
       let renewals = 0;
+      let blockedCommand: CommandId | null = null;
+      const readBlocked = yield* Deferred.make<void>();
+      const releaseRead = yield* Deferred.make<void>();
+      const heartbeatRenewals = new Map<string, number>();
+      let claimRenewals = 0;
       let cancellations = 0;
       let confirmedCancellations = 0;
       let deliveryAllowed = true;
@@ -540,7 +586,7 @@ it.effect(
           workflowVersionId: "workflow",
           factoryVersionId: "factory-version",
           repository: "fixture",
-          revision: "pinned",
+          revision: "a".repeat(40),
           state: "pending",
         },
         workflow: {
@@ -588,6 +634,10 @@ it.effect(
         attempts,
       };
       const unsupported = Effect.die("Unexpected fixture operation");
+      let activeWorkflow = run.workflow;
+      let activeBinding = run.binding;
+      let workerPaused = false;
+      const repairRequests: string[] = [];
       let startWorkflow = run.workflow;
       let admittedStarts = 0;
       let replayAccepted = false;
@@ -596,6 +646,21 @@ it.effect(
       let reasoningEfforts = ["high"];
       let projectReady = true;
       const store = DispatchStore.DispatchStore.of({
+        configureWorker: () => unsupported,
+        confirmUndelivered: () => Effect.succeed(true),
+        deliveryState: () => Effect.succeed("pending"),
+        renewClaim: () =>
+          Effect.sync(() => {
+            if (blockedCommand) claimRenewals++;
+            return true;
+          }),
+        workerCapacity: (workerId) =>
+          Effect.succeed({ workerId, capacity: 2, occupied: 0, paused: workerPaused }),
+        repair: (_claim, commandId) =>
+          Effect.sync(() => {
+            repairRequests.push(commandId);
+            return null;
+          }),
         workItemTitle: () => Effect.succeed("Implement the requested feature"),
         replayManual: () => Effect.succeed(replayAccepted ? run : null),
         readWorkflow: () => Effect.succeed(startWorkflow),
@@ -622,10 +687,21 @@ it.effect(
             return true;
           }),
         enroll: () => unsupported,
-        read: () => Effect.succeed({ ...run, state, reason, attempts: [...attempts] }),
+        read: () =>
+          Effect.succeed({
+            ...run,
+            workflow: activeWorkflow,
+            binding: activeBinding,
+            mode,
+            state,
+            reason,
+            attempts: [...attempts],
+          }),
         claimNext: ({ owner }) =>
           Effect.sync(() => ({
             ...run,
+            workflow: activeWorkflow,
+            binding: activeBinding,
             mode,
             state,
             reason,
@@ -637,6 +713,9 @@ it.effect(
           Effect.sync(() => {
             const attempt: DispatchStore.DispatchAttempt = {
               ...input,
+              ...(input.target
+                ? { workerId: input.target.workerId, workerBinding: input.target.binding }
+                : {}),
               state: "pending",
               reason: null,
               receipt: null,
@@ -701,12 +780,28 @@ it.effect(
             version: "fixture",
             checkedAt: "2026-11-03T20:00:00Z",
             capacityAvailable: true,
+            capacity: 2,
+            occupied: 0,
+            free: 2,
+            parallelExecutionVersion: 1,
             activeRuns: 0,
           }),
-        read: (_identity, input) => Effect.sync(() => executions.get(input.commandId) ?? null),
-        renew: () =>
+        read: (_identity, input) =>
+          Effect.gen(function* () {
+            if (input.commandId === blockedCommand) {
+              yield* Deferred.succeed(readBlocked, undefined);
+              yield* Deferred.await(releaseRead);
+            }
+            return executions.get(input.commandId) ?? null;
+          }),
+        renew: (_identity, input) =>
           Effect.sync(() => {
             renewals++;
+            if (blockedCommand)
+              heartbeatRenewals.set(
+                input.commandId,
+                (heartbeatRenewals.get(input.commandId) ?? 0) + 1,
+              );
           }),
         launch: (_identity, input) =>
           Effect.gen(function* () {
@@ -840,6 +935,21 @@ it.effect(
         );
         assert.equal(admittedStarts, 0);
         startWorkflow = run.workflow;
+        assert.equal(
+          (yield* scheduler
+            .start(request, {
+              ...start,
+              workers: [
+                {
+                  deviceId: proof.identity.deviceId,
+                  environmentId: proof.identity.environmentId,
+                  projectId: start.projectId,
+                },
+              ],
+            })
+            .pipe(Effect.flip)).reason,
+          "invalid_binding",
+        );
         yield* scheduler.start(request, start);
         assert.equal(admittedStarts, 1);
         replayAccepted = true;
@@ -943,6 +1053,112 @@ it.effect(
         assert.equal(confirmedCancellations, 1);
         assert.equal(attempts[1]?.state, "failed");
         assert.equal(launches.length, 2);
+
+        activeWorkflow = {
+          ...run.workflow,
+          execution: {
+            mode: "parallel",
+            maxParallelism: 2,
+            maxRepairRounds: 1,
+            join: "all_succeeded",
+            failurePolicy: "repair_failed",
+            joinStepId: "join",
+          },
+          steps: [
+            { id: "left", kind: "agent", prompt: "Left branch", dependsOn: [] },
+            { id: "right", kind: "agent", prompt: "Right branch", dependsOn: [] },
+            {
+              id: "join",
+              kind: "agent",
+              prompt: "Join both results",
+              dependsOn: ["left", "right"],
+            },
+          ],
+        };
+        activeBinding = {
+          ...decodeDispatchBinding(run.binding),
+          requiredArtifacts: [],
+        };
+        attempts.length = 0;
+        executions.clear();
+        const parallelStart = launches.length;
+        mode = "active";
+        workerPaused = true;
+        yield* scheduler.tick;
+        assert.equal(launches.length, parallelStart);
+        assert.equal(reason, "worker_capacity_unavailable");
+        workerPaused = false;
+        yield* scheduler.tick;
+        assert.equal(launches.length, parallelStart + 2);
+        const left = launches[parallelStart]!;
+        const right = launches[parallelStart + 1]!;
+        assert.notEqual(left.commandId, right.commandId);
+        assert.equal(left.workspaceMode, "worktree");
+        assert.equal(right.workspaceMode, "worktree");
+        assert.equal(left.previousExecution, undefined);
+        assert.equal(right.previousExecution, undefined);
+        assert.equal(attempts[0]?.state, "running");
+        assert.equal(attempts[1]?.state, "running");
+        yield* scheduler.tick;
+        assert.equal(launches.length, parallelStart + 2);
+        blockedCommand = left.commandId;
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const blockedTick = yield* scheduler.tick.pipe(Effect.forkScoped);
+            yield* Deferred.await(readBlocked);
+            yield* TestClock.adjust("75 seconds");
+            assert.isAtLeast(claimRenewals, 4);
+            assert.isAtLeast(heartbeatRenewals.get(left.commandId) ?? 0, 4);
+            assert.isAtLeast(heartbeatRenewals.get(right.commandId) ?? 0, 4);
+            yield* Deferred.succeed(releaseRead, undefined);
+            yield* Fiber.join(blockedTick);
+          }),
+        );
+        blockedCommand = null;
+        const complete = (commandId: CommandId) => {
+          const current = executions.get(commandId)!;
+          executions.set(commandId, { ...proof.execution, receipt: current.receipt });
+        };
+        complete(right.commandId);
+        yield* scheduler.tick;
+        assert.equal(attempts[1]?.state, "succeeded");
+        assert.equal(launches.length, parallelStart + 2);
+        complete(left.commandId);
+        yield* scheduler.tick;
+        assert.equal(launches.length, parallelStart + 3);
+        const join = launches[parallelStart + 2]!;
+        assert.equal(join.title, "Automation join");
+        assert.isTrue(join.prompt.indexOf(left.commandId) < join.prompt.indexOf(right.commandId));
+        assert.include(join.prompt, left.commandId);
+        assert.include(join.prompt, right.commandId);
+        yield* scheduler.tick;
+        assert.equal(launches.length, parallelStart + 3);
+
+        attempts.length = 0;
+        executions.clear();
+        const cancelStart = launches.length;
+        const cancelCount = cancellations;
+        yield* scheduler.tick;
+        assert.equal(launches.length, cancelStart + 2);
+        mode = "cancel_requested";
+        yield* scheduler.tick;
+        assert.equal(cancellations, cancelCount + 2);
+        assert.equal(launches.length, cancelStart + 2);
+        mode = "active";
+        const failedCommand = launches[cancelStart]!.commandId;
+        const failed = executions.get(failedCommand)!;
+        executions.set(failedCommand, {
+          ...proof.execution,
+          receipt: failed.receipt,
+          run: { ...failed.run, status: "failed" },
+        });
+        complete(launches[cancelStart + 1]!.commandId);
+        yield* scheduler.tick;
+        assert.equal(attempts[0]?.state, "failed");
+        assert.equal(attempts[1]?.state, "succeeded");
+        yield* scheduler.tick;
+        assert.deepEqual(repairRequests, [failedCommand]);
+        assert.equal(launches.length, cancelStart + 2);
       }).pipe(
         Effect.provide(
           Scheduler.layer.pipe(

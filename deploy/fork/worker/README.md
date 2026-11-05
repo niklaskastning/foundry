@@ -14,7 +14,7 @@ pnpm --config.allow-unused-patches=true --filter t3 deploy --prod --legacy /path
 
 Das vollständige Paket einschließlich `dist`, Metadaten und produktiven Dependencies administrativ unter `/opt/foundry-worker/releases/<vollständiger-commit>/` ablegen. Release und Runtime bleiben root-eigen und für das Dienstkonto unveränderlich; keine Symlinks aus dem Paket in persönliche Checkouts. Der Installer akzeptiert passende Metadaten eines sauberen Foundry-Builds. Diese sind ein Herkunftshinweis, keine kryptographische Signatur; sichere Bereitstellung bleibt Betreiberaufgabe.
 
-Eine Konfigurationsdatei enthält die folgenden Pflichtfelder; `providerInstanceId` und `artifactPublication` sind optional. Zahlen sind Beispielwerte, kein festgelegtes Produktionsbudget:
+Eine Konfigurationsdatei enthält die folgenden Pflichtfelder; `providerInstanceId`, `artifactPublication` und `capacity` sind optional. `capacity` begrenzt gleichzeitige Ausführungen auf 1–8 (Standard 1); unabhängige Factory-Zweige benötigen getrennte Worktrees. Zahlen sind Beispielwerte, kein festgelegtes Produktionsbudget:
 
 ```json
 {

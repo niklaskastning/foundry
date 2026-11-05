@@ -25,6 +25,7 @@ import * as Schema from "effect/Schema";
 import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as GatewayGrants from "../foundry/GatewayGrants.ts";
 import * as AutomationDatabase from "./AutomationDatabase.ts";
+import * as DispatchStore from "./DispatchStore.ts";
 import * as Control from "./Control.ts";
 import * as Definitions from "./Definitions.ts";
 import * as Factories from "./Factories.ts";
@@ -42,6 +43,7 @@ const decodeDefaults = Schema.decodeUnknownEffect(FactoryExecutionDefaults);
 const decodeLaunch = Schema.decodeUnknownOption(FoundryWorkerLaunchInput);
 const decodeExecutionBinding = Schema.decodeUnknownEffect(
   Schema.Struct({
+    workers: ManualStart.fields.workers,
     projectId: ManualStart.fields.projectId,
     model: ManualStart.fields.model,
     checks: ManualStart.fields.checks,
@@ -135,6 +137,7 @@ const make = Effect.gen(function* () {
   const target = yield* Scheduler.SchedulerConfig;
   const control = yield* Control.Control;
   const worker = yield* WorkerTransport.WorkerTransport;
+  const dispatch = yield* DispatchStore.DispatchStore;
   const gateway = yield* GatewayGrants.GatewayGrants;
   const factory = Effect.fn("AutomationApplication.factory")(function* (factoryId: string) {
     const item = yield* factories.readFactory(factoryId);
@@ -190,6 +193,7 @@ const make = Effect.gen(function* () {
           )
             return yield* new AutomationApplicationError({ code: "conflict" });
           const settings = {
+            ...(input.workers ? { workers: input.workers } : {}),
             projectId: input.projectId,
             model: input.model,
             checks: input.checks,
@@ -296,16 +300,22 @@ const make = Effect.gen(function* () {
           };
         }
         case "workerBinding": {
-          const identity = yield* worker.authorize(request, target);
+          const targets = [target, ...(target.workers ?? [])];
+          const selected = input.deviceId
+            ? targets.find((entry) => entry.deviceId === input.deviceId)
+            : target;
+          if (!selected) return yield* new AutomationApplicationError({ code: "forbidden" });
+          const identity = yield* worker.authorize(request, selected);
           const status = yield* worker.status(identity);
+          const capacity = yield* dispatch.workerCapacity(selected.deviceId);
           const grant = yield* gateway.create(request, {
-            deviceId: target.deviceId,
-            environmentId: target.environmentId,
+            deviceId: selected.deviceId,
+            environmentId: selected.environmentId,
             scopes: ["orchestration:read"],
           });
           const lookup = {
-            deviceId: target.deviceId,
-            environmentId: target.environmentId,
+            deviceId: selected.deviceId,
+            environmentId: selected.environmentId,
             grantId: grant.grantId,
           };
           const snapshot = yield* gateway
@@ -313,9 +323,12 @@ const make = Effect.gen(function* () {
             .pipe(Effect.ensuring(gateway.remove(request, lookup).pipe(Effect.ignore)));
           return {
             kind: "workerBinding" as const,
-            deviceId: target.deviceId,
-            environmentId: target.environmentId,
+            deviceId: selected.deviceId,
+            environmentId: selected.environmentId,
             status,
+            paused: capacity?.paused ?? false,
+            reserved: capacity?.occupied ?? 0,
+            workers: targets.map(({ deviceId, environmentId }) => ({ deviceId, environmentId })),
             projects: snapshot.projects
               .filter((project) => !project.deletedAt && !project.archivedAt)
               .map(({ id, title, workspaceRoot }) => ({ id, title, workspaceRoot })),
@@ -380,7 +393,7 @@ const make = Effect.gen(function* () {
           yield* ownedRun(input.runId);
           yield* workflows.readRun(input.factoryId, input.runId);
           const rows =
-            yield* sql<AutomationAttemptSummary>`SELECT a.command_id AS "commandId",a.ordinal,a.attempt_number AS "attemptNumber",a.state,a.reason,a.receipt->'receipt'->>'threadId' AS "threadId",d.binding->'identity'->>'environmentId' AS "environmentId",a.result IS NOT NULL AS "hasResult" FROM foundry_automation.step_attempts a JOIN foundry_automation.dispatch_runs d ON d.run_id=a.run_id WHERE a.run_id=${input.runId} AND a.command_id>${input.after ?? ""} ORDER BY a.command_id LIMIT ${input.limit + 1}`;
+            yield* sql<AutomationAttemptSummary>`SELECT a.command_id AS "commandId",a.ordinal,a.attempt_number AS "attemptNumber",a.state,a.reason,a.receipt->'receipt'->>'threadId' AS "threadId",COALESCE(a.worker_binding->'identity'->>'environmentId',d.binding->'identity'->>'environmentId') AS "environmentId",a.worker_id AS "workerId",a.capacity_released AS "capacityReleased",a.result IS NOT NULL AS "hasResult" FROM foundry_automation.step_attempts a JOIN foundry_automation.dispatch_runs d ON d.run_id=a.run_id WHERE a.run_id=${input.runId} AND a.command_id>${input.after ?? ""} ORDER BY a.command_id LIMIT ${input.limit + 1}`;
           const items = rows.slice(0, input.limit);
           return {
             kind: "attempts" as const,
@@ -415,6 +428,7 @@ const make = Effect.gen(function* () {
       Effect.mapError(() => new AutomationApplicationError({ code: "invalid_input" })),
     );
     const scope = [
+      "setWorkerPaused",
       "createFactory",
       "configureExecutionDefaults",
       "activateDefinition",
@@ -427,6 +441,20 @@ const make = Effect.gen(function* () {
       : "orchestration:operate";
     const identity = yield* gateway.identityForWrite(request, scope);
     switch (input.op) {
+      case "setWorkerPaused": {
+        const selected = [target, ...(target.workers ?? [])].find(
+          (entry) => entry.deviceId === input.deviceId,
+        );
+        if (!selected) return yield* new AutomationApplicationError({ code: "forbidden" });
+        const authorized = yield* worker.authorize(request, selected);
+        const status = yield* worker.status(authorized);
+        const capacity = yield* dispatch.configureWorker({
+          workerId: selected.deviceId,
+          capacity: status.capacity ?? 1,
+          paused: input.paused,
+        });
+        return { kind: "workerCapacity" as const, ...capacity, workerId: selected.deviceId };
+      }
       case "configureExecutionDefaults":
         return {
           kind: "executionDefaults" as const,
