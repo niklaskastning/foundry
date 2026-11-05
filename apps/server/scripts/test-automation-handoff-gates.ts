@@ -667,6 +667,7 @@ export const handoffGates = Effect.fn("Handoffs.postgresGates")(function <E, E2>
       sourceCommandId: "p29-assigned-source",
       mode: "existing",
     });
+    NodeAssert.ok(assignedTake.op === "takeOver");
     NodeAssert.equal(
       (yield* failure(execute(assignedTake)))?.code,
       "writer_not_ended",
