@@ -307,7 +307,7 @@ try {
   NodeAssert.deepEqual(await call((s) => s.readWorkItem("a", "w1")), beforeUpgrade);
   NodeAssert.equal(
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
-    8,
+    9,
   );
   const definitions = await Promise.all(
     Array.from({ length: 8 }, () => workflowCall((s) => s.createVersion(workflow))),
@@ -709,6 +709,124 @@ try {
   NodeAssert.ok(Option.isSome(restoredActive));
   if (Option.isSome(restoredActive)) NodeAssert.deepEqual(restoredActive.value, restoredDefinition);
   NodeAssert.deepEqual(await workflowCall((s) => s.readRun("a", "definition-run")), pinnedRun);
+  const roleDefinition = {
+    schemaVersion: 2 as const,
+    factoryId: "a",
+    repositories: ["repo-a"],
+    defaults: {
+      provider: "codex" as const,
+      model: "fixture-default",
+      options: { reasoningEffort: "low" as const },
+    },
+    roles: [
+      {
+        id: "implementer",
+        name: "Implementer",
+        description: "Implement changes",
+        instructions: "Preserve behavior.",
+        skills: ["verification"],
+      },
+    ],
+    skills: [{ id: "verification", name: "Verification", instructions: "Run focused tests." }],
+    workflows: [
+      {
+        id: "build",
+        steps: [
+          {
+            id: "work",
+            kind: "agent" as const,
+            dependsOn: [],
+            role: "implementer",
+            prompt: "Build the requested change.",
+          },
+        ],
+      },
+      {
+        id: "repair",
+        steps: [
+          {
+            id: "work",
+            kind: "agent" as const,
+            dependsOn: [],
+            role: "implementer",
+            prompt: "Repair the reported issue.",
+            execution: { options: { reasoningEffort: "high" as const } },
+          },
+        ],
+      },
+    ],
+  };
+  const roleVersion = await definitionCall((s) =>
+    s.activate({
+      ...activation,
+      commandId: "role-v1",
+      expectedVersionId: restoredDefinition.id,
+      files: exportFactoryFiles(roleDefinition),
+    }),
+  );
+  const roleWorkflow = await workflowCall((s) =>
+    s.readVersion("a", roleVersion.workflowVersions[0]!.versionId),
+  );
+  const roleRun = await workflowCall((s) =>
+    s.start({
+      ...startInput,
+      commandId: "role-run-v1",
+      id: "role-run-v1",
+      workflowVersionId: roleWorkflow.id,
+    }),
+  );
+  NodeAssert.equal(roleWorkflow.steps[0]?.kind, "agent");
+  if (roleWorkflow.steps[0]?.kind !== "agent") throw new Error("Missing resolved agent step");
+  NodeAssert.equal(roleWorkflow.steps[0].resolved?.execution.model, "fixture-default");
+  NodeAssert.equal(roleWorkflow.steps[0].resolved?.skills[0]?.instructions, "Run focused tests.");
+  const replacement = await definitionCall((s) =>
+    s.activate({
+      ...activation,
+      commandId: "role-v2",
+      expectedVersionId: roleVersion.id,
+      files: exportFactoryFiles({
+        ...roleDefinition,
+        defaults: { ...roleDefinition.defaults, model: "fixture-new" },
+        skills: [{ ...roleDefinition.skills[0]!, instructions: "Verify the new requirements." }],
+      }),
+    }),
+  );
+  const newWorkflow = await workflowCall((s) =>
+    s.readVersion("a", replacement.workflowVersions[0]!.versionId),
+  );
+  const newRun = await workflowCall((s) =>
+    s.start({
+      ...startInput,
+      commandId: "role-run-v2",
+      id: "role-run-v2",
+      workflowVersionId: newWorkflow.id,
+    }),
+  );
+  NodeAssert.notEqual(newRun.workflowVersionId, roleRun.workflowVersionId);
+  if (newWorkflow.steps[0]?.kind !== "agent") throw new Error("Missing new resolved agent step");
+  NodeAssert.equal(newWorkflow.steps[0].resolved?.execution.model, "fixture-new");
+  NodeAssert.equal(
+    newWorkflow.steps[0].resolved?.skills[0]?.instructions,
+    "Verify the new requirements.",
+  );
+  await stop();
+  await start();
+  NodeAssert.deepEqual(
+    await workflowCall((s) => s.readVersion("a", roleRun.workflowVersionId)),
+    roleWorkflow,
+  );
+  NodeAssert.deepEqual(await workflowCall((s) => s.readRun("a", "definition-run")), pinnedRun);
+  NodeAssert.deepEqual(
+    await definitionCall((s) => s.readVersion("a", roleVersion.id)),
+    roleVersion,
+  );
+  await definitionCall((s) =>
+    s.activate({
+      ...activation,
+      commandId: "restore-v1-after-role-gate",
+      expectedVersionId: replacement.id,
+    }),
+  );
   await NodeAssert.rejects(
     call((s) =>
       s.withStartEligibility(
@@ -758,7 +876,7 @@ try {
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
     99,
   );
-  await query("UPDATE foundry_automation.schema_version SET version=8", "automation_migrator");
+  await query("UPDATE foundry_automation.schema_version SET version=9", "automation_migrator");
   await run(migration);
   const preservedQueries = [
     "SELECT * FROM foundry_automation.definition_versions ORDER BY id",
@@ -791,7 +909,7 @@ try {
   await run(migration);
   NodeAssert.equal(
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
-    8,
+    9,
   );
   NodeAssert.deepEqual(
     await Promise.all(preservedQueries.map((statement) => query(statement))),
@@ -1552,6 +1670,40 @@ try {
   NodeAssert.equal(await dispatchCall((s) => s.permitted("p19-inactive")), false);
   NodeAssert.equal(await dispatchCall((s) => s.permitted("p20-pause")), true);
   const firstControlInput = await controlInput("p20-pause");
+  NodeAssert.equal(
+    (
+      await dispatchCall((s) =>
+        s.replayManual(
+          firstControlInput,
+          controlIdentity.deviceId,
+          controlBinding,
+          controlIdentity,
+        ),
+      )
+    )?.run.id,
+    "p20-pause",
+  );
+  await failure(
+    dispatchCall((s) =>
+      s.replayManual(
+        { ...firstControlInput, revision: "changed" },
+        controlIdentity.deviceId,
+        controlBinding,
+        controlIdentity,
+      ),
+    ),
+    "conflict",
+  );
+  await failure(
+    dispatchCall((s) =>
+      s.replayManual(firstControlInput, controlIdentity.deviceId, controlBinding, {
+        ...controlIdentity,
+        operatorId: "other",
+      }),
+    ),
+    "conflict",
+  );
+
   await failure(
     dispatchCall((s) =>
       s.startManual(

@@ -123,6 +123,15 @@ export type AutomationTriggerResult = typeof AutomationTriggerResult.Type;
 export class AutomationTriggerError extends Schema.TaggedError<AutomationTriggerError>()(
   "AutomationTriggerError",
   {
-    code: Schema.Literals(["forbidden", "invalid_input", "conflict", "not_found", "unavailable"]),
+    code: Schema.Literals([
+      "forbidden",
+      "invalid_input",
+      "conflict",
+      "not_found",
+      "unavailable",
+      "unsupported_provider",
+      "worker_not_ready",
+      "invalid_execution",
+    ]),
   },
 ) {}

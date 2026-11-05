@@ -19,6 +19,17 @@ import { FoundryArtifactManifest } from "./foundryArtifact.ts";
 
 export const FoundryWorkerStatus = Schema.Struct({
   online: Schema.Literal(true),
+  projectReady: Schema.optional(Schema.Boolean),
+  roleExecutionVersion: Schema.optional(Schema.Literal(1)),
+  models: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        id: TrimmedNonEmptyString,
+        aliases: Schema.Array(TrimmedNonEmptyString),
+        reasoningEfforts: Schema.Array(TrimmedNonEmptyString),
+      }),
+    ),
+  ),
   providerInstanceId: Schema.NullOr(ProviderInstanceId),
   providerReady: Schema.Boolean,
   providerState: Schema.Literals([
@@ -96,6 +107,13 @@ export const FoundryWorkerLaunchInput = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
   model: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  options: Schema.optional(
+    Schema.Struct({
+      reasoningEffort: Schema.optional(
+        Schema.Literals(["minimal", "low", "medium", "high", "xhigh"]),
+      ),
+    }),
+  ),
   prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(100_000)),
 });
 export type FoundryWorkerLaunchInput = typeof FoundryWorkerLaunchInput.Type;

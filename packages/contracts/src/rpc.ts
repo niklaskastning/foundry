@@ -94,7 +94,7 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
-import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, TrimmedNonEmptyString, ProjectId } from "./baseSchemas.ts";
 import {
   ProviderAuthCancelInput,
   ProviderAuthCompleteInput,
@@ -1534,7 +1534,7 @@ const WsFoundryWorkerLaunchRpc = Rpc.make(WS_METHODS.foundryWorkerLaunch, {
   error: Schema.Union([FoundryWorkerLaunchError, EnvironmentAuthorizationError]),
 });
 const WsFoundryWorkerStatusRpc = Rpc.make(WS_METHODS.foundryWorkerStatus, {
-  payload: Schema.Struct({}),
+  payload: Schema.Struct({ projectId: Schema.optional(ProjectId) }),
   success: FoundryWorkerStatus,
   error: Schema.Union([FoundryWorkerError, EnvironmentAuthorizationError]),
 });

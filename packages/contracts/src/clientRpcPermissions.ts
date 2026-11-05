@@ -108,6 +108,7 @@ export function clientRpcRequiredScopes(
       "createFactory",
       "activateDefinition",
       "configureDefinitionSource",
+      "configureExecutionDefaults",
       "syncDefinitionSource",
       "setDefinitionSourceEnabled",
       "activateDefinitionRevision",

@@ -2,8 +2,16 @@ import {
   FoundryWorkerError,
   type FoundryWorkerStatus,
   ProviderInstanceId,
+  type ProjectId,
   type ServerProvider,
 } from "@t3tools/contracts";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Clock from "effect/Clock";
@@ -12,6 +20,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+
+const decodeRoots = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
 
 export function providerState(
   provider: ServerProvider | undefined,
@@ -40,7 +50,9 @@ export function providerState(
 export class WorkerReadiness extends Context.Service<
   WorkerReadiness,
   {
-    readonly read: () => Effect.Effect<FoundryWorkerStatus, FoundryWorkerError>;
+    readonly read: (
+      projectId?: ProjectId,
+    ) => Effect.Effect<FoundryWorkerStatus, FoundryWorkerError>;
   }
 >()("t3/foundry/WorkerReadiness") {}
 
@@ -51,10 +63,54 @@ export const layer = Layer.effect(
     const binding = yield* Config.String("FOUNDRY_WORKER_PROVIDER_INSTANCE_ID").pipe(
       Config.withDefault(""),
     );
+    const rootsJson = yield* Config.String("FOUNDRY_WORKER_WORKSPACE_ROOTS").pipe(
+      Config.withDefault("[]"),
+    );
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const projects = yield* ProjectService.ProjectService;
+    const managed = yield* ManagedProjectFolders.ManagedProjectFolders;
+    const threads = yield* ThreadManagement.ThreadManagementService;
     const registry = yield* ProviderRegistry.ProviderRegistry;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const projectReady = Effect.fn("WorkerReadiness.projectReady")(
+      function* (projectId: ProjectId) {
+        const project = yield* projects.getById(projectId);
+        if (
+          !binding ||
+          Option.isNone(project) ||
+          project.value.deletedAt !== null ||
+          Boolean(project.value.archivedAt) ||
+          (yield* managed.isScratchProject(projectId))
+        )
+          return false;
+        if (
+          !(yield* threads.isProviderInstanceEnabledForProject({
+            projectId,
+            instanceId: ProviderInstanceId.make(binding),
+          }))
+        )
+          return false;
+        const workspace = yield* fs.realPath(project.value.workspaceRoot);
+        const roots = yield* decodeRoots(rootsJson);
+        for (const root of roots) {
+          if (!path.isAbsolute(root)) continue;
+          const canonical = yield* fs.realPath(root);
+          const relative = path.relative(canonical, workspace);
+          if (
+            relative === "" ||
+            (!relative.startsWith(`..${path.sep}`) &&
+              relative !== ".." &&
+              !path.isAbsolute(relative))
+          )
+            return true;
+        }
+        return false;
+      },
+      Effect.orElseSucceed(() => false),
+    );
     return {
-      read: Effect.fn("WorkerReadiness.read")(function* () {
+      read: Effect.fn("WorkerReadiness.read")(function* (projectId?: ProjectId) {
         if (!enabled) return yield* new FoundryWorkerError({ code: "not_enabled" });
         const started = yield* Clock.currentTimeMillis;
         const instanceId = binding ? ProviderInstanceId.make(binding) : null;
@@ -74,6 +130,18 @@ export const layer = Layer.effect(
           .pipe(Effect.orElseSucceed(() => null));
         return {
           online: true as const,
+          ...(projectId ? { projectReady: yield* projectReady(projectId) } : {}),
+          roleExecutionVersion: 1 as const,
+          models: (provider?.models ?? []).map((model) => ({
+            id: model.slug,
+            aliases: model.aliases ?? [],
+            reasoningEfforts:
+              model.capabilities?.optionDescriptors?.flatMap((option) =>
+                option.id === "reasoningEffort" && option.type === "select"
+                  ? option.options.map((choice) => choice.id)
+                  : [],
+              ) ?? [],
+          })),
           providerInstanceId: instanceId,
           providerReady: state === "ready",
           providerState: state,

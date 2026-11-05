@@ -35,6 +35,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as Artifacts from "../foundry/Artifacts.ts";
 import * as ThreadArchive from "../foundry/ThreadArchive.ts";
 import * as DispatchStore from "./DispatchStore.ts";
@@ -547,12 +548,35 @@ it.effect(
           factoryId: "factory",
           factoryVersionId: "factory-version",
           steps: [
-            { id: "first", kind: "agent", prompt: "fixture", dependsOn: [] },
+            {
+              id: "first",
+              kind: "agent",
+              prompt: "fixture",
+              dependsOn: [],
+              role: "reviewer",
+              resolved: {
+                role: {
+                  id: "reviewer",
+                  name: "Reviewer",
+                  instructions: "Inspect the implementation.",
+                },
+                skills: [
+                  { id: "testing", name: "Testing", instructions: "Verify regression coverage." },
+                ],
+                instructions: "Inspect the implementation.\n\nVerify regression coverage.",
+                execution: {
+                  provider: "codex",
+                  model: "role-model",
+                  options: { reasoningEffort: "high" },
+                },
+              },
+            },
             { id: "next", kind: "agent", prompt: "successor", dependsOn: ["first"] },
           ],
         },
         workerId: proof.identity.deviceId,
         binding: {
+          manualInput: { title: "Implement the requested feature" },
           identity: proof.identity,
           projectId: ProjectId.make("own-fixture-project"),
           model: "fixture",
@@ -564,12 +588,26 @@ it.effect(
         attempts,
       };
       const unsupported = Effect.die("Unexpected fixture operation");
+      let startWorkflow = run.workflow;
+      let admittedStarts = 0;
+      let replayAccepted = false;
+      let providerState: "ready" | "unsupported_provider" = "ready";
+      let roleExecutionVersion: 1 | undefined = 1;
+      let reasoningEfforts = ["high"];
+      let projectReady = true;
       const store = DispatchStore.DispatchStore.of({
+        workItemTitle: () => Effect.succeed("Implement the requested feature"),
+        replayManual: () => Effect.succeed(replayAccepted ? run : null),
+        readWorkflow: () => Effect.succeed(startWorkflow),
         archiveCursor: () => Effect.succeed(0),
         projectQuestions: () => Effect.void,
         answers: () => Effect.succeed([]),
         answerDelivered: () => Effect.void,
-        startManual: () => unsupported,
+        startManual: () =>
+          Effect.sync(() => {
+            admittedStarts++;
+            return run;
+          }),
         startTriggered: () => unsupported,
         completePublish: () => unsupported,
         permitted: () => Effect.succeed(false),
@@ -651,8 +689,15 @@ it.effect(
           Effect.succeed({
             online: true,
             providerInstanceId: ProviderInstanceId.make("fixture"),
-            providerReady: true,
-            providerState: "ready",
+            projectReady,
+            providerReady: providerState === "ready",
+            providerState,
+            ...(roleExecutionVersion ? { roleExecutionVersion } : {}),
+            models: ["role-model", "fallback-model", "fixture"].map((id) => ({
+              id,
+              aliases: [],
+              reasoningEfforts,
+            })),
             version: "fixture",
             checkedAt: "2026-11-03T20:00:00Z",
             capacityAvailable: true,
@@ -729,8 +774,88 @@ it.effect(
       });
       yield* Effect.gen(function* () {
         const scheduler = yield* Scheduler.Scheduler;
+        const request = HttpServerRequest.fromWeb(new Request("http://fixture.invalid"));
+        const start = {
+          commandId: "manual-start",
+          id: "manual-run",
+          factoryId: run.run.factoryId,
+          workItemId: run.run.workItemId,
+          workflowVersionId: run.workflow.id,
+          revision: "pinned",
+          projectId: ProjectId.make("own-fixture-project"),
+          model: "fallback-model",
+          checks: [],
+          requiredArtifacts: [],
+        };
+        projectReady = false;
+        assert.equal(
+          (yield* scheduler.start(request, start).pipe(Effect.flip)).reason,
+          "invalid_binding",
+        );
+        projectReady = true;
+        providerState = "unsupported_provider";
+        assert.equal(
+          (yield* scheduler.start(request, start).pipe(Effect.flip)).reason,
+          "unsupported_provider",
+        );
+        providerState = "ready";
+        roleExecutionVersion = undefined;
+        assert.equal(
+          (yield* scheduler.start(request, start).pipe(Effect.flip)).reason,
+          "worker_not_ready",
+        );
+        roleExecutionVersion = 1;
+        startWorkflow = {
+          ...run.workflow,
+          steps: [
+            {
+              id: "broken",
+              kind: "agent",
+              prompt: "missing resource",
+              role: "unknown",
+              dependsOn: [],
+            },
+          ],
+        };
+        assert.equal(
+          (yield* scheduler.start(request, start).pipe(Effect.flip)).reason,
+          "invalid_execution",
+        );
+        assert.equal(admittedStarts, 0);
+        startWorkflow = run.workflow;
+        reasoningEfforts = [];
+        assert.equal(
+          (yield* scheduler.start(request, start).pipe(Effect.flip)).reason,
+          "invalid_execution",
+        );
+        reasoningEfforts = ["high"];
+        startWorkflow = {
+          ...run.workflow,
+          steps: [{ id: "legacy", kind: "agent", prompt: "legacy", dependsOn: [] }],
+        };
+        assert.equal(
+          (yield* scheduler.start(request, { ...start, model: "unknown-model" }).pipe(Effect.flip))
+            .reason,
+          "invalid_execution",
+        );
+        assert.equal(admittedStarts, 0);
+        startWorkflow = run.workflow;
+        yield* scheduler.start(request, start);
+        assert.equal(admittedStarts, 1);
+        replayAccepted = true;
+        providerState = "unsupported_provider";
+        yield* scheduler.start(request, start);
+        assert.equal(admittedStarts, 1);
+        providerState = "ready";
         assert.isTrue(yield* scheduler.tick);
         assert.equal(launches.length, 1);
+        assert.equal(launches[0]?.model, "role-model");
+        assert.deepEqual(launches[0]?.options, { reasoningEffort: "high" });
+        assert.equal(
+          launches[0]?.prompt,
+          "Inspect the implementation.\n\nVerify regression coverage.\n\nfixture\n\nWork item request:\n\nImplement the requested feature",
+        );
+        assert.deepEqual(attempts[0]?.request, launches[0]);
         assert.equal(attempts[0]?.receipt, null);
         assert.isTrue(yield* scheduler.tick);
         assert.equal(launches.length, 1);
@@ -795,6 +920,8 @@ it.effect(
         deliveryAllowed = true;
         assert.isTrue(yield* scheduler.tick);
         assert.equal(launches.length, 2);
+        assert.equal(launches[1]?.model, "fixture");
+        assert.equal(launches[1]?.options, undefined);
         assert.notEqual(launches[1]?.commandId, commandId);
         assert.deepEqual(launches[1]?.previousExecution, { commandId, generation: 1 });
         assert.deepEqual(launches[1]?.inputArtifacts, [artifact]);

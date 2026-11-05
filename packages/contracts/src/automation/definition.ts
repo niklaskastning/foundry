@@ -1,5 +1,11 @@
 import * as Schema from "effect/Schema";
-import { AutomationFactory, AutomationWorkflowVersion } from "./factory.ts";
+import {
+  AutomationFactory,
+  FactoryAgentRole,
+  FactoryAgentSkill,
+  FactoryAgentExecution,
+  FactoryDefinitionSteps,
+} from "./factory.ts";
 
 const Key = AutomationFactory.fields.id;
 const WorkflowKey = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/));
@@ -13,8 +19,24 @@ const Repositories = Schema.Array(Key).check(
   Schema.isMaxLength(100),
   Schema.makeFilter((values) => new Set(values).size === values.length),
 );
+const Catalog = {
+  schemaVersion: Schema.Literals([1, 2]),
+  roles: Schema.optional(
+    Schema.Array(FactoryAgentRole).check(
+      Schema.isMaxLength(100),
+      Schema.makeFilter((items) => new Set(items.map((item) => item.id)).size === items.length),
+    ),
+  ),
+  skills: Schema.optional(
+    Schema.Array(FactoryAgentSkill).check(
+      Schema.isMaxLength(100),
+      Schema.makeFilter((items) => new Set(items.map((item) => item.id)).size === items.length),
+    ),
+  ),
+  defaults: Schema.optional(FactoryAgentExecution),
+};
 export const FactoryDefinitionManifest = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
+  ...Catalog,
   factoryId: Key,
   repositories: Repositories,
   workflows: Schema.Array(Schema.Struct({ id: WorkflowKey, file: DefinitionPath })).check(
@@ -27,14 +49,12 @@ export const FactoryDefinitionManifest = Schema.Struct({
     ),
   ),
 });
-export const FactoryWorkflowFile = Schema.Struct({ steps: AutomationWorkflowVersion.fields.steps });
+export const FactoryWorkflowFile = Schema.Struct({ steps: FactoryDefinitionSteps });
 export const CanonicalFactoryDefinition = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
+  ...Catalog,
   factoryId: Key,
   repositories: Repositories,
-  workflows: Schema.Array(
-    Schema.Struct({ id: WorkflowKey, steps: AutomationWorkflowVersion.fields.steps }),
-  ),
+  workflows: Schema.Array(Schema.Struct({ id: WorkflowKey, steps: FactoryDefinitionSteps })),
 });
 export type CanonicalFactoryDefinition = typeof CanonicalFactoryDefinition.Type;
 export const FactoryDefinitionFiles = Schema.Array(

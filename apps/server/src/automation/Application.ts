@@ -2,6 +2,9 @@ import * as MachineAccess from "./MachineAccess.ts";
 import * as Handoffs from "./Handoffs.ts";
 import * as DefinitionSources from "./DefinitionSources.ts";
 import {
+  ManualStart,
+  FactoryExecutionDefaults,
+  FoundryWorkerLaunchInput,
   AutomationApplicationCommand,
   AutomationApplicationError,
   AutomationApplicationQuery,
@@ -35,6 +38,16 @@ const decodeQuery = Schema.decodeEffect(AutomationApplicationQuery, { onExcessPr
 const decodeCommand = Schema.decodeEffect(AutomationApplicationCommand, {
   onExcessProperty: "error",
 });
+const decodeDefaults = Schema.decodeUnknownEffect(FactoryExecutionDefaults);
+const decodeLaunch = Schema.decodeUnknownOption(FoundryWorkerLaunchInput);
+const decodeExecutionBinding = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    projectId: ManualStart.fields.projectId,
+    model: ManualStart.fields.model,
+    checks: ManualStart.fields.checks,
+    requiredArtifacts: ManualStart.fields.requiredArtifacts,
+  }),
+);
 const decodeResult = Schema.decodeUnknownEffect(
   Schema.Union([
     Schema.Struct({
@@ -57,6 +70,12 @@ const error = (cause: unknown) => {
     const reason = "reason" in cause ? cause.reason : "code" in cause ? cause.code : null;
     if (reason === "forbidden" || reason === "not_allowed")
       return new AutomationApplicationError({ code: "forbidden" });
+    if (
+      reason === "unsupported_provider" ||
+      reason === "worker_not_ready" ||
+      reason === "invalid_execution"
+    )
+      return new AutomationApplicationError({ code: reason });
     if (reason === "not_found") return new AutomationApplicationError({ code: "not_found" });
     if (
       reason === "invalid_input" ||
@@ -96,6 +115,12 @@ const make = Effect.gen(function* () {
   const factories = yield* Factories.Factories;
   const definitions = yield* Definitions.Definitions;
   const sources = yield* DefinitionSources.DefinitionSources;
+  const runBinding = Effect.fn("AutomationApplication.runBinding")(function* (runId: string) {
+    const rows = yield* sql<{
+      binding: unknown;
+    }>`SELECT binding FROM foundry_automation.dispatch_runs WHERE run_id=${runId}`;
+    return rows[0] ? yield* decodeExecutionBinding(rows[0].binding) : null;
+  });
   const runDefinition = Effect.fn("AutomationApplication.runDefinition")(function* (
     factoryId: string,
     factoryVersionId: string,
@@ -122,6 +147,67 @@ const make = Effect.gen(function* () {
       active: Option.getOrNull(yield* definitions.active(factoryId)),
     };
   });
+  const executionDefaults = Effect.fn("AutomationApplication.executionDefaults")(function* (
+    factoryId: string,
+    repository: string,
+    identity: { instanceId: string; operatorId: string },
+  ) {
+    yield* factories.readFactory(factoryId);
+    const rows = yield* sql<{
+      defaults: unknown;
+    }>`SELECT settings || jsonb_build_object('factoryId',factory_id,'repository',repository,'generation',generation) AS defaults FROM foundry_automation.execution_defaults WHERE factory_id=${factoryId} AND repository=${repository} AND instance_id=${identity.instanceId} AND operator_id=${identity.operatorId}`;
+    return rows[0] ? yield* decodeDefaults(rows[0].defaults) : null;
+  });
+  const configureExecutionDefaults = Effect.fn("AutomationApplication.configureExecutionDefaults")(
+    function* (
+      input: Extract<AutomationApplicationCommand, { op: "configureExecutionDefaults" }>,
+      identity: { instanceId: string; operatorId: string },
+    ) {
+      return yield* sql.withTransaction(
+        Effect.gen(function* () {
+          const locked =
+            yield* sql`SELECT id FROM foundry_automation.factories WHERE id=${input.factoryId} AND NOT archived FOR UPDATE`;
+          if (!locked.length) return yield* new AutomationApplicationError({ code: "not_found" });
+          const receipt = yield* sql<{
+            same: boolean;
+            result: unknown;
+          }>`SELECT payload=${sql.json(input)}::jsonb AND instance_id=${identity.instanceId} AND operator_id=${identity.operatorId} AS same,result FROM foundry_automation.execution_defaults_commands WHERE id=${input.commandId}`;
+          if (receipt[0]) {
+            if (!receipt[0].same)
+              return yield* new AutomationApplicationError({ code: "conflict" });
+            return yield* decodeDefaults(receipt[0].result);
+          }
+          const active = Option.getOrNull(yield* definitions.active(input.factoryId));
+          if (!active?.definition.repositories.includes(input.repository))
+            return yield* new AutomationApplicationError({ code: "invalid_input" });
+          const existing = yield* sql<{
+            generation: number;
+            owned: boolean;
+          }>`SELECT generation,instance_id=${identity.instanceId} AND operator_id=${identity.operatorId} AS owned FROM foundry_automation.execution_defaults WHERE factory_id=${input.factoryId} AND repository=${input.repository}`;
+          if (
+            (existing[0]?.generation ?? null) !== input.expectedGeneration ||
+            (existing[0] && !existing[0].owned)
+          )
+            return yield* new AutomationApplicationError({ code: "conflict" });
+          const settings = {
+            projectId: input.projectId,
+            model: input.model,
+            checks: input.checks,
+            requiredArtifacts: input.requiredArtifacts,
+          };
+          const defaults = {
+            factoryId: input.factoryId,
+            repository: input.repository,
+            generation: (input.expectedGeneration ?? 0) + 1,
+            ...settings,
+          };
+          yield* sql`INSERT INTO foundry_automation.execution_defaults(factory_id,repository,generation,instance_id,operator_id,settings) VALUES(${input.factoryId},${input.repository},${defaults.generation},${identity.instanceId},${identity.operatorId},${sql.json(settings)}) ON CONFLICT(factory_id,repository) DO UPDATE SET generation=EXCLUDED.generation,settings=EXCLUDED.settings`;
+          yield* sql`INSERT INTO foundry_automation.execution_defaults_commands(id,payload,result,instance_id,operator_id) VALUES(${input.commandId},${sql.json(input)},${sql.json(defaults)},${identity.instanceId},${identity.operatorId})`;
+          return defaults;
+        }),
+      );
+    },
+  );
   const query = Effect.fn("AutomationApplication.query")(function* (
     request: Request,
     raw: AutomationApplicationQuery,
@@ -164,6 +250,11 @@ const make = Effect.gen(function* () {
     });
     const result = yield* Effect.gen(function* () {
       switch (input.op) {
+        case "executionDefaults":
+          return {
+            kind: "executionDefaults" as const,
+            defaults: yield* executionDefaults(input.factoryId, input.repository, identity),
+          };
         case "handoffs":
           return { kind: "handoffs" as const, items: yield* handoffs.query(request, input) };
         case "threadHandoff":
@@ -245,7 +336,7 @@ const make = Effect.gen(function* () {
         case "workItems": {
           yield* factories.readFactory(input.factoryId);
           const rows =
-            yield* sql<AutomationWorkItem>`SELECT id,factory_id AS "factoryId",version_id AS "versionId",repository,title,source,state FROM foundry_automation.work_items WHERE factory_id=${input.factoryId} AND id>${input.after ?? ""} ORDER BY id LIMIT ${input.limit + 1}`;
+            yield* sql<AutomationWorkItem>`SELECT id,factory_id AS "factoryId",version_id AS "versionId",repository,title,source,state FROM foundry_automation.work_items WHERE factory_id=${input.factoryId} AND (NOT ${input.activeOnly ?? false} OR state NOT IN ('completed','cancelled')) AND id>${input.after ?? ""} ORDER BY id LIMIT ${input.limit + 1}`;
           const items = rows.slice(0, input.limit);
           return {
             kind: "workItems" as const,
@@ -259,8 +350,9 @@ const make = Effect.gen(function* () {
             item: yield* factories.readWorkItem(input.factoryId, input.workItemId),
           };
         case "runs": {
-          const rows =
-            yield* sql<AutomationRun>`SELECT r.id,r.factory_id AS "factoryId",r.work_item_id AS "workItemId",r.workflow_version_id AS "workflowVersionId",r.factory_version_id AS "factoryVersionId",r.repository,r.revision,CASE WHEN c.mode IS NOT NULL AND c.mode<>'active' THEN c.mode ELSE COALESCE(d.state,r.state) END AS state FROM foundry_automation.runs r LEFT JOIN foundry_automation.dispatch_runs d ON d.run_id=r.id LEFT JOIN foundry_automation.run_controls c ON c.run_id=r.id WHERE (${allowed ? sql.json(allowed) : null}::jsonb IS NULL OR ${allowed ? sql.json(allowed) : null}::jsonb ? r.factory_id) AND r.id>${input.after ?? ""} AND (d.run_id IS NULL OR (d.binding->'identity'->>'instanceId'=${identity.instanceId} AND d.binding->'identity'->>'operatorId'=${identity.operatorId})) AND (${input.factoryId ?? null}::text IS NULL OR r.factory_id=${input.factoryId ?? null}) AND (${input.workItemId ?? null}::text IS NULL OR r.work_item_id=${input.workItemId ?? null}) AND (${input.state ?? null}::text IS NULL OR CASE WHEN c.mode IS NOT NULL AND c.mode<>'active' THEN c.mode ELSE COALESCE(d.state,r.state) END=${input.state ?? null}) ORDER BY r.id LIMIT ${input.limit + 1}`;
+          const rows = yield* sql<
+            AutomationRun & { workItemTitle: string }
+          >`SELECT w.title AS "workItemTitle",r.id,r.factory_id AS "factoryId",r.work_item_id AS "workItemId",r.workflow_version_id AS "workflowVersionId",r.factory_version_id AS "factoryVersionId",r.repository,r.revision,CASE WHEN c.mode IS NOT NULL AND c.mode<>'active' THEN c.mode ELSE COALESCE(d.state,r.state) END AS state FROM foundry_automation.runs r JOIN foundry_automation.work_items w ON w.factory_id=r.factory_id AND w.id=r.work_item_id LEFT JOIN foundry_automation.dispatch_runs d ON d.run_id=r.id LEFT JOIN foundry_automation.run_controls c ON c.run_id=r.id WHERE (${allowed ? sql.json(allowed) : null}::jsonb IS NULL OR ${allowed ? sql.json(allowed) : null}::jsonb ? r.factory_id) AND (CASE WHEN ${input.recent ?? false} THEN d.enrolled_at IS NOT NULL AND (${input.after ?? null}::text IS NULL OR (d.enrolled_at,r.id)<((SELECT enrolled_at FROM foundry_automation.dispatch_runs WHERE run_id=${input.after ?? null}),${input.after ?? null})) ELSE r.id>${input.after ?? ""} END) AND (d.run_id IS NULL OR (d.binding->'identity'->>'instanceId'=${identity.instanceId} AND d.binding->'identity'->>'operatorId'=${identity.operatorId})) AND (${input.factoryId ?? null}::text IS NULL OR r.factory_id=${input.factoryId ?? null}) AND (${input.workItemId ?? null}::text IS NULL OR r.work_item_id=${input.workItemId ?? null}) AND (${input.state ?? null}::text IS NULL OR CASE WHEN c.mode IS NOT NULL AND c.mode<>'active' THEN c.mode ELSE COALESCE(d.state,r.state) END=${input.state ?? null}) ORDER BY CASE WHEN ${input.recent ?? false} THEN d.enrolled_at END DESC,CASE WHEN ${input.recent ?? false} THEN r.id END DESC,r.id LIMIT ${input.limit + 1}`;
           const items = rows.slice(0, input.limit);
           return {
             kind: "runs" as const,
@@ -273,6 +365,9 @@ const make = Effect.gen(function* () {
           const run = yield* workflows.readRun(input.factoryId, input.runId);
           return {
             kind: "run" as const,
+            factoryName: (yield* factories.readFactory(run.factoryId)).name,
+            workItem: yield* factories.readWorkItem(run.factoryId, run.workItemId),
+            executionBinding: yield* runBinding(run.id),
             definition: yield* runDefinition(run.factoryId, run.factoryVersionId),
             run,
             workflow: yield* workflows.readVersion(input.factoryId, run.workflowVersionId),
@@ -298,11 +393,13 @@ const make = Effect.gen(function* () {
           yield* workflows.readRun(input.factoryId, input.runId);
           const rows = yield* sql<{
             result: unknown;
-          }>`SELECT result FROM foundry_automation.step_attempts WHERE run_id=${input.runId} AND command_id=${input.commandId}`;
+            request: unknown;
+          }>`SELECT result,request FROM foundry_automation.step_attempts WHERE run_id=${input.runId} AND command_id=${input.commandId}`;
           if (!rows[0]) return yield* new AutomationApplicationError({ code: "not_found" });
           const parsed = yield* decodeResult(rows[0].result ?? { execution: null, artifacts: [] });
           return {
             kind: "attempt" as const,
+            launch: Option.getOrNull(decodeLaunch(rows[0].request)),
             ...("publish" in parsed ? { ...parsed, execution: null, artifacts: [] } : parsed),
           };
         }
@@ -319,6 +416,7 @@ const make = Effect.gen(function* () {
     );
     const scope = [
       "createFactory",
+      "configureExecutionDefaults",
       "activateDefinition",
       "configureDefinitionSource",
       "syncDefinitionSource",
@@ -329,6 +427,11 @@ const make = Effect.gen(function* () {
       : "orchestration:operate";
     const identity = yield* gateway.identityForWrite(request, scope);
     switch (input.op) {
+      case "configureExecutionDefaults":
+        return {
+          kind: "executionDefaults" as const,
+          defaults: yield* configureExecutionDefaults(input, identity),
+        };
       case "takeOver":
       case "returnHandoff":
       case "reopenHandoff":
@@ -379,6 +482,9 @@ const make = Effect.gen(function* () {
         const run = yield* workflows.readRun(input.input.factoryId, input.input.id);
         return {
           kind: "run" as const,
+          factoryName: (yield* factories.readFactory(run.factoryId)).name,
+          workItem: yield* factories.readWorkItem(run.factoryId, run.workItemId),
+          executionBinding: yield* runBinding(run.id),
           definition: yield* runDefinition(run.factoryId, run.factoryVersionId),
           run,
           workflow: yield* workflows.readVersion(input.input.factoryId, run.workflowVersionId),

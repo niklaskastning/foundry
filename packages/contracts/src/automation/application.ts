@@ -10,7 +10,11 @@ import {
 import * as Schema from "effect/Schema";
 import { EnvironmentId, ThreadId, ProjectId } from "../baseSchemas.ts";
 import { FoundryArtifactManifest } from "../foundryArtifact.ts";
-import { FoundryWorkerExecution, FoundryWorkerStatus } from "../foundryWorker.ts";
+import {
+  FoundryWorkerExecution,
+  FoundryWorkerStatus,
+  FoundryWorkerLaunchInput,
+} from "../foundryWorker.ts";
 import { ActivateFactoryDefinition, FactoryDefinitionVersion } from "./definition.ts";
 import {
   AutomationFactory,
@@ -24,6 +28,16 @@ import { FoundryDeviceId } from "../foundryDevices.ts";
 import { ManualStart, AutomationControlSnapshot } from "./control.ts";
 
 const Key = AutomationFactory.fields.id;
+export const FactoryExecutionDefaults = Schema.Struct({
+  factoryId: Key,
+  repository: Key,
+  generation: Schema.Int.check(Schema.isGreaterThan(0)),
+  projectId: ManualStart.fields.projectId,
+  model: ManualStart.fields.model,
+  checks: ManualStart.fields.checks,
+  requiredArtifacts: ManualStart.fields.requiredArtifacts,
+});
+export type FactoryExecutionDefaults = typeof FactoryExecutionDefaults.Type;
 const Page = {
   after: Schema.optional(Key),
   limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 })),
@@ -31,6 +45,7 @@ const Page = {
 const FactoryFilter = { factoryId: Schema.optional(Key) };
 export const AutomationApplicationQuery = Schema.Union([
   ...AutomationHandoffQuery.members,
+  Schema.Struct({ op: Schema.Literal("executionDefaults"), factoryId: Key, repository: Key }),
   Schema.Struct({
     op: Schema.Literal("definitionRevisionFile"),
     factoryId: Key,
@@ -49,10 +64,16 @@ export const AutomationApplicationQuery = Schema.Union([
     search: Schema.optional(Schema.String.check(Schema.isMaxLength(200))),
   }),
   Schema.Struct({ op: Schema.Literal("factory"), factoryId: Key }),
-  Schema.Struct({ op: Schema.Literal("workItems"), factoryId: Key, ...Page }),
+  Schema.Struct({
+    op: Schema.Literal("workItems"),
+    factoryId: Key,
+    activeOnly: Schema.optional(Schema.Boolean),
+    ...Page,
+  }),
   Schema.Struct({ op: Schema.Literal("workItem"), factoryId: Key, workItemId: Key }),
   Schema.Struct({
     op: Schema.Literal("runs"),
+    recent: Schema.optional(Schema.Boolean),
     ...FactoryFilter,
     workItemId: Schema.optional(Key),
     state: Schema.optional(AutomationRun.fields.state),
@@ -65,6 +86,17 @@ export const AutomationApplicationQuery = Schema.Union([
 export type AutomationApplicationQuery = typeof AutomationApplicationQuery.Type;
 export const AutomationApplicationCommand = Schema.Union([
   ...AutomationHandoffCommand.members,
+  Schema.Struct({
+    op: Schema.Literal("configureExecutionDefaults"),
+    factoryId: Key,
+    repository: Key,
+    projectId: ManualStart.fields.projectId,
+    model: ManualStart.fields.model,
+    checks: ManualStart.fields.checks,
+    requiredArtifacts: ManualStart.fields.requiredArtifacts,
+    commandId: Key,
+    expectedGeneration: Schema.NullOr(Schema.Int.check(Schema.isGreaterThan(0))),
+  }),
   Schema.Struct({
     op: Schema.Literal("configureDefinitionSource"),
     ...ConfigureDefinitionSource.fields,
@@ -104,6 +136,10 @@ export const AutomationAttemptSummary = Schema.Struct({
 export type AutomationAttemptSummary = typeof AutomationAttemptSummary.Type;
 const Next = { next: Schema.NullOr(Key) };
 export const AutomationApplicationResult = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("executionDefaults"),
+    defaults: Schema.NullOr(FactoryExecutionDefaults),
+  }),
   Schema.Struct({ kind: Schema.Literal("handoffs"), items: Schema.Array(AutomationHandoff) }),
   Schema.Struct({ kind: Schema.Literal("handoff"), handoff: Schema.NullOr(AutomationHandoff) }),
   Schema.Struct({
@@ -152,9 +188,27 @@ export const AutomationApplicationResult = Schema.Union([
     ...Next,
   }),
   Schema.Struct({ kind: Schema.Literal("workItem"), item: AutomationWorkItem }),
-  Schema.Struct({ kind: Schema.Literal("runs"), items: Schema.Array(AutomationRun), ...Next }),
+  Schema.Struct({
+    kind: Schema.Literal("runs"),
+    items: Schema.Array(
+      Schema.Struct({ ...AutomationRun.fields, workItemTitle: Schema.optional(Schema.String) }),
+    ),
+    ...Next,
+  }),
   Schema.Struct({
     kind: Schema.Literal("run"),
+    factoryName: Schema.optional(Schema.String),
+    workItem: Schema.optional(AutomationWorkItem),
+    executionBinding: Schema.optional(
+      Schema.NullOr(
+        Schema.Struct({
+          projectId: ManualStart.fields.projectId,
+          model: ManualStart.fields.model,
+          checks: ManualStart.fields.checks,
+          requiredArtifacts: ManualStart.fields.requiredArtifacts,
+        }),
+      ),
+    ),
     definition: Schema.NullOr(FactoryDefinitionVersion),
     run: AutomationRun,
     workflow: AutomationWorkflowVersion,
@@ -167,6 +221,7 @@ export const AutomationApplicationResult = Schema.Union([
   }),
   Schema.Struct({
     kind: Schema.Literal("attempt"),
+    launch: Schema.optional(Schema.NullOr(FoundryWorkerLaunchInput)),
     publish: Schema.optional(
       Schema.Struct({
         number: Schema.Int,
@@ -194,6 +249,9 @@ export class AutomationApplicationError extends Schema.TaggedError<AutomationApp
       "checkpoint_pending",
       "archive_missing",
       "workspace_changed",
+      "unsupported_provider",
+      "worker_not_ready",
+      "invalid_execution",
     ]),
   },
 ) {
