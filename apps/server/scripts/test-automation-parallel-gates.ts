@@ -154,6 +154,74 @@ export const parallelGates = Effect.fn("AutomationParallel.postgresGates")(funct
       }),
     );
 
+  const pausedIdle = yield* start("parallel-paused-idle");
+  yield* Effect.gen(function* () {
+    const sql = yield* Database.AutomationDatabase;
+    yield* sql`UPDATE foundry_automation.run_controls SET mode='paused' WHERE run_id=${pausedIdle.run.id}`;
+    const workflows = yield* Workflows.Workflows;
+    yield* workflows.start({
+      commandId: "parallel-behind-paused",
+      id: "parallel-behind-paused",
+      factoryId: "parallel",
+      workItemId: "parallel-work",
+      workflowVersionId: "parallel-flow",
+      revision: "pinned",
+    });
+  }).pipe(Effect.provide(services));
+  yield* call((store) =>
+    store.enroll({
+      factoryId: "parallel",
+      runId: "parallel-behind-paused",
+      workerId: pausedIdle.workerId,
+      binding: {},
+    }),
+  );
+  yield* call((store) => store.release(pausedIdle));
+  const unblocked = yield* call((store) =>
+    store.claimNext({
+      workerId: pausedIdle.workerId,
+      owner: "unblocked-owner",
+      leaseMillis: 60000,
+    }),
+  );
+  NodeAssert.equal(unblocked?.run.id, "parallel-behind-paused");
+  NodeAssert.ok(unblocked);
+  yield* Effect.gen(function* () {
+    const sql = yield* Database.AutomationDatabase;
+    yield* sql`UPDATE foundry_automation.run_controls SET mode='cancel_requested' WHERE run_id=${unblocked.run.id}`;
+  }).pipe(Effect.provide(database));
+  NodeAssert.equal(yield* call((store) => store.confirmCancel(unblocked)), true);
+  NodeAssert.equal(
+    yield* call((store) =>
+      store.claimNext({ workerId: pausedIdle.workerId, owner: "paused-owner", leaseMillis: 60000 }),
+    ),
+    null,
+  );
+  yield* Effect.gen(function* () {
+    const sql = yield* Database.AutomationDatabase;
+    yield* sql`UPDATE foundry_automation.run_controls SET mode='active' WHERE run_id=${pausedIdle.run.id}`;
+  }).pipe(Effect.provide(database));
+  const resumedIdle = yield* call((store) =>
+    store.claimNext({ workerId: pausedIdle.workerId, owner: "resumed-owner", leaseMillis: 60000 }),
+  );
+  NodeAssert.equal(resumedIdle?.run.id, pausedIdle.run.id);
+  NodeAssert.ok(resumedIdle);
+  const retained = yield* prepare(resumedIdle, 0, "parallel-paused-writer");
+  yield* call((store) => store.beginDelivery(resumedIdle, retained.commandId));
+  yield* Effect.gen(function* () {
+    const sql = yield* Database.AutomationDatabase;
+    yield* sql`UPDATE foundry_automation.run_controls SET mode='paused' WHERE run_id=${pausedIdle.run.id}`;
+  }).pipe(Effect.provide(database));
+  yield* call((store) => store.release(resumedIdle));
+  const retainedClaim = yield* call((store) =>
+    store.claimNext({ workerId: pausedIdle.workerId, owner: "writer-owner", leaseMillis: 60000 }),
+  );
+  NodeAssert.equal(retainedClaim?.run.id, pausedIdle.run.id);
+  NodeAssert.equal(
+    (yield* call((store) => store.workerCapacity("parallel-paused-writer")))?.occupied,
+    1,
+  );
+
   const first = yield* start("parallel-first");
   const other = yield* start("parallel-other");
   const races = yield* Effect.all(

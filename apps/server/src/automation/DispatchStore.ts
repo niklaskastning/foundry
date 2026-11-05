@@ -377,11 +377,13 @@ const make = Effect.gen(function* () {
         const held =
           yield* sql`SELECT h.id FROM foundry_automation.work_item_handoffs h JOIN foundry_automation.dispatch_runs d ON d.run_id=h.run_id WHERE d.worker_id=${input.workerId} AND h.state<>'returned'`;
         if (held.length) return null;
-        let runId = slots[0].runId;
+        const yielded =
+          yield* sql`UPDATE foundry_automation.dispatch_workers w SET run_id=NULL,claim_owner=NULL,lease_until='-infinity' WHERE w.worker_id=${input.workerId} AND EXISTS (SELECT 1 FROM foundry_automation.run_controls c WHERE c.run_id=w.run_id AND c.mode='paused') AND NOT EXISTS (SELECT 1 FROM foundry_automation.step_attempts a WHERE a.run_id=w.run_id) RETURNING worker_id`;
+        let runId = yielded.length ? null : slots[0].runId;
         if (!runId) {
           const queued = yield* sql<{
             runId: string;
-          }>`SELECT d.run_id AS "runId" FROM foundry_automation.dispatch_runs d WHERE d.worker_id=${input.workerId} AND d.state IN ('running','waiting') AND NOT EXISTS (SELECT 1 FROM foundry_automation.work_item_handoffs h WHERE h.run_id=d.run_id) ORDER BY d.enrolled_at,d.run_id LIMIT 1`;
+          }>`SELECT d.run_id AS "runId" FROM foundry_automation.dispatch_runs d WHERE d.worker_id=${input.workerId} AND d.state IN ('running','waiting') AND NOT EXISTS (SELECT 1 FROM foundry_automation.run_controls c WHERE c.run_id=d.run_id AND c.mode='paused' AND NOT EXISTS (SELECT 1 FROM foundry_automation.step_attempts a WHERE a.run_id=d.run_id)) AND NOT EXISTS (SELECT 1 FROM foundry_automation.work_item_handoffs h WHERE h.run_id=d.run_id) ORDER BY d.enrolled_at,d.run_id LIMIT 1`;
           runId = queued[0]?.runId ?? null;
         }
         if (!runId) return null;
