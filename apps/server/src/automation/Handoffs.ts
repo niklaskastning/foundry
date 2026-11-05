@@ -28,6 +28,9 @@ import * as Artifacts from "../foundry/Artifacts.ts";
 import * as ThreadArchive from "../foundry/ThreadArchive.ts";
 
 const decodeBinding = Schema.decodeUnknownEffect(DispatchBinding);
+const isCancelledBeforeStart = Schema.is(
+  Schema.Struct({ cancelledBeforeStart: Schema.Literal(true) }),
+);
 const decodeAssignment = Schema.decodeUnknownEffect(
   Schema.Struct({ identity: WorkerTransport.WorkerIdentity, projectId: ProjectId }),
 );
@@ -244,7 +247,8 @@ const make = Effect.gen(function* () {
               (attempt) =>
                 attempt.state !== "pending" &&
                 !(attempt.state === "confirmed" && isNonWriterStep(attempt.request)) &&
-                !DispatchStore.writerEnded(attempt.result),
+                !DispatchStore.writerEnded(attempt.result) &&
+                !isCancelledBeforeStart(attempt.result),
             )
           )
             return yield* fail("writer_not_ended");

@@ -676,6 +676,29 @@ export const handoffGates = Effect.fn("Handoffs.postgresGates")(function <E, E2>
       (sql) =>
         sql`UPDATE foundry_automation.step_attempts SET state='succeeded',result=${sql.json({ execution: source, artifacts: [] })} WHERE command_id='p51-running-sibling'`,
     );
+    yield* query(
+      (sql) =>
+        sql`INSERT INTO foundry_automation.step_attempts(command_id,run_id,ordinal,request,state,result,worker_id) VALUES('p29-cancelled-before-start','p29-handoff-run',2,'{}','failed','{"cancelledBeforeStart":"true"}',${binding.identity.deviceId})`,
+    );
+    yield* query(
+      (sql) =>
+        sql`INSERT INTO foundry_automation.dispatch_outbox(command_id,state) VALUES('p29-cancelled-before-start','confirmed')`,
+    );
+    NodeAssert.equal(
+      (yield* failure(execute(assignedTake)))?.code,
+      "writer_not_ended",
+      "An untyped no-start claim must not bypass writer confirmation",
+    );
+    yield* query(
+      (sql) =>
+        sql`UPDATE foundry_automation.step_attempts SET result='{"cancelledBeforeStart":true}' WHERE command_id='p29-cancelled-before-start'`,
+    );
+    NodeAssert.equal(
+      (yield* failure(execute({ ...assignedTake, sourceCommandId: "p29-cancelled-before-start" })))
+        ?.code,
+      "writer_not_ended",
+      "A no-start proof permits transfer but cannot supply a source checkpoint",
+    );
     const assignedHandoff = yield* execute(assignedTake);
     NodeAssert.equal(assignedHandoff.environmentId, expectedIdentity.environmentId);
     NodeAssert.equal(assignedHandoff.receipt?.projectId, expectedProjectId);

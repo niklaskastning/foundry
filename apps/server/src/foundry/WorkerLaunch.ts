@@ -668,8 +668,9 @@ export const layer = Layer.effect(
         if (prior && prior !== input.launchCommandId)
           return yield* new FoundryWorkerCancelError({ code: "command_conflict" });
         const execution = yield* read({ commandId: input.launchCommandId }).pipe(
-          Effect.catch((error) =>
-            error.code === "not_found" ? Effect.succeed(null) : Effect.fail(error),
+          Effect.catchIf(
+            (error) => error.code === "not_found",
+            () => Effect.succeed(null),
           ),
         );
         if (!execution) {
