@@ -3754,9 +3754,9 @@ it.effect(
   },
 );
 
-it.live(
-  "worker starts a returned branch only at the confirmed commit and keeps its receipt after lost acknowledgement",
-  () =>
+it.live.each(["branch", "existing"] as const)(
+  "worker starts a returned branch only at the confirmed commit and keeps its receipt after lost acknowledgement: %s",
+  (mode) =>
     Effect.gen(function* () {
       const harness = makeHarness();
       const fs = yield* FileSystem.FileSystem;
@@ -3779,8 +3779,23 @@ it.live(
         "-m",
         "result",
       ]);
+      const originalHead = yield* execute(["rev-parse", "HEAD"]);
+      if (mode === "existing") {
+        yield* fs.writeFileString(`${cwd}/checkpoint-only.txt`, "uncommitted checkpoint");
+        yield* execute(["add", "."]);
+        yield* execute([
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.test",
+          "commit",
+          "-m",
+          "checkpoint",
+        ]);
+      }
       const commitSha = yield* execute(["rev-parse", "HEAD"]);
       const treeSha = yield* execute(["rev-parse", "HEAD^{tree}"]);
+      if (mode === "existing") yield* execute(["reset", "--mixed", originalHead]);
       const result = {
         receipt: {
           handoffId: "interactive",
@@ -3788,10 +3803,10 @@ it.live(
           projectId,
           workspacePath: cwd,
           branch: "result",
-          baseCommit: commitSha,
+          baseCommit: originalHead,
           baseCheckpointRef: commitSha,
           sourceThreadId: ThreadId.make("source"),
-          mode: "branch" as const,
+          mode,
         },
         commitSha,
         treeSha,

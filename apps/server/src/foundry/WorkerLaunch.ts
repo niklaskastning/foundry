@@ -1,3 +1,4 @@
+import { makeCheckpointWorkspaceTree } from "./CheckpointWorkspace.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { FoundryWorkerHandoffResult } from "@t3tools/contracts";
 import * as WorkerPublishEvidence from "./WorkerPublishEvidence.ts";
@@ -111,6 +112,7 @@ export const layer = Layer.effect(
       Config.withDefault("[]"),
     );
     const fs = yield* FileSystem.FileSystem;
+    const checkpointWorkspaceTree = yield* makeCheckpointWorkspaceTree();
     const path = yield* Path.Path;
     const projects = yield* ProjectService.ProjectService;
     const managed = yield* ManagedProjectFolders.ManagedProjectFolders;
@@ -455,9 +457,20 @@ export const layer = Layer.effect(
         if (returned) {
           if ((yield* fs.realPath(returned.receipt.workspacePath)) !== cwd)
             return yield* failure("handoff_changed");
+          const head = (yield* git.resolveCommit({ cwd, revision: "HEAD" })).commitSha;
+          const unchangedCheckpoint =
+            returned.receipt.mode === "existing" &&
+            head === returned.receipt.baseCommit &&
+            (yield* git.resolveCommit({ cwd, revision: returned.receipt.baseCheckpointRef }))
+              .commitSha === returned.commitSha;
+          if (head !== returned.commitSha && !unchangedCheckpoint)
+            return yield* failure("handoff_changed");
+          if (unchangedCheckpoint) {
+            if ((yield* checkpointWorkspaceTree(cwd, returned.checkpointRef)) !== returned.treeSha)
+              return yield* failure("handoff_changed");
+            return;
+          }
           if (
-            (yield* git.resolveCommit({ cwd, revision: "HEAD" })).commitSha !==
-              returned.commitSha ||
             (yield* git.execute({
               cwd,
               operation: "foundry.handoff.tree",

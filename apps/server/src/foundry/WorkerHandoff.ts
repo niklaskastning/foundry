@@ -1,3 +1,4 @@
+import { makeCheckpointWorkspaceTree } from "./CheckpointWorkspace.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- Stable IDs bind retries to one worker workspace and thread.
 import * as NodeCrypto from "node:crypto";
 import {
@@ -115,6 +116,7 @@ export const layer = Layer.effect(
     const checkpoints = yield* Checkpoints.CheckpointStore;
     const git = yield* Git.GitVcsDriver;
     const fs = yield* FileSystem.FileSystem;
+    const checkpointWorkspaceTree = yield* makeCheckpointWorkspaceTree();
     const path = yield* Path.Path;
     const config = yield* ServerConfig.ServerConfig;
     const publication = yield* ArtifactPublication.ArtifactPublication;
@@ -160,6 +162,17 @@ export const layer = Layer.effect(
       const row = yield* store.handoff(id);
       if (!row) return yield* fail("not_found");
       return row;
+    });
+    const checkpointTree = Effect.fn("WorkerHandoff.checkpointTree")(function* (
+      receipt: FoundryWorkerHandoffReceipt,
+    ) {
+      const tree = yield* checkpointWorkspaceTree(receipt.workspacePath, receipt.baseCheckpointRef);
+      if (
+        tree !==
+        (yield* runGit(receipt.workspacePath, ["rev-parse", `${receipt.baseCheckpointRef}^{tree}`]))
+      )
+        return yield* fail("workspace_changed");
+      return tree;
     });
     const assertUnchanged = Effect.fn("WorkerHandoff.assertUnchanged")(function* (
       receipt: FoundryWorkerHandoffReceipt,
@@ -355,7 +368,9 @@ export const layer = Layer.effect(
             const bundlePath = path.join(temp, "source.bundle");
             yield* fs.writeFile(bundlePath, downloaded.bytes);
             const staged = path.join(temp, "workspace");
-            yield* runGit(temp, ["clone", "--no-checkout", "--", bundlePath, staged]);
+            yield* fs.makeDirectory(staged);
+            yield* runGit(staged, ["init"]);
+            yield* runGit(staged, ["fetch", "--", bundlePath, receipt.baseCommit]);
             yield* runGit(staged, ["checkout", "-b", receipt.branch!, receipt.baseCommit]);
             yield* fs.rename(staged, receipt.workspacePath);
           }
@@ -474,21 +489,35 @@ export const layer = Layer.effect(
         }
         if (!publication || !archive) return yield* fail("archive_missing");
         yield* validateRepository(receipt.workspacePath);
+        const head = yield* runGit(receipt.workspacePath, ["rev-parse", "HEAD"]);
+        const unchangedCheckpoint =
+          !latestRun && receipt.mode === "existing" && head === receipt.baseCommit;
         if (
-          yield* runGit(receipt.workspacePath, [
+          !unchangedCheckpoint &&
+          (yield* runGit(receipt.workspacePath, [
             "status",
             "--porcelain",
             "--untracked-files=normal",
-          ])
+          ]))
         )
           return yield* fail("workspace_changed");
-        const commitSha = yield* runGit(receipt.workspacePath, ["rev-parse", "HEAD"]);
-        const treeSha = yield* runGit(receipt.workspacePath, ["rev-parse", "HEAD^{tree}"]);
+        const commitSha = unchangedCheckpoint
+          ? yield* runGit(receipt.workspacePath, [
+              "rev-parse",
+              `${receipt.baseCheckpointRef}^{commit}`,
+            ])
+          : head;
+        const treeSha = unchangedCheckpoint
+          ? yield* checkpointTree(receipt)
+          : yield* runGit(receipt.workspacePath, ["rev-parse", "HEAD^{tree}"]);
         const checkpointRef = `refs/t3/handoff-result/${hash(input.commandId)}`;
-        yield* checkpoints.captureCheckpoint({
-          cwd: receipt.workspacePath,
-          checkpointRef: CheckpointRef.make(checkpointRef),
-        });
+        if (unchangedCheckpoint)
+          yield* runGit(receipt.workspacePath, ["update-ref", checkpointRef, commitSha]);
+        else
+          yield* checkpoints.captureCheckpoint({
+            cwd: receipt.workspacePath,
+            checkpointRef: CheckpointRef.make(checkpointRef),
+          });
         if (
           (yield* runGit(receipt.workspacePath, ["rev-parse", `${checkpointRef}^{tree}`])) !==
           treeSha
@@ -496,7 +525,12 @@ export const layer = Layer.effect(
           return yield* fail("workspace_changed");
         const temp = yield* fs.makeTempDirectoryScoped();
         const bundlePath = path.join(temp, "result.bundle");
-        yield* runGit(receipt.workspacePath, ["bundle", "create", bundlePath, "HEAD"]);
+        yield* runGit(receipt.workspacePath, [
+          "bundle",
+          "create",
+          bundlePath,
+          unchangedCheckpoint ? checkpointRef : "HEAD",
+        ]);
         const size = Number((yield* fs.stat(bundlePath)).size);
         if (size > 50 * 1024 * 1024) return yield* fail("unavailable");
         const id = createDeterministicAttachmentId(
@@ -541,13 +575,15 @@ export const layer = Layer.effect(
           confirmed.missingAttachmentCount
         )
           return yield* fail("archive_missing");
-        if (
-          (yield* runGit(receipt.workspacePath, ["rev-parse", "HEAD"])) !== commitSha ||
-          (yield* runGit(receipt.workspacePath, [
+        if ((yield* runGit(receipt.workspacePath, ["rev-parse", "HEAD"])) !== head)
+          return yield* fail("workspace_changed");
+        if (unchangedCheckpoint) yield* checkpointTree(receipt);
+        else if (
+          yield* runGit(receipt.workspacePath, [
             "status",
             "--porcelain",
             "--untracked-files=normal",
-          ]))
+          ])
         )
           return yield* fail("workspace_changed");
         const result: FoundryWorkerHandoffResult = {

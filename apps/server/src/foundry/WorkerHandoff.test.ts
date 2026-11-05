@@ -189,10 +189,33 @@ const fixture = Effect.fn("test.handoff.fixture")(function* () {
       }),
     ),
   } as unknown as WorkerLaunch.WorkerLaunch["Service"]);
+  const capture = Effect.fn("test.handoff.realCapture")(function* (at: string, ref: string) {
+    const tempIndex = yield* fs.makeTempDirectoryScoped();
+    const env = {
+      GIT_INDEX_FILE: `${tempIndex}/index`,
+      GIT_AUTHOR_NAME: "Fixture",
+      GIT_AUTHOR_EMAIL: "fixture@example.test",
+      GIT_COMMITTER_NAME: "Fixture",
+      GIT_COMMITTER_EMAIL: "fixture@example.test",
+    };
+    const run = Effect.fn("test.handoff.realCapture.git")(function* (args: ReadonlyArray<string>) {
+      return (yield* git.execute({
+        cwd: at,
+        operation: "test.checkpoint",
+        args,
+        env,
+      })).stdout.trim();
+    });
+    yield* run(["read-tree", "HEAD"]);
+    yield* run(["-c", "core.filemode=true", "add", "-A"]);
+    const tree = yield* run(["write-tree"]);
+    const commit = yield* run(["commit-tree", tree, "-p", "HEAD", "-m", "checkpoint"]);
+    yield* run(["update-ref", ref, commit]);
+  });
   const checkpointLayer = Layer.succeed(Checkpoints.CheckpointStore, {
     captureCheckpoint: Effect.fn("test.handoff.capture")(
       ({ cwd: at, checkpointRef }: Checkpoints.CaptureCheckpointInput) =>
-        command(at, ["update-ref", checkpointRef, "HEAD"]).pipe(Effect.asVoid, Effect.orDie),
+        capture(at, checkpointRef).pipe(Effect.scoped, Effect.orDie),
     ),
     deleteCheckpointRefs: Effect.fn("test.handoff.delete")(
       ({ cwd: at, checkpointRefs }: Checkpoints.DeleteCheckpointRefsInput) =>
@@ -304,7 +327,21 @@ const fixture = Effect.fn("test.handoff.fixture")(function* () {
     mode: "existing",
     title: "Edit work item",
   };
-  return { fs, cwd, base, root, command, state, layer, input, created, artifacts, sourceId };
+  return {
+    fs,
+    capture,
+    sourceRef,
+    cwd,
+    base,
+    root,
+    command,
+    state,
+    layer,
+    input,
+    created,
+    artifacts,
+    sourceId,
+  };
 });
 
 it.live(
@@ -405,6 +442,74 @@ it.live(
       yield* Effect.gen(function* () {
         const service = yield* WorkerHandoff.WorkerHandoff;
         assert.equal((yield* service.open(f.input)).baseCommit, f.base);
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    }).pipe(Effect.provide(infrastructure), Effect.scoped),
+);
+
+it.live.each(["unchanged", "content", "mode", "extra"] as const)(
+  "returns an unchanged uncommitted checkpoint without creating a user commit and rejects hidden drift: %s",
+  (drift) =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.fs.writeFileString(`${f.cwd}/worker-result.txt`, "checkpoint bytes\n");
+      yield* f.fs.chmod(`${f.cwd}/worker-result.txt`, 0o755);
+      yield* f.capture(f.cwd, f.sourceRef);
+      const pinned = yield* f.command(f.cwd, ["rev-parse", f.sourceRef]);
+      yield* Effect.gen(function* () {
+        const service = yield* WorkerHandoff.WorkerHandoff;
+        const receipt = yield* service.open(f.input);
+        const finish = {
+          commandId: CommandId.make("unchanged-return"),
+          handoffId: receipt.handoffId,
+          expectedBaseCommit: receipt.baseCommit,
+          tests: "inspection only",
+          openPoints: "none",
+        };
+        yield* f.fs.writeFileString(`${f.root}/host-ignore`, "*.txt\n");
+        yield* f.command(f.cwd, ["config", "core.excludesFile", `${f.root}/host-ignore`]);
+        yield* f.command(f.cwd, ["config", "core.filemode", "false"]);
+        if (drift === "content")
+          yield* f.fs.writeFileString(`${f.cwd}/worker-result.txt`, "changed");
+        if (drift === "mode") yield* f.fs.chmod(`${f.cwd}/worker-result.txt`, 0o644);
+        if (drift === "extra") yield* f.fs.writeFileString(`${f.cwd}/hidden.txt`, "unconfirmed");
+        if (drift !== "unchanged") {
+          assert.equal((yield* service.finish(finish).pipe(Effect.flip)).code, "workspace_changed");
+          return;
+        }
+        const result = yield* service.finish(finish);
+        assert.equal(result.commitSha, pinned);
+        assert.equal(yield* f.command(f.cwd, ["rev-parse", "HEAD"]), f.base);
+        assert.equal(
+          yield* f.fs.readFileString(`${f.cwd}/worker-result.txt`),
+          "checkpoint bytes\n",
+        );
+        assert.equal(
+          yield* f.command(f.cwd, ["rev-parse", `${result.checkpointRef}^{tree}`]),
+          result.treeSha,
+        );
+        assert.deepEqual(yield* service.finish(finish), result);
+        yield* f.fs.remove(f.cwd, { recursive: true });
+        f.state.sourceAvailable = false;
+        const restored = yield* service.open({
+          ...f.input,
+          commandId: CommandId.make("restore-unchanged"),
+          handoffId: "restore-unchanged",
+          mode: "archive",
+          archive: {
+            bundle: result.bundle,
+            commitSha: result.commitSha,
+            treeSha: result.treeSha,
+            sourceThreadId: receipt.threadId,
+          },
+        });
+        assert.equal(
+          yield* f.fs.readFileString(`${restored.workspacePath}/worker-result.txt`),
+          "checkpoint bytes\n",
+        );
+        assert.equal(
+          (yield* f.fs.stat(`${restored.workspacePath}/worker-result.txt`)).mode & 0o111,
+          0o111,
+        );
       }).pipe(Effect.provide(f.layer), Effect.scoped);
     }).pipe(Effect.provide(infrastructure), Effect.scoped),
 );

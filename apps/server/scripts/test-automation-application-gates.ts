@@ -479,7 +479,12 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
         activeVersionId: metadata.activeVersionId,
       });
       NodeAssert.equal(file.kind, "definitionRevisionFile");
-      if (file.kind === "definitionRevisionFile") NodeAssert.deepEqual(file.file, largeFiles[1]);
+      if (file.kind === "definitionRevisionFile")
+        NodeAssert.deepEqual(file.file, {
+          ...largeFiles[1],
+          encoding: "utf8",
+          size: Buffer.byteLength(largeFiles[1]!.content, "utf8"),
+        });
       NodeAssert.ok(encodeJson(file).length < 3 * 1024 * 1024);
     }
     yield* app.command(operate, {

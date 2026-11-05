@@ -338,76 +338,11 @@ Ein einzelner Agent darf mehrere Repositories bearbeiten, wenn sein Step diese a
 
 Jedes Repository erhält eigene Basis-/Ergebnis-Commits, Berechtigungen und PR-Referenzen. Multi-Repo-Checkpoints müssen über ein Ergebnismanifest zusammengesetzt werden. Git unterstützt dadurch noch keine atomare Änderung über mehrere Repositories; Veröffentlichungsreihenfolge, Teilfehler und Kompensation bleiben sichtbar.
 
-### 8.3 Beispiel für die spätere Definition
+### 8.3 Späterer Multi-Repo-Ablauf im gemeinsamen Definitionsmodell
 
-Das folgende YAML ist ein **konzeptionelles Format**, noch keine existierende API. Namen in `${...}` stehen für validierte Referenzen der zukünftigen Ausdruckssprache.
+Der geplante Ablauf untersucht die ausdrücklich gebundenen Repositories, erstellt einen gemeinsamen Plan und führt Umsetzung und Prüfung je betroffenem Repository aus. Eine Freigabe bezieht sich auf die konkreten Ergebnis-Checkpoints; die anschließenden Veröffentlichungen behalten getrennte Repository- und PR-Identitäten. Teilfehler und bereits erfolgte Veröffentlichungen bleiben nachvollziehbar.
 
-```yaml
-name: ticket-to-reviewed-changes
-version: 1
-inputSchema: ticket-with-repository-set-v1
-
-execution:
-  environment: build-machine-01
-  isolation: container
-  workspaceLifetime: per-repository-per-run
-  maxParallel: 4
-
-steps:
-  - id: investigate
-    type: agent
-    forEach: "${input.repositories}"
-    itemKey: repositoryId
-    agent: investigator@3
-    repository: "${item.repositoryId}"
-    instructions: "Prüfe die Betroffenheit anhand des Tickets."
-    outputSchema: repository-impact-v1
-
-  - id: plan
-    type: agent
-    needs: [investigate]
-    join: all-succeeded
-    agent: planner@2
-    inputs:
-      impacts: "${steps.investigate.outputs}"
-    outputSchema: cross-repository-plan-v1
-
-  - id: implement
-    type: agent
-    needs: [plan]
-    forEach: "${steps.plan.output.affectedRepositories}"
-    itemKey: repositoryId
-    agent: implementer@5
-    repository: "${item.repositoryId}"
-    inputs:
-      plan: "${steps.plan.output}"
-    outputSchema: repository-change-v1
-
-  - id: verify
-    type: script
-    needs: [implement]
-    forEach: "${steps.implement.outputs}"
-    itemKey: repositoryId
-    repository: "${item.repositoryId}"
-    revision: "${item.revision}"
-    commandRef: approved-repository-checks@1
-
-  - id: approve
-    type: approval
-    needs: [verify]
-    join: all-succeeded
-    subject: "${steps.implement.outputs}"
-
-  - id: publish
-    type: connector-action
-    needs: [approve]
-    forEach: "${steps.implement.outputs}"
-    itemKey: repositoryId
-    action: source-control.open-pull-request
-    input: "${item}"
-```
-
-`commandRef` wird pro Repository auf einen freigegebenen Befehl aufgelöst. Die Definition enthält weder Access Tokens noch frei evaluierbaren Backend-Code. Die tatsächlichen Commits und Hashes werden im Run-Snapshot gespeichert.
+Das wird später als ausdrückliche Erweiterung des gemeinsamen v4-Modells spezifiziert. V4 liefert heute endliche deklarierte Gruppen und genau eine gepinnte Repositorybasis pro Run; dynamisches Repository-Fan-out, Multi-Repo-Workspaces und ein gemeinsames Ergebnismanifest sind damit nicht zugesagt. Es gibt dafür keine zweite YAML-DSL oder zusätzliche Template-Ausdruckssprache. Gebundene Prüfungen, Betriebsberechtigungen und Secret-Referenzen bleiben getrennt von der Definition; konkrete Commits und Hashes gehören in den Run-Snapshot.
 
 ## 9. Identitäten und Berechtigungen
 

@@ -400,9 +400,10 @@ const make = Effect.gen(function* () {
       return yield* fail("archive_missing");
     yield* reauthorize();
     const continuationRunId = `handoff:run:${hash}`;
-    const coordinatorIdentity = run.workflow.execution
-      ? yield* worker.authorize(request, target)
-      : identity;
+    const coordinatorIdentity =
+      run.workflow.execution || run.workflow.v4
+        ? yield* worker.authorize(request, target)
+        : identity;
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         yield* lock(run.run.workItemId, runId);
@@ -421,6 +422,7 @@ const make = Effect.gen(function* () {
           workItemId: run.run.workItemId,
           workflowVersionId: run.run.workflowVersionId,
           revision: result.commitSha,
+          ...(run.run.inputs ? { inputs: run.run.inputs } : {}),
         });
         yield* store.admission(continuationRunId, `handoff:continue:${hash}`, identity);
         yield* store.enroll({
@@ -431,7 +433,7 @@ const make = Effect.gen(function* () {
             ...originalBinding,
             identity: coordinatorIdentity,
             projectId: result.receipt.projectId,
-            ...(run.workflow.execution
+            ...(run.workflow.execution || run.workflow.v4
               ? { workers: [{ identity, projectId: result.receipt.projectId }] }
               : { previousHandoff: { handoffId: id, commitSha: result.commitSha } }),
           },
