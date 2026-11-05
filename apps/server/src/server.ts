@@ -1,3 +1,4 @@
+import * as WorkerHandoff from "./foundry/WorkerHandoff.ts";
 import * as WorkspaceGate from "./foundry/workspaces/WorkspaceGate.ts";
 import * as WorkspaceReconciler from "./foundry/workspaces/WorkspaceReconciler.ts";
 import * as ExecutionStore from "./foundry/ExecutionStore.ts";
@@ -603,19 +604,28 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
   }),
 );
 
+const layerWorkerLaunch = WorkerLaunch.layer.pipe(
+  Layer.provide(RuntimePolicy.layerFromProjectStore),
+  Layer.provide(layerWorkspaceGate),
+  Layer.provide(layerExecutionStore),
+  Layer.provide(layerCheckpointStore),
+  Layer.provide(EventStoreV2.layerFromOrchestrationEventStore),
+  Layer.provide(CommandReceiptStore.layer),
+  Layer.provide(WorkerReadiness.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
+);
+
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   WorkspaceReconciler.layerWatchdog.pipe(
     Layer.provide(layerWorkspaceGate),
     Layer.provide(layerExecutionStore),
   ),
-  WorkerLaunch.layer.pipe(
-    Layer.provide(RuntimePolicy.layerFromProjectStore),
+  layerWorkerLaunch,
+  WorkerHandoff.layerConfigured.pipe(
+    Layer.provide(layerWorkerLaunch),
     Layer.provide(layerWorkspaceGate),
-    Layer.provide(layerExecutionStore),
     Layer.provide(layerCheckpointStore),
-    Layer.provide(EventStoreV2.layerFromOrchestrationEventStore),
-    Layer.provide(CommandReceiptStore.layer),
-    Layer.provide(WorkerReadiness.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
+    Layer.provide(GitVcsDriver.layer),
+    Layer.provide(RuntimeLayer.layerArchivePublication),
   ),
   WorkerReadiness.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
   AssetTransfer.layer.pipe(Layer.provide(NativeAppIconResolver.layer)),

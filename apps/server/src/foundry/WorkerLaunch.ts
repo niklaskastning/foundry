@@ -1,3 +1,5 @@
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { FoundryWorkerHandoffResult } from "@t3tools/contracts";
 import * as WorkerPublishEvidence from "./WorkerPublishEvidence.ts";
 import { FoundryPublishRequest } from "@t3tools/contracts";
 import { WorkspaceGate } from "./workspaces/WorkspaceGate.ts";
@@ -56,6 +58,7 @@ import * as ArtifactPublication from "./ArtifactPublication.ts";
 import * as ServerConfig from "../config.ts";
 import { createDeterministicAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
 
+const decodeHandoffResult = Schema.decodeEffect(Schema.fromJsonString(FoundryWorkerHandoffResult));
 const decodeManifest = Schema.decodeEffect(Schema.fromJsonString(FoundryWorkerManifest));
 const decodeFileAttachment = Schema.decodeEffect(ChatFileAttachment);
 const decodeRoots = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
@@ -70,7 +73,7 @@ export function workerLaunchIds(input: FoundryWorkerLaunchInput, binding: string
   return {
     commandId: CommandId.make(`foundry-launch:${key}`),
     threadId: ThreadId.make(
-      `foundry-launch:${digest(JSON.stringify([1, key, binding, input.projectId, input.title, input.model, input.prompt, ...(input.workspaceMode === "worktree" ? ["worktree"] : []), ...(input.previousExecution ? [input.previousExecution.commandId, input.previousExecution.generation] : []), ...(input.publishEvidence ? [input.publishEvidence] : []), ...(input.inputArtifacts?.length ? [input.inputArtifacts.map((item) => [item.reference.instanceId, item.reference.artifactId, item.reference.owner.environmentId, item.reference.owner.threadId, item.name, item.mimeType, item.sizeBytes, item.sha256])] : [])]))}`,
+      `foundry-launch:${digest(JSON.stringify([1, key, binding, input.projectId, input.title, input.model, input.prompt, ...(input.workspaceMode === "worktree" ? ["worktree"] : []), ...(input.previousExecution ? [input.previousExecution.commandId, input.previousExecution.generation] : []), ...(input.previousHandoff ? [input.previousHandoff.handoffId, input.previousHandoff.commitSha] : []), ...(input.publishEvidence ? [input.publishEvidence] : []), ...(input.inputArtifacts?.length ? [input.inputArtifacts.map((item) => [item.reference.instanceId, item.reference.artifactId, item.reference.owner.environmentId, item.reference.owner.threadId, item.name, item.mimeType, item.sizeBytes, item.sha256])] : [])]))}`,
     ),
   };
 }
@@ -120,6 +123,7 @@ export const layer = Layer.effect(
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
     const executions = yield* ExecutionStore.ExecutionStore;
     const checkpoints = yield* CheckpointStore.CheckpointStore;
+    const git = yield* GitVcsDriver.GitVcsDriver;
     const handoffs = yield* Semaphore.make(1);
     const launchLane = yield* Semaphore.make(1);
     const evidenceLane = yield* Semaphore.make(1);
@@ -355,8 +359,98 @@ export const layer = Layer.effect(
       },
       Effect.mapError((error) => (isReadError(error) ? error : readFailure("read_failed"))),
     );
+    const returnedHandoff = Effect.fn("WorkerLaunch.returnedHandoff")(
+      function* (input: FoundryWorkerLaunchInput) {
+        if (!input.previousHandoff) return null;
+        if (
+          input.previousExecution ||
+          input.workspaceMode === "worktree" ||
+          !workspaceGate.handoffs
+        )
+          return yield* failure("handoff_unavailable");
+        const row = yield* workspaceGate.handoffs.handoff(input.previousHandoff.handoffId);
+        if (!row?.result || row.state !== "returned") return yield* failure("handoff_unavailable");
+        const result = yield* decodeHandoffResult(row.result);
+        if (
+          result.commitSha !== input.previousHandoff.commitSha ||
+          result.receipt.projectId !== input.projectId ||
+          result.receipt.workspacePath !== row.workspacePath
+        )
+          return yield* failure("handoff_changed");
+        return result;
+      },
+      Effect.mapError((error) => (isLaunchError(error) ? error : failure("handoff_unavailable"))),
+    );
+    const previousWorkspace = Effect.fn("WorkerLaunch.previousWorkspace")(
+      function* (input: FoundryWorkerLaunchInput) {
+        if (!input.previousExecution) return null;
+        const execution = yield* read({ commandId: input.previousExecution.commandId });
+        const manifest = execution.lifecycle?.manifest;
+        if (
+          !execution.lifecycle?.writerEnded ||
+          execution.lifecycle.generation !== input.previousExecution.generation ||
+          !manifest?.checkpointId ||
+          !manifest.checkpointRef
+        )
+          return yield* failure("handoff_unavailable");
+        const records = yield* threads.getThreadRecords(execution.receipt.threadId, [
+          "checkpoints",
+          "checkpointScopes",
+        ]);
+        const checkpoint = records.checkpoints.find(
+          (item) =>
+            item.id === manifest.checkpointId &&
+            item.ref === manifest.checkpointRef &&
+            item.runId === execution.run.id &&
+            item.status === "ready",
+        );
+        const scope = records.checkpointScopes.find(
+          (item) => item.id === checkpoint?.scopeId && item.runId === execution.run.id,
+        );
+        if (!scope || records.thread.projectId !== input.projectId)
+          return yield* failure("handoff_unavailable");
+        return scope.cwd;
+      },
+      Effect.mapError((error) => (isLaunchError(error) ? error : failure("handoff_unavailable"))),
+    );
     const verifyHandoff = Effect.fn("WorkerLaunch.verifyHandoff")(
       function* (input: FoundryWorkerLaunchInput, cwd: string) {
+        const returned = yield* returnedHandoff(input);
+        if (returned) {
+          if ((yield* fs.realPath(returned.receipt.workspacePath)) !== cwd)
+            return yield* failure("handoff_changed");
+          if (
+            (yield* git.resolveCommit({ cwd, revision: "HEAD" })).commitSha !==
+              returned.commitSha ||
+            (yield* git.execute({
+              cwd,
+              operation: "foundry.handoff.tree",
+              args: ["rev-parse", "HEAD^{tree}"],
+            })).stdout.trim() !== returned.treeSha
+          )
+            return yield* failure("handoff_changed");
+          const temporary = CheckpointRef.make(
+            `refs/t3/foundry-handoff/${digest(input.commandId)}`,
+          );
+          yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: temporary });
+          yield* Effect.gen(function* () {
+            const diff = yield* checkpoints.diffCheckpoints({
+              cwd,
+              fromCheckpointRef: CheckpointRef.make(returned.checkpointRef),
+              toCheckpointRef: temporary,
+              ignoreWhitespace: false,
+              maxOutputBytes: 1024,
+            });
+            if (diff.length !== 0) return yield* failure("handoff_changed");
+          }).pipe(
+            Effect.ensuring(
+              checkpoints
+                .deleteCheckpointRefs({ cwd, checkpointRefs: [temporary] })
+                .pipe(Effect.ignore),
+            ),
+          );
+          return;
+        }
         const previous = input.previousExecution;
         if (!previous) return;
         if (previous.commandId === input.commandId || input.workspaceMode === "worktree")
@@ -686,23 +780,6 @@ export const layer = Layer.effect(
           const roots = yield* decodeRoots(rootsJson).pipe(
             Effect.mapError(() => failure("project_denied")),
           );
-          const workspace = yield* fs
-            .realPath(project.value.workspaceRoot)
-            .pipe(Effect.mapError(() => failure("project_denied")));
-          const allowed = yield* Effect.forEach(roots, (root) =>
-            Effect.gen(function* () {
-              if (!path.isAbsolute(root)) return false;
-              const canonical = yield* fs.realPath(root);
-              const relative = path.relative(canonical, workspace);
-              return (
-                relative === "" ||
-                (!relative.startsWith(`..${path.sep}`) &&
-                  relative !== ".." &&
-                  !path.isAbsolute(relative))
-              );
-            }).pipe(Effect.orElseSucceed(() => false)),
-          );
-          if (!allowed.some(Boolean)) return yield* failure("project_denied");
           const ids = workerLaunchIds(input, binding);
           const initial = yield* receipts.getByCommandId(ids.commandId);
           if (
@@ -732,6 +809,25 @@ export const layer = Layer.effect(
               return yield* failure("command_conflict");
             return toReceipt(receipt.value);
           }
+          const returned = yield* returnedHandoff(input);
+          const previousCwd = yield* previousWorkspace(input);
+          const workspace = yield* fs
+            .realPath(returned?.receipt.workspacePath ?? previousCwd ?? project.value.workspaceRoot)
+            .pipe(Effect.mapError(() => failure("project_denied")));
+          const allowed = yield* Effect.forEach(roots, (root) =>
+            Effect.gen(function* () {
+              if (!path.isAbsolute(root)) return false;
+              const canonical = yield* fs.realPath(root);
+              const relative = path.relative(canonical, workspace);
+              return (
+                relative === "" ||
+                (!relative.startsWith(`..${path.sep}`) &&
+                  relative !== ".." &&
+                  !path.isAbsolute(relative))
+              );
+            }).pipe(Effect.orElseSucceed(() => false)),
+          );
+          if (!allowed.some(Boolean)) return yield* failure("project_denied");
           if (
             !(yield* threads.isProviderInstanceEnabledForProject({
               projectId: input.projectId,
@@ -782,7 +878,10 @@ export const layer = Layer.effect(
             runtimeMode: "approval-required",
             interactionMode: "default",
             workspaceStrategy:
-              reservation?.mode === "worktree"
+              reservation &&
+              (reservation.mode === "worktree" ||
+                input.previousHandoff !== undefined ||
+                previousCwd !== null)
                 ? {
                     type: "existing_worktree",
                     worktreePath: reservation.workspacePath,

@@ -1,3 +1,4 @@
+import { AutomationHandoff, AutomationHandoffCommand, AutomationHandoffQuery } from "./handoff.ts";
 import {
   FactoryDefinitionSourceBinding,
   FactoryDefinitionGitRevision,
@@ -29,6 +30,7 @@ const Page = {
 };
 const FactoryFilter = { factoryId: Schema.optional(Key) };
 export const AutomationApplicationQuery = Schema.Union([
+  ...AutomationHandoffQuery.members,
   Schema.Struct({
     op: Schema.Literal("definitionRevisionFile"),
     factoryId: Key,
@@ -62,6 +64,7 @@ export const AutomationApplicationQuery = Schema.Union([
 ]);
 export type AutomationApplicationQuery = typeof AutomationApplicationQuery.Type;
 export const AutomationApplicationCommand = Schema.Union([
+  ...AutomationHandoffCommand.members,
   Schema.Struct({
     op: Schema.Literal("configureDefinitionSource"),
     ...ConfigureDefinitionSource.fields,
@@ -101,6 +104,8 @@ export const AutomationAttemptSummary = Schema.Struct({
 export type AutomationAttemptSummary = typeof AutomationAttemptSummary.Type;
 const Next = { next: Schema.NullOr(Key) };
 export const AutomationApplicationResult = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("handoffs"), items: Schema.Array(AutomationHandoff) }),
+  Schema.Struct({ kind: Schema.Literal("handoff"), handoff: Schema.NullOr(AutomationHandoff) }),
   Schema.Struct({
     kind: Schema.Literal("definitionSource"),
     binding: Schema.NullOr(FactoryDefinitionSourceBinding),
@@ -179,7 +184,17 @@ export type AutomationApplicationResult = typeof AutomationApplicationResult.Typ
 export class AutomationApplicationError extends Schema.TaggedError<AutomationApplicationError>()(
   "AutomationApplicationError",
   {
-    code: Schema.Literals(["forbidden", "invalid_input", "conflict", "not_found", "unavailable"]),
+    code: Schema.Literals([
+      "forbidden",
+      "invalid_input",
+      "conflict",
+      "not_found",
+      "unavailable",
+      "writer_not_ended",
+      "checkpoint_pending",
+      "archive_missing",
+      "workspace_changed",
+    ]),
   },
 ) {
   override get message() {

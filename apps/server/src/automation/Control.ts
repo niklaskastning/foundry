@@ -127,6 +127,9 @@ const make = Effect.gen(function* () {
           if (!previous[0].same || !previous[0].receipt) return yield* fail("conflict");
           return previous[0].receipt;
         }
+        const handedOff =
+          yield* sql`SELECT id FROM foundry_automation.work_item_handoffs WHERE run_id=${input.runId}`;
+        if (handedOff.length) return yield* fail("invalid_transition");
         const current = yield* snapshot(input.factoryId, input.runId);
         if (current.revision !== input.expectedRevision) return yield* fail("conflict");
         const run = yield* store.read(input.factoryId, input.runId);

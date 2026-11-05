@@ -622,6 +622,15 @@ it.effect(
         release: () => Effect.void,
       });
       const worker = WorkerTransport.WorkerTransport.of({
+        handoffOpen: Effect.fn("Fixture.handoffOpen")(() =>
+          Effect.die("Handoff not configured in this fixture"),
+        ),
+        handoffFinish: Effect.fn("Fixture.handoffFinish")(() =>
+          Effect.die("Handoff not configured in this fixture"),
+        ),
+        handoffReopen: Effect.fn("Fixture.handoffReopen")(() =>
+          Effect.die("Handoff not configured in this fixture"),
+        ),
         cancel: (_identity, input) =>
           Effect.sync(() => {
             cancellations++;

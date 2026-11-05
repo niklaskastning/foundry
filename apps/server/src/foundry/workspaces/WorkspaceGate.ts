@@ -24,6 +24,8 @@ interface WorkerInput {
   mode: "checkout" | "worktree";
 }
 export class WorkspaceGate extends Context.Reference<{
+  readonly handoffs: ReservationStore.ReservationStore["Service"] | null;
+  readonly reconcile: Effect.Effect<void>;
   readonly installReconciler: (
     effect: Effect.Effect<void>,
   ) => Effect.Effect<void, never, Scope.Scope>;
@@ -49,6 +51,8 @@ export class WorkspaceGate extends Context.Reference<{
   readonly confirm: (requestId: string) => Effect.Effect<void, FoundryWorkspaceError>;
 }>("t3/foundry/workspaces/WorkspaceGate", {
   defaultValue: () => ({
+    handoffs: null,
+    reconcile: Effect.void,
     installReconciler: () => Effect.void,
     reserve: () => Effect.succeed(null),
     prepare: () => Effect.succeed(true),
@@ -86,6 +90,7 @@ export const layer = (allowedRoots: ReadonlyArray<string>) =>
               return input.threadId.startsWith("foundry-launch:") ? false : null;
             const cwd = yield* fs.realPath(input.cwd);
             const root = rootFor(cwd);
+            if (!(yield* store.handoffAllowed(input.threadId, cwd))) return false;
             if (!root) return input.threadId.startsWith("foundry-launch:") ? false : null;
             const bound = (yield* store.bindings).find(
               (binding) => binding.threadId === input.threadId && binding.commandId !== null,
@@ -98,12 +103,15 @@ export const layer = (allowedRoots: ReadonlyArray<string>) =>
             } else {
               if (input.threadId.startsWith("foundry-launch:")) return false;
               requestId = `manual:${key(`${input.runId.length}:${input.runId}${input.attemptId ?? ""}`)}`;
-              yield* reservations.reserve({
-                requestId,
-                repositoryPath: cwd,
-                mode: "checkout",
-                managedRoot: root,
-              });
+              yield* reservations.reserve(
+                {
+                  requestId,
+                  repositoryPath: cwd,
+                  mode: "checkout",
+                  managedRoot: root,
+                },
+                input.threadId,
+              );
               yield* store.bind({
                 requestId,
                 threadId: input.threadId,
@@ -115,6 +123,8 @@ export const layer = (allowedRoots: ReadonlyArray<string>) =>
           }).pipe(Effect.orElseSucceed(() => false as const)),
       );
       return {
+        handoffs: store,
+        reconcile: Effect.suspend(() => refresh),
         // Provider sessions must exist before their verifier can be attached to the admission fence.
         installReconciler: Effect.fn("WorkspaceGate.installReconciler")(
           (effect: Effect.Effect<void>) =>
@@ -131,12 +141,15 @@ export const layer = (allowedRoots: ReadonlyArray<string>) =>
         bindings: store.bindings,
         reserve: Effect.fn("WorkspaceGate.reserve")(function* (input: WorkerInput) {
           const requestId = `worker:${key(input.commandId)}`;
-          const reservation = yield* reservations.reserve({
-            requestId,
-            repositoryPath: input.repositoryPath,
-            mode: input.mode,
-            managedRoot: rootFor(input.repositoryPath) ?? "",
-          });
+          const reservation = yield* reservations.reserve(
+            {
+              requestId,
+              repositoryPath: input.repositoryPath,
+              mode: input.mode,
+              managedRoot: rootFor(input.repositoryPath) ?? "",
+            },
+            input.threadId,
+          );
           yield* store.bind({
             requestId,
             threadId: input.threadId,

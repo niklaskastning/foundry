@@ -89,3 +89,6 @@ export * from "./automation/inbox.ts";
 export * from "./automation/trigger.ts";
 
 export * from "./automation/definitionSource.ts";
+
+export * from "./foundryHandoff.ts";
+export * from "./automation/handoff.ts";

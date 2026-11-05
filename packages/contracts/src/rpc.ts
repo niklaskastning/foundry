@@ -1,4 +1,12 @@
 import {
+  FoundryWorkerHandoffOpen,
+  FoundryWorkerHandoffFinish,
+  FoundryWorkerHandoffReopen,
+  FoundryWorkerHandoffReceipt,
+  FoundryWorkerHandoffResult,
+  FoundryWorkerHandoffError,
+} from "./foundryHandoff.ts";
+import {
   AutomationTriggerCommand,
   AutomationTriggerQuery,
   AutomationTriggerResult,
@@ -479,6 +487,9 @@ export const WS_METHODS = {
   foundryAutomationControl: "foundry.automationControl",
   foundryAutomationInboxQuery: "foundry.automationInboxQuery",
   foundryAutomationInboxMark: "foundry.automationInboxMark",
+  foundryWorkerHandoffOpen: "foundry.workerHandoffOpen",
+  foundryWorkerHandoffFinish: "foundry.workerHandoffFinish",
+  foundryWorkerHandoffReopen: "foundry.workerHandoffReopen",
   foundryWorkerRenew: "foundry.workerRenew",
   foundryWorkerCancel: "foundry.workerCancel",
   foundryWorkerFollow: "foundry.workerFollow",
@@ -1481,6 +1492,21 @@ const WsAutomationInboxMarkRpc = Rpc.make(WS_METHODS.foundryAutomationInboxMark,
   success: AutomationInboxEntry,
   error: Schema.Union([AutomationInboxError, EnvironmentAuthorizationError]),
 });
+const WsFoundryWorkerHandoffOpenRpc = Rpc.make(WS_METHODS.foundryWorkerHandoffOpen, {
+  payload: FoundryWorkerHandoffOpen,
+  success: FoundryWorkerHandoffReceipt,
+  error: Schema.Union([FoundryWorkerHandoffError, EnvironmentAuthorizationError]),
+});
+const WsFoundryWorkerHandoffFinishRpc = Rpc.make(WS_METHODS.foundryWorkerHandoffFinish, {
+  payload: FoundryWorkerHandoffFinish,
+  success: FoundryWorkerHandoffResult,
+  error: Schema.Union([FoundryWorkerHandoffError, EnvironmentAuthorizationError]),
+});
+const WsFoundryWorkerHandoffReopenRpc = Rpc.make(WS_METHODS.foundryWorkerHandoffReopen, {
+  payload: FoundryWorkerHandoffReopen,
+  success: FoundryWorkerHandoffReceipt,
+  error: Schema.Union([FoundryWorkerHandoffError, EnvironmentAuthorizationError]),
+});
 const WsFoundryWorkerRenewRpc = Rpc.make(WS_METHODS.foundryWorkerRenew, {
   payload: FoundryWorkerRenewInput,
   success: Schema.Void,
@@ -2254,6 +2280,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsAutomationControlRpc,
   WsAutomationInboxQueryRpc,
   WsAutomationInboxMarkRpc,
+  WsFoundryWorkerHandoffOpenRpc,
+  WsFoundryWorkerHandoffFinishRpc,
+  WsFoundryWorkerHandoffReopenRpc,
   WsFoundryWorkerRenewRpc,
   WsFoundryWorkerCancelRpc,
   WsFoundryWorkerFollowRpc,

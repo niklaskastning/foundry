@@ -19,6 +19,7 @@ export class WorkspaceReservations extends Context.Service<
   {
     readonly reserve: (
       input: FoundryWorkspaceRequest,
+      threadId?: string,
     ) => Effect.Effect<FoundryWorkspaceReservation, FoundryWorkspaceError>;
     readonly recover: (
       requestId: string,
@@ -129,7 +130,7 @@ export const layer = (allowedRoots: ReadonlyArray<string>) =>
       });
       return WorkspaceReservations.of({
         recover,
-        reserve: Effect.fn("WorkspaceReservations.reserve")(function* (input) {
+        reserve: Effect.fn("WorkspaceReservations.reserve")(function* (input, threadId) {
           const decoded = yield* decodeRequest(input).pipe(
             Effect.mapError(
               (cause) => new FoundryWorkspaceError({ code: "invalid_request", cause }),
@@ -189,7 +190,7 @@ export const layer = (allowedRoots: ReadonlyArray<string>) =>
             branch: input.mode === "worktree" ? `foundry/${key}` : null,
             state: "allocating",
           };
-          if (!(yield* store.claim(reservation)))
+          if (!(yield* store.claim(reservation, threadId)))
             return yield* new FoundryWorkspaceError({ code: "writer_busy" });
           // Failure or interruption leaves the durable claim intact; recovery never deletes user files.
           if (input.mode === "worktree")
