@@ -3,10 +3,16 @@ FROM node:26.12.1-bookworm-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends git python3 make g++ ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN npm install --global vite-plus@1.4.0
 WORKDIR /src
-COPY . .
-RUN vp install --frozen-lockfile
 ARG FOUNDRY_REVISION
+RUN printf '%s' "$FOUNDRY_REVISION" | grep -Eq '^[a-f0-9]{40}$' \
+    && git init . \
+    && git remote add origin https://github.com/niklaskastning/foundry.git \
+    && git fetch --depth=1 origin "$FOUNDRY_REVISION" \
+    && git checkout --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "$FOUNDRY_REVISION"
+RUN vp install --frozen-lockfile
 RUN FOUNDRY_ARCHIVE_REVISION="$FOUNDRY_REVISION" vp run foundry:build server
+RUN node --input-type=module -e 'import fs from "node:fs"; const m = JSON.parse(fs.readFileSync("apps/server/dist/foundry-build.json", "utf8")); if (m.repository !== "niklaskastning/foundry" || m.revision !== process.argv[1] || m.dirty !== false) throw new Error("Unverified Foundry build provenance");' "$FOUNDRY_REVISION"
 # The production subset intentionally excludes patches for mobile and build tools.
 RUN npx --yes pnpm@12.14.0 --config.allow-unused-patches=true --filter t3 deploy --prod --legacy /output
 
