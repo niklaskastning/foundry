@@ -1,3 +1,4 @@
+import * as MachineCredentials from "./MachineCredentials.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
@@ -76,6 +77,7 @@ export const layer = Layer.unwrap(
       ? Layer.merge(
           ArtifactHttp.layer,
           AutomationRuntime.layer.pipe(
+            Layer.provide(MachineCredentials.layer),
             Layer.provide(GatewayGrants.layer),
             Layer.provide(DeviceGrants.layer),
             Layer.provide(DeviceChannel.layer),

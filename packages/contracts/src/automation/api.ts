@@ -1,3 +1,7 @@
+import {
+  AutomationMachineCredentialIssue,
+  AutomationMachineCredential,
+} from "./machineCredential.ts";
 import * as Schema from "effect/Schema";
 import {
   AutomationApplicationCommand,
@@ -37,6 +41,24 @@ export const AutomationApiError = Schema.Struct({
 });
 
 export const AutomationApiOperations = {
+  credentialIssue: {
+    path: "credentials/issue",
+    input: AutomationMachineCredentialIssue,
+    output: Schema.Struct({
+      credential: AutomationMachineCredential,
+      token: Schema.NullOr(Schema.String),
+    }),
+  },
+  credentialList: {
+    path: "credentials/list",
+    input: Schema.Struct({}),
+    output: Schema.Array(AutomationMachineCredential),
+  },
+  credentialRevoke: {
+    path: "credentials/revoke",
+    input: Schema.Struct({ id: AutomationMachineCredentialIssue.fields.id }),
+    output: Schema.Null,
+  },
   query: { path: "query", input: AutomationApplicationQuery, output: AutomationApplicationResult },
   command: {
     path: "command",

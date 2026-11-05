@@ -542,6 +542,15 @@ Persistenznachweise schließen weder Maschinenzugang noch P58b/G12 ab.
 Maschinen-Credentials benötigen einen eigenen begrenzten Identitätspfad; weder
 Provider-MCP-Tokens noch T3-MCP-OAuth-Tokens ersetzen die Foundry-Anmeldung.
 
+**Begrenzter Maschinen-Leseschnitt:** Eigene Credentials in Instanzschema 8 binden
+Instanz, Betreiber, aktuelle Zugangsgenerationen, Factory-Liste und Ablauf. Ausgabe,
+Liste und Widerruf verlangen die bestehenden Benutzersitzungen mit `access:write`;
+Ausgabe zusätzlich Leserechte. Nur `automation:read` für Factory-/Auftrags-/Run- und
+Attempt-Abfragen ist vorgesehen. Kein Worker-/Archiv-Livezugang, keine Inbox- oder
+Triggerrechte, keine Konfigurations-, Freigabe-, Start- oder Handoff-Autorität.
+Persistenz-, Ablauf-/Widerrufs- und Factory-Grenztests sind von der öffentlichen
+Access-/CI-Abnahme getrennt. P58b samt MCP-Instruktionsevals und G12 bleiben offen.
+
 ### P28 · Versionierter Agent- und Skill-Katalog
 
 **Voraussetzungen:** G5, P47.

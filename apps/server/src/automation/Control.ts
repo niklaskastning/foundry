@@ -1,3 +1,4 @@
+import type { ReadIdentity } from "./MachineAccess.ts";
 import { CommandId, OrchestrationV2UserInputQuestion } from "@t3tools/contracts";
 import {
   AutomationControlCommand,
@@ -40,6 +41,11 @@ export class Control extends Context.Service<
       factoryId: string,
       runId: string,
     ) => Effect.Effect<AutomationControlSnapshot, AutomationControlError>;
+    readonly readAuthorized: (
+      identity: ReadIdentity,
+      factoryId: string,
+      runId: string,
+    ) => Effect.Effect<AutomationControlSnapshot, AutomationControlError>;
     readonly execute: (
       request: HttpServerRequest.HttpServerRequest,
       input: AutomationControlCommand,
@@ -60,11 +66,12 @@ const make = Effect.gen(function* () {
     return rows[0];
   });
   const owned = Effect.fn("Control.owned")(function* (
-    request: HttpServerRequest.HttpServerRequest,
+    identity: ReadIdentity,
     factoryId: string,
     runId: string,
   ) {
-    const identity = yield* worker.identityForRead(request);
+    if (identity.factoryIds && !identity.factoryIds.includes(factoryId))
+      return yield* fail("forbidden");
     const rows = yield* sql<{
       binding: unknown;
     }>`SELECT d.binding FROM foundry_automation.dispatch_runs d JOIN foundry_automation.runs r ON r.id=d.run_id WHERE r.factory_id=${factoryId} AND r.id=${runId}`;
@@ -82,7 +89,15 @@ const make = Effect.gen(function* () {
     factoryId: string,
     runId: string,
   ) {
-    yield* owned(request, factoryId, runId);
+    yield* owned(yield* worker.identityForRead(request), factoryId, runId);
+    return yield* snapshot(factoryId, runId);
+  }, Effect.mapError(mapError));
+  const readAuthorized = Effect.fn("Control.readAuthorized")(function* (
+    identity: ReadIdentity,
+    factoryId: string,
+    runId: string,
+  ) {
+    yield* owned(identity, factoryId, runId);
     return yield* snapshot(factoryId, runId);
   }, Effect.mapError(mapError));
   const execute = Effect.fn("Control.execute")(function* (
@@ -90,7 +105,11 @@ const make = Effect.gen(function* () {
     raw: AutomationControlCommand,
   ) {
     const input = yield* decodeCommand(raw);
-    const { binding } = yield* owned(request, input.factoryId, input.runId);
+    const { binding } = yield* owned(
+      yield* worker.identityForRead(request),
+      input.factoryId,
+      input.runId,
+    );
     const writer = yield* worker.identityForWrite(request);
     if (
       writer.instanceId !== binding.identity.instanceId ||
@@ -243,6 +262,6 @@ const make = Effect.gen(function* () {
       }),
     );
   }, Effect.mapError(mapError));
-  return Control.of({ read, execute });
+  return Control.of({ read, readAuthorized, execute });
 });
 export const layer = Layer.effect(Control, make);

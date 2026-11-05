@@ -1,3 +1,6 @@
+import * as MachineAccess from "../automation/MachineAccess.ts";
+import * as MachineCredentials from "./MachineCredentials.ts";
+import * as Factories from "../automation/Factories.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Signing real DPoP proofs exercises the existing HTTP authenticator.
 import * as NodeCrypto from "node:crypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -265,7 +268,13 @@ it.live("reauthenticates the versioned Factory contract with both sessions on ev
     const f = yield* fixture;
     const handler = HttpRouter.toWebHandler(
       AutomationApiHttp.layer.pipe(
-        Layer.provide(Layer.succeed(GatewayGrants.GatewayGrants, f.grants)),
+        Layer.provide(
+          MachineAccess.layer.pipe(
+            Layer.provide(Layer.mock(MachineCredentials.MachineCredentials)({})),
+            Layer.provide(Layer.mock(Factories.Factories)({})),
+            Layer.provide(Layer.succeed(GatewayGrants.GatewayGrants, f.grants)),
+          ),
+        ),
         Layer.provide(Layer.mock(AutomationApplication.Application)({})),
         Layer.provide(Layer.mock(AutomationControl.Control)({})),
         Layer.provide(Layer.mock(AutomationInbox.Inbox)({})),
@@ -416,6 +425,24 @@ it.effect(
           (yield* f.grants.create(f.request(f.read.token, changes), f.input).pipe(Effect.result))
             ._tag,
         ).toBe("Failure");
+      const browser = yield* f.sessions.issue({
+        scopes: ["orchestration:read", "orchestration:operate", "access:write"],
+        method: "browser-session-cookie",
+      });
+      const cookies = `${FoundrySessions.FOUNDRY_SESSION_COOKIE}=foundry-fixture; ${f.sessions.cookieName}=${browser.token}`;
+      expect(
+        (yield* f.grants
+          .identityForRead(f.request(browser.token, { cookie: cookies }))
+          .pipe(Effect.result))._tag,
+      ).toBe("Success");
+      for (const authorization of ["Bearer fmc_revoked", "bearer fmc_revoked"]) {
+        const mixed = f.request(browser.token, { cookie: cookies, authorization });
+        expect((yield* f.grants.identityForRead(mixed).pipe(Effect.result))._tag).toBe("Failure");
+        expect(
+          (yield* f.grants.identityForWrite(mixed, "orchestration:operate").pipe(Effect.result))
+            ._tag,
+        ).toBe("Failure");
+      }
       const other = yield* f.sessions.issue({
         scopes: ["orchestration:read"],
         subject: "client",
