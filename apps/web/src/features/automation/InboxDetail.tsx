@@ -8,6 +8,8 @@ import type {
   ProviderUserInputAnswers,
 } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
+import { useAutomationQuery } from "./useAutomationQuery";
+import { AttemptResult } from "./RunDetail";
 import { Button } from "../../components/ui/button";
 import { Textarea } from "../../components/ui/textarea";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -39,6 +41,7 @@ export function InboxDetail({
   const control = useAtomCommand(automationCommands.control, { reportFailure: false });
   const canMark = useAtomValue(automationCommands.inboxMark.permissionAtom(environmentId));
   const canDecide = useAtomValue(automationCommands.control.permissionAtom(environmentId));
+  const [showEvidence, setShowEvidence] = useState(false);
   const [answers, setAnswers] = useState<ProviderUserInputAnswers>({});
   const [busy, setBusy] = useState(false);
   const [pendingAction, setPendingAction] = useState<AutomationControlCommand["action"] | null>(
@@ -146,6 +149,12 @@ export function InboxDetail({
       <p className="text-xs text-muted-foreground">
         Marking done only organizes your inbox. It does not approve a result or answer a question.
       </p>
+      <div className="space-y-3">
+        <Button variant="outline" onClick={() => setShowEvidence(!showEvidence)}>
+          {showEvidence ? "Hide evidence" : "Review tests, changes and artifacts"}
+        </Button>
+        {showEvidence ? <InboxEvidence environmentId={environmentId} item={item} /> : null}
+      </div>
       {item.kind === "approval" && item.active ? (
         <div className="space-y-2">
           <p className="text-sm">
@@ -299,5 +308,99 @@ export function InboxDetail({
         </p>
       ) : null}
     </aside>
+  );
+}
+
+function InboxEvidence({
+  environmentId,
+  item,
+}: {
+  environmentId: EnvironmentId;
+  item: AutomationInboxEntry;
+}) {
+  const run = useAutomationQuery(environmentId, {
+    op: "run",
+    factoryId: item.factoryId,
+    runId: item.runId,
+  });
+  const [after, setAfter] = useState<string>();
+  const [selected, setSelected] = useState<string>();
+  const attempts = useAutomationQuery(environmentId, {
+    op: "attempts",
+    factoryId: item.factoryId,
+    runId: item.runId,
+    limit: 20,
+    ...(after ? { after } : {}),
+  });
+  const detail = run.result?.kind === "run" ? run.result : null;
+  const matches =
+    detail?.control?.revision === item.expectedRevision &&
+    detail.control.resultRevision === item.resultRevision;
+  return (
+    <section className="space-y-3 rounded-lg border p-3" aria-label="Decision evidence">
+      <h3 className="font-medium">Evidence for this decision</h3>
+      <p className="text-sm">
+        Decision revision {item.expectedRevision} · Result revision {item.resultRevision}
+      </p>
+      {run.error || attempts.error ? <p role="alert">{run.error ?? attempts.error}</p> : null}
+      {detail ? (
+        <p className="text-sm" role={matches ? "status" : "alert"}>
+          {matches
+            ? "This decision matches the current run and result revisions."
+            : "The run changed. This evidence is current; reload the inbox before deciding on the new revision."}
+        </p>
+      ) : null}
+      {attempts.result?.kind === "attempts" ? (
+        <>
+          <ul className="space-y-2">
+            {attempts.result.items.map((attempt) => (
+              <li
+                key={attempt.commandId}
+                className="flex flex-wrap items-center justify-between gap-2 text-sm"
+              >
+                <span>
+                  {detail?.workflow.steps[attempt.ordinal]?.id ?? `Step ${attempt.ordinal + 1}`} ·
+                  Attempt {attempt.attemptNumber + 1} · {attempt.state}
+                </span>
+                <Button variant="outline" onClick={() => setSelected(attempt.commandId)}>
+                  Inspect evidence
+                </Button>
+              </li>
+            ))}
+          </ul>
+          <div className="flex gap-2">
+            <Button variant="outline" disabled={!after} onClick={() => setAfter(undefined)}>
+              First attempts
+            </Button>
+            <Button
+              variant="outline"
+              disabled={!attempts.result.next}
+              onClick={() =>
+                setAfter(
+                  attempts.result?.kind === "attempts"
+                    ? (attempts.result.next ?? undefined)
+                    : undefined,
+                )
+              }
+            >
+              Next attempts
+            </Button>
+          </div>
+        </>
+      ) : null}
+      {selected ? (
+        <AttemptResult
+          key={selected}
+          environmentId={environmentId}
+          factoryId={item.factoryId}
+          runId={item.runId}
+          commandId={selected}
+        />
+      ) : null}
+      <p className="text-xs text-muted-foreground">
+        Review the attempt's checkpoint, confirmed tests, linked T3 diff and central artifacts. A
+        completed turn or an inbox mark is not approval.
+      </p>
+    </section>
   );
 }

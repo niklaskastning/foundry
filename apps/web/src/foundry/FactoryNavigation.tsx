@@ -34,7 +34,8 @@ export function FactoryNavigation() {
   const available = useAutomationAvailable();
   if (!available) return null;
   return (
-    <nav aria-label="Foundry" className="flex flex-wrap gap-3 px-2 py-2 text-sm">
+    <nav aria-label="Foundry instance" className="flex flex-wrap gap-3 px-2 py-2 text-sm">
+      <span className="text-muted-foreground">Instance</span>
       <Link to="/foundry" search={{ view: "factories" }}>
         Factories
       </Link>

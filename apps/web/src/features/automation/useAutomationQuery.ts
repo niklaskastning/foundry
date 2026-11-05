@@ -16,9 +16,16 @@ export function useAutomationQuery(
 ) {
   const registry = useContext(RegistryContext);
   const session = useAtomValue(environmentSession.sessionStateAtom(environmentId));
-  const live = input.op === "run" || input.op === "attempts" || input.op === "handoffs";
+  const live =
+    input.op === "run" ||
+    input.op === "runs" ||
+    input.op === "workItems" ||
+    input.op === "attempts" ||
+    input.op === "handoffs";
   const [generation, setGeneration] = useState(0);
   const key = JSON.stringify({ input, generation });
+  const queryKey = JSON.stringify({ environmentId, input });
+  const [responseKey, setResponseKey] = useState<string>();
   const [result, setResult] = useState<AutomationApplicationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -42,10 +49,12 @@ export function useAutomationQuery(
       );
       inFlight = false;
       if (disposed || sequence !== latest) return;
+      setResponseKey(queryKey);
       if (AsyncResult.isSuccess(response)) {
         setResult(response.value);
         setError(null);
       } else {
+        setResult(null);
         const failure = squashAtomCommandFailure(response);
         setError(failure instanceof Error ? failure.message : "Unable to load factory data.");
       }
@@ -63,12 +72,16 @@ export function useAutomationQuery(
       document.removeEventListener("visibilitychange", load);
       window.clearInterval(timer);
     };
-  }, [registry, environmentId, key, session, live]);
+  }, [registry, environmentId, key, queryKey, session, live]);
   const allowed = sessionHasScope(session, "orchestration:read");
   return {
-    result: allowed ? result : null,
-    error: allowed ? error : "A current Main session with read permission is required.",
-    loading: allowed && loading,
+    result: allowed && responseKey === queryKey ? result : null,
+    error: allowed
+      ? responseKey === queryKey
+        ? error
+        : null
+      : "A current Main session with read permission is required.",
+    loading: allowed && (loading || responseKey !== queryKey),
     refresh: () => setGeneration((value) => value + 1),
   };
 }

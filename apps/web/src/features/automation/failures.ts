@@ -42,3 +42,21 @@ export function handoffFailureMessage(failure: unknown) {
   }
   return failure instanceof Error ? failure.message : "Handoff was not confirmed.";
 }
+
+export function startFailureMessage(failure: unknown) {
+  if (isApplicationError(failure)) {
+    switch (failure.code) {
+      case "unsupported_provider":
+        return "This worker supports Codex factory execution only. Configure the worker with a supported Codex provider before starting.";
+      case "worker_not_ready":
+        return "The configured worker or provider is not ready. Check its connection and provider setup, then retry.";
+      case "invalid_execution":
+        return "Execution settings or required resources are incomplete. Review the workflow's roles, model and check bindings before starting.";
+      case "forbidden":
+        return "Current Main and worker permissions are required. Check your connection and access.";
+      case "conflict":
+        return "The definition or saved defaults changed. Reload and review the current configuration before trying again.";
+    }
+  }
+  return "The operation was not confirmed. Retry uses the same command and run ID. Check the worker binding and permissions before starting new work.";
+}

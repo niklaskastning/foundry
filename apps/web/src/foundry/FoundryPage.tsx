@@ -1,5 +1,5 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useSearch, Link } from "@tanstack/react-router";
+import { useSearch, useNavigate, Link } from "@tanstack/react-router";
 import { FactoryNavigation, useAutomationAvailable } from "./FactoryNavigation";
 import { hasConfirmedAutomationView } from "./pageMode";
 import { lazy, Suspense, useState } from "react";
@@ -33,6 +33,7 @@ const InboxPage = lazy(() =>
 );
 export function FoundryPage() {
   const search = useSearch({ from: "/foundry" });
+  const navigate = useNavigate({ from: "/foundry" });
   const [origin, setOrigin] = useState(window.location.origin);
   const [state, setState] = useState<OnboardingResult>(initialState);
   const automationAvailable = useAutomationAvailable(state.binding?.instanceId);
@@ -88,19 +89,17 @@ export function FoundryPage() {
                 environmentId={state.binding.mainEnvironmentId}
                 {...(search.factoryId ? { factoryId: search.factoryId } : {})}
                 onNavigateRun={(factoryId, runId) =>
-                  window.location.assign(
-                    `/foundry?view=runs&factoryId=${encodeURIComponent(factoryId)}&runId=${encodeURIComponent(runId)}`,
-                  )
+                  void navigate({ search: { view: "factories", factoryId, runId, tab: "runs" } })
                 }
                 onNavigateWorkItem={(factoryId, workItemId) =>
-                  window.location.assign(
-                    `/foundry?view=factories&factoryId=${encodeURIComponent(factoryId)}&workItemId=${encodeURIComponent(workItemId)}`,
-                  )
+                  void navigate({
+                    search: { view: "factories", factoryId, workItemId, tab: "work" },
+                  })
                 }
               />
             ) : (
               <FactoryPage
-                key={`${search.view}:${search.factoryId}:${search.runId}`}
+                key={`${search.view}:${search.factoryId}`}
                 environmentId={state.binding.mainEnvironmentId}
                 initialView={search.view === "runs" ? "runs" : "factories"}
                 {...(search.factoryId ? { factoryId: search.factoryId } : {})}

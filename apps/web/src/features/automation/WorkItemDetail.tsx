@@ -1,5 +1,5 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { isDefinitiveAutomationFailure } from "./failures";
+import { isDefinitiveAutomationFailure, startFailureMessage } from "./failures";
 import { randomUUID } from "../../lib/utils";
 import { useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
@@ -7,19 +7,29 @@ import {
   ProjectId,
   ManualStart,
   type AutomationApplicationCommand,
+  type AutomationWorkItem,
   type EnvironmentId,
   type FactoryDefinitionVersion,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { resolveFactoryWorkflow } from "@t3tools/shared/factoryDefinition";
 import { AsyncResult } from "effect/reactivity";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
 import { Textarea } from "../../components/ui/textarea";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { automationCommands } from "./commands";
 import { useAutomationQuery } from "./useAutomationQuery";
 import { HandoffList } from "./HandoffPanel";
 import { RunList } from "./RunList";
+import { WorkflowConfiguration } from "./AgentCatalog";
 
 const decodeManualStart = Schema.decodeUnknownSync(ManualStart, { onExcessProperty: "error" });
 
@@ -36,42 +46,139 @@ export function WorkItemDetail({
   active: FactoryDefinitionVersion | null;
   onOpenRun: (factoryId: string, runId: string) => void;
 }) {
-  const binding = useAutomationQuery(environmentId, { op: "workerBinding" });
-  const target = binding.result?.kind === "workerBinding" ? binding.result : null;
   const work = useAutomationQuery(environmentId, { op: "workItem", factoryId, workItemId });
-  const [workflowVersionId, setWorkflowVersionId] = useState("");
-  const [projectId, setProjectId] = useState("");
-  const [model, setModel] = useState("");
-  const [revision, setRevision] = useState("");
-  const [checks, setChecks] = useState("[]");
-  const [artifacts, setArtifacts] = useState("[]");
+  return (
+    <section className="space-y-4" aria-label="Work item detail">
+      {work.error ? <p role="alert">{work.error}</p> : null}
+      {work.result?.kind === "workItem" ? (
+        <>
+          <div>
+            <h2 className="text-lg font-medium">{work.result.item.title}</h2>
+            <p className="text-sm text-muted-foreground">
+              {work.result.item.state.replaceAll("_", " ")} · {work.result.item.repository}
+            </p>
+          </div>
+          <StartWorkflow
+            key={work.result.item.id}
+            environmentId={environmentId}
+            item={work.result.item}
+            active={active}
+            onOpenRun={onOpenRun}
+          />
+        </>
+      ) : null}
+      <HandoffList environmentId={environmentId} factoryId={factoryId} workItemId={workItemId} />
+      <RunList
+        environmentId={environmentId}
+        factoryId={factoryId}
+        workItemId={workItemId}
+        onOpen={onOpenRun}
+      />
+    </section>
+  );
+}
+
+function StartWorkflow({
+  environmentId,
+  item,
+  active,
+  onOpenRun,
+}: {
+  environmentId: EnvironmentId;
+  item: AutomationWorkItem;
+  active: FactoryDefinitionVersion | null;
+  onOpenRun: (factoryId: string, runId: string) => void;
+}) {
+  const binding = useAutomationQuery(environmentId, { op: "workerBinding" });
+  const defaultsQuery = useAutomationQuery(environmentId, {
+    op: "executionDefaults",
+    factoryId: item.factoryId,
+    repository: item.repository,
+  });
+  const defaults =
+    defaultsQuery.result?.kind === "executionDefaults" ? defaultsQuery.result.defaults : null;
+  const target = binding.result?.kind === "workerBinding" ? binding.result : null;
+  const [selectedWorkflow, setWorkflowVersionId] = useState<string>();
+  const workflowVersionId =
+    active?.workflowVersions.find((workflow) => workflow.versionId === selectedWorkflow)
+      ?.versionId ??
+    active?.workflowVersions[0]?.versionId ??
+    "";
+  const workflow = active?.workflowVersions.find(
+    (workflow) => workflow.versionId === workflowVersionId,
+  );
+  const [projectOverride, setProjectId] = useState<string>();
+  const [modelOverride, setModel] = useState<string>();
+  const [revision, setRevision] = useState(`work-item:${item.id}`);
+  const [checksOverride, setChecks] = useState<string>();
+  const [artifactsOverride, setArtifacts] = useState<string>();
+  const projectId = projectOverride ?? defaults?.projectId ?? "";
+  const firstAgent =
+    active && workflow
+      ? resolveFactoryWorkflow(active.definition, workflow.id).find(
+          (step) => step.kind === "agent" && step.resolved?.execution.model,
+        )
+      : undefined;
+  const model =
+    modelOverride ??
+    defaults?.model ??
+    active?.definition.defaults?.model ??
+    (firstAgent?.kind === "agent" ? firstAgent.resolved?.execution.model : undefined) ??
+    "";
+  const checks = checksOverride ?? JSON.stringify(defaults?.checks ?? [], null, 2);
+  const artifacts = artifactsOverride ?? JSON.stringify(defaults?.requiredArtifacts ?? [], null, 2);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState<AutomationApplicationCommand | null>(null);
   const command = useAtomCommand(automationCommands.command, { reportFailure: false });
   const canStart = useAtomValue(automationCommands.command.permissionAtom(environmentId));
-  async function start() {
-    if (busy || !projectId || !model || !revision || !workflowVersionId) return;
+  const canConfigure = useAtomValue(
+    automationCommands.command.permissionAtom(environmentId, { op: "configureExecutionDefaults" }),
+  );
+  const selectedProject = target?.projects.find((project) => project.id === projectId);
+  const configured = Boolean(selectedProject && model);
+  async function submit(action: "start" | "save") {
+    if (
+      busy ||
+      (!pending &&
+        (!configured || defaultsQuery.loading || defaultsQuery.error || !workflowVersionId))
+    )
+      return;
     let input: AutomationApplicationCommand;
     try {
-      input = pending ?? {
-        op: "start",
-        input: decodeManualStart({
+      if (pending) {
+        input = pending;
+      } else {
+        const start = decodeManualStart({
           commandId: randomUUID(),
           id: randomUUID(),
-          factoryId,
-          workItemId,
+          factoryId: item.factoryId,
+          workItemId: item.id,
           workflowVersionId,
           revision,
           projectId: ProjectId.make(projectId),
           model,
           checks: JSON.parse(checks),
           requiredArtifacts: JSON.parse(artifacts),
-        }),
-      };
+        });
+        input =
+          action === "start"
+            ? { op: "start", input: start }
+            : {
+                op: "configureExecutionDefaults",
+                commandId: randomUUID(),
+                factoryId: item.factoryId,
+                repository: item.repository,
+                expectedGeneration: defaults?.generation ?? null,
+                projectId: start.projectId,
+                model: start.model,
+                checks: start.checks,
+                requiredArtifacts: start.requiredArtifacts,
+              };
+      }
     } catch {
       setMessage(
-        "Check the start fields. Checks require id, prompt, command and cwd; artifact bindings require stepId and names.",
+        "Check the binding fields. Checks require id, prompt, command and cwd; artifacts require stepId and names.",
       );
       return;
     }
@@ -79,36 +186,29 @@ export function WorkItemDetail({
     setBusy(true);
     const result = await command({ environmentId, input });
     setBusy(false);
-    if (
-      AsyncResult.isFailure(result) &&
-      isDefinitiveAutomationFailure(squashAtomCommandFailure(result))
-    )
+    if (AsyncResult.isSuccess(result)) {
       setPending(null);
-    if (AsyncResult.isSuccess(result) && result.value.kind === "run") {
-      setPending(null);
-      onOpenRun(factoryId, result.value.run.id);
-    } else
-      setMessage(
-        "Start was not confirmed. Verify the worker/project binding and permissions. Unconfirmed requests retain their command and run ID.",
-      );
+      if (result.value.kind === "run") onOpenRun(item.factoryId, result.value.run.id);
+      else {
+        setMessage(
+          "Execution defaults saved for this factory and repository. Starting each run still requires authorization.",
+        );
+        defaultsQuery.refresh();
+      }
+    } else {
+      const failure = squashAtomCommandFailure(result);
+      if (isDefinitiveAutomationFailure(failure)) {
+        setPending(null);
+        defaultsQuery.refresh();
+        binding.refresh();
+      }
+      setMessage(startFailureMessage(failure));
+    }
   }
   return (
-    <section className="space-y-4" aria-label="Work item detail">
-      {work.error ? <p role="alert">{work.error}</p> : null}
-      {work.result?.kind === "workItem" ? (
-        <>
-          <h2 className="text-lg font-medium">{work.result.item.title}</h2>
-          <p className="text-sm">
-            {work.result.item.state} · {work.result.item.repository}
-          </p>
-        </>
-      ) : null}
-      <fieldset disabled={busy || Boolean(pending)} className="space-y-3 rounded-lg border p-3">
-        <legend className="px-1">Start a workflow manually</legend>
-        <p className="text-xs text-muted-foreground">
-          Choose an activated workflow and an explicit project on the configured worker. Starting
-          authorizes this run only; activating a definition never starts existing runs.
-        </p>
+    <section className="space-y-3" aria-label="Start workflow">
+      <fieldset disabled={busy || Boolean(pending)} className="space-y-3 rounded-lg border p-4">
+        <legend className="px-1">Choose a workflow</legend>
         <div className="flex flex-wrap gap-2">
           {active?.workflowVersions.map((workflow) => (
             <Button
@@ -120,16 +220,49 @@ export function WorkItemDetail({
             </Button>
           ))}
         </div>
+        {!active ? <p>Activate a definition before starting work.</p> : null}
+        {active && workflow ? (
+          <details>
+            <summary className="cursor-pointer text-sm">
+              Review roles, tasks and effective settings
+            </summary>
+            <WorkflowConfiguration active={active} workflowId={workflow.id} />
+          </details>
+        ) : null}
         {binding.error ? <p role="alert">Worker binding unavailable: {binding.error}</p> : null}
+        {defaultsQuery.error ? (
+          <p role="alert">Execution defaults unavailable: {defaultsQuery.error}</p>
+        ) : null}
         {target ? (
-          <>
-            <p className="text-sm">
-              Worker: {target.environmentId} · {target.status.providerState} ·{" "}
-              {target.status.activeRuns} active runs
-            </p>
+          <p className="text-sm">
+            Worker: {target.status.providerState} · {target.status.activeRuns} active runs
+          </p>
+        ) : null}
+        {configured ? (
+          <p className="text-sm">
+            Project: {selectedProject?.title} · Fallback model: {model}
+            {defaults &&
+            projectId === defaults.projectId &&
+            model === defaults.model &&
+            checks === JSON.stringify(defaults.checks, null, 2) &&
+            artifacts === JSON.stringify(defaults.requiredArtifacts, null, 2)
+              ? " · Saved repository defaults"
+              : " · Unsaved settings"}
+          </p>
+        ) : (
+          <p className="text-sm">
+            Set up this repository's worker project and fallback model once, then reuse them for
+            future work items.
+          </p>
+        )}
+        <details open={!configured || undefined}>
+          <summary className="cursor-pointer text-sm">
+            Execution binding and advanced settings
+          </summary>
+          <div className="space-y-3 pt-3">
             <fieldset className="space-y-2">
-              <legend className="text-sm">Choose worker project</legend>
-              {target.projects.map((project) => (
+              <legend className="text-sm">Worker project</legend>
+              {target?.projects.map((project) => (
                 <label key={project.id} className="flex items-center gap-2 text-sm">
                   <input
                     type="radio"
@@ -143,27 +276,42 @@ export function WorkItemDetail({
                 </label>
               ))}
             </fieldset>
-          </>
-        ) : null}
-        <label className="block space-y-1">
-          <span className="text-sm">Model on the bound provider</span>
-          <Input
-            value={model}
-            onChange={(event) => setModel(event.target.value)}
-            placeholder="Enter the intended model explicitly"
-          />
-        </label>
-        <label className="block space-y-1">
-          <span className="text-sm">Input revision</span>
-          <Input
-            value={revision}
-            onChange={(event) => setRevision(event.target.value)}
-            placeholder="The input revision you intend to execute"
-          />
-        </label>
-        <details>
-          <summary className="cursor-pointer text-sm">Check and artifact bindings</summary>
-          <div className="space-y-2 pt-2">
+            <label className="block space-y-1">
+              <span className="text-sm">Fallback Codex model</span>
+              {target?.status.models?.length ? (
+                <Select
+                  value={model}
+                  onValueChange={(value) => {
+                    if (value !== null) setModel(value);
+                  }}
+                >
+                  <SelectTrigger aria-label="Fallback Codex model">
+                    <SelectValue>{model || "Choose an available model"}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {target.status.models.map((candidate) => (
+                      <SelectItem key={candidate.id} value={candidate.id}>
+                        {candidate.id}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  value={model}
+                  onChange={(event) => setModel(event.target.value)}
+                  placeholder="Model for steps without a versioned model"
+                />
+              )}
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Role and step models take precedence. These operational defaults grant no accounts or
+              permissions.
+            </p>
+            <label className="block space-y-1">
+              <span className="text-sm">Input revision</span>
+              <Input value={revision} onChange={(event) => setRevision(event.target.value)} />
+            </label>
             <label className="block space-y-1">
               <span className="text-sm">Checks: id, prompt, command, cwd</span>
               <Textarea value={checks} onChange={(event) => setChecks(event.target.value)} />
@@ -175,32 +323,56 @@ export function WorkItemDetail({
           </div>
         </details>
       </fieldset>
-      <Button
-        disabled={
-          busy ||
-          !canStart ||
-          !target?.status.providerReady ||
-          !workflowVersionId ||
-          !projectId ||
-          !model ||
-          !revision
-        }
-        onClick={() => void start()}
-      >
-        {busy ? "Starting…" : pending ? "Retry the same start" : "Start this workflow"}
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          disabled={
+            busy ||
+            !canStart ||
+            (!pending &&
+              (!target?.status.providerReady ||
+                !configured ||
+                !revision ||
+                !workflowVersionId ||
+                defaultsQuery.loading ||
+                Boolean(defaultsQuery.error))) ||
+            (pending !== null && pending.op !== "start")
+          }
+          onClick={() => void submit("start")}
+        >
+          {busy
+            ? "Saving…"
+            : pending?.op === "start"
+              ? "Retry the same start"
+              : "Authorize and start workflow"}
+        </Button>
+        <Button
+          variant="outline"
+          disabled={
+            busy ||
+            !canConfigure ||
+            (!pending &&
+              (!configured ||
+                !workflowVersionId ||
+                defaultsQuery.loading ||
+                Boolean(defaultsQuery.error))) ||
+            (pending !== null && pending.op !== "configureExecutionDefaults")
+          }
+          onClick={() => void submit("save")}
+        >
+          {pending?.op === "configureExecutionDefaults"
+            ? "Retry saving defaults"
+            : "Save repository defaults"}
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Starting authorizes this run using the active definition and current worker permissions.
+        Saved defaults and definition activation never start work automatically.
+      </p>
       {message ? (
         <p role="status" className="text-sm">
           {message}
         </p>
       ) : null}
-      <HandoffList environmentId={environmentId} factoryId={factoryId} workItemId={workItemId} />
-      <RunList
-        environmentId={environmentId}
-        factoryId={factoryId}
-        workItemId={workItemId}
-        onOpen={onOpenRun}
-      />
     </section>
   );
 }
