@@ -62,7 +62,7 @@ function FactoryFilter({
   value: string;
   onChange: (value: string) => void;
 }) {
-  const query = useAutomationQuery(environmentId, { op: "factories", limit: 100 });
+  const query = useAutomationQuery(environmentId, { op: "factories", limit: 50 });
   const factories = query.result?.kind === "factories" ? query.result.items : [];
   return (
     <div className="space-y-1">

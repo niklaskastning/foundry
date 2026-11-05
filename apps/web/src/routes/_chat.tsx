@@ -1,5 +1,5 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { Outlet, createFileRoute, redirect, useMatches } from "@tanstack/react-router";
+import { Outlet, createFileRoute, redirect, useMatches, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { ThreadRouteView } from "../components/ThreadRouteView";
@@ -9,6 +9,7 @@ import { resolveThreadRouteTarget, type ThreadRouteTarget } from "../threadRoute
 import { retainThreadFindForRoute } from "../components/chat/threadFindStore";
 import { ThreadLinkPrompt } from "../components/promptLinks/ThreadLinkPrompt";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
+import { FactoryThreadAccess } from "../foundry/FactoryThreadAccess";
 
 function threadRouteTargetKey(target: ThreadRouteTarget | null) {
   if (!target) return null;
@@ -18,6 +19,7 @@ function threadRouteTargetKey(target: ThreadRouteTarget | null) {
 function ChatRouteLayout() {
   // Render both routes here so draft promotion keeps the same ChatView mounted.
   const threadTarget = useThreadRouteTarget();
+  const search = useSearch({ strict: false });
   // Read matches, not location, so this agrees with the params useThreadRouteTarget reads.
   const modalOpen = useMatches({
     select: (matches) => matches.some((match) => isAppModalPage(match.pathname)),
@@ -34,7 +36,17 @@ function ChatRouteLayout() {
         <ThreadLinkPrompt threadRef={shownTarget.threadRef} />
       ) : null}
       {shownTarget ? (
-        <ThreadRouteView target={shownTarget} background={modalOpen} />
+        <FactoryThreadAccess
+          environmentId={
+            shownTarget.kind === "server" && !modalOpen
+              ? shownTarget.threadRef.environmentId
+              : undefined
+          }
+          factoryId={search.factoryId}
+          runId={search.runId}
+        >
+          <ThreadRouteView target={shownTarget} background={modalOpen} />
+        </FactoryThreadAccess>
       ) : modalOpen ? (
         <SidebarInset className="h-dvh" />
       ) : (
