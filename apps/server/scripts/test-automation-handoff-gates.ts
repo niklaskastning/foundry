@@ -1,3 +1,6 @@
+import { stringify } from "yaml";
+import { validateFactoryFiles } from "@t3tools/shared/factoryDefinition";
+import { initializeV4 } from "../src/automation/V4Execution.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- These assertions exercise an isolated PostgreSQL cluster owned by the parent harness.
 import * as NodeAssert from "node:assert/strict";
 import * as NodeCrypto from "node:crypto";
@@ -30,7 +33,7 @@ import * as InstanceDatabase from "../src/foundry/InstanceDatabase.ts";
 import * as InstanceMigrations from "../src/foundry/InstanceMigrations.ts";
 import * as ArtifactFiles from "../src/foundry/ArtifactFiles.ts";
 
-const decodeBinding = Schema.decodeEffect(Scheduler.DispatchBinding);
+const decodeBinding = Schema.decodeUnknownEffect(Scheduler.DispatchBinding);
 const decodeReceipt = Schema.decodeEffect(FoundryWorkerHandoffReceipt);
 const decodeResult = Schema.decodeEffect(FoundryWorkerHandoffResult);
 const decodeExecution = Schema.decodeEffect(FoundryWorkerExecution);
@@ -73,7 +76,7 @@ export const handoffGates = Effect.fn("Handoffs.postgresGates")(function <E, E2,
       mode: "branch",
     });
     const bytes = Buffer.from("isolated bundle fixture");
-    const result = yield* decodeResult({
+    let result = yield* decodeResult({
       receipt,
       commitSha: "b".repeat(40),
       treeSha: "c".repeat(40),
@@ -731,5 +734,174 @@ export const handoffGates = Effect.fn("Handoffs.postgresGates")(function <E, E2,
     NodeAssert.equal(assignedHandoff.environmentId, expectedIdentity.environmentId);
     NodeAssert.equal(assignedHandoff.receipt?.projectId, expectedProjectId);
     NodeAssert.deepEqual(yield* execute(assignedTake), assignedHandoff);
+
+    const extraWorker = { identity: expectedIdentity, projectId: expectedProjectId };
+    expectedIdentity = binding.identity;
+    expectedProjectId = binding.projectId;
+    const parsed = validateFactoryFiles([
+      {
+        path: "factory.yaml",
+        content: stringify({
+          schemaVersion: 4,
+          factoryId: "p51-factory",
+          repositories: ["p51-repo"],
+          workflows: [{ id: "delivery", file: "workflows/delivery.yaml" }],
+          agents: [{ id: "writer", file: "agents/writer.yaml" }],
+          skills: [],
+          mcp: [],
+        }),
+      },
+      {
+        path: "agents/writer.yaml",
+        content: stringify({
+          id: "writer",
+          name: "Writer",
+          description: "Handoff fixture",
+          instructions: "Implement",
+          skills: [],
+          mcp: [],
+        }),
+      },
+      {
+        path: "workflows/delivery.yaml",
+        content: stringify({
+          id: "delivery",
+          limits: { maxConcurrentAgents: 1, maxAgentExecutions: 2 },
+          steps: [
+            {
+              id: "writer",
+              kind: "agent",
+              agent: "writer",
+              instructions: "Use pinned inputs",
+              dependsOn: [],
+              inputs: { request: { ref: "inputs.request" } },
+              workspace: { access: "write" },
+            },
+            { id: "review", kind: "approval", instructions: "Review again", dependsOn: ["writer"] },
+          ],
+        }),
+      },
+    ]);
+    NodeAssert.equal(parsed._tag, "Success");
+    if (parsed._tag !== "Success" || parsed.success.schemaVersion !== 4)
+      throw new Error("Invalid handoff v4 fixture");
+    const definition = parsed.success;
+    const pinned = {
+      workflow: definition.workflows[0]!,
+      agents: definition.agents,
+      skills: definition.skills,
+      mcp: definition.mcp,
+      files: definition.files,
+    };
+    const inputs = {
+      request: { title: "Keep original request", accepted: true },
+      paths: ["proof.txt"],
+    };
+    const originalState = {
+      ...initializeV4(pinned, "a".repeat(40), inputs),
+      startedAgentExecutions: 1,
+    };
+    yield* Effect.gen(function* () {
+      const workflows = yield* Workflows.Workflows;
+      const dispatch = yield* DispatchStore.DispatchStore;
+      yield* (yield* Factories.Factories).createWorkItem({
+        commandId: "v4-handoff-work",
+        id: "v4-handoff-work",
+        factoryId: "p51-factory",
+        versionId: "p51-version",
+        repository: "p51-repo",
+        title: "V4 handoff",
+        source: { kind: "manual", reference: "fixture" },
+      });
+      yield* workflows.createVersion({
+        commandId: "v4-handoff-flow",
+        id: "v4-handoff-flow",
+        factoryId: "p51-factory",
+        factoryVersionId: "p51-version",
+        steps: [],
+        v4: pinned,
+      });
+      yield* workflows.start({
+        commandId: "v4-handoff-start",
+        id: "v4-handoff-run",
+        factoryId: "p51-factory",
+        workItemId: "v4-handoff-work",
+        workflowVersionId: "v4-handoff-flow",
+        revision: "a".repeat(40),
+        inputs,
+      });
+      yield* dispatch.enroll({
+        factoryId: "p51-factory",
+        runId: "v4-handoff-run",
+        workerId: binding.identity.deviceId,
+        binding: {
+          ...binding,
+          workers: [{ identity: binding.identity, projectId: binding.projectId }, extraWorker],
+        },
+      });
+    }).pipe(Effect.provide(services));
+    yield* query(
+      (sql) =>
+        sql`UPDATE foundry_automation.dispatch_runs SET v4_state=${sql.json(originalState)} WHERE run_id='v4-handoff-run'`,
+    );
+    yield* query(
+      (sql) =>
+        sql`UPDATE foundry_automation.run_controls SET mode='paused' WHERE run_id='v4-handoff-run'`,
+    );
+    yield* query(
+      (sql) =>
+        sql`INSERT INTO foundry_automation.step_attempts(command_id,run_id,ordinal,request,state,result,worker_id,worker_binding) VALUES('v4-handoff-source','v4-handoff-run',0,'{}','succeeded',${sql.json({ execution: source, artifacts: [] })},${binding.identity.deviceId},${sql.json({ identity: binding.identity, projectId: binding.projectId })})`,
+    );
+    yield* query(
+      (sql) =>
+        sql`INSERT INTO foundry_automation.dispatch_outbox(command_id,state) VALUES('v4-handoff-source','confirmed')`,
+    );
+    const v4Handoff = yield* execute({
+      op: "takeOver",
+      commandId: "v4-handoff-take",
+      id: "v4-handoff",
+      factoryId: "p51-factory",
+      runId: "v4-handoff-run",
+      expectedRevision: 0,
+      sourceCommandId: "v4-handoff-source",
+      mode: "branch",
+    });
+    result = { ...result, receipt: { ...receipt, handoffId: v4Handoff.id } };
+    const v4Return = {
+      op: "returnHandoff" as const,
+      commandId: "v4-handoff-return",
+      factoryId: "p51-factory",
+      handoffId: v4Handoff.id,
+      expectedGeneration: v4Handoff.generation,
+      expectedBaseCommit: receipt.baseCommit,
+      tests: result.tests,
+      openPoints: result.openPoints,
+    };
+    const v4Returned = yield* execute(v4Return);
+    NodeAssert.deepEqual(yield* execute(v4Return), v4Returned);
+    const continued = yield* DispatchStore.DispatchStore.pipe(
+      Effect.flatMap((store) => store.read("p51-factory", v4Returned.continuationRunId!)),
+      Effect.provide(services),
+    );
+    NodeAssert.deepEqual(continued.run.inputs, inputs);
+    NodeAssert.equal(continued.run.revision, result.commitSha);
+    NodeAssert.equal(continued.run.workflowVersionId, "v4-handoff-flow");
+    NodeAssert.deepEqual(continued.workflow.v4, pinned);
+    NodeAssert.equal(continued.mode, "paused");
+    NodeAssert.deepEqual(continued.attempts, []);
+    NodeAssert.equal(continued.v4State?.startedAgentExecutions, 0);
+    NodeAssert.deepEqual(continued.v4State?.inputs, inputs);
+    const continuationBinding = yield* decodeBinding(continued.binding);
+    NodeAssert.deepEqual(continuationBinding.workers, [
+      { identity: binding.identity, projectId: receipt.projectId },
+    ]);
+    NodeAssert.equal(continuationBinding.previousHandoff, undefined);
+    const unchanged = yield* query(
+      (sql) =>
+        sql<{
+          state: unknown;
+        }>`SELECT v4_state AS state FROM foundry_automation.dispatch_runs WHERE run_id='v4-handoff-run'`,
+    );
+    NodeAssert.deepEqual(unchanged[0]?.state, originalState);
   });
 });

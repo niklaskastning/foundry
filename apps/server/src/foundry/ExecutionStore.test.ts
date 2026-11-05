@@ -140,6 +140,27 @@ it.effect("cancel before start fences future invocation and proves the writer ne
         yield* recovered.cancelUnstarted(CommandId.make("cancel-active"), active.commandId),
       );
       assert.equal(yield* recovered.occupied, 1);
+      yield* recovered.rejectedBeforeStart({ ...start, threadId: active.threadId, runOrdinal: 2 });
+      yield* recovered.rejectedBeforeStart({
+        ...start,
+        threadId: active.threadId,
+        providerThreadId: ProviderThreadId.make("wrong"),
+      });
+      assert.isFalse((yield* recovered.read(active.commandId))?.writerEnded === 1);
+      yield* recovered.rejectedBeforeStart({ ...start, threadId: active.threadId });
+      assert.equal(yield* recovered.occupied, 0);
+      assert.deepInclude(yield* recovered.read(active.commandId), {
+        writerEnded: 1,
+        state: "finalizing",
+      });
+      assert.isFalse(yield* recovered.starting({ ...start, threadId: active.threadId }));
+      yield* Effect.gen(function* () {
+        const restarted = yield* ExecutionStore.ExecutionStore;
+        assert.deepInclude(yield* restarted.read(active.commandId), {
+          writerEnded: 1,
+          state: "finalizing",
+        });
+      }).pipe(Effect.provide(Layer.fresh(ExecutionStore.layer)));
     }).pipe(Effect.provide(Layer.fresh(ExecutionStore.layer)));
   }).pipe(Effect.provide(testLayer)),
 );

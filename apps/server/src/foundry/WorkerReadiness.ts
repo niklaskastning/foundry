@@ -22,6 +22,10 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ExecutionStore from "./ExecutionStore.ts";
 
 const decodeRoots = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
+export function supportsDefinitionV4(version: string | null | undefined) {
+  const parts = /^(?:codex-cli\s+)?v?(\d+)\.(\d+)\.\d+(?:[-+].*)?$/.exec(version ?? "");
+  return parts !== null && (Number(parts[1]) > 0 || Number(parts[2]) >= 166);
+}
 
 export function providerState(
   provider: ServerProvider | undefined,
@@ -134,6 +138,9 @@ export const layer = Layer.effect(
           ...(projectId ? { projectReady: yield* projectReady(projectId) } : {}),
           roleExecutionVersion: 1 as const,
           parallelExecutionVersion: 1 as const,
+          ...(state === "ready" && supportsDefinitionV4(provider?.version)
+            ? { definitionExecutionVersion: 4 as const }
+            : {}),
           capacity,
           occupied,
           free: occupied === null ? null : Math.max(0, capacity - occupied),

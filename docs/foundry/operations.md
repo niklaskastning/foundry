@@ -1226,3 +1226,69 @@ Gezielte Nachweise, jeweils ausschließlich gegen eigene temporäre PostgreSQL-C
 FOUNDRY_TEST_PG_BIN=/path/to/postgresql/bin vp run --filter t3 test:automation-postgres
 (cd apps/server && FOUNDRY_TEST_PG_BIN=/path/to/postgresql/bin node scripts/test-automation-session-reference.ts)
 ```
+
+### Modulare Definitionen v4 aktualisieren
+
+V4 verwendet getrennte Agenten-, Workflow- und MCP-Dateien sowie vollständige
+Skillverzeichnisse. Bestehende v1–v3-Definitionen werden nicht automatisch migriert.
+Die lokale Definition kann eine v4-Migration als Dateisatz für Review exportieren;
+Git-gebundene Factories übernehmen sie erst über ihren normalen PR-, Sync- und
+Aktivierungspfad. Laufende Runs behalten den vollständigen ursprünglichen Snapshot.
+
+Main benötigt Instanzschema 8 und Automation-Schema 11. Der Worker muss
+`definitionExecutionVersion: 4` melden; der Codex-Pfad verlangt mindestens CLI
+0.166.0. Ein älterer dedizierter Provider muss zuerst ohne Änderung seiner
+Anmeldedaten aktualisiert werden. Den getesteten Worker zuerst installieren,
+danach das immutable Main-Image aus demselben Revisionstand verwenden:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-factory-definition-v4 sha256:<digest> <commit>
+```
+
+Der Updater verlangt das aktive Schema-10-Profil, hält den gemeinsamen Lock,
+stoppt Main, sichert den koordinierten Stand und migriert die separate
+Automation-Datenbank. Migratorzugang wird anschließend wieder gesperrt.
+`manifest.json` und `success` halten vorherige und aktuelle Revision fest.
+Recovery auf Schema-10-Code benötigt den koordinierten Daten-/State-Stand;
+ein reiner Image-Downgrade reicht nicht. Updates innerhalb Schema 11 verwenden
+wieder `update`. Ein Update aktiviert keine neue Factorydefinition.
+
+Auf Hosts mit AppArmor-Usernamespace-Beschränkung kann das gebündelte Codex-`bwrap`
+trotz funktionierender CLI mit `EPERM` scheitern. Der gezielte
+[Profil-Installer](../../deploy/fork/worker/codex-apparmor.py) übernimmt die vorhandenen
+Distributionsregeln aus `/etc/apparmor.d/bwrap-userns-restrict` für genau das
+root-eigene, nicht fremd beschreibbare Binary unter
+`/opt/foundry-worker/providers/codex-<version>/node_modules/@openai/codex-linux-<arch>/vendor/<target>/codex-resources/bwrap`.
+`sudo -n python3 -I deploy/fork/worker/codex-apparmor.py install --binary <absoluter-bwrap-pfad>`
+prüft alle Pfadkomponenten, kompiliert offline und schreibt ausschließlich ein
+eigenes Profil mit eigenem Capability-entzogenen Kindprofil. Der Helfer hält den
+Deploylock intern; nicht zusätzlich einklammern. Er lädt keine Kernelpolicy.
+Anschließend den Deploylock erneut bis zum Ende der Prüfung halten, das ausgegebene
+Profil mit `sudo -n apparmor_parser -r <profilpfad>` laden und den kostenlosen
+nativen Sandbox-Command-Gate mit dem dedizierten Provider ausführen. Erst dessen
+Erfolg belegt die Sandboxfähigkeit; eine erfolgreiche Modellausgabe allein reicht
+nicht. Recovery unter demselben Lock: `sudo -n apparmor_parser -R <profilpfad>`
+entfernt nur die beiden eigenen Profile; danach löscht `remove --binary
+<absoluter-bwrap-pfad>` am Helfer die unveränderte eigene Profildatei mit internem
+Lock. Vor `remove` deshalb den äußeren Lock freigeben. Die Distributionsprofile,
+globale Usernamespace-Regeln und Provider-Anmeldedaten bleiben unverändert.
+
+MCP-Definitionen benötigen unter **Agents & skills → MCP runtime authorization**
+eine ausdrückliche Factory-Bindung an die konkrete Definition und deren Tools.
+Die Verbindung referenziert vorhandene Secret-Provider-Einträge; Secretwerte
+gehören weder ins Definitionsrepository noch in das Bindungsformular.
+Geänderte Ziele verlangen eine neue Bindung. Widerruf verhindert neue Starts;
+bereits laufende Arbeit wird über den Run-Abbruch beendet. Skillskripte werden
+beim Import nicht ausgeführt. Nur Codex mit den geprüften v4-Fähigkeiten wird
+für diesen Ausführungspfad zugelassen.
+
+Beim Auftrag werden die gepinnte Git-Basis und optional strukturierte
+Workflow-Eingaben angegeben. Die Run-Ansicht zeigt gespeicherte Conditions,
+Swarm-Zweige und Iterationen; einzelne Eingaben und Resultate werden auf Wunsch
+geladen. Technische Retries und fachliche Schleifen verwenden getrennte Budgets.
+
+Eine T3-Rückgabe erstellt einen neuen, zunächst pausierten Run mit derselben
+Workflowrevision und denselben Eingaben auf dem bestätigten Rückgabe-Checkpoint.
+Der Quellrun bleibt als übergebene Historie gesperrt. Erst explizites Fortsetzen
+autorisiert die neue Ausführung mit eigenem Budget; abgeschlossene Veröffentlichungen
+und Freigaben des Quellruns werden dabei nicht automatisch ausgeführt.

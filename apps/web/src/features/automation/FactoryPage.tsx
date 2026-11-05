@@ -1,3 +1,4 @@
+import { McpBindingsPanel } from "./McpBindingsPanel";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { isDefinitiveAutomationFailure } from "./failures";
 import { randomUUID } from "../../lib/utils";
@@ -498,7 +499,18 @@ function FactoryDetail({
           <RunList environmentId={environmentId} factoryId={factoryId} onOpen={onOpenRun} compact />
         </div>
       ) : null}
-      {tab === "agents" ? <AgentCatalog active={detail?.active ?? null} /> : null}
+      {tab === "agents" ? (
+        <>
+          <AgentCatalog active={detail?.active ?? null} />
+          {detail?.active?.definition.schemaVersion === 4 ? (
+            <McpBindingsPanel
+              environmentId={environmentId}
+              factoryId={factoryId}
+              resources={detail.active.definition.mcp}
+            />
+          ) : null}
+        </>
+      ) : null}
       {tab === "definition" && detail ? (
         <div className="space-y-5">
           {source.error ? <p role="alert">{source.error}</p> : null}

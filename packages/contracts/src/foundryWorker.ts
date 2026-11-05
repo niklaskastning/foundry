@@ -16,12 +16,24 @@ import { FoundryInstanceId } from "./foundry.ts";
 import { FoundryDeviceId } from "./foundryDevices.ts";
 import { FoundryArchiveOwner } from "./foundryArchive.ts";
 import { FoundryArtifactManifest } from "./foundryArtifact.ts";
+import { FactoryV4ResolvedAgent, FactoryV4ResultSchema } from "./automation/definitionV4.ts";
+import { FactoryMcpBinding } from "./automation/mcpBinding.ts";
+
+export const FoundryWorkerDefinitionV4 = Schema.Struct({
+  factoryId: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  resources: FactoryV4ResolvedAgent,
+  workspaceAccess: Schema.Literals(["read", "write"]),
+  resultSchema: Schema.optional(FactoryV4ResultSchema),
+  mcpBindings: Schema.Array(FactoryMcpBinding).check(Schema.isMaxLength(100)),
+});
+export type FoundryWorkerDefinitionV4 = typeof FoundryWorkerDefinitionV4.Type;
 
 export const FoundryWorkerStatus = Schema.Struct({
   online: Schema.Literal(true),
   projectReady: Schema.optional(Schema.Boolean),
   roleExecutionVersion: Schema.optional(Schema.Literal(1)),
   parallelExecutionVersion: Schema.optional(Schema.Literal(1)),
+  definitionExecutionVersion: Schema.optional(Schema.Literal(4)),
   capacity: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(8))),
   occupied: Schema.optional(Schema.NullOr(NonNegativeInt)),
   free: Schema.optional(Schema.NullOr(NonNegativeInt)),
@@ -93,6 +105,7 @@ export const FoundryPublishEvidence = Schema.Struct({
 });
 export type FoundryPublishEvidence = typeof FoundryPublishEvidence.Type;
 export const FoundryWorkerLaunchInput = Schema.Struct({
+  definitionV4: Schema.optional(FoundryWorkerDefinitionV4),
   previousHandoff: Schema.optional(
     Schema.Struct({
       handoffId: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
@@ -142,11 +155,17 @@ export class FoundryWorkerLaunchError extends Schema.TaggedError<FoundryWorkerLa
       "launch_failed",
       "handoff_unavailable",
       "handoff_changed",
+      "capability_denied",
+      "resource_denied",
     ]),
   },
 ) {}
 
 export const FoundryWorkerManifest = Schema.Struct({
+  resourceFailure: Schema.optional(Schema.Literal("changed")),
+  checkpointCommitSha: Schema.optional(PublishSha),
+  structuredResult: Schema.optional(Schema.Json),
+  structuredResultError: Schema.optional(Schema.Literals(["missing", "invalid", "oversized"])),
   workspacePath: Schema.optional(TrimmedNonEmptyString),
   publishEvidenceFailure: Schema.optional(
     Schema.Literals(["dirty_commit", "test_failed", "changed_commit", "unavailable"]),

@@ -58,7 +58,7 @@ const make = Effect.gen(function* () {
           }>`SELECT version FROM foundry_automation.schema_version`;
           if (
             versions.length !== 1 ||
-            ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(versions[0]?.version ?? 0)
+            ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(versions[0]?.version ?? 0)
           )
             return yield* new AutomationMigrationError({ reason: "schema_incompatible" });
           if (versions[0]?.version === 1) {
@@ -133,6 +133,15 @@ const make = Effect.gen(function* () {
             yield* sql`CREATE INDEX step_attempts_capacity ON foundry_automation.step_attempts(worker_id) WHERE NOT capacity_released`;
             yield* sql`UPDATE foundry_automation.schema_version SET version=10`;
           }
+          if ((versions[0]?.version ?? 0) < 11) {
+            yield* sql`ALTER TABLE foundry_automation.workflow_versions ADD COLUMN IF NOT EXISTS v4 jsonb, DROP CONSTRAINT workflow_versions_steps_check, ADD CONSTRAINT workflow_versions_steps_check CHECK(jsonb_typeof(steps)='array' AND (jsonb_array_length(steps)>0 OR v4 IS NOT NULL))`;
+            yield* sql`ALTER TABLE foundry_automation.dispatch_runs ADD COLUMN IF NOT EXISTS v4_state jsonb`;
+            yield* sql`ALTER TABLE foundry_automation.runs ADD COLUMN IF NOT EXISTS inputs jsonb`;
+            yield* sql`CREATE TABLE IF NOT EXISTS foundry_automation.mcp_bindings(factory_id text NOT NULL REFERENCES foundry_automation.factories(id),resource_id text NOT NULL,generation integer NOT NULL CHECK(generation>0),binding jsonb NOT NULL,PRIMARY KEY(factory_id,resource_id))`;
+            yield* sql`UPDATE foundry_automation.schema_version SET version=11`;
+          }
+          yield* sql`GRANT INSERT, UPDATE ON foundry_automation.mcp_bindings TO ${sql(runtimeRole)}`;
+          yield* sql`GRANT UPDATE(v4_state) ON foundry_automation.dispatch_runs TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT, UPDATE ON foundry_automation.dispatch_capacity TO ${sql(runtimeRole)}`;
           yield* sql`GRANT UPDATE(capacity_released) ON foundry_automation.step_attempts TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT, UPDATE ON foundry_automation.execution_defaults TO ${sql(runtimeRole)}`;

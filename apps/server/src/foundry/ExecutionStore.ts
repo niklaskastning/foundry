@@ -65,6 +65,9 @@ export class ExecutionStore extends Context.Service<
     readonly starting: Context.Service.Shape<
       typeof ExecutionObserver.ExecutionObserver
     >["starting"];
+    readonly rejectedBeforeStart: NonNullable<
+      Context.Service.Shape<typeof ExecutionObserver.ExecutionObserver>["rejectedBeforeStart"]
+    >;
     readonly confirm: (
       commandId: CommandId,
       generation: number,
@@ -245,6 +248,13 @@ export const layer = Layer.effect(
       },
       Effect.orElseSucceed(() => false),
     );
+    const rejectedBeforeStart = Effect.fn("ExecutionStore.rejectedBeforeStart")(function* (
+      input: Parameters<ExecutionStore["Service"]["rejectedBeforeStart"]>[0],
+    ) {
+      yield* sql`UPDATE foundry_executions SET writer_ended = 1, state = 'finalizing'
+          WHERE thread_id = ${input.threadId} AND provider_thread_id = ${input.providerThreadId}
+          AND run_ordinal = ${input.runOrdinal} AND manifest IS NULL AND writer_ended = 0`;
+    }, Effect.orDie);
     const confirm = Effect.fn("ExecutionStore.confirm")(
       function* (commandId: CommandId, generation: number) {
         yield* sql`UPDATE foundry_executions SET writer_ended = 1, state = 'finalizing' WHERE command_id = ${commandId} AND generation = ${generation} AND manifest IS NULL`;
@@ -252,6 +262,7 @@ export const layer = Layer.effect(
       Effect.mapError((cause) => new ExecutionStoreError({ cause })),
     );
     return {
+      rejectedBeforeStart,
       reserve,
       occupied,
       cancelUnstarted,
@@ -272,6 +283,6 @@ export const layerObserver = Layer.effect(
   ExecutionObserver.ExecutionObserver,
   Effect.gen(function* () {
     const store = yield* ExecutionStore;
-    return { starting: store.starting };
+    return { starting: store.starting, rejectedBeforeStart: store.rejectedBeforeStart };
   }),
 );

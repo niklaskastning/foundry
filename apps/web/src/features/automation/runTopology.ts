@@ -1,6 +1,6 @@
 import type { AutomationWorkflowVersion } from "@t3tools/contracts";
 
-export function runTopology(workflow: AutomationWorkflowVersion) {
+export function runTopology(workflow: Pick<AutomationWorkflowVersion, "steps" | "execution">) {
   if (!workflow.execution) return null;
   const joinIndex = workflow.steps.findIndex((step) => step.id === workflow.execution?.joinStepId);
   const levels: string[][] = [];

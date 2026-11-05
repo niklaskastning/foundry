@@ -34,7 +34,7 @@ export const AutomationInboxEntry = Schema.Struct({
   sourceRevision: Key,
   title: Schema.String,
   detail: Schema.String,
-  stepId: Schema.NullOr(Key),
+  stepId: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024))),
   requestId: Schema.NullOr(Key),
   threadId: Schema.NullOr(Key),
   environmentId: Schema.NullOr(Key),

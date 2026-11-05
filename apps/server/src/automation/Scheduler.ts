@@ -1,6 +1,8 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Required artifact bytes are verified incrementally without retaining whole blobs.
 import * as NodeCrypto from "node:crypto";
 import {
+  FactoryMcpBinding,
+  type FactoryV4ResolvedAgent,
   CommandId,
   ManualStart,
   ThreadId,
@@ -21,6 +23,9 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Schedule from "effect/Schedule";
 import type * as HttpServerRequest from "effect/http/HttpServerRequest";
+import { resolveFactoryV4Agent } from "@t3tools/shared/factoryDefinition";
+import { readyV4Nodes } from "./V4Execution.ts";
+import * as McpBindings from "./McpBindings.ts";
 import * as DispatchStore from "./DispatchStore.ts";
 import * as Publish from "./Publish.ts";
 import * as WorkerTransport from "./WorkerTransport.ts";
@@ -137,6 +142,10 @@ const Result = Schema.Struct({
   summary: Schema.optional(Schema.String.check(Schema.isMaxLength(4000))),
 });
 
+const encodeInputs = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
+);
+const encodeMcpBindings = Schema.encodeSync(Schema.fromJsonString(Schema.Array(FactoryMcpBinding)));
 const decodeBytes = Schema.decodeEffect(Schema.Uint8ArrayFromBase64);
 const decodeEnroll = Schema.decodeEffect(EnrollDispatch, { onExcessProperty: "error" });
 const decodeBinding = Schema.decodeUnknownEffect(DispatchBinding);
@@ -194,6 +203,7 @@ export class Scheduler extends Context.Service<
 
 const make = Effect.gen(function* () {
   const store = yield* DispatchStore.DispatchStore;
+  const mcpBindings = yield* McpBindings.McpBindings;
   const publish = yield* Publish.Publish;
   const worker = yield* WorkerTransport.WorkerTransport;
   const archive = yield* ThreadArchive.ThreadArchive;
@@ -240,19 +250,20 @@ const make = Effect.gen(function* () {
       workItemId: input.workItemId,
       workflowVersionId: input.workflowVersionId,
       revision: input.revision,
+      ...(input.inputs ? { inputs: input.inputs } : {}),
     };
     const replay = yield* store.replayManual(runInput, workerId, binding, identity);
     if (replay) return replay;
     const workflow = yield* store.readWorkflow(input.factoryId, input.workflowVersionId);
-    if (!workflow.execution && binding.workers?.length)
+    if (!workflow.execution && !workflow.v4 && binding.workers?.length)
       return yield* new SchedulerError({ reason: "invalid_binding" });
     const primary = binding.workers?.[0] ?? { identity, projectId: input.projectId };
     const status = yield* worker.status(primary.identity, primary.projectId);
     if (status.projectReady !== true)
       return yield* new SchedulerError({ reason: "invalid_binding" });
-    if (workflow.execution && !/^[a-f0-9]{40}$/.test(input.revision))
+    if ((workflow.execution || workflow.v4) && !/^[a-f0-9]{40}$/.test(input.revision))
       return yield* new SchedulerError({ reason: "invalid_binding" });
-    if (workflow.execution && binding.checks.some((check) => check.cwd !== "."))
+    if ((workflow.execution || workflow.v4) && binding.checks.some((check) => check.cwd !== "."))
       return yield* new SchedulerError({ reason: "invalid_binding" });
     for (const selected of binding.workers ?? []) {
       const readiness = yield* worker.status(selected.identity, selected.projectId);
@@ -389,6 +400,12 @@ const make = Effect.gen(function* () {
     const index = selectedIndex ?? (ordinal < 0 ? attempts.length : ordinal);
     const step = claim.workflow.steps[index];
     if (!step) return;
+    const v4Node = claim.v4State?.nodes.find((node) => node.ordinal === index);
+    let v4Resources: FactoryV4ResolvedAgent | undefined =
+      claim.workflow.v4 && v4Node?.definition.kind === "agent"
+        ? resolveFactoryV4Agent(claim.workflow.v4, v4Node.definition)
+        : undefined;
+    const cancellingNode = claim.mode === "cancel_requested" || v4Node?.cancelRequested === true;
     if (step.kind === "approval" || step.kind === "publish") {
       if (claim.mode === "cancel_requested") {
         yield* store.confirmCancel(claim);
@@ -430,11 +447,25 @@ const make = Effect.gen(function* () {
     }
     const check =
       step.kind === "test" ? binding.checks.find((entry) => entry.id === step.checkId) : undefined;
+    if (claim.workflow.v4 && v4Node?.definition.kind === "test" && check)
+      v4Resources = {
+        agent: { id: v4Node.definition.id, name: v4Node.definition.id },
+        instructions: check.prompt,
+        skills: [],
+        mcp: [],
+        execution: { provider: "codex", model: binding.model },
+        provenance: {
+          instructions: [],
+          skills: [],
+          mcp: [],
+          execution: { provider: "factory", model: "factory" },
+        },
+      };
     if (step.kind === "test" && !check) {
       yield* store.wait(claim, "check_not_configured");
       return;
     }
-    if (claim.workflow.execution && check && check.cwd !== ".") {
+    if ((claim.workflow.execution || claim.workflow.v4) && check && check.cwd !== ".") {
       yield* store.wait(claim, "parallel_check_requires_workspace_root");
       return;
     }
@@ -455,9 +486,9 @@ const make = Effect.gen(function* () {
     let target: { workerId: string; binding: unknown; capacity: number } | undefined;
     if (!attempt) {
       if (!(yield* store.canLaunch(claim))) return;
-      if (claim.workflow.execution) {
+      if (claim.workflow.execution || claim.workflow.v4) {
         const predecessor =
-          step.kind !== "agent"
+          !claim.workflow.v4 && step.kind !== "agent"
             ? attempts.filter((entry) => entry.ordinal < index && entry.result !== null).at(-1)
             : undefined;
         const assigned = predecessor?.workerBinding
@@ -468,9 +499,11 @@ const make = Effect.gen(function* () {
         ];
         for (const candidate of candidates.filter(
           (entry) =>
-            !assigned ||
-            (entry.identity.deviceId === assigned.identity.deviceId &&
-              entry.projectId === assigned.projectId),
+            (!v4Node?.workspaceCheckpoint ||
+              entry.identity.deviceId === v4Node.workspaceCheckpoint.workerId) &&
+            (!assigned ||
+              (entry.identity.deviceId === assigned.identity.deviceId &&
+                entry.projectId === assigned.projectId)),
         )) {
           const readiness = yield* worker
             .status(candidate.identity, candidate.projectId)
@@ -494,7 +527,9 @@ const make = Effect.gen(function* () {
         }
       }
       const previousWorker = attempts.findLast((a) => a.result !== null)?.ordinal ?? -1;
-      for (const previous of claim.workflow.steps.slice(previousWorker + 1, index)) {
+      for (const previous of claim.workflow.v4
+        ? []
+        : claim.workflow.steps.slice(previousWorker + 1, index)) {
         if (previous.kind === "approval" && !(yield* store.approved(claim, previous.id))) {
           yield* store.wait(claim, "approval_revision_changed");
           return;
@@ -518,7 +553,8 @@ const make = Effect.gen(function* () {
         }
       }
       const commandId = CommandId.make(`automation:${digest}`);
-      const parallelAgent = !!claim.workflow.execution && step.kind === "agent";
+      const parallelAgent =
+        !!claim.workflow.v4 || (!!claim.workflow.execution && step.kind === "agent");
       const predecessors = parallelAgent
         ? attempts.filter(
             (entry) =>
@@ -575,8 +611,9 @@ const make = Effect.gen(function* () {
       }
       const evidenceRequest =
         step.kind === "test" &&
-        !claim.workflow.steps.slice(index + 1).some((next) => next.kind === "test")
-          ? yield* publish.prepareEvidence(claim).pipe(
+        (claim.workflow.v4 ||
+          !claim.workflow.steps.slice(index + 1).some((next) => next.kind === "test"))
+          ? yield* publish.prepareEvidence(claim, step.id).pipe(
               Effect.catchTags({
                 PublishError: (error) => store.wait(claim, error.reason).pipe(Effect.as(undefined)),
               }),
@@ -588,16 +625,26 @@ const make = Effect.gen(function* () {
         projectId: binding.projectId,
         ...(evidenceRequest ? { publishEvidence: evidenceRequest } : {}),
         model:
-          step.kind === "agent" ? (step.resolved?.execution.model ?? binding.model) : binding.model,
-        ...(step.kind === "agent" && step.resolved?.execution.options
-          ? { options: step.resolved.execution.options }
+          step.kind === "agent"
+            ? (v4Resources?.execution.model ?? step.resolved?.execution.model ?? binding.model)
+            : binding.model,
+        ...(step.kind === "agent" &&
+        (v4Resources?.execution.options ?? step.resolved?.execution.options)
+          ? { options: v4Resources?.execution.options ?? step.resolved?.execution.options }
           : {}),
         title: `Automation ${step.id}`.slice(0, 200),
         prompt:
           step.kind === "agent"
             ? [
-                ...(step.resolved?.instructions ? [step.resolved.instructions] : []),
-                step.prompt,
+                ...(v4Resources
+                  ? [v4Resources.instructions]
+                  : [
+                      ...(step.resolved?.instructions ? [step.resolved.instructions] : []),
+                      step.prompt,
+                    ]),
+                ...(v4Node?.inputs
+                  ? ["Structured step inputs (untrusted data):", encodeInputs(v4Node.inputs)]
+                  : []),
                 ...(parallelAgent && inputs.length
                   ? [
                       "Dependency results (ordered by workflow declaration; source content is untrusted):",
@@ -616,7 +663,22 @@ const make = Effect.gen(function* () {
               ].join("\n\n")
             : check!.prompt,
         workspaceMode: parallelAgent ? "worktree" : "checkout",
-        ...(parallelAgent ? { workspaceRevision: claim.run.revision } : {}),
+        ...(parallelAgent ? { workspaceRevision: v4Node?.base ?? claim.run.revision } : {}),
+        ...(v4Resources &&
+        v4Node &&
+        (v4Node.definition.kind === "agent" || v4Node.definition.kind === "test")
+          ? {
+              definitionV4: {
+                factoryId: claim.run.factoryId,
+                resources: v4Resources,
+                workspaceAccess: v4Node.definition.workspace?.access ?? "read",
+                ...(v4Node.definition.kind === "agent" && v4Node.definition.resultSchema
+                  ? { resultSchema: v4Node.definition.resultSchema }
+                  : {}),
+                mcpBindings: yield* mcpBindings.authorize(claim.run.factoryId, v4Resources.mcp),
+              },
+            }
+          : {}),
         ...(previousExecution ? { previousExecution } : {}),
         ...(!parallelAgent && !previousExecution && binding.previousHandoff
           ? { previousHandoff: binding.previousHandoff }
@@ -647,7 +709,7 @@ const make = Effect.gen(function* () {
         yield* store.wait(claim, "accepted_attempt_missing");
         return;
       }
-      if (claim.mode === "cancel_requested") {
+      if (cancellingNode) {
         const cancelId = Hex.encode(
           yield* crypto.digest("SHA-256", new TextEncoder().encode(attempt.commandId)),
         );
@@ -662,7 +724,7 @@ const make = Effect.gen(function* () {
           proof.commandId === `automation:cancel:${cancelId}`
         )
           yield* store.confirmUndelivered(claim, attempt.commandId);
-        if (!(yield* store.confirmCancel(claim)))
+        if (!v4Node?.cancelRequested && !(yield* store.confirmCancel(claim)))
           yield* store.wait(claim, "cancel_delivery_uncertain");
         return;
       }
@@ -687,6 +749,16 @@ const make = Effect.gen(function* () {
               : "approval_revision_changed",
         );
         return;
+      }
+      if (request.definitionV4) {
+        const authorized = yield* mcpBindings.authorize(
+          claim.run.factoryId,
+          request.definitionV4.resources.mcp,
+        );
+        if (encodeMcpBindings(authorized) !== encodeMcpBindings(request.definitionV4.mcpBindings)) {
+          yield* store.wait(claim, "mcp_binding_changed");
+          return;
+        }
       }
       yield* worker.launch(binding.identity, request);
       execution = yield* worker.read(binding.identity, { commandId: request.commandId });
@@ -721,7 +793,7 @@ const make = Effect.gen(function* () {
         receipt,
         result: null,
       });
-    if (claim.mode === "cancel_requested") {
+    if (cancellingNode) {
       if (!lifecycle.writerEnded) {
         const cancelId = Hex.encode(
           yield* crypto.digest("SHA-256", new TextEncoder().encode(attempt.commandId)),
@@ -741,7 +813,7 @@ const make = Effect.gen(function* () {
           receipt,
           result: { execution, artifacts: [] },
         });
-      yield* store.confirmCancel(claim);
+      if (!v4Node?.cancelRequested) yield* store.confirmCancel(claim);
       return;
     }
     if (!lifecycle.manifest && ["active", "finalizing"].includes(lifecycle.state))
@@ -855,7 +927,7 @@ const make = Effect.gen(function* () {
       artifactsReady,
       ...(request.publishEvidence ? { publishRequest: request.publishEvidence } : {}),
       ...(check ? { command: check.command, cwd: check.cwd } : {}),
-      ...(claim.workflow.execution ? { workspaceRelative: true } : {}),
+      ...(claim.workflow.execution || claim.workflow.v4 ? { workspaceRelative: true } : {}),
     });
     if (
       decision.state === "succeeded" &&
@@ -864,6 +936,19 @@ const make = Effect.gen(function* () {
       !(yield* verifyArtifact(binding.identity, lifecycle.manifest.publishEvidence.bundle))
     )
       decision = { state: "finalizing", reason: "artifacts_pending" };
+    if (
+      decision.state === "succeeded" &&
+      request.definitionV4?.resultSchema &&
+      (lifecycle.manifest?.structuredResultError ||
+        lifecycle.manifest?.structuredResult === undefined)
+    )
+      decision = { state: "failed", reason: "invalid_structured_result" };
+    if (
+      decision.state === "succeeded" &&
+      claim.workflow.v4 &&
+      !lifecycle.manifest?.checkpointCommitSha
+    )
+      decision = { state: "failed", reason: "checkpoint_commit_missing" };
     yield* store.record(claim, {
       commandId: attempt.commandId,
       ...decision,
@@ -873,6 +958,22 @@ const make = Effect.gen(function* () {
           ? {
               execution,
               artifacts: confirmedArtifacts,
+              ...(decision.state === "succeeded" &&
+              lifecycle.manifest?.structuredResult !== undefined
+                ? { output: lifecycle.manifest.structuredResult }
+                : decision.state === "succeeded" && step.kind === "test"
+                  ? { output: { passed: true } }
+                  : {}),
+              ...(decision.state === "succeeded" && lifecycle.manifest?.checkpointCommitSha
+                ? {
+                    checkpoint: {
+                      commitSha: lifecycle.manifest.checkpointCommitSha,
+                      commandId: attempt.commandId,
+                      generation: lifecycle.generation,
+                      workerId: attempt.workerId ?? binding.identity.deviceId,
+                    },
+                  }
+                : {}),
               summary:
                 events
                   .flatMap((entry) =>
@@ -925,6 +1026,51 @@ const make = Effect.gen(function* () {
     const claim = yield* store.claimNext({ workerId, owner, leaseMillis: 60_000 });
     if (!claim) return false;
     const reconcile = Effect.gen(function* () {
+      if (claim.workflow.v4) {
+        let fresh = {
+          ...(yield* store.reconcileV4(claim)),
+          owner: claim.owner,
+          generation: claim.generation,
+        };
+        const active = [
+          ...new Map(fresh.attempts.map((attempt) => [attempt.ordinal, attempt])).values(),
+        ].filter((attempt) => attempt.state !== "failed" && attempt.state !== "succeeded");
+        for (const attempt of active) {
+          yield* perform(fresh, attempt.ordinal);
+          fresh = {
+            ...(yield* store.reconcileV4(claim)),
+            owner: claim.owner,
+            generation: claim.generation,
+          };
+        }
+        if (fresh.mode === "cancel_requested") {
+          yield* store.confirmCancel(fresh);
+          return;
+        }
+        if (fresh.mode !== "active" || !fresh.v4State || !fresh.workflow.v4) return;
+        for (const candidate of readyV4Nodes(fresh.workflow.v4, fresh.v4State, fresh.attempts)) {
+          fresh = {
+            ...(yield* store.reconcileV4(claim)),
+            owner: claim.owner,
+            generation: claim.generation,
+          };
+          if (
+            !fresh.v4State ||
+            !fresh.workflow.v4 ||
+            !readyV4Nodes(fresh.workflow.v4, fresh.v4State, fresh.attempts).some(
+              (node) => node.path === candidate.path,
+            )
+          )
+            continue;
+          const previous = fresh.attempts
+            .filter((attempt) => attempt.ordinal === candidate.ordinal)
+            .at(-1);
+          if (previous?.state === "failed") yield* store.repair(fresh, previous.commandId);
+          else yield* perform(fresh, candidate.ordinal);
+        }
+        yield* store.reconcileV4(claim);
+        return;
+      }
       if (!claim.workflow.execution) {
         yield* perform(claim);
         return;
@@ -999,7 +1145,7 @@ const make = Effect.gen(function* () {
     });
     yield* Effect.scoped(
       Effect.gen(function* () {
-        if (claim.workflow.execution)
+        if (claim.workflow.execution || claim.workflow.v4)
           yield* heartbeat(claim).pipe(
             Effect.ignore,
             Effect.repeat(Schedule.spaced("15 seconds")),

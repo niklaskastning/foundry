@@ -1,3 +1,4 @@
+import * as WorkerResources from "../../foundry/WorkerResources.ts";
 import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
 import {
   makeProviderTextDeltaCoalescer,
@@ -219,6 +220,54 @@ describe("CodexAdapterV2 runtime policy", () => {
       assert.equal(fullAccess.approvalPolicy, "never");
       assert.equal(fullAccess.approvalsReviewer, "user");
       assert.equal(fullAccess.sandboxPolicy?.type, "dangerFullAccess");
+      for (const access of ["read", "write"] as const) {
+        const resources = {
+          factoryId: "factory",
+          workspaceAccess: access,
+          mcpBindings: [],
+          resultSchema: { type: "boolean" as const },
+          resources: {
+            agent: { id: "reviewer", name: "Reviewer" },
+            instructions: "Review",
+            skills: [
+              {
+                id: "review",
+                name: "review",
+                description: "Review code",
+                directory: "skills/review",
+                files: [],
+              },
+            ],
+            mcp: [],
+            execution: { provider: "codex" as const },
+            provenance: {
+              instructions: [],
+              skills: [],
+              mcp: [],
+              execution: { provider: "factory" as const },
+            },
+          },
+        };
+        const pinned = yield* CodexAdapterV2.buildCodexTurnStartParams({
+          nativeThreadId: "foundry",
+          codexInput: [{ type: "text", text: "Review" }],
+          runtimePolicy: {
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            cwd: "/isolated/worktree",
+          },
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+          foundryResources: { directory: "/isolated/resources", request: resources },
+        });
+        assert.equal(pinned.approvalPolicy, "never");
+        assert.equal(pinned.sandboxPolicy?.type, access === "read" ? "readOnly" : "workspaceWrite");
+        assert.deepEqual(pinned.outputSchema, { type: "boolean" });
+        assert.deepEqual(pinned.input.at(-1), {
+          type: "skill",
+          name: "review",
+          path: "/isolated/resources/skills/review/SKILL.md",
+        });
+      }
     }),
   );
 
@@ -290,6 +339,7 @@ describe("CodexAdapterV2 native protocol logging", () => {
           params: {
             id: "evt-1",
             http_headers: { Authorization: "Bearer secret-codex-token" },
+            env: { DOCUMENTATION_CREDENTIAL: "secret-from-reference" },
             usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
           },
         },
@@ -316,6 +366,7 @@ describe("CodexAdapterV2 native protocol logging", () => {
             params: {
               id: "evt-1",
               http_headers: { Authorization: "[REDACTED]" },
+              env: "[REDACTED]",
               usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
             },
           },
@@ -1208,6 +1259,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       const runtime = yield* adapter.openSession({
         threadId,
         providerSessionId: ProviderSessionId.make(`provider-session-${transcript.scenario}`),
+        ...(existingNativeThreadId ? { initialNativeThreadId: existingNativeThreadId } : {}),
         modelSelection: CODEX_TEST_MODEL_SELECTION,
         runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
       });
@@ -1293,8 +1345,112 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       };
     });
 
+  it.effect("starts a v4 model turn only after its native sandbox command succeeds", () =>
+    Effect.gen(function* () {
+      const nativeThreadId = "sandbox-ready-thread";
+      const nativeTurnId = "sandbox-ready-turn";
+      const request = {
+        factoryId: "fixture",
+        workspaceAccess: "write" as const,
+        mcpBindings: [],
+        resources: {
+          agent: { id: "writer", name: "Writer" },
+          instructions: "Write",
+          skills: [],
+          mcp: [],
+          execution: { provider: "codex" as const },
+          provenance: {
+            instructions: [],
+            skills: [],
+            mcp: [],
+            execution: { provider: "factory" as const },
+          },
+        },
+      };
+      const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
+        nativeThreadId,
+        codexInput: [{ type: "text", text: "fixture" }],
+        runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+        modelSelection: CODEX_TEST_MODEL_SELECTION,
+        foundryResources: { directory: "/unused", request },
+      });
+      const transcript = makeCodexReplayTranscript({
+        scenario: "sandbox-ready",
+        entries: [
+          ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "fixture" }).slice(0, 5),
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 3,
+              method: "command/exec",
+              params: WorkerResources.codexSandboxProbe("write", "/workspace"),
+            },
+          },
+          {
+            type: "emit_inbound",
+            frame: { id: 3, result: { exitCode: 0, stdout: "foundry-sandbox-ready", stderr: "" } },
+          },
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 4,
+              method: "mcpServerStatus/list",
+              params: { threadId: nativeThreadId, detail: "full", limit: 100 },
+            },
+          },
+          { type: "emit_inbound", frame: { id: 4, result: { data: [], nextCursor: null } } },
+          { type: "expect_outbound", frame: { id: 5, method: "turn/start", params } },
+          {
+            type: "emit_inbound",
+            frame: {
+              id: 5,
+              result: { turn: makeCodexReplayTurn({ id: nativeTurnId, status: "inProgress" }) },
+            },
+          },
+          {
+            type: "emit_inbound",
+            frame: {
+              method: "turn/completed",
+              params: {
+                threadId: nativeThreadId,
+                turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+              },
+            },
+          },
+        ],
+      });
+      const harness = yield* makeCodexReplayHarness(transcript);
+      yield* WorkerResources.prepareResources(
+        harness.serverConfig.stateDir,
+        harness.threadId,
+        request,
+      );
+      yield* harness.runtime.startTurn(
+        makeCodexTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("sandbox-ready"),
+          text: "fixture",
+        }),
+      );
+      yield* harness.firstTerminal;
+      assert.equal(harness.terminalEvents()[0]?.status, "completed");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
   it.effect.each([
     "recovered",
+    "recovered-empty",
+    "empty-unproven",
+    "preflight-rejected",
+    "sandbox-rejected",
+    "recovered-unidentified",
     "completed",
     "inProgress",
     "missing",
@@ -1313,7 +1469,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           nativeThreadId,
           nativeTurnId,
           prompt: "fixture",
-        }).slice(0, state === "recovered" ? 3 : 5);
+        }).slice(0, state.startsWith("recovered") ? 3 : 5);
         const thread = {
           id: nativeThreadId,
           sessionId: nativeThreadId,
@@ -1335,7 +1491,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           gitInfo: null,
           name: null,
           turns:
-            state === "missing"
+            state === "missing" ||
+            state === "recovered-empty" ||
+            state === "empty-unproven" ||
+            state === "preflight-rejected" ||
+            state === "sandbox-rejected"
               ? []
               : [
                   {
@@ -1380,11 +1540,34 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           scenario: `writer-evidence-${state}`,
           entries: [
             ...preamble,
+            ...(state === "sandbox-rejected"
+              ? [
+                  {
+                    type: "expect_outbound" as const,
+                    frame: {
+                      id: 3,
+                      method: "command/exec",
+                      params: WorkerResources.codexSandboxProbe("read", "/workspace"),
+                    },
+                  },
+                  {
+                    type: "emit_inbound" as const,
+                    frame: {
+                      id: 3,
+                      result: {
+                        exitCode: 1,
+                        stdout: "",
+                        stderr: "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted",
+                      },
+                    },
+                  },
+                ]
+              : []),
             {
               type: "expect_outbound",
               label: "proof",
               frame: {
-                id: state === "recovered" ? 2 : 3,
+                id: state.startsWith("recovered") ? 2 : state === "sandbox-rejected" ? 4 : 3,
                 method: "thread/read",
                 params: { threadId: nativeThreadId, includeTurns: true },
               },
@@ -1395,7 +1578,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               frame:
                 state === "disconnected"
                   ? { id: 3, error: { code: -32603, message: "offline fixture" } }
-                  : { id: state === "recovered" ? 2 : 3, result: { thread } },
+                  : {
+                      id: state.startsWith("recovered") ? 2 : state === "sandbox-rejected" ? 4 : 3,
+                      result: { thread },
+                    },
             },
             ...(state.startsWith("child-")
               ? [
@@ -1440,16 +1626,66 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           undefined,
           undefined,
           undefined,
-          state === "recovered" ? nativeThreadId : undefined,
+          state.startsWith("recovered") ? nativeThreadId : undefined,
         );
+        if (state === "preflight-rejected" || state === "sandbox-rejected") {
+          const prepared = yield* WorkerResources.prepareResources(
+            harness.serverConfig.stateDir,
+            harness.threadId,
+            {
+              factoryId: "fixture",
+              workspaceAccess: "read",
+              mcpBindings: [],
+              resources: {
+                agent: { id: "review", name: "Review" },
+                instructions: "Review",
+                skills: [],
+                mcp: [],
+                execution: { provider: "codex" },
+                provenance: {
+                  instructions: [],
+                  skills: [],
+                  mcp: [],
+                  execution: { provider: "factory" },
+                },
+              },
+            },
+          );
+          if (state === "preflight-rejected")
+            yield* (yield* FileSystem.FileSystem).remove(`${prepared.directory}/request.json`);
+          const rejected = yield* harness.runtime
+            .startTurn({
+              ...makeCodexTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make("rejected-preflight"),
+                text: "fixture",
+              }),
+              runId: RunId.make("writer-evidence-run"),
+            })
+            .pipe(Effect.exit);
+          assert.equal(rejected._tag, "Failure");
+        }
         assert.isDefined(harness.runtime.confirmWriterEnded);
         assert.equal(
           yield* harness.runtime.confirmWriterEnded!({
             providerThread: harness.providerThread,
-            nativeTurnId,
+            ...(state === "recovered-empty" ||
+            state === "empty-unproven" ||
+            state === "preflight-rejected" ||
+            state === "sandbox-rejected" ||
+            state === "recovered-unidentified"
+              ? {}
+              : { nativeTurnId }),
             runId: RunId.make("writer-evidence-run"),
           }),
-          state === "recovered" || state === "completed" || state === "child-completed",
+          state === "recovered" ||
+            state === "recovered-empty" ||
+            state === "preflight-rejected" ||
+            state === "sandbox-rejected" ||
+            state === "completed" ||
+            state === "child-completed",
         );
       }).pipe(
         Effect.scoped,
@@ -2600,6 +2836,99 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(resumed.nativeThreadRef?.nativeId, nativeThreadId);
         assert.equal(resumed.status, "idle");
         assert.equal(DateTime.toEpochMillis(resumed.updatedAt), 1782622450000);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("initializes a recovered v4 session before reading inherited MCP configuration", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = "codex-v4-recovered-config";
+        const nativeThreadId = "native-v4-recovered";
+        const resources = {
+          factoryId: "fixture",
+          workspaceAccess: "read" as const,
+          mcpBindings: [],
+          resources: {
+            agent: { id: "review", name: "Review" },
+            instructions: "Review",
+            skills: [],
+            mcp: [],
+            execution: { provider: "codex" as const },
+            provenance: {
+              instructions: [],
+              skills: [],
+              mcp: [],
+              execution: { provider: "factory" as const },
+            },
+          },
+        };
+        const transcript = makeCodexReplayTranscript({
+          scenario,
+          entries: [
+            ...codexReplayPreamble({
+              nativeThreadId,
+              nativeTurnId: "unused",
+              prompt: "unused",
+            }).slice(0, 3),
+            {
+              type: "expect_outbound",
+              label: "config/read",
+              frame: {
+                id: 2,
+                method: "config/read",
+                params: { cwd: CODEX_TEST_RUNTIME_POLICY.cwd, includeLayers: false },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "config/read",
+              frame: { id: 2, result: { config: {}, origins: {} } },
+            },
+            {
+              type: "expect_outbound",
+              label: "thread/resume",
+              frame: {
+                id: 3,
+                method: "thread/resume",
+                params: {
+                  threadId: nativeThreadId,
+                  excludeTurns: true,
+                  config: {
+                    ...CodexAdapterV2.CODEX_THREAD_CONFIG,
+                    ...WorkerResources.codexResourceConfig(resources, {}),
+                  },
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "thread/resume",
+              frame: { id: 3, result: { thread: { id: nativeThreadId, updatedAt: 1782622450 } } },
+            },
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(
+          transcript,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          nativeThreadId,
+        );
+        yield* WorkerResources.prepareResources(
+          harness.serverConfig.stateDir,
+          harness.threadId,
+          resources,
+        );
+        const resumed = yield* harness.runtime.resumeThread({
+          providerThread: harness.providerThread,
+        });
+        assert.equal(resumed.status, "idle");
       }).pipe(
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
@@ -6409,6 +6738,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         Effect.gen(function* () {
           const retriedTurnId = "native-capacity-recovered-parent";
           const retrying = yield* Deferred.make<void>();
+          const childWaiting = yield* Deferred.make<void>();
+          const releaseChild = yield* Deferred.make<void>();
           const entries: Array<CodexReplay.CodexAppServerReplayEntry> = [
             ...lateChildPrefix().spawned,
             {
@@ -6492,7 +6823,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               text: "CAPACITY_CHILD_DONE",
               turnId: RESUME_CHILD_TURN_1,
               completedAtMs: 1782622480000,
-              afterMs: 60_000,
             }),
             childTurnCompleted(RESUME_CHILD_TURN_1),
           ];
@@ -6506,6 +6836,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               event.turnItem.type === "error" &&
               event.turnItem.status === "running"
                 ? Deferred.succeed(retrying, undefined)
+                : Effect.void,
+            undefined,
+            undefined,
+            (entry) =>
+              entry.label === "item/completed/child-after-capacity"
+                ? Deferred.succeed(childWaiting, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseChild)),
+                  )
                 : Effect.void,
           );
           yield* harness.runtime.startTurn(
@@ -6525,7 +6863,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             const terminal = harness.terminalEvents()[0];
             if (terminal?.status === "failed") assert.isTrue(terminal.childTurnsContinue);
           }
-          yield* TestClock.adjust("60 seconds");
+          yield* Deferred.await(childWaiting);
+          yield* Deferred.succeed(releaseChild, undefined);
           yield* harness.until(
             () => harness.subagentUpdates().at(-1)?.subagent.status === "completed",
           );

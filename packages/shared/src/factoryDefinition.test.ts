@@ -1,3 +1,6 @@
+import { factoryDefinitionPreview } from "./factoryDefinitionPreview.ts";
+import { AutomationApplicationResult } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 import * as Result from "effect/Result";
 import {
@@ -6,6 +9,8 @@ import {
   validateFactoryFiles,
   resolveFactoryWorkflow,
 } from "./factoryDefinition.ts";
+
+const decodeApplicationResult = Schema.decodeUnknownSync(AutomationApplicationResult);
 
 const files = () => [
   {
@@ -21,6 +26,49 @@ const files = () => [
 ];
 
 describe("canonical factory definitions", () => {
+  it("preserves revision file display metadata across the public contract", () => {
+    const file = {
+      path: "asset.bin",
+      content: "",
+      encoding: "base64",
+      mode: "100755",
+      sha256: "a".repeat(64),
+      size: 2,
+    };
+    const decoded = decodeApplicationResult({
+      kind: "definitionRevisionFile",
+      file,
+    });
+    expect(decoded).toEqual({ kind: "definitionRevisionFile", file });
+    const text = "schemaVersion: 4\nname: Prüfung 🛠\n";
+    const encoded = {
+      ...file,
+      path: "factory.yaml",
+      content: Buffer.from(text).toString("base64"),
+      encoding: "base64" as const,
+      mode: "100755" as const,
+    };
+    expect(factoryDefinitionPreview(encoded)).toEqual({
+      ...encoded,
+      encoding: "utf8",
+      content: text,
+      size: Buffer.byteLength(text),
+    });
+    for (const content of ["AP8=", "AAE=", "/w=="]) {
+      const binary = factoryDefinitionPreview({ ...encoded, content });
+      expect(binary.encoding).toBe("base64");
+      expect(binary.content).toBe("");
+      expect(binary.sha256).toBe(file.sha256);
+      expect(binary.size).toBe(Buffer.from(content, "base64").byteLength);
+      expect(factoryDefinitionPreview(binary)).toEqual(binary);
+    }
+    expect(factoryDefinitionPreview({ ...encoded, encoding: "utf8", content: "\u0000" })).toEqual({
+      ...encoded,
+      encoding: "base64",
+      content: "",
+      size: 1,
+    });
+  });
   it("rejects a compact input whose canonical export exceeds the file limit", () => {
     const input = files();
     input[1]!.content =
@@ -157,6 +205,7 @@ describe("canonical factory definitions", () => {
     ];
     const parsed = validateFactoryFiles(input);
     if (Result.isFailure(parsed)) throw new Error(JSON.stringify(parsed.failure));
+    if (parsed.success.schemaVersion === 4) throw new Error("Expected legacy fixture");
     expect(validateFactoryFiles(exportFactoryFiles(parsed.success))).toEqual(parsed);
     const before = resolveFactoryWorkflow(parsed.success, "build");
     expect(before[0]).toMatchObject({
@@ -287,6 +336,7 @@ describe("canonical factory definitions", () => {
     input[1]!.content = JSON.stringify({ execution, steps });
     const parsed = validateFactoryFiles(input);
     if (Result.isFailure(parsed)) throw new Error(JSON.stringify(parsed.failure));
+    if (parsed.success.schemaVersion === 4) throw new Error("Expected legacy fixture");
     expect(parsed.success.workflows[0]?.execution).toEqual(execution);
     expect(validateFactoryFiles(exportFactoryFiles(parsed.success))).toEqual(parsed);
     expect(resolveFactoryWorkflow(parsed.success, "main")[0]).toMatchObject({
@@ -374,6 +424,7 @@ describe("canonical factory definitions", () => {
       input[1]!.content = JSON.stringify({ steps });
       const legacy = validateFactoryFiles(input);
       if (Result.isFailure(legacy)) throw new Error(JSON.stringify(legacy.failure));
+      if (legacy.success.schemaVersion === 4) throw new Error("Expected legacy fixture");
       expect(legacy.success.workflows[0]?.execution).toBeUndefined();
       expect(validateFactoryFiles(exportFactoryFiles(legacy.success))).toEqual(legacy);
     }

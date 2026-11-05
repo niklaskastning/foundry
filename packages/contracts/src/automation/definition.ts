@@ -1,3 +1,4 @@
+import { CanonicalFactoryDefinitionV4, FactoryV4Path } from "./definitionV4.ts";
 import * as Schema from "effect/Schema";
 import {
   AutomationFactory,
@@ -55,7 +56,7 @@ export const FactoryWorkflowFile = Schema.Struct({
   steps: FactoryDefinitionSteps,
   execution: Schema.optional(FactoryWorkflowExecution),
 }).check(factoryWorkflowExecutionCheck);
-export const CanonicalFactoryDefinition = Schema.Struct({
+export const LegacyCanonicalFactoryDefinition = Schema.Struct({
   ...Catalog,
   factoryId: Key,
   repositories: Repositories,
@@ -65,13 +66,21 @@ export const CanonicalFactoryDefinition = Schema.Struct({
     ),
   ),
 });
+export const CanonicalFactoryDefinition = Schema.Union([
+  LegacyCanonicalFactoryDefinition,
+  CanonicalFactoryDefinitionV4,
+]);
+export type LegacyCanonicalFactoryDefinition = typeof LegacyCanonicalFactoryDefinition.Type;
 export type CanonicalFactoryDefinition = typeof CanonicalFactoryDefinition.Type;
 export const FactoryDefinitionFiles = Schema.Array(
   Schema.Struct({
-    path: DefinitionPath,
-    content: Schema.String.check(Schema.isMaxLength(256 * 1024)),
+    path: FactoryV4Path,
+    content: Schema.String.check(Schema.isMaxLength(1_398_104)),
+    encoding: Schema.optional(Schema.Literals(["utf8", "base64"])),
+    mode: Schema.optional(Schema.Literals(["100644", "100755"])),
+    sha256: Schema.optional(Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))),
   }),
-).check(Schema.isMinLength(1), Schema.isMaxLength(101));
+).check(Schema.isMinLength(1), Schema.isMaxLength(2048));
 export type FactoryDefinitionFiles = typeof FactoryDefinitionFiles.Type;
 export const FactoryDefinitionIssue = Schema.Struct({
   file: Schema.String,

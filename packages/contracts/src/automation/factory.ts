@@ -1,3 +1,6 @@
+import { FactoryV4ResolvedAgent, FactoryV4Snapshot } from "./definitionV4.ts";
+import { FactoryAgentExecution } from "./agentExecution.ts";
+export { FactoryAgentExecution } from "./agentExecution.ts";
 import * as Schema from "effect/Schema";
 
 const Key = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200));
@@ -49,17 +52,6 @@ export const CreateAutomationWorkItem = Schema.Struct({
 });
 
 const StepText = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(20_000));
-export const FactoryAgentExecution = Schema.Struct({
-  provider: Schema.optional(Schema.Literal("codex")),
-  model: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200))),
-  options: Schema.optional(
-    Schema.Struct({
-      reasoningEffort: Schema.optional(
-        Schema.Literals(["minimal", "low", "medium", "high", "xhigh"]),
-      ),
-    }),
-  ),
-});
 export const FactoryAgentSkill = Schema.Struct({
   id: Key,
   name: Title,
@@ -77,12 +69,14 @@ export const FactoryAgentRole = Schema.Struct({
   execution: Schema.optional(FactoryAgentExecution),
 });
 export const FactoryResolvedAgent = Schema.Struct({
+  v4: Schema.optional(FactoryV4ResolvedAgent),
   role: Schema.optional(Schema.Struct({ id: Key, name: Title, instructions: StepText })),
   skills: Schema.Array(FactoryAgentSkill).check(Schema.isMaxLength(100)),
   execution: Schema.Struct({ ...FactoryAgentExecution.fields, provider: Schema.Literal("codex") }),
   instructions: Schema.String.check(Schema.isMaxLength(60_000)),
 });
-const StepFields = { id: Key, dependsOn: Schema.Array(Key) };
+const StepPath = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024));
+const StepFields = { id: StepPath, dependsOn: Schema.Array(StepPath) };
 const AgentStepFields = {
   ...StepFields,
   kind: Schema.Literal("agent"),
@@ -184,18 +178,44 @@ export const factoryWorkflowExecutionCheck = Schema.makeFilter(
       "Parallel workflows require agent branches converging on one explicit join, followed only by a serial test, approval or publish chain.",
   },
 );
+const isSequentialSteps = Schema.is(SequentialSteps);
 export const AutomationWorkflowVersion = Schema.Struct({
   id: Key,
   factoryId: Key,
   factoryVersionId: Key,
-  steps: SequentialSteps,
+  steps: Schema.Array(AutomationStep).check(Schema.isMaxLength(10000)),
+  v4: Schema.optional(FactoryV4Snapshot),
   execution: Schema.optional(FactoryWorkflowExecution),
-}).check(factoryWorkflowExecutionCheck);
+}).check(
+  factoryWorkflowExecutionCheck,
+  Schema.makeFilter((value) => value.v4 !== undefined || isSequentialSteps(value.steps)),
+);
 export type AutomationWorkflowVersion = typeof AutomationWorkflowVersion.Type;
 export const CreateAutomationWorkflowVersion = Schema.Struct({
   commandId: Key,
   ...AutomationWorkflowVersion.fields,
-}).check(factoryWorkflowExecutionCheck);
+}).check(
+  factoryWorkflowExecutionCheck,
+  Schema.makeFilter((value) => value.v4 !== undefined || isSequentialSteps(value.steps)),
+);
+export const FactoryWorkflowInputs = Schema.Record(
+  Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9-]{0,63}$/)),
+  Schema.Json,
+).check(
+  Schema.makeFilter((value) => {
+    let count = 0;
+    const bounded = (entry: unknown, depth: number): boolean => {
+      if (depth > 8 || ++count > 2000) return false;
+      if (entry && typeof entry === "object")
+        return Object.entries(entry).every(
+          ([key, child]) =>
+            !["__proto__", "constructor", "prototype"].includes(key) && bounded(child, depth + 1),
+        );
+      return true;
+    };
+    return bounded(value, 0) && new TextEncoder().encode(JSON.stringify(value)).byteLength <= 65536;
+  }),
+);
 export const AutomationRun = Schema.Struct({
   id: Key,
   factoryId: Key,
@@ -204,6 +224,7 @@ export const AutomationRun = Schema.Struct({
   factoryVersionId: Key,
   repository: Key,
   revision: Key,
+  inputs: Schema.optional(FactoryWorkflowInputs),
   state: Schema.Literals([
     "pending",
     "running",
@@ -223,6 +244,7 @@ export const StartAutomationRun = Schema.Struct({
   workItemId: Key,
   workflowVersionId: Key,
   revision: Key,
+  inputs: Schema.optional(FactoryWorkflowInputs),
 });
 export const AutomationOutboxEntry = Schema.Struct({
   id: Key,

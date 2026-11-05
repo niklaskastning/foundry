@@ -112,17 +112,25 @@ Die folgende Liste ist ein Zielumfang mit Abgleich zum bisherigen Plan, keine Be
 
 ### 3.3 Factory as Code als gemeinsame Konfigurationsquelle
 
-Vorgesehen ist ein eigenes versioniertes Foundry-Schema mit einer `factory.yaml` als Einstieg, referenzierten Workflow-Dateien sowie Markdown-Agenten/Skills. Runner-, Scorer- und Benchmark-Definitionen kommen mit ihren Fähigkeiten hinzu. Das ist eine Formatentscheidung für P47, kein Versprechen der Kompatibilität mit Warp-Dateien. Die frühere Factory-as-Code-Implementierung des Betreibers ist eine mögliche Referenz; ihr Code und Format wurden in diesem Abgleich nicht untersucht und werden nicht als wiederverwendbar vorausgesetzt.
+Das versionierte Foundry-Schema verwendet `factory.yaml` als Einstieg. V1/v2/v3 bleiben mit ihrer bisherigen Semantik erhalten. Das für Linux/Codex und Web nativ abgenommene [modulare Modell v4](https://github.com/niklaskastning/foundry-definitions/blob/main/docs/definition-model.md) registriert Workflow- und Agenten-YAMLs, vollständige Standard-Skillordner mit `SKILL.md` sowie einzelne MCP-YAMLs. Runner-, Scorer- und Benchmark-Definitionen kommen erst mit ihren Fähigkeiten hinzu. Das ist eine Formatentscheidung für P47, kein Versprechen der Kompatibilität mit Warp-Dateien. Die frühere Factory-as-Code-Implementierung des Betreibers ist eine mögliche Referenz; ihr Code und Format wurden in diesem Abgleich nicht untersucht und werden nicht als wiederverwendbar vorausgesetzt.
 
-Auf Maintainerwunsch liegen Factory-Definitionen, Workflows und später unterstützte Agenten/Skills im privaten Repository [niklaskastning/foundry-definitions](https://github.com/niklaskastning/foundry-definitions), getrennt von Foundry-Appcode und den bearbeiteten Code-Repositories. PostgreSQL hält aktivierte unveränderliche Snapshots, Herkunft und Laufhistorie. Der manuelle Datei-Import/Export dient der expliziten Erstübernahme mit Driftabgleich. Git-Synchronisierung und Aktivierung sind getrennte Schritte; erst die Aktivierung einer geprüften Revision überträgt die dauerhafte Ownership.
+Auf Maintainerwunsch liegen Factory-Definitionen, Workflows und versionierte Agenten/Skills im privaten Repository [niklaskastning/foundry-definitions](https://github.com/niklaskastning/foundry-definitions), getrennt von Foundry-Appcode und den bearbeiteten Code-Repositories. PostgreSQL hält aktivierte unveränderliche Snapshots, Herkunft und Laufhistorie. Der manuelle Datei-Import/Export dient der expliziten Erstübernahme mit Driftabgleich. Git-Synchronisierung und Aktivierung sind getrennte Schritte; erst die Aktivierung einer geprüften Revision überträgt die dauerhafte Ownership.
 
 Das GitHub-Definitionsrepository ist der einzige dauerhafte Owner. Menschen und autorisierte Agenten lesen dieselben Dateien und schlagen Änderungen über Commits und PRs dort vor. Die App ist die Lese-, Prüf- und Bedienoberfläche für diese Definitionen; sie zeigt Repository, Pfad, Branch, konkreten Commit und aktive Revision. Ein späterer UI-Editor darf ausschließlich Änderungen/PRs im Definitionsrepository vorbereiten. Der bestehende manuelle P47/P21-Editor ist ein Entwicklungs-/Importübergang, kein zweiter dauerhafter Verwaltungsmodus. P48 übernimmt vorhandene Testdefinitionen mit explizitem Versions-/Driftabgleich und beendet für Git-gebundene Factories die direkte lokale Definitionsbearbeitung.
 
 In der App konfigurierbar bleiben Betriebsbindungen und Entscheidungen: zugeordnete Worker/Checkouts, Credential- und Grant-Bindings, ausdrückliche Trigger-Aktivierung oder Pause, Freigaben und Run-Steuerung. Diese Einstellungen überschreiben keine Workflow-Schritte, Prompts, Skills oder Evaluationskriterien aus Git. Spätere Agentenverbesserungen verwenden Beobachtungen und Evals als Belege für einen PR im Definitionsrepository (P57); Merge und Aktivierung folgen weiterhin menschlicher Prüfung und P48.
 
-Die Aktivierung prüft Schema, Referenzen, Fähigkeiten und zulässige Bindings und veröffentlicht genau einen konsistenten Snapshot. Ungültige Revisionen bleiben sichtbar abgewiesen, die letzte gültige Version aktiv. Gleichzeitige Änderungen benötigen eine erwartete Basisversion. Laufende Runs behalten ihren Snapshot. Rollback aktiviert eine frühere Definition für neue Starts und setzt weder Datenbankmigrationen noch externe Aktionen zurück.
+Die Aktivierung prüft Schema, Referenzen und zulässigen Definitionsscope und veröffentlicht genau einen konsistenten Snapshot. Tatsächliche Worker-/Modellfähigkeiten und aktuelle Ressourcenfreigaben werden beim Start zusätzlich geprüft; ein gültiger Snapshot garantiert deren Verfügbarkeit nicht. Ungültige Revisionen bleiben sichtbar abgewiesen, die letzte gültige Version aktiv. Gleichzeitige Änderungen benötigen eine erwartete Basisversion. Laufende Runs behalten ihren Snapshot. Rollback aktiviert eine frühere Definition für neue Starts und setzt weder Datenbankmigrationen noch externe Aktionen zurück.
 
 Logische Repository-, Runner-, MCP- und Secret-Referenzen stehen in der Definition; konkrete Device-Pfade und Credential-Werte bleiben getrennte Instanzbindungen. Git-Inhalte dürfen keine Rechte erzeugen. Import validiert Pfade, Größen, referenzierte Dateien und unterstützte Schema-Versionen; Definitionen führen auf Main keinen Code aus. Spätere Ressourcen werden capability-gesteuert ergänzt, unbekannte erforderliche Ressourcen nicht stillschweigend ignoriert.
+
+V4 pinnt den vollständigen referenzierten Dateibaum einschließlich Inhaltsbytes, SHA-256 und Git-Ausführbarkeitsmodus. Der explizite Migrationsexport verändert weder aktive Factories noch alte Runs. Agentenressourcen werden additiv in der Reihenfolge Basisagent → Workflow → Step aufgelöst; die konkrete Aufgabe folgt zuletzt. Ausführungseinstellungen erben feldweise Factory → Agent → Workflow → Step. Herkunft und wirksame Konfiguration bleiben am Attempt nachvollziehbar, ohne Secrets im Snapshot.
+
+Der Codex-Adapter stellt Standard-Skills als Dateien bereit und prüft MCP-Toolrechte gegen Factory-begrenzte, versionierte Betriebsbindungen sowie das reale Providerinventar. Andere Provider und weitere HTTP-Authentifizierungsverfahren sind damit nicht unterstützt; HTTP-Auth ist zunächst auf autorisierte Bearer-Referenzen begrenzt. Deklarationen erzeugen keine Grants. Fehlerhafte oder nicht technisch durchsetzbare Fähigkeiten verhindern den Start. Diese Ressourcenbereitstellung ist keine Sandboxplattform.
+
+V4 ergänzt den vorhandenen PostgreSQL-Scheduler um persistente Scope-, Condition-, Resultat- und Iterationszustände; lokales T3-SQLite bleibt getrennt. Technisches Retry zählt als erneuter physischer Start, ein Review/Fix-Durchlauf als neue Iteration mit gespeichertem Feedback und Checkpoint. Auch `test` benötigt im aktuellen Workerpfad einen Agentenslot und zählt gegen das dauerhafte Startbudget. Container reservieren keine Slots, Resultatjoins mergen keinen Code und die Freigabe von Kapazität wartet auf Writer-Ende/Fencing. Pollende Runansichten laden kompakte Node-Seiten; vollständige Ressourcen und Resultate werden gezielt angefordert. Der Linux/Codex-/Web-Pfad ist nativ abgenommen; Aktivierung bleibt ausdrücklich und an passende Workerfähigkeiten sowie Ressourcenfreigaben gebunden. Windows-Nativ und öffentliches SSO behalten separate offene Gates, Mobile bleibt zurückgestellt. Die konkreten Nachweise und der geprüfte Build stehen im Umsetzungsplan.
+
+Strukturierte Resultatschemas begrenzen Form und erlaubte Werte, bestätigen aber nicht die Wahrheit einer Modellaussage über Dateiarbeit. Ein erfolgreicher technischer Attempt kann deshalb keine objektive Prüfung ersetzen. Checkpoints und gebundene Prüfungen müssen die für Freigabe oder Veröffentlichung entscheidenden Dateieigenschaften belegen; die native v4-Abnahme prüft diese getrennt von den zurückgegebenen JSON-Resultaten.
 
 ## 4. Zielarchitektur und Verantwortlichkeiten
 
@@ -332,76 +340,11 @@ Ein einzelner Agent darf mehrere Repositories bearbeiten, wenn sein Step diese a
 
 Jedes Repository erhält eigene Basis-/Ergebnis-Commits, Berechtigungen und PR-Referenzen. Multi-Repo-Checkpoints müssen über ein Ergebnismanifest zusammengesetzt werden. Git unterstützt dadurch noch keine atomare Änderung über mehrere Repositories; Veröffentlichungsreihenfolge, Teilfehler und Kompensation bleiben sichtbar.
 
-### 8.3 Beispiel für die spätere Definition
+### 8.3 Späterer Multi-Repo-Ablauf im gemeinsamen Definitionsmodell
 
-Das folgende YAML ist ein **konzeptionelles Format**, noch keine existierende API. Namen in `${...}` stehen für validierte Referenzen der zukünftigen Ausdruckssprache.
+Der geplante Ablauf untersucht die ausdrücklich gebundenen Repositories, erstellt einen gemeinsamen Plan und führt Umsetzung und Prüfung je betroffenem Repository aus. Eine Freigabe bezieht sich auf die konkreten Ergebnis-Checkpoints; die anschließenden Veröffentlichungen behalten getrennte Repository- und PR-Identitäten. Teilfehler und bereits erfolgte Veröffentlichungen bleiben nachvollziehbar.
 
-```yaml
-name: ticket-to-reviewed-changes
-version: 1
-inputSchema: ticket-with-repository-set-v1
-
-execution:
-  environment: build-machine-01
-  isolation: container
-  workspaceLifetime: per-repository-per-run
-  maxParallel: 4
-
-steps:
-  - id: investigate
-    type: agent
-    forEach: "${input.repositories}"
-    itemKey: repositoryId
-    agent: investigator@3
-    repository: "${item.repositoryId}"
-    instructions: "Prüfe die Betroffenheit anhand des Tickets."
-    outputSchema: repository-impact-v1
-
-  - id: plan
-    type: agent
-    needs: [investigate]
-    join: all-succeeded
-    agent: planner@2
-    inputs:
-      impacts: "${steps.investigate.outputs}"
-    outputSchema: cross-repository-plan-v1
-
-  - id: implement
-    type: agent
-    needs: [plan]
-    forEach: "${steps.plan.output.affectedRepositories}"
-    itemKey: repositoryId
-    agent: implementer@5
-    repository: "${item.repositoryId}"
-    inputs:
-      plan: "${steps.plan.output}"
-    outputSchema: repository-change-v1
-
-  - id: verify
-    type: script
-    needs: [implement]
-    forEach: "${steps.implement.outputs}"
-    itemKey: repositoryId
-    repository: "${item.repositoryId}"
-    revision: "${item.revision}"
-    commandRef: approved-repository-checks@1
-
-  - id: approve
-    type: approval
-    needs: [verify]
-    join: all-succeeded
-    subject: "${steps.implement.outputs}"
-
-  - id: publish
-    type: connector-action
-    needs: [approve]
-    forEach: "${steps.implement.outputs}"
-    itemKey: repositoryId
-    action: source-control.open-pull-request
-    input: "${item}"
-```
-
-`commandRef` wird pro Repository auf einen freigegebenen Befehl aufgelöst. Die Definition enthält weder Access Tokens noch frei evaluierbaren Backend-Code. Die tatsächlichen Commits und Hashes werden im Run-Snapshot gespeichert.
+Das wird später als ausdrückliche Erweiterung des gemeinsamen v4-Modells spezifiziert. V4 liefert heute endliche deklarierte Gruppen und genau eine gepinnte Repositorybasis pro Run; dynamisches Repository-Fan-out, Multi-Repo-Workspaces und ein gemeinsames Ergebnismanifest sind damit nicht zugesagt. Es gibt dafür keine zweite YAML-DSL oder zusätzliche Template-Ausdruckssprache. Gebundene Prüfungen, Betriebsberechtigungen und Secret-Referenzen bleiben getrennt von der Definition; konkrete Commits und Hashes gehören in den Run-Snapshot.
 
 ## 9. Identitäten und Berechtigungen
 

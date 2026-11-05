@@ -1,6 +1,8 @@
+import { makeCheckpointWorkspaceTree } from "./CheckpointWorkspace.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { FoundryWorkerHandoffResult } from "@t3tools/contracts";
 import * as WorkerPublishEvidence from "./WorkerPublishEvidence.ts";
+import * as WorkerResources from "./WorkerResources.ts";
 import { FoundryPublishRequest } from "@t3tools/contracts";
 import { WorkspaceGate } from "./workspaces/WorkspaceGate.ts";
 import * as ProviderSessions from "../orchestration-v2/ProviderSessionManager.ts";
@@ -73,7 +75,7 @@ export function workerLaunchIds(input: FoundryWorkerLaunchInput, binding: string
   return {
     commandId: CommandId.make(`foundry-launch:${key}`),
     threadId: ThreadId.make(
-      `foundry-launch:${digest(JSON.stringify([1, key, binding, input.projectId, input.title, input.model, input.prompt, ...(input.options ? [input.options] : []), ...(input.workspaceMode === "worktree" ? ["worktree"] : []), ...(input.workspaceRevision ? [input.workspaceRevision] : []), ...(input.previousExecution ? [input.previousExecution.commandId, input.previousExecution.generation] : []), ...(input.previousHandoff ? [input.previousHandoff.handoffId, input.previousHandoff.commitSha] : []), ...(input.publishEvidence ? [input.publishEvidence] : []), ...(input.inputArtifacts?.length ? [input.inputArtifacts.map((item) => [item.reference.instanceId, item.reference.artifactId, item.reference.owner.environmentId, item.reference.owner.threadId, item.name, item.mimeType, item.sizeBytes, item.sha256])] : [])]))}`,
+      `foundry-launch:${input.definitionV4 ? "v4:" : ""}${digest(JSON.stringify([1, key, binding, input.projectId, input.title, input.model, input.prompt, ...(input.definitionV4 ? [input.definitionV4] : []), ...(input.options ? [input.options] : []), ...(input.workspaceMode === "worktree" ? ["worktree"] : []), ...(input.workspaceRevision ? [input.workspaceRevision] : []), ...(input.previousExecution ? [input.previousExecution.commandId, input.previousExecution.generation] : []), ...(input.previousHandoff ? [input.previousHandoff.handoffId, input.previousHandoff.commitSha] : []), ...(input.publishEvidence ? [input.publishEvidence] : []), ...(input.inputArtifacts?.length ? [input.inputArtifacts.map((item) => [item.reference.instanceId, item.reference.artifactId, item.reference.owner.environmentId, item.reference.owner.threadId, item.name, item.mimeType, item.sizeBytes, item.sha256])] : [])]))}`,
     ),
   };
 }
@@ -110,6 +112,7 @@ export const layer = Layer.effect(
       Config.withDefault("[]"),
     );
     const fs = yield* FileSystem.FileSystem;
+    const checkpointWorkspaceTree = yield* makeCheckpointWorkspaceTree();
     const path = yield* Path.Path;
     const projects = yield* ProjectService.ProjectService;
     const managed = yield* ManagedProjectFolders.ManagedProjectFolders;
@@ -175,7 +178,14 @@ export const layer = Layer.effect(
         if (event?.type !== "run.created") return yield* readFailure("read_failed");
         const records = yield* threads.getThreadRecords(
           receipt.threadId,
-          ["runs", "checkpoints", "checkpointScopes", "providerThreads", "providerTurns"],
+          [
+            "runs",
+            "checkpoints",
+            "checkpointScopes",
+            "providerThreads",
+            "providerTurns",
+            "messages",
+          ],
           {
             runIds: [event.payload.id],
           },
@@ -197,11 +207,7 @@ export const layer = Layer.effect(
               candidate.providerThreadId === providerThread?.id,
           );
           const turn = turns.at(-1);
-          if (
-            run.activeAttemptId &&
-            providerThread?.providerSessionId &&
-            turn?.nativeTurnRef?.nativeId
-          ) {
+          if (run.activeAttemptId && providerThread?.providerSessionId) {
             let runtime = yield* sessions.get(providerThread.providerSessionId);
             const providerSessionId = providerThread.providerSessionId;
             const nativeThreadId = providerThread.nativeThreadRef?.nativeId;
@@ -241,7 +247,9 @@ export const layer = Layer.effect(
                 .confirmWriterEnded({
                   runId: run.id,
                   providerThread,
-                  nativeTurnId: turn.nativeTurnRef.nativeId,
+                  ...(turn?.nativeTurnRef?.nativeId
+                    ? { nativeTurnId: turn.nativeTurnRef.nativeId }
+                    : {}),
                 })
                 .pipe(
                   Effect.timeoutOption("2 seconds"),
@@ -317,6 +325,30 @@ export const layer = Layer.effect(
                           ),
                         )
                       : {};
+                  const resourceRead = yield* (
+                    config._tag === "Some"
+                      ? WorkerResources.readResources(config.value.stateDir, receipt.threadId, true)
+                      : Effect.succeed(null)
+                  ).pipe(Effect.result);
+                  const resources = resourceRead._tag === "Success" ? resourceRead.success : null;
+                  const finalMessage = records.messages
+                    .filter(
+                      (message) =>
+                        message.runId === run.id &&
+                        message.role === "assistant" &&
+                        !message.streaming,
+                    )
+                    .at(-1);
+                  const structured =
+                    resources?.request.resultSchema && !stopped
+                      ? WorkerResources.parseStructuredResult(
+                          resources.request.resultSchema,
+                          finalMessage?.text,
+                        )
+                      : {};
+                  const checkpointCommitSha = ready
+                    ? yield* WorkerResources.checkpointCommit(scope.cwd, checkpoint.ref)
+                    : undefined;
                   yield* executions.finish(input.commandId, latest.generation, {
                     generation: latest.generation,
                     runId: run.id,
@@ -325,6 +357,11 @@ export const layer = Layer.effect(
                     ...(ready ? { workspacePath: scope.cwd } : {}),
                     outcome: stopped ? "stopped" : "completed",
                     ...publishResult,
+                    ...structured,
+                    ...(resourceRead._tag === "Failure"
+                      ? { resourceFailure: "changed" as const }
+                      : {}),
+                    ...(checkpointCommitSha ? { checkpointCommitSha } : {}),
                   });
                   row = yield* executions.read(input.commandId);
                 }),
@@ -420,9 +457,20 @@ export const layer = Layer.effect(
         if (returned) {
           if ((yield* fs.realPath(returned.receipt.workspacePath)) !== cwd)
             return yield* failure("handoff_changed");
+          const head = (yield* git.resolveCommit({ cwd, revision: "HEAD" })).commitSha;
+          const unchangedCheckpoint =
+            returned.receipt.mode === "existing" &&
+            head === returned.receipt.baseCommit &&
+            (yield* git.resolveCommit({ cwd, revision: returned.receipt.baseCheckpointRef }))
+              .commitSha === returned.commitSha;
+          if (head !== returned.commitSha && !unchangedCheckpoint)
+            return yield* failure("handoff_changed");
+          if (unchangedCheckpoint) {
+            if ((yield* checkpointWorkspaceTree(cwd, returned.checkpointRef)) !== returned.treeSha)
+              return yield* failure("handoff_changed");
+            return;
+          }
           if (
-            (yield* git.resolveCommit({ cwd, revision: "HEAD" })).commitSha !==
-              returned.commitSha ||
             (yield* git.execute({
               cwd,
               operation: "foundry.handoff.tree",
@@ -794,6 +842,13 @@ export const layer = Layer.effect(
       launch: Effect.fn("WorkerLaunch.launch")(
         function* (input: FoundryWorkerLaunchInput) {
           if (!enabled || !binding) return yield* failure("not_enabled");
+          if (
+            input.definitionV4 &&
+            (input.workspaceMode !== "worktree" ||
+              !input.workspaceRevision ||
+              config._tag === "None")
+          )
+            return yield* failure("capability_denied");
           if (input.workspaceRevision && input.workspaceMode !== "worktree")
             return yield* failure("project_denied");
           const project = yield* projects.getById(input.projectId);
@@ -862,6 +917,8 @@ export const layer = Layer.effect(
           )
             return yield* failure("provider_disabled");
           const status = yield* readiness.read();
+          if (input.definitionV4 && status.definitionExecutionVersion !== 4)
+            return yield* failure("capability_denied");
           if (!status.providerReady || status.providerInstanceId !== binding)
             return yield* failure("provider_not_ready");
           const model = status.models?.find(
@@ -877,6 +934,16 @@ export const layer = Layer.effect(
           if (input.previousExecution && input.workspaceMode === "worktree")
             return yield* failure("handoff_unavailable");
           yield* verifyHandoff(input, workspace);
+          if (input.definitionV4 && config._tag === "Some") {
+            yield* WorkerResources.resolveResourceSecrets(input.definitionV4).pipe(
+              Effect.mapError(() => failure("resource_denied")),
+            );
+            yield* WorkerResources.prepareResources(
+              config.value.stateDir,
+              ids.threadId,
+              input.definitionV4,
+            ).pipe(Effect.mapError(() => failure("resource_denied")));
+          }
           const attachments = yield* materializeArtifacts(input, ids.threadId);
           if (input.publishEvidence) {
             if (config._tag === "None") return yield* failure("launch_failed");
@@ -907,6 +974,15 @@ export const layer = Layer.effect(
             ...(input.workspaceRevision ? { revision: input.workspaceRevision } : {}),
           });
           yield* verifyHandoff(input, workspace).pipe(
+            Effect.andThen(
+              input.definitionV4 && config._tag === "Some" && reservation
+                ? WorkerResources.prepareWorkspaceResources(
+                    config.value.stateDir,
+                    ids.threadId,
+                    reservation.workspacePath,
+                  ).pipe(Effect.mapError(() => failure("resource_denied")))
+                : Effect.void,
+            ),
             Effect.catch((error) =>
               Effect.gen(function* () {
                 yield* executions.stop(input.commandId);

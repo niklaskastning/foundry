@@ -19,9 +19,21 @@ export const automationCommands = makeAutomationCommands(
       const binding = initialState().binding;
       if (!binding || binding.mainEnvironmentId !== environmentId)
         return yield* new AutomationApplicationError({ code: "forbidden" });
+      const definitionTransfer =
+        typeof input === "object" &&
+        input !== null &&
+        "op" in input &&
+        [
+          "factory",
+          "definitionRevision",
+          "definitionRevisionFile",
+          "runtimeNode",
+          "activateDefinition",
+          "activateDefinitionRevision",
+        ].includes(String(input.op));
       const main = yield* FoundryMain.make({
         allowLoopback: import.meta.env.DEV,
-        maxResponseBytes: 3 * 1024 * 1024,
+        maxResponseBytes: (definitionTransfer ? 64 : 3) * 1024 * 1024,
       });
       const connection = yield* main.prepare(binding);
       const response = yield* connection.response(`/api/foundry/automation/${path}`, input, true);

@@ -13,7 +13,7 @@ export const AutomationControlCommand = Schema.Union([
   Schema.Struct({
     ...Base,
     action: Schema.Literals(["approve", "reject"]),
-    stepId: Key,
+    stepId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
     resultRevision: Revision,
   }),
   Schema.Struct({

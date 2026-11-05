@@ -24,6 +24,9 @@ import * as Control from "./Control.ts";
 import * as Inbox from "./Inbox.ts";
 import * as Triggers from "./Triggers.ts";
 
+const decodeLargeDefinition = Schema.decodeEffect(
+  Schema.fromJsonString(Schema.Struct({ op: Schema.Literal("activateDefinition") })),
+);
 const headers = { "cache-control": "no-store" };
 const isDomainError = Schema.is(
   Schema.Union([
@@ -155,13 +158,17 @@ export const layer = Layer.unwrap(
               () => ({ size: 0, parts: [] as Array<string>, decoder: new TextDecoder() }),
               (state, chunk) => {
                 state.size += chunk.byteLength;
-                if (state.size > 3 * 1024 * 1024)
+                if (state.size > (operation.path === "command" ? 64 : 3) * 1024 * 1024)
                   return Effect.fail(new AutomationApplicationError({ code: "invalid_input" }));
                 state.parts.push(state.decoder.decode(chunk, { stream: true }));
                 return Effect.succeed(state);
               },
             ),
-            Effect.map((state) => state.parts.join("") + state.decoder.decode()),
+            Effect.flatMap((state) => {
+              const text = state.parts.join("") + state.decoder.decode();
+              if (state.size <= 3 * 1024 * 1024) return Effect.succeed(text);
+              return decodeLargeDefinition(text).pipe(Effect.as(text));
+            }),
             Effect.flatMap(
               Schema.decodeUnknownEffect(Schema.fromJsonString(operation.input), {
                 onExcessProperty: "error",

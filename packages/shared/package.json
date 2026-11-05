@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./factoryDefinitionPreview": {
+      "types": "./src/factoryDefinitionPreview.ts",
+      "import": "./src/factoryDefinitionPreview.ts"
+    },
     "./foundryArtifacts": {
       "types": "./src/foundryArtifacts.ts",
       "import": "./src/foundryArtifacts.ts"
@@ -526,6 +530,10 @@
     "./foundryBuild": {
       "types": "./src/foundryBuild.ts",
       "import": "./src/foundryBuild.ts"
+    },
+    "./factoryDefinitionV4": {
+      "types": "./src/factoryDefinitionV4.ts",
+      "import": "./src/factoryDefinitionV4.ts"
     }
   },
   "scripts": {

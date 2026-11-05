@@ -165,7 +165,20 @@ const make = Effect.gen(function* () {
             factoryId: input.factoryId,
             factoryVersionId,
             steps: resolveFactoryWorkflow(definition, workflow.id),
-            ...(workflow.execution ? { execution: workflow.execution } : {}),
+            ...(definition.schemaVersion === 4
+              ? {
+                  v4: {
+                    workflow: definition.workflows.find((item) => item.id === workflow.id)!,
+                    agents: definition.agents,
+                    skills: definition.skills,
+                    mcp: definition.mcp,
+                    files: definition.files,
+                    ...(definition.defaults ? { defaults: definition.defaults } : {}),
+                  },
+                }
+              : "execution" in workflow && workflow.execution
+                ? { execution: workflow.execution }
+                : {}),
           });
           workflowVersions.push({ id: workflow.id, versionId });
         }
