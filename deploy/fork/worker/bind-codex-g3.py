@@ -92,6 +92,9 @@ def quiet_database(database):
         with closing(sqlite3.connect(journal.as_uri() + "?mode=ro", uri=True)) as connection:
             if connection.execute("SELECT count(*) FROM reservations WHERE state != 'released'").fetchone()[0]:
                 raise RuntimeError("Unreleased writer reservation; refuse binding/restart")
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='handoffs'").fetchone():
+                if connection.execute("SELECT count(*) FROM handoffs WHERE state != 'returned'").fetchone()[0]:
+                    raise RuntimeError("Active interactive handoff; refuse binding/restart")
 
 
 def provider_config():

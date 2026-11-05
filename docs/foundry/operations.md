@@ -892,18 +892,49 @@ nicht bestätigbare Recovery lässt Main gestoppt. Die separate migrierte Datenb
 bleibt inaktiv. Bei späteren Updates gehört sie zum Recovery-Bundle; Schema 5 darf
 nicht durch einen reinen Image-Downgrade auf Schema-4-Code zurückgesetzt werden.
 
-Der aktive Entwicklungsstand wird von Automation-Schema 6 auf 7 über denselben
+Der aktive Entwicklungsstand wird von Automation-Schema 7 auf 8 über denselben
 intern sperrenden Betreiberpfad aktualisiert:
 
 ```sh
 sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-automation sha256:<image-digest> <source-sha>
 ```
 
-Dieser Pfad verlangt das aktive Schema-6-Profil, stoppt Main, sichert zusätzlich die
+Dieser Pfad verlangt das aktive Schema-7-Profil, stoppt Main, sichert zusätzlich die
 separate Automation-Datenbank und migriert sie mit dem Zielimage. Der Migrator wird
 anschließend wieder gesperrt. Bei Fehlschlag umfasst Recovery auch diese Datenbank;
 kein Image-only-Downgrade. Der Aufruf aktiviert keine Trigger. Für spätere Updates
-innerhalb Schema 7 bleibt `update` der passende Pfad.
+innerhalb Schema 8 bleibt `update` der passende Pfad.
+
+### Auftrag interaktiv übernehmen und zurückgeben (P51)
+
+Im Run zunächst pausieren und das bestätigte Writer-Ende abwarten. Unter „Take over
+in T3“ den Quellversuch und vorhandenen Workspace, Alternativbranch oder
+Archiv-Wiederherstellung wählen. Der neue verknüpfte Thread startet keinen Turn
+von selbst. Er benötigt weiterhin die aktuelle Foundry-/T3-Sitzung und die
+bestehenden Worker-Rechte. Im Thread führt „Back to work item“ zum Auftrag zurück.
+
+Vor der Rückgabe Änderungen committen und laufende Turns beenden. Beim Auftrag
+Prüfbericht und offene Punkte angeben und „Return to factory“ auslösen. Erst nach
+Writer-Ende, Checkpoint, Bundle- und Archivbestätigung entsteht ein pausierter
+Folgelauf desselben Auftrags mit neuer Revision und derselben Workflow-Version.
+Diesen ausdrücklich fortsetzen; der alte Run bleibt gesperrt. Der Bericht ist eine
+Benutzerangabe und ersetzt keine Workflow-Prüfung oder Freigabe. Git-Definitionen
+werden durch die Rückgabe nicht geändert oder aktiviert.
+
+Eine unbestätigte Entscheidung mit der gespeicherten Anfrage wiederholen, auch
+nach Neuladen. Bei blockierter Rückgabe erlaubt „Reopen interactive work“ weitere
+Bearbeitung, solange der Worker die Rückgabe noch nicht finalisiert hat. Danach
+kann nur die ursprüngliche Rückgabe zentral bestätigt werden. Fehlende Archive
+oder veränderte Workspaces blockieren sichtbar; ein Thread-Archiv allein ersetzt
+kein gesichertes Git-Bundle. Technische Fehler während des Öffnens halten die
+Sperre bis zur ausdrücklichen Wiederholung nach Behebung der Ursache.
+
+Während eines Handoffs bleibt der eine konfigurierte Worker für diesen Auftrag
+reserviert, auch zwischen interaktiven Turns. Worker-Updates verweigern offene
+Handoffs. P51 erweitert das lokale Reservierungsjournal; ein älteres Worker-Binary
+darf dessen Sperren nicht ignorieren. Die erste Rückkehr auf den vorherigen Stand
+benötigt deshalb eine geprüfte Wiederherstellung der gesicherten Worker-Daten,
+keinen reinen Konfigurationswechsel. Main-Recovery umfasst Automation-Schema 8.
 
 ### GitHub- und Zeitplan-Eingänge
 

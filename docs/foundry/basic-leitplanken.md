@@ -513,6 +513,17 @@ Paket-IDs bleiben mit dem Feature-Plan verknüpft. Vollständig ausgelagerte Pak
 
 **Gate P51 – Nachweis:** Gleichzeitige Übernahme/Dispatch und verlorenes Ack erzeugen keinen zweiten Writer. Rückgabe ist idempotent, prüft Basisrevision und entwertet alte Freigaben. Nach Ressourcenverlust nur gesicherten Stand öffnen; fehlendes Archiv sichtbar blockieren.
 
+**Implementierungsnachweis:** Isoliertes echtes PostgreSQL prüft konkurrierenden
+Dispatch/Übernahme, verlorene Bestätigung und Neustart, revisionsgebundene
+Rückgabe, Widerruf während der Bestätigung, Entwertung alter Freigaben und genau
+einen pausierten Folgelauf. Worker-Tests verwenden echte Git-Repositories und das
+SQLite-Reservierungsjournal für Writer-/Checkpoint-Sperren, Wiederöffnung,
+Alternativbranch und Wiederherstellung nach gelöschtem Quellcheckout. Sie ersetzen
+Thread-/Artefakt-/Archivtransporte durch Fixtures. Der lokale Root-Browserpass
+verwendet ein eigenes Replay-Projekt und synthetische Foundry-Antworten; er ist
+kein öffentlicher SSO- oder neuer nativer Writer-Nachweis. Windows, Sandbox-Handoff
+und vollständiges G12 einschließlich P58 bleiben offen.
+
 ### P58 · Externe API und Factory-MCP
 
 **Voraussetzungen:** P47, P49, P51.
