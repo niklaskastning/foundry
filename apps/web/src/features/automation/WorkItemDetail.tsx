@@ -18,6 +18,7 @@ import { Textarea } from "../../components/ui/textarea";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { automationCommands } from "./commands";
 import { useAutomationQuery } from "./useAutomationQuery";
+import { HandoffList } from "./HandoffPanel";
 import { RunList } from "./RunList";
 
 const decodeManualStart = Schema.decodeUnknownSync(ManualStart, { onExcessProperty: "error" });
@@ -193,6 +194,7 @@ export function WorkItemDetail({
           {message}
         </p>
       ) : null}
+      <HandoffList environmentId={environmentId} factoryId={factoryId} workItemId={workItemId} />
       <RunList
         environmentId={environmentId}
         factoryId={factoryId}
