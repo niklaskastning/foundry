@@ -14,7 +14,7 @@ vi.mock("../state/environments", () => ({
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => mocks.run }));
 vi.mock("./devices", () => ({ deviceCommand: {} }));
 vi.mock("../lib/utils", () => ({
-  randomUUID: () => crypto.randomUUID(),
+  randomUUID: () => "11111111-1111-4111-8111-111111111111",
   cn: (...classes: string[]) => classes.filter(Boolean).join(" "),
 }));
 vi.mock("../components/ui/sidebar", () => ({ SidebarInset: "main" }));

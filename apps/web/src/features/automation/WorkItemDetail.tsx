@@ -179,12 +179,15 @@ function StartWorkflow({
     (workflow) => workflow.versionId === workflowVersionId,
   );
   const [workersOverride, setWorkers] = useState<ManualStart["workers"] | null>();
-  const workers =
-    workersOverride === undefined ? defaults?.workers : (workersOverride ?? undefined);
   const execution = active?.definition.workflows.find(
     (entry) => entry.id === workflow?.id,
   )?.execution;
   const parallel = execution?.mode === "parallel";
+  const workers = parallel
+    ? workersOverride === undefined
+      ? defaults?.workers
+      : (workersOverride ?? undefined)
+    : undefined;
   const [projectOverride, setProjectId] = useState<string>();
   const [modelOverride, setModel] = useState<string>();
   const [revision, setRevision] = useState(`work-item:${item.id}`);
@@ -367,11 +370,13 @@ function StartWorkflow({
             Execution binding and advanced settings
           </summary>
           <div className="space-y-3 pt-3">
-            <WorkerPoolPicker
-              environmentId={environmentId}
-              workers={workers}
-              onChange={(value) => setWorkers(value ?? null)}
-            />
+            {parallel && (
+              <WorkerPoolPicker
+                environmentId={environmentId}
+                workers={workers}
+                onChange={(value) => setWorkers(value ?? null)}
+              />
+            )}
             <fieldset className="space-y-2">
               <legend className="text-sm">Default worker project</legend>
               {target?.projects.map((project) => (
