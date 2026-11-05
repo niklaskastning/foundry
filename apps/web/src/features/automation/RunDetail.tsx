@@ -18,6 +18,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { automationCommands } from "./commands";
 import { HandoffList, TakeOverPanel } from "./HandoffPanel";
 import { useAutomationQuery } from "./useAutomationQuery";
+import { runTopology } from "./runTopology";
 
 export function RunDetail({
   environmentId,
@@ -50,6 +51,8 @@ export function RunDetail({
   const command = useAtomCommand(automationCommands.control, { reportFailure: false });
   const canControl = useAtomValue(automationCommands.control.permissionAtom(environmentId));
   const detail = run.result?.kind === "run" ? run.result : null;
+  const topology = detail ? runTopology(detail.workflow) : null;
+  const execution = detail?.workflow.execution;
   const state = detail?.control?.state ?? detail?.run.state;
   const terminal = state === "succeeded" || state === "cancelled";
   const available = {
@@ -165,7 +168,11 @@ export function RunDetail({
                 {(state ?? detail.run.state).replaceAll("_", " ")}
               </Badge>
               <p className="text-sm">
-                {detail.control?.reason?.replaceAll("_", " ") ??
+                {(detail.control?.reason === "repair_pending"
+                  ? "A failed branch is queued for a bounded repair attempt. The join waits for successful branch results."
+                  : detail.control?.reason === "repair_exhausted"
+                    ? "Automatic repair rounds are exhausted. Inspect failed attempts before deciding how to continue."
+                    : detail.control?.reason?.replaceAll("_", " ")) ??
                   (state === "succeeded"
                     ? "Execution completed. Review the step results below."
                     : state === "failed"
@@ -276,16 +283,113 @@ export function RunDetail({
           {message}
         </p>
       ) : null}
+      {topology && execution ? (
+        <section
+          className="space-y-4 rounded-lg border bg-card p-4"
+          aria-label="Parallel execution plan"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="font-semibold">Branches → join → follow-up</h3>
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="info">Up to {execution.maxParallelism} parallel steps</Badge>
+              <Badge variant="outline">
+                {execution.maxRepairRounds} repair rounds per failed branch
+              </Badge>
+            </div>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Dependencies from this run's pinned workflow. Independent steps may run together when
+            authorized worker capacity is available.
+          </p>
+          <div className="flex flex-wrap items-start gap-4">
+            {topology.levels.map((level, index) => (
+              <div key={level.join(":")} className="min-w-0 space-y-2">
+                <p className="text-xs text-muted-foreground">Dependency level {index + 1}</p>
+                <ul className="space-y-2">
+                  {level.map((id) => (
+                    <li key={id}>
+                      <a
+                        className="block break-words rounded-md border px-3 py-2 text-sm underline"
+                        href={`#run-step-${encodeURIComponent(id)}`}
+                      >
+                        {id}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+            <div className="min-w-0 space-y-2">
+              <p className="text-xs text-muted-foreground">All branches must succeed</p>
+              <a
+                className="block break-words rounded-md border px-3 py-2 text-sm font-medium underline"
+                href={`#run-step-${encodeURIComponent(topology.join.id)}`}
+              >
+                Join: {topology.join.id}
+              </a>
+            </div>
+            {topology.suffix.length ? (
+              <div className="min-w-0 space-y-2">
+                <p className="text-xs text-muted-foreground">Serial follow-up</p>
+                <ol className="space-y-2">
+                  {topology.suffix.map((step) => (
+                    <li key={step.id}>
+                      <a
+                        className="block break-words rounded-md border px-3 py-2 text-sm underline"
+                        href={`#run-step-${encodeURIComponent(step.id)}`}
+                      >
+                        {step.id} · {step.kind}
+                      </a>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            The join agent receives ordered branch summaries and artifact references. This does not
+            automatically merge Git branches. Attempt states below reflect the loaded page, not an
+            aggregate of all attempts.
+          </p>
+        </section>
+      ) : null}
       <h3 className="text-lg font-semibold">Execution & results</h3>
       {detail && attempts.result?.kind === "attempts" ? (
         <>
           <ol className="space-y-3">
             {detail.workflow.steps.map((step, ordinal) => (
-              <li key={step.id} className="min-w-0 space-y-3 rounded-lg border bg-card p-4">
+              <li
+                key={step.id}
+                id={`run-step-${step.id}`}
+                className="min-w-0 scroll-mt-16 space-y-3 rounded-lg border bg-card p-4"
+              >
                 <h4 className="font-medium">
                   {ordinal + 1}. {step.id} ·{" "}
                   {step.kind === "agent" ? (step.resolved?.role?.name ?? "Agent") : step.kind}
                 </h4>
+                {execution ? (
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <Badge variant={step.id === execution.joinStepId ? "info" : "outline"}>
+                      {step.id === execution.joinStepId
+                        ? "Join"
+                        : topology && ordinal < topology.joinIndex
+                          ? "Branch"
+                          : "Serial follow-up"}
+                    </Badge>
+                    <span className="text-muted-foreground">
+                      {step.dependsOn.length ? "Depends on:" : "No step dependencies"}
+                    </span>
+                    {step.dependsOn.map((dependency) => (
+                      <a
+                        key={dependency}
+                        className="underline"
+                        href={`#run-step-${encodeURIComponent(dependency)}`}
+                      >
+                        {dependency}
+                      </a>
+                    ))}
+                  </div>
+                ) : null}
                 {step.kind === "agent" || step.kind === "approval" ? (
                   <details className="text-sm">
                     <summary className="cursor-pointer text-muted-foreground">
@@ -322,6 +426,13 @@ export function RunDetail({
                       <div key={attempt.commandId} className="space-y-2 border-t pt-3">
                         <div className="flex flex-wrap items-center gap-2 text-sm">
                           <span className="font-medium">Attempt {attempt.attemptNumber + 1}</span>
+                          {execution && topology && ordinal < topology.joinIndex ? (
+                            <Badge variant="outline">
+                              {attempt.attemptNumber === 0
+                                ? "Initial execution"
+                                : `Repair round ${attempt.attemptNumber}`}
+                            </Badge>
+                          ) : null}
                           <Badge variant={attempt.hasResult ? "secondary" : "info"}>
                             {attempt.state.replaceAll("_", " ")}
                           </Badge>
@@ -332,7 +443,13 @@ export function RunDetail({
                           ) : null}
                         </div>
                         <p className="break-all text-xs text-muted-foreground">
-                          Worker environment: {attempt.environmentId ?? "Not assigned"}
+                          {attempt.workerId ? <>Worker: {attempt.workerId} · </> : null}
+                          Environment: {attempt.environmentId ?? "Not assigned"}
+                          {attempt.capacityReleased === true
+                            ? " · Capacity released"
+                            : attempt.capacityReleased === false && attempt.workerId
+                              ? " · Capacity reserved"
+                              : ""}
                         </p>
                         <div className="flex flex-wrap gap-3 text-sm">
                           {attempt.threadId && attempt.environmentId ? (
@@ -502,6 +619,13 @@ export function AttemptResult({
                   Model: {result.launch.model} · Reasoning:{" "}
                   {result.launch.options?.reasoningEffort ?? "Provider default"}
                 </p>
+                <p className="break-all">
+                  Project: {result.launch.projectId} · Workspace mode:{" "}
+                  {result.launch.workspaceMode ?? "Not recorded"}
+                </p>
+                {result.launch.workspaceRevision ? (
+                  <p className="break-all">Workspace revision: {result.launch.workspaceRevision}</p>
+                ) : null}
                 <p className="whitespace-pre-wrap">{result.launch.prompt}</p>
               </div>
             </details>
@@ -536,6 +660,11 @@ export function AttemptResult({
                 ))}
               </ul>
             </div>
+          ) : null}
+          {result.execution?.lifecycle?.manifest?.workspacePath ? (
+            <p className="break-all text-sm">
+              Workspace: {result.execution.lifecycle.manifest.workspacePath}
+            </p>
           ) : null}
           <p className="text-sm">Worker run: {result.execution?.run.status ?? "No final result"}</p>
           <details className="text-sm">

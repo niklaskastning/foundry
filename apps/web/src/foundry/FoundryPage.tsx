@@ -10,6 +10,7 @@ import { Input } from "../components/ui/input";
 import { StandalonePage } from "../components/ui/standalone-page";
 import { useAtomCommand } from "../state/use-atom-command";
 import { DeviceCatalog } from "./DeviceCatalog";
+import { WorkerCapacity } from "../features/automation/WorkerCapacity";
 import {
   instanceCommand,
   instanceEntry,
@@ -116,6 +117,7 @@ export function FoundryPage() {
                     Workers and their authorized access to factory work.
                   </p>
                 </div>
+                <WorkerCapacity environmentId={state.binding.mainEnvironmentId} />
                 <DeviceCatalog />
               </div>
             ) : search.view === "inbox" ? (

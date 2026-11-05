@@ -31,6 +31,7 @@ import { automationCommands } from "./commands";
 import { useAutomationQuery } from "./useAutomationQuery";
 import { HandoffList } from "./HandoffPanel";
 import { RunList } from "./RunList";
+import { WorkerPoolPicker } from "./WorkerPoolPicker";
 import { WorkflowConfiguration } from "./AgentCatalog";
 
 const decodeManualStart = Schema.decodeUnknownSync(ManualStart, { onExcessProperty: "error" });
@@ -177,6 +178,13 @@ function StartWorkflow({
   const workflow = active?.workflowVersions.find(
     (workflow) => workflow.versionId === workflowVersionId,
   );
+  const [workersOverride, setWorkers] = useState<ManualStart["workers"] | null>();
+  const workers =
+    workersOverride === undefined ? defaults?.workers : (workersOverride ?? undefined);
+  const execution = active?.definition.workflows.find(
+    (entry) => entry.id === workflow?.id,
+  )?.execution;
+  const parallel = execution?.mode === "parallel";
   const [projectOverride, setProjectId] = useState<string>();
   const [modelOverride, setModel] = useState<string>();
   const [revision, setRevision] = useState(`work-item:${item.id}`);
@@ -206,7 +214,7 @@ function StartWorkflow({
     automationCommands.command.permissionAtom(environmentId, { op: "configureExecutionDefaults" }),
   );
   const selectedProject = target?.projects.find((project) => project.id === projectId);
-  const configured = Boolean(selectedProject && model);
+  const configured = Boolean((workers?.length || selectedProject) && model);
   async function submit(action: "start" | "save") {
     if (
       busy ||
@@ -226,7 +234,8 @@ function StartWorkflow({
           workItemId: item.id,
           workflowVersionId,
           revision,
-          projectId: ProjectId.make(projectId),
+          projectId: workers?.[0]?.projectId ?? ProjectId.make(projectId),
+          ...(workers ? { workers } : {}),
           model,
           checks: JSON.parse(checks),
           requiredArtifacts: JSON.parse(artifacts),
@@ -241,6 +250,7 @@ function StartWorkflow({
                 repository: item.repository,
                 expectedGeneration: defaults?.generation ?? null,
                 projectId: start.projectId,
+                ...(start.workers ? { workers: start.workers } : {}),
                 model: start.model,
                 checks: start.checks,
                 requiredArtifacts: start.requiredArtifacts,
@@ -303,22 +313,46 @@ function StartWorkflow({
         {defaultsQuery.error ? (
           <p role="alert">Execution defaults unavailable: {defaultsQuery.error}</p>
         ) : null}
+        {parallel ? (
+          <div className="space-y-2 rounded-lg border p-3 text-sm">
+            <p>
+              Parallel workflow · Up to {execution.maxParallelism} branches ·{" "}
+              {execution.maxRepairRounds} repair rounds
+            </p>
+            <label className="block space-y-1">
+              <span>Repository commit SHA</span>
+              <Input
+                value={revision}
+                onChange={(event) => setRevision(event.target.value)}
+                placeholder="Full 40-character commit SHA"
+              />
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Every agent starts from this pinned commit in an isolated worktree. Checks must use
+              cwd: "." to run in the join worktree.
+            </p>
+          </div>
+        ) : null}
         {target ? (
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <Badge variant={target.status.providerReady ? "success" : "warning"}>
-              {target.status.providerReady ? "Worker ready" : target.status.providerState}
+              {target.status.providerReady ? "Default worker ready" : target.status.providerState}
             </Badge>
             <span className="text-muted-foreground">{target.status.activeRuns} active runs</span>
           </div>
         ) : null}
         {configured ? (
           <p className="text-sm">
-            Project: {selectedProject?.title} · Fallback model: {model}
+            {workers?.length
+              ? `Worker pool: ${workers.length} authorized targets`
+              : `Project: ${selectedProject?.title}`}{" "}
+            · Fallback model: {model}
             {defaults &&
             projectId === defaults.projectId &&
             model === defaults.model &&
             checks === JSON.stringify(defaults.checks, null, 2) &&
-            artifacts === JSON.stringify(defaults.requiredArtifacts, null, 2)
+            artifacts === JSON.stringify(defaults.requiredArtifacts, null, 2) &&
+            JSON.stringify(workers) === JSON.stringify(defaults.workers)
               ? " · Saved repository defaults"
               : " · Unsaved settings"}
           </p>
@@ -333,8 +367,13 @@ function StartWorkflow({
             Execution binding and advanced settings
           </summary>
           <div className="space-y-3 pt-3">
+            <WorkerPoolPicker
+              environmentId={environmentId}
+              workers={workers}
+              onChange={(value) => setWorkers(value ?? null)}
+            />
             <fieldset className="space-y-2">
-              <legend className="text-sm">Worker project</legend>
+              <legend className="text-sm">Default worker project</legend>
               {target?.projects.map((project) => (
                 <label key={project.id} className="flex items-center gap-2 text-sm">
                   <input
@@ -382,7 +421,9 @@ function StartWorkflow({
               permissions.
             </p>
             <label className="block space-y-1">
-              <span className="text-sm">Input revision</span>
+              <span className="text-sm">
+                {parallel ? "Pinned repository commit SHA" : "Input revision"}
+              </span>
               <Input value={revision} onChange={(event) => setRevision(event.target.value)} />
             </label>
             <label className="block space-y-1">
@@ -402,7 +443,8 @@ function StartWorkflow({
             busy ||
             !canStart ||
             (!pending &&
-              (!target?.status.providerReady ||
+              ((!workers?.length && !target?.status.providerReady) ||
+                (parallel && !/^[a-f0-9]{40}$/i.test(revision)) ||
                 !configured ||
                 !revision ||
                 !workflowVersionId ||

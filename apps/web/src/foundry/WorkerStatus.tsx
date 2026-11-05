@@ -124,9 +124,11 @@ export function WorkerStatus({ environmentId }: { environmentId: EnvironmentId }
                     : "Occupied"}
               </Badge>
               <p className="text-sm">
-                {status.activeRuns === null
-                  ? "Active run count unavailable"
-                  : `${status.activeRuns} active runs`}
+                {status.capacity !== undefined && status.free != null
+                  ? `${status.free} of ${status.capacity} slots free`
+                  : status.activeRuns === null
+                    ? "Active run count unavailable"
+                    : `${status.activeRuns} active runs`}
               </p>
             </div>
             <div className="space-y-2">
@@ -143,6 +145,10 @@ export function WorkerStatus({ environmentId }: { environmentId: EnvironmentId }
             <div className="space-y-2 pt-3 text-muted-foreground">
               <p>{messages[status.providerState]}</p>
               <p>Version: {status.version ?? "Unknown"}</p>
+              <p>
+                Parallel execution:{" "}
+                {status.parallelExecutionVersion === 1 ? "Supported" : "Not advertised"}
+              </p>
               <p>
                 Readiness does not grant automation access or reserve capacity. Provider
                 installation and sign-in are managed on this worker.
