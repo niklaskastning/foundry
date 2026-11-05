@@ -1721,15 +1721,15 @@ try {
     ),
     "conflict",
   );
+  const pausedClaim = await dispatchCall((s) =>
+    s.claimNext({ workerId: controlIdentity.deviceId, owner: "p20-owner", leaseMillis: 60000 }),
+  );
+  NodeAssert.ok(pausedClaim);
   const pauseCommand = command("p20-pause", "pause-1", 0, "pause");
   const paused = await Promise.all(Array.from({ length: 4 }, () => executeControl(pauseCommand)));
   NodeAssert.ok(paused.every((result) => result.state === "paused" && result.revision === 1));
   await NodeAssert.rejects(executeControl(command("p20-pause", "stale-resume", 0, "resume")));
   await NodeAssert.rejects(executeControl({ ...pauseCommand, action: "cancel" }));
-  const pausedClaim = await dispatchCall((s) =>
-    s.claimNext({ workerId: controlIdentity.deviceId, owner: "p20-owner", leaseMillis: 60000 }),
-  );
-  NodeAssert.ok(pausedClaim);
   NodeAssert.equal(await dispatchCall((s) => s.canLaunch(pausedClaim)), false);
   await failure(
     dispatchCall((s) =>
@@ -1738,6 +1738,12 @@ try {
     "invalid_step",
   );
   await dispatchCall((s) => s.release(pausedClaim));
+  NodeAssert.equal(
+    await dispatchCall((s) =>
+      s.claimNext({ workerId: controlIdentity.deviceId, owner: "p20-idle", leaseMillis: 60000 }),
+    ),
+    null,
+  );
   await stop();
   await start();
   NodeAssert.deepEqual(await executeControl(pauseCommand), paused[0]);
