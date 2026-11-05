@@ -935,6 +935,21 @@ it.effect(
         );
         assert.equal(admittedStarts, 0);
         startWorkflow = run.workflow;
+        assert.equal(
+          (yield* scheduler
+            .start(request, {
+              ...start,
+              workers: [
+                {
+                  deviceId: proof.identity.deviceId,
+                  environmentId: proof.identity.environmentId,
+                  projectId: start.projectId,
+                },
+              ],
+            })
+            .pipe(Effect.flip)).reason,
+          "invalid_binding",
+        );
         yield* scheduler.start(request, start);
         assert.equal(admittedStarts, 1);
         replayAccepted = true;
