@@ -26,6 +26,9 @@ import * as Scheduler from "../src/automation/Scheduler.ts";
 import * as WorkerTransport from "../src/automation/WorkerTransport.ts";
 import * as Artifacts from "../src/foundry/Artifacts.ts";
 import * as ThreadArchive from "../src/foundry/ThreadArchive.ts";
+import * as InstanceDatabase from "../src/foundry/InstanceDatabase.ts";
+import * as InstanceMigrations from "../src/foundry/InstanceMigrations.ts";
+import * as ArtifactFiles from "../src/foundry/ArtifactFiles.ts";
 
 const decodeBinding = Schema.decodeEffect(Scheduler.DispatchBinding);
 const decodeReceipt = Schema.decodeEffect(FoundryWorkerHandoffReceipt);
@@ -34,16 +37,17 @@ const decodeExecution = Schema.decodeEffect(FoundryWorkerExecution);
 const decodeCommand = Schema.decodeEffect(AutomationHandoffCommand);
 const decodeUnknownCommand = Schema.decodeUnknownEffect(AutomationHandoffCommand);
 
-export const handoffGates = Effect.fn("Handoffs.postgresGates")(function <E, E2>(
+export const handoffGates = Effect.fn("Handoffs.postgresGates")(function <E, E2, E3>(
   database: Layer.Layer<Database.AutomationDatabase, E>,
   restart: Effect.Effect<void, E2>,
+  archiveDatabase: Layer.Layer<InstanceDatabase.InstanceDatabase, E3>,
 ) {
   return Effect.gen(function* () {
     const testDatabase = database.pipe(Layer.orDie);
     const binding = yield* decodeBinding({
       identity: {
         instanceId: "11111111-1111-4111-8111-111111111151",
-        operatorId: "handoff-owner",
+        operatorId: "33333333-3333-4333-8333-333333333351",
         deviceId: "22222222-2222-4222-8222-222222222251",
         environmentId: "handoff-worker",
         deviceGeneration: 1,
@@ -96,6 +100,31 @@ export const handoffGates = Effect.fn("Handoffs.postgresGates")(function <E, E2>
         sourceSequence: 3,
       },
     });
+    const testArchiveDatabase = archiveDatabase.pipe(Layer.orDie);
+    yield* InstanceDatabase.InstanceDatabase.pipe(
+      Effect.flatMap((sql) => sql`REVOKE ALL ON SCHEMA public FROM PUBLIC`),
+      Effect.provide(testArchiveDatabase),
+    );
+    yield* InstanceMigrations.InstanceMigrations.pipe(
+      Effect.flatMap((service) =>
+        service.migrate({
+          instanceId: binding.identity.instanceId,
+          mainEnvironmentId: EnvironmentId.make("handoff-main"),
+          runtimeRole: "automation_runtime",
+        }),
+      ),
+      Effect.provide(InstanceMigrations.layer.pipe(Layer.provide(testArchiveDatabase))),
+    );
+    yield* Effect.gen(function* () {
+      const sql = yield* InstanceDatabase.InstanceDatabase;
+      yield* sql`INSERT INTO foundry_instance.operator_binding(operator_id,issuer,subject) VALUES(${binding.identity.operatorId},'https://fixture.invalid','handoff-owner')`;
+      yield* sql`INSERT INTO foundry_instance.devices(device_id,instance_id,operator_id,environment_id,public_key) VALUES(${binding.identity.deviceId},${binding.identity.instanceId},${binding.identity.operatorId},${binding.identity.environmentId},${"a".repeat(43)})`;
+      yield* sql`INSERT INTO foundry_instance.archive_threads(instance_id,operator_id,environment_id,thread_id,device_id,source_complete,confirmed_cursor,confirmed_source_sequence,source_head) VALUES(${binding.identity.instanceId},${binding.identity.operatorId},${binding.identity.environmentId},${receipt.threadId},${binding.identity.deviceId},true,3,3,3)`;
+    }).pipe(Effect.provide(testArchiveDatabase));
+    const realArchive = ThreadArchive.layer.pipe(
+      Layer.provide(testArchiveDatabase),
+      Layer.provide(Layer.mock(ArtifactFiles.ArtifactFiles)({})),
+    );
     const source = yield* decodeExecution({
       receipt: {
         commandId: "p51-source",
@@ -203,20 +232,18 @@ export const handoffGates = Effect.fn("Handoffs.postgresGates")(function <E, E2>
       ),
       Layer.provide(
         Layer.mock(ThreadArchive.ThreadArchive)({
-          cursor: () =>
-            Effect.sync(() => {
-              if (revokeOnArchive) allowed = false;
-              return {
-                owner: result.archive.owner,
-                confirmedCursor: 3,
-                confirmedSourceSequence: 3,
-                sourceHead: 3,
-                sourceComplete: archiveComplete,
-                complete: archiveComplete,
-                missingArtifacts: [],
-                missingAttachmentCount: 0,
-              };
-            }),
+          cursor: Effect.fn("Handoffs.fixtureArchiveCursor")(function* (principal, owner) {
+            const status = yield* ThreadArchive.ThreadArchive.pipe(
+              Effect.flatMap((service) => service.cursor(principal, owner)),
+              Effect.provide(realArchive),
+            );
+            if (revokeOnArchive) allowed = false;
+            return {
+              ...status,
+              sourceComplete: archiveComplete && status.sourceComplete,
+              complete: archiveComplete && status.complete,
+            };
+          }),
         }),
       ),
     );
