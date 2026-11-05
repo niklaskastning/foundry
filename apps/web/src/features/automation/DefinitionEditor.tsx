@@ -122,136 +122,161 @@ export function DefinitionEditor({
   return (
     <section className="space-y-4" aria-label="Factory definition">
       <div>
-        <h2 className="text-lg font-medium">Manual import transition</h2>
+        <h2 className="text-lg font-medium">Definition draft</h2>
         <p className="text-sm text-muted-foreground">
-          {active ? `Active version: ${active.id}` : "No active definition"}
+          {active
+            ? "Editing a local draft of the active definition"
+            : "Create the first definition for this factory"}
         </p>
       </div>
       <p className="text-sm text-muted-foreground">
-        Local editing is an import transition until Git takes ownership. After binding, changes to
-        the active local version cause import drift. Git-owned definitions are edited in their
-        repository.
+        Validate your draft, then activate it for new runs. Existing runs keep their pinned version.
+        Git-owned definitions are edited in their repository.
       </p>
-      <p className="text-sm">Repositories: {repositories.join(", ")}</p>
+      <details className="text-sm">
+        <summary className="cursor-pointer">Active version and repository scope</summary>
+        <div className="space-y-2 break-all pt-2 text-muted-foreground">
+          <p>Active version: {active?.id ?? "None"}</p>
+          <p>Repositories: {repositories.join(", ")}</p>
+          <p>
+            After binding a Git source, local edits change the import basis and must be reconciled
+            before import.
+          </p>
+        </div>
+      </details>
+      {!permission ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Read-only access. You can inspect or export a draft, but cannot activate it.
+        </p>
+      ) : null}
       {definition.workflows.map((workflow, wi) => (
-        <fieldset key={workflow.id} className="space-y-3 rounded-lg border p-3">
-          <legend className="px-1 text-sm">Workflow {wi + 1}</legend>
-          <label className="block space-y-1">
-            <span className="text-sm">Workflow key</span>
-            <Input
-              defaultValue={workflow.id}
-              onBlur={(event) => {
-                setPending(null);
-                setDefinition({
-                  ...definition,
-                  workflows: definition.workflows.map((item, index) =>
-                    index === wi ? { ...item, id: event.target.value } : item,
-                  ),
-                });
-              }}
-            />
-          </label>
-          {workflow.steps.map((step, si) => (
-            <fieldset key={step.id} className="space-y-2 rounded border p-3">
-              <legend className="px-1 text-sm">
-                Step {si + 1} · {step.kind}
-              </legend>
-              <label className="block space-y-1">
-                <span className="text-sm">Step key</span>
-                <Input
-                  defaultValue={step.id}
-                  onBlur={(event) => replaceStep(wi, si, { ...step, id: event.target.value })}
-                />
-              </label>
-              <label className="block space-y-1">
-                <span className="text-sm">Depends on (comma separated step keys)</span>
-                <Input
-                  value={step.dependsOn.join(", ")}
-                  onChange={(event) =>
-                    replaceStep(wi, si, {
-                      ...step,
-                      dependsOn: event.target.value
-                        .split(",")
-                        .map((id) => id.trim())
-                        .filter(Boolean),
-                    })
-                  }
-                />
-              </label>
-              {step.kind === "agent" || step.kind === "approval" ? (
+        <details
+          key={workflow.id}
+          open={definition.workflows.length === 1}
+          className="rounded-lg border p-4"
+        >
+          <summary className="cursor-pointer font-medium">
+            {workflow.id} · {workflow.steps.length} steps
+          </summary>
+          <fieldset className="space-y-3 pt-4">
+            <legend className="sr-only">Workflow {wi + 1}</legend>
+            <label className="block space-y-1">
+              <span className="text-sm">Workflow key</span>
+              <Input
+                defaultValue={workflow.id}
+                onBlur={(event) => {
+                  setPending(null);
+                  setDefinition({
+                    ...definition,
+                    workflows: definition.workflows.map((item, index) =>
+                      index === wi ? { ...item, id: event.target.value } : item,
+                    ),
+                  });
+                }}
+              />
+            </label>
+            {workflow.steps.map((step, si) => (
+              <fieldset key={step.id} className="space-y-2 rounded border p-3">
+                <legend className="px-1 text-sm">
+                  Step {si + 1} · {step.kind}
+                </legend>
                 <label className="block space-y-1">
-                  <span className="text-sm">Instructions</span>
-                  <Textarea
-                    value={step.prompt}
-                    onChange={(event) =>
-                      replaceStep(wi, si, { ...step, prompt: event.target.value })
-                    }
-                  />
-                </label>
-              ) : step.kind === "test" ? (
-                <label className="block space-y-1">
-                  <span className="text-sm">Check binding key</span>
+                  <span className="text-sm">Step key</span>
                   <Input
-                    value={step.checkId}
+                    defaultValue={step.id}
+                    onBlur={(event) => replaceStep(wi, si, { ...step, id: event.target.value })}
+                  />
+                </label>
+                <label className="block space-y-1">
+                  <span className="text-sm">Depends on (comma separated step keys)</span>
+                  <Input
+                    value={step.dependsOn.join(", ")}
                     onChange={(event) =>
-                      replaceStep(wi, si, { ...step, checkId: event.target.value })
+                      replaceStep(wi, si, {
+                        ...step,
+                        dependsOn: event.target.value
+                          .split(",")
+                          .map((id) => id.trim())
+                          .filter(Boolean),
+                      })
                     }
                   />
                 </label>
-              ) : (
-                <p className="text-sm">
-                  Publishes the tested commit as a pull request after approval for that revision.
-                </p>
-              )}
-              <Button
-                variant="ghost"
-                disabled={workflow.steps.length === 1}
-                onClick={() => {
-                  setPending(null);
-                  setDefinition({
-                    ...definition,
-                    workflows: definition.workflows.map((item, index) =>
-                      index === wi
-                        ? { ...item, steps: item.steps.filter((_, index) => index !== si) }
-                        : item,
-                    ),
-                  });
-                }}
-              >
-                Remove step
-              </Button>
-            </fieldset>
-          ))}
-          <div className="flex flex-wrap gap-2">
-            {(["agent", "test", "approval", "publish"] as const).map((kind) => (
-              <Button
-                key={kind}
-                variant="outline"
-                onClick={() => {
-                  const base = {
-                    id: `${kind}-${workflow.steps.length + 1}`,
-                    dependsOn: workflow.steps.at(-1) ? [workflow.steps.at(-1)!.id] : [],
-                  };
-                  const step: Step =
-                    kind === "test"
-                      ? { ...base, kind, checkId: "check" }
-                      : kind === "publish"
-                        ? { ...base, kind, target: "pull_request" }
-                        : { ...base, kind, prompt: "Describe the required work." };
-                  setPending(null);
-                  setDefinition({
-                    ...definition,
-                    workflows: definition.workflows.map((item, index) =>
-                      index === wi ? { ...item, steps: [...item.steps, step] } : item,
-                    ),
-                  });
-                }}
-              >
-                Add {kind}
-              </Button>
+                {step.kind === "agent" || step.kind === "approval" ? (
+                  <label className="block space-y-1">
+                    <span className="text-sm">Instructions</span>
+                    <Textarea
+                      value={step.prompt}
+                      onChange={(event) =>
+                        replaceStep(wi, si, { ...step, prompt: event.target.value })
+                      }
+                    />
+                  </label>
+                ) : step.kind === "test" ? (
+                  <label className="block space-y-1">
+                    <span className="text-sm">Check binding key</span>
+                    <Input
+                      value={step.checkId}
+                      onChange={(event) =>
+                        replaceStep(wi, si, { ...step, checkId: event.target.value })
+                      }
+                    />
+                  </label>
+                ) : (
+                  <p className="text-sm">
+                    Publishes the tested commit as a pull request after approval for that revision.
+                  </p>
+                )}
+                <Button
+                  variant="ghost"
+                  disabled={workflow.steps.length === 1}
+                  onClick={() => {
+                    setPending(null);
+                    setDefinition({
+                      ...definition,
+                      workflows: definition.workflows.map((item, index) =>
+                        index === wi
+                          ? { ...item, steps: item.steps.filter((_, index) => index !== si) }
+                          : item,
+                      ),
+                    });
+                  }}
+                >
+                  Remove step
+                </Button>
+              </fieldset>
             ))}
-          </div>
-        </fieldset>
+            <div className="flex flex-wrap gap-2">
+              {(["agent", "test", "approval", "publish"] as const).map((kind) => (
+                <Button
+                  key={kind}
+                  variant="outline"
+                  onClick={() => {
+                    const base = {
+                      id: `${kind}-${workflow.steps.length + 1}`,
+                      dependsOn: workflow.steps.at(-1) ? [workflow.steps.at(-1)!.id] : [],
+                    };
+                    const step: Step =
+                      kind === "test"
+                        ? { ...base, kind, checkId: "check" }
+                        : kind === "publish"
+                          ? { ...base, kind, target: "pull_request" }
+                          : { ...base, kind, prompt: "Describe the required work." };
+                    setPending(null);
+                    setDefinition({
+                      ...definition,
+                      workflows: definition.workflows.map((item, index) =>
+                        index === wi ? { ...item, steps: [...item.steps, step] } : item,
+                      ),
+                    });
+                  }}
+                >
+                  Add {kind}
+                </Button>
+              ))}
+            </div>
+          </fieldset>
+        </details>
       ))}
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" onClick={onActivated}>
@@ -261,7 +286,7 @@ export function DefinitionEditor({
           Validate
         </Button>
         <Button disabled={busy || !permission} onClick={() => void activate()}>
-          {busy ? "Activating…" : pending ? "Retry activation" : "Activate definition"}
+          {busy ? "Activating…" : pending ? "Retry activation" : "Activate draft"}
         </Button>
         <Button
           variant="outline"

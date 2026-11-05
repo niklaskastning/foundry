@@ -10,6 +10,7 @@ import {
   type EnvironmentId,
   type FactoryDefinitionVersion,
 } from "@t3tools/contracts";
+import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Textarea } from "../../components/ui/textarea";
@@ -74,32 +75,79 @@ export function TriggerPanel({
   const items = query.result?.kind === "bindings" ? query.result.items : [];
   return (
     <section className="space-y-4" aria-label="Workflow triggers">
-      <h2 className="text-lg font-medium">Workflow triggers</h2>
-      <p className="text-sm text-muted-foreground">
-        Triggers keep their activated workflow version. Create an inactive trigger, review its
-        destination, then explicitly authorize unattended execution. Decisions and questions remain
-        in Inbox.
-      </p>
-      <Button variant="outline" onClick={query.refresh}>
-        Refresh triggers
-      </Button>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-medium">Triggers</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Start work from a schedule or labeled GitHub issues.
+          </p>
+        </div>
+        <Button variant="outline" onClick={query.refresh}>
+          Refresh triggers
+        </Button>
+      </div>
+      {!allowed ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Read-only access. Trigger changes require additional permission.
+        </p>
+      ) : null}
+      {query.loading ? (
+        <p role="status" className="text-sm">
+          Loading triggers…
+        </p>
+      ) : null}
       {query.error ? <p role="alert">{query.error}</p> : null}
-      <ul className="divide-y rounded border">
+      <ul className="space-y-3">
         {items.map((binding) => (
-          <li key={binding.id} className="space-y-2 p-3">
-            <p className="text-sm">
-              {binding.source.kind === "github_issue"
-                ? `${binding.source.repository} · ${binding.source.label}`
-                : `${binding.source.config.timeOfDay} · ${binding.source.config.timeZone}`}{" "}
-              · {binding.state}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Workflow {binding.workflowVersionId} · Project {binding.target.projectId}
-              {binding.reason ? ` · ${binding.reason}` : ""}
-              {binding.nextDueAt !== null
-                ? ` · Next ${new Date(binding.nextDueAt).toISOString()}`
-                : ""}
-            </p>
+          <li key={binding.id} className="space-y-3 rounded-lg border bg-card p-4">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-xs text-muted-foreground">
+                  {binding.source.kind === "github_issue" ? "GitHub issues" : "Schedule"}
+                </p>
+                <h3 className="mt-1 break-words font-medium">
+                  {binding.source.kind === "github_issue"
+                    ? `${binding.source.repository} · ${binding.source.label}`
+                    : `${binding.source.config.timeOfDay} · ${binding.source.config.timeZone}`}
+                </h3>
+              </div>
+              <Badge
+                variant={
+                  binding.state === "active"
+                    ? "success"
+                    : binding.state === "revoked"
+                      ? "secondary"
+                      : "outline"
+                }
+              >
+                {binding.state}
+              </Badge>
+            </div>
+            {binding.reason ? <p className="text-sm">{binding.reason}</p> : null}
+            {binding.nextDueAt !== null ? (
+              <p className="text-sm text-muted-foreground">
+                Next run {new Date(binding.nextDueAt).toLocaleString()}
+              </p>
+            ) : null}
+            <details className="text-sm">
+              <summary className="cursor-pointer text-muted-foreground">
+                Pinned workflow and destination
+              </summary>
+              <dl className="space-y-2 break-all pt-2">
+                <div>
+                  <dt className="text-muted-foreground">Workflow version</dt>
+                  <dd>{binding.workflowVersionId}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Worker project</dt>
+                  <dd>{binding.target.projectId}</dd>
+                </div>
+              </dl>
+              <p className="pt-2 text-muted-foreground">
+                This trigger keeps its authorized workflow version when the factory definition
+                changes.
+              </p>
+            </details>
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={() => setSelected(binding)}>
                 View inputs
@@ -180,7 +228,15 @@ export function TriggerPanel({
           </li>
         ))}
       </ul>
-      {items.length === 0 ? <p className="text-sm">No triggers configured.</p> : null}
+      {!query.loading && !query.error && items.length === 0 ? (
+        <div className="rounded-lg border border-dashed p-6 text-sm">
+          <p className="font-medium">No triggers configured</p>
+          <p className="mt-1 text-muted-foreground">
+            You can still create work manually. Add a trigger when this factory should accept work
+            unattended.
+          </p>
+        </div>
+      ) : null}
       <div className="flex gap-2">
         <Button variant="outline" disabled={!after} onClick={() => setAfter(undefined)}>
           First triggers
@@ -211,13 +267,20 @@ export function TriggerPanel({
           onOpenRun={onOpenRun}
         />
       ) : null}
-      <CreateTrigger
-        environmentId={environmentId}
-        factoryId={factoryId}
-        active={active}
-        disabled={!allowed || busy || Boolean(pending)}
-        onCreate={execute}
-      />
+      <details className="rounded-lg border p-4">
+        <summary className="cursor-pointer font-medium">Add trigger</summary>
+        <p className="py-3 text-sm text-muted-foreground">
+          Save an inactive trigger first, then review its destination and authorize unattended
+          execution.
+        </p>
+        <CreateTrigger
+          environmentId={environmentId}
+          factoryId={factoryId}
+          active={active}
+          disabled={!allowed || busy || Boolean(pending)}
+          onCreate={execute}
+        />
+      </details>
     </section>
   );
 }
@@ -240,7 +303,7 @@ function TriggerInputs({
   });
   return (
     <section className="space-y-2 rounded border p-3" aria-label="Durable workflow inputs">
-      <h3 className="font-medium">Durable inputs · {binding.id}</h3>
+      <h3 className="font-medium">Input history</h3>
       <p className="text-xs text-muted-foreground">
         Technical input history is separate from your personal Inbox. Baseline issues never start a
         run.
@@ -428,14 +491,19 @@ function CreateTrigger({
           <span>Model</span>
           <Input value={model} onChange={(e) => setModel(e.target.value)} />
         </label>
-        <label className="block space-y-1">
-          <span>Checks (id, prompt, command, cwd)</span>
-          <Textarea value={checks} onChange={(e) => setChecks(e.target.value)} />
-        </label>
-        <label className="block space-y-1">
-          <span>Required artifacts (stepId, names)</span>
-          <Textarea value={artifacts} onChange={(e) => setArtifacts(e.target.value)} />
-        </label>
+        <details className="rounded border p-3">
+          <summary className="cursor-pointer text-sm">Checks and required artifacts</summary>
+          <div className="space-y-3 pt-3">
+            <label className="block space-y-1">
+              <span>Checks (id, prompt, command, cwd)</span>
+              <Textarea value={checks} onChange={(e) => setChecks(e.target.value)} />
+            </label>
+            <label className="block space-y-1">
+              <span>Required artifacts (stepId, names)</span>
+              <Textarea value={artifacts} onChange={(e) => setArtifacts(e.target.value)} />
+            </label>
+          </div>
+        </details>
         <div className="flex gap-2">
           <Button
             type="button"

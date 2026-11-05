@@ -118,32 +118,31 @@ export function DefinitionSourcePanel({
     }
   }
   return (
-    <section aria-label="Git definition source" className="space-y-4 rounded-lg border p-4">
+    <section aria-label="Git definition source" className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-medium">Git definition source</h2>
+        <h2 className="text-lg font-medium">Definition source</h2>
         <Button variant="outline" onClick={refresh}>
-          Refresh source and revisions
+          Refresh
         </Button>
       </div>
       <p className="text-sm text-muted-foreground">
-        Definitions live in a separate GitHub repository. Synchronization reads revisions; only an
-        explicit activation changes the definition used by new runs.
+        Review changes from Git, then activate a revision for new runs. Existing runs keep their
+        pinned definition.
       </p>
       {binding ? (
         <>
-          <dl className="space-y-2 break-all text-sm">
+          <dl className="grid gap-4 rounded-lg border bg-card p-4 text-sm sm:grid-cols-2">
             <div>
               <dt className="font-medium">Repository</dt>
               <dd>
                 <a
                   className="underline"
-                  href={`https://github.com/${binding.repository}`}
+                  href={`https://github.com/${binding.repository}/tree/${encodeURIComponent(binding.branch)}/${binding.path.split("/").map(encodeURIComponent).join("/")}`}
                   target="_blank"
                   rel="noreferrer"
                 >
                   {binding.repository}
-                </a>{" "}
-                · ID {binding.repositoryId}
+                </a>
               </dd>
             </div>
             <div>
@@ -218,12 +217,15 @@ export function DefinitionSourcePanel({
               >
                 Use current local version as import basis
               </Button>
-              <p className="break-all">
-                Import version: {binding.importVersionId ?? "New factory"}
-              </p>
-              <p className="break-all">
-                Import content hash: {binding.importContentHash ?? "No existing definition"}
-              </p>
+              <details>
+                <summary className="cursor-pointer">Import basis details</summary>
+                <div className="space-y-1 break-all pt-2 text-muted-foreground">
+                  <p>Import version: {binding.importVersionId ?? "New factory"}</p>
+                  <p>
+                    Import content hash: {binding.importContentHash ?? "No existing definition"}
+                  </p>
+                </div>
+              </details>
               {active &&
               (active.id !== binding.importVersionId ||
                 active.contentHash !== binding.importContentHash) ? (
@@ -235,9 +237,8 @@ export function DefinitionSourcePanel({
             </div>
           ) : (
             <p className="text-sm">
-              Git owns this definition. Contents are read-only here; propose changes through commits
-              or pull requests in the definitions repository. Pausing reads does not restore local
-              editing.
+              Managed in Git. Open the repository above to propose a change, then sync and review it
+              here.
             </p>
           )}
           <div className="flex flex-wrap gap-2">
@@ -352,6 +353,11 @@ export function DefinitionSourcePanel({
           </Button>
         </form>
       )}
+      {!canConfigure && !canSync && !canEnable && !canActivate ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Read-only access. Source changes and activation require additional permission.
+        </p>
+      ) : null}
       {pending && !busy ? (
         <Button
           variant="outline"
@@ -368,7 +374,10 @@ export function DefinitionSourcePanel({
       ) : null}
       {binding ? (
         <>
-          <h3 className="font-medium">Read revisions</h3>
+          <h3 className="font-medium">Revisions available for review</h3>
+          <p className="text-sm text-muted-foreground">
+            A synced revision is a candidate until you activate it.
+          </p>
           {revisions.error ? <p role="alert">{revisions.error}</p> : null}
           {revisions.loading ? <p role="status">Loading revisions…</p> : null}
           <ul className="divide-y">
@@ -442,10 +451,11 @@ function CommitLink({ repository, sha }: { repository: string; sha: string }) {
     <a
       className="break-all underline"
       href={`https://github.com/${repository}/commit/${sha}`}
+      aria-label={`Commit ${sha}`}
       target="_blank"
       rel="noreferrer"
     >
-      {sha}
+      {sha.slice(0, 12)}
     </a>
   );
 }

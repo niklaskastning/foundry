@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { createEnvironmentRpcCommand } from "@t3tools/client-runtime/state/runtime";
@@ -6,6 +6,7 @@ import { WS_METHODS, type EnvironmentId, type FoundryWorkerStatus } from "@t3too
 import { connectionAtomRuntime } from "../connection/runtime";
 import { serverEnvironment } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 
 const statusCommand = createEnvironmentRpcCommand(connectionAtomRuntime, {
@@ -33,14 +34,14 @@ const messages: Record<FoundryWorkerStatus["providerState"], string> = {
 };
 
 export function WorkerStatus({ environmentId }: { environmentId: EnvironmentId }) {
-  const supported =
-    useAtomValue(serverEnvironment.configValueAtom(environmentId))?.environment.capabilities
-      .foundryWorkerReadiness === true;
+  const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const supported = config?.environment.capabilities.foundryWorkerReadiness === true;
   const permitted = useAtomValue(statusCommand.permissionAtom(environmentId));
   const run = useAtomCommand(statusCommand, { reportFailure: false });
   const [status, setStatus] = useState<FoundryWorkerStatus>();
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  const initiallyChecked = useRef<EnvironmentId | null>(null);
   async function refresh() {
     setBusy(true);
     setStatus(undefined);
@@ -50,44 +51,110 @@ export function WorkerStatus({ environmentId }: { environmentId: EnvironmentId }
     else setFailed(true);
     setBusy(false);
   }
-  if (!supported) return null;
+  const checkInitially = useEffectEvent(() => void refresh());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Check remote worker readiness once its capability and permission become available, without duplicate StrictMode requests.
+  useEffect(() => {
+    if (!supported || !permitted || initiallyChecked.current === environmentId) return;
+    initiallyChecked.current = environmentId;
+    checkInitially();
+  }, [supported, permitted, environmentId]);
+
   return (
-    <div className="space-y-2 rounded-md border p-3">
-      <Button variant="outline" disabled={busy || !permitted} onClick={() => void refresh()}>
-        Check selected worker
-      </Button>
-      <div role="status" className="text-sm">
-        {busy ? (
-          "Checking worker…"
-        ) : failed ? (
-          "Worker status could not be verified. Check the device connection and retry."
-        ) : status ? (
-          <>
-            <p>Snapshot: {status.checkedAt} · worker responded online</p>
-            <p>
-              Provider ready: {status.providerReady ? "yes" : "no"} ·{" "}
-              {status.providerInstanceId ?? "no binding"} · {status.version ?? "version unknown"}
-            </p>
-            <p>{messages[status.providerState]}</p>
-            <p>
-              Capacity available:{" "}
-              {status.capacityAvailable === null
-                ? "unknown"
-                : status.capacityAvailable
-                  ? "yes"
-                  : "no"}{" "}
-              · active runs: {status.activeRuns ?? "unknown"}
-            </p>
-          </>
-        ) : (
-          "Check the selected worker's provider and run capacity."
-        )}
+    <section
+      aria-label="Selected worker readiness"
+      className="space-y-4 rounded-lg border bg-card p-4"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className="font-medium">Selected worker</h3>
+        <Button
+          variant="outline"
+          disabled={busy || !supported || !permitted}
+          onClick={() => void refresh()}
+        >
+          Refresh readiness
+        </Button>
       </div>
-      <p className="text-xs text-muted-foreground">
-        Capacity is a snapshot of unfinished runs, not a reservation. This check does not start an
-        agent or grant automation access. Provider installation and sign-in require the worker
-        operator's local access; personal credentials must not be copied.
-      </p>
-    </div>
+      {!config ? (
+        <p role="status" className="text-sm">
+          Connecting to selected worker…
+        </p>
+      ) : !supported ? (
+        <p className="text-sm text-muted-foreground">
+          This device does not support worker readiness checks.
+        </p>
+      ) : !permitted ? (
+        <p className="text-sm text-muted-foreground">
+          You do not have permission to inspect this worker's readiness.
+        </p>
+      ) : busy ? (
+        <p role="status" className="text-sm">
+          Checking worker…
+        </p>
+      ) : failed ? (
+        <p role="alert" className="text-sm">
+          Worker status could not be verified. Check the device connection and retry.
+        </p>
+      ) : status ? (
+        <>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Provider</p>
+              <Badge variant={status.providerReady ? "success" : "warning"}>
+                {status.providerReady ? "Ready" : "Needs attention"}
+              </Badge>
+              <p className="break-words text-sm">
+                {status.providerInstanceId ?? "No provider bound"}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Capacity</p>
+              <Badge
+                variant={
+                  status.capacityAvailable === null
+                    ? "outline"
+                    : status.capacityAvailable
+                      ? "success"
+                      : "warning"
+                }
+              >
+                {status.capacityAvailable === null
+                  ? "Unknown"
+                  : status.capacityAvailable
+                    ? "Available"
+                    : "Occupied"}
+              </Badge>
+              <p className="text-sm">
+                {status.activeRuns === null
+                  ? "Active run count unavailable"
+                  : `${status.activeRuns} active runs`}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Last checked</p>
+              <p className="text-sm">{new Date(status.checkedAt).toLocaleString()}</p>
+              <p className="text-xs text-muted-foreground">Snapshot, not a reservation</p>
+            </div>
+          </div>
+          {!status.providerReady ? (
+            <p className="text-sm">{messages[status.providerState]}</p>
+          ) : null}
+          <details className="border-t pt-3 text-sm">
+            <summary className="cursor-pointer">Provider and configuration details</summary>
+            <div className="space-y-2 pt-3 text-muted-foreground">
+              <p>{messages[status.providerState]}</p>
+              <p>Version: {status.version ?? "Unknown"}</p>
+              <p>
+                Readiness does not grant automation access or reserve capacity. Provider
+                installation and sign-in are managed on this worker.
+              </p>
+            </div>
+          </details>
+        </>
+      ) : (
+        <p role="status" className="text-sm">
+          Waiting to check worker readiness…
+        </p>
+      )}
+    </section>
   );
 }

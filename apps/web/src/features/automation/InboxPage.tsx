@@ -4,6 +4,7 @@ import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import type { AutomationInboxEntry, AutomationInboxQuery, EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { useWorkspaceNavigation } from "../../foundry/useWorkspaceNavigation";
+import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { ListFilters } from "./ListFilters";
 import {
@@ -134,9 +135,11 @@ export function InboxPage({
     <section className="space-y-4" aria-label="Personal inbox">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold">{compact ? "Next decisions" : "Inbox"}</h1>
+          <h1 className="text-xl font-semibold">
+            {compact ? "Needs your attention" : "Decisions"}
+          </h1>
           <p className="text-sm text-muted-foreground">
-            Questions, decisions and problems from your factory runs.
+            Review requests, unblock runs and keep track of your decisions.
           </p>
         </div>
         <Button variant="outline" disabled={busy || !canRead} onClick={refresh}>
@@ -146,6 +149,7 @@ export function InboxPage({
       {!compact ? (
         <div className="flex flex-wrap items-end gap-3">
           <ListFilters
+            environmentId={environmentId}
             factoryId={factoryId ?? filterFactory}
             {...(!factoryId
               ? {
@@ -206,22 +210,56 @@ export function InboxPage({
           </label>
         </div>
       ) : null}
-      {!canRead ? (
+      {!canRead || !sessionHasScope(session, "orchestration:read") ? (
         <p role="status" className="text-sm">
           Connect to Main with read permission to open your inbox.
         </p>
       ) : null}
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div
+        className={
+          selected
+            ? "grid items-start gap-4 xl:grid-cols-[minmax(16rem,2fr)_minmax(0,3fr)]"
+            : "space-y-4"
+        }
+      >
         <div className="space-y-3">
           <ul className="space-y-2" aria-label="Inbox items">
             {visibleItems.map((item) => (
-              <li key={item.id} className="rounded-lg border p-3">
+              <li
+                key={item.id}
+                className={
+                  selectedId === item.id
+                    ? "rounded-lg border border-primary bg-accent/30 p-4"
+                    : "rounded-lg border bg-card p-4"
+                }
+              >
                 <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-medium">{item.title}</p>
+                  <div className="min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge
+                        variant={
+                          item.kind === "error" || item.kind === "blocker"
+                            ? "error"
+                            : item.active && !item.isDone
+                              ? "warning"
+                              : "secondary"
+                        }
+                      >
+                        {item.kind}
+                      </Badge>
+                      {!item.isRead ? <span className="text-xs font-medium">Unread</span> : null}
+                    </div>
+                    <p className="break-words text-sm font-medium">{item.title}</p>
+                    <p className="line-clamp-2 whitespace-pre-wrap text-sm text-muted-foreground">
+                      {item.detail}
+                    </p>
                     <p className="text-xs text-muted-foreground">
-                      {item.isRead ? "Read" : "Unread"} ·{" "}
-                      {item.isDone ? "Done" : item.active ? "Open" : "Resolved"} · {item.factoryId}
+                      {item.isDone
+                        ? "Done in your inbox"
+                        : item.active
+                          ? "Needs review"
+                          : "Resolved"}
+                      {item.stepId ? ` · Step ${item.stepId}` : ""}
                     </p>
                   </div>
                   <Button
@@ -229,14 +267,17 @@ export function InboxPage({
                     aria-pressed={selectedId === item.id}
                     onClick={() => setSelectedId(item.id)}
                   >
-                    Details
+                    {item.active && !item.isDone ? "Review" : "View"}
                   </Button>
                 </div>
               </li>
             ))}
           </ul>
-          {canRead && current && !busy && visibleItems.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No matching inbox items.</p>
+          {canRead && current && !busy && !message && visibleItems.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No decisions match these filters. New questions, approvals and blockers will appear
+              here.
+            </p>
           ) : null}
           {!compact ? (
             <div className="flex gap-2">
@@ -265,7 +306,9 @@ export function InboxPage({
           />
         ) : null}
       </div>
-      {busy || !current || message ? (
+      {canRead &&
+      sessionHasScope(session, "orchestration:read") &&
+      (busy || !current || message) ? (
         <p role="status" className="text-sm">
           {busy || !current ? "Loading inbox…" : message}
         </p>

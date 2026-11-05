@@ -9,6 +9,7 @@ import type {
   EnvironmentId,
 } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Textarea } from "../../components/ui/textarea";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -65,10 +66,9 @@ export function TakeOverPanel({
   return (
     <section aria-label="Take over in T3" className="space-y-3 rounded border p-3">
       <h3 className="font-medium">Take over in T3</h3>
-      <p className="text-sm">
-        Pause an active run first and wait for its writer to finish. Finished runs can also be taken
-        over. The server verifies writer shutdown and the saved checkpoint before opening
-        interactive work.
+      <p className="text-sm text-muted-foreground">
+        Continue from a confirmed checkpoint. Pause an active run and wait for its current work to
+        finish before taking over.
       </p>
       <fieldset disabled={action.busy || Boolean(action.pending)} className="space-y-2">
         <legend className="text-sm">Choose the source attempt</legend>
@@ -157,7 +157,8 @@ export function HandoffList({
   const query = useAutomationQuery(environmentId, { op: "handoffs", factoryId, workItemId });
   return (
     <section aria-label="Interactive handoffs" className="space-y-3">
-      <h3 className="font-medium">Interactive handoffs</h3>
+      <h3 className="font-medium">Interactive work</h3>
+      {query.loading && !query.result ? <p role="status">Loading interactive work…</p> : null}
       {query.error ? <p role="alert">{query.error}</p> : null}
       {query.result?.kind === "handoffs" ? (
         query.result.items.length ? (
@@ -170,7 +171,9 @@ export function HandoffList({
             />
           ))
         ) : (
-          <p className="text-sm">No interactive handoff. Open a run to take over an attempt.</p>
+          <p className="text-sm">
+            No interactive work yet. You can take over a paused or finished run in T3.
+          </p>
         )
       ) : null}
     </section>
@@ -197,20 +200,48 @@ function HandoffPanel({
       : handoff.pendingCommands;
   return (
     <section aria-label="Interactive handoff" className="space-y-3 rounded border p-3">
-      <p className="text-sm">
-        {handoff.state} · Generation {handoff.generation} · {handoff.mode}
-      </p>
-      <p className="break-all text-sm">Input revision: {handoff.baseRevision}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge
+          variant={
+            handoff.state === "open"
+              ? "info"
+              : handoff.state === "returning"
+                ? "warning"
+                : "secondary"
+          }
+        >
+          {handoff.state.replaceAll("_", " ")}
+        </Badge>
+        <span className="text-sm">
+          {handoff.mode === "existing"
+            ? "Existing workspace"
+            : handoff.mode === "branch"
+              ? "Alternative branch"
+              : "Restored archive"}
+        </span>
+      </div>
+      <details className="text-xs text-muted-foreground">
+        <summary className="cursor-pointer">Workspace & revision details</summary>
+        <div className="space-y-1 break-all pt-2">
+          <p>
+            Input revision: {handoff.baseRevision} · Generation {handoff.generation}
+          </p>
+          {receipt ? (
+            <>
+              <p>Base commit: {receipt.baseCommit}</p>
+              <p>
+                Workspace: {receipt.workspacePath} · Branch: {receipt.branch ?? "detached"}
+              </p>
+            </>
+          ) : null}
+        </div>
+      </details>
       {receipt ? (
         <>
-          <p className="break-all text-sm">Base commit: {receipt.baseCommit}</p>
-          <p className="break-all text-sm">
-            Workspace: {receipt.workspacePath} · Branch: {receipt.branch ?? "detached"}
-          </p>
           <div className="flex flex-wrap gap-3 text-sm">
             <a
               className="underline"
-              href={`/${encodeURIComponent(handoff.environmentId)}/${encodeURIComponent(receipt.threadId)}`}
+              href={`/${encodeURIComponent(handoff.environmentId)}/${encodeURIComponent(receipt.threadId)}?factoryId=${encodeURIComponent(handoff.factoryId)}&runId=${encodeURIComponent(handoff.runId)}`}
             >
               Open T3 thread
             </a>

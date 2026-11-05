@@ -10,6 +10,7 @@ import type {
 import { AsyncResult } from "effect/reactivity";
 import { useAutomationQuery } from "./useAutomationQuery";
 import { AttemptResult } from "./RunDetail";
+import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Textarea } from "../../components/ui/textarea";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -37,6 +38,12 @@ export function InboxDetail({
   onNavigateRun?: (factoryId: string, runId: string) => void;
   onNavigateWorkItem?: (factoryId: string, workItemId: string) => void;
 }) {
+  const context = useAutomationQuery(environmentId, {
+    op: "run",
+    factoryId: item.factoryId,
+    runId: item.runId,
+  });
+  const runContext = context.result?.kind === "run" ? context.result : null;
   const mark = useAtomCommand(automationCommands.inboxMark, { reportFailure: false });
   const control = useAtomCommand(automationCommands.control, { reportFailure: false });
   const canMark = useAtomValue(automationCommands.inboxMark.permissionAtom(environmentId));
@@ -118,37 +125,36 @@ export function InboxDetail({
     }
   }
   return (
-    <aside className="space-y-4 rounded-lg border p-4" aria-label="Inbox item details">
+    <aside
+      className="min-w-0 space-y-5 rounded-lg border bg-card p-5"
+      aria-label="Inbox item details"
+    >
       <div className="flex items-start justify-between gap-3">
-        <h2 className="text-lg font-medium">{item.title}</h2>
+        <div className="min-w-0 space-y-2">
+          <Badge variant={item.active ? "warning" : "secondary"}>
+            {item.active
+              ? item.kind === "answer"
+                ? "Answer received"
+                : "Needs review"
+              : "Resolved or superseded"}
+          </Badge>
+          <h2 className="break-words text-lg font-semibold">{item.title}</h2>
+          <p className="text-sm text-muted-foreground">
+            {runContext?.factoryName ?? "Factory"} ·{" "}
+            {runContext?.workItem?.title ??
+              (context.loading ? "Loading work item context…" : "Work item context unavailable")}
+          </p>
+          {context.error ? (
+            <p role="alert" className="text-sm">
+              Work item context is unavailable. {context.error}
+            </p>
+          ) : null}
+        </div>
         <Button variant="ghost" onClick={onClose}>
           Close
         </Button>
       </div>
       <p className="whitespace-pre-wrap text-sm">{item.detail}</p>
-      <p className="text-xs text-muted-foreground">
-        {item.active ? "Current" : "Resolved or superseded"} · Revision {item.expectedRevision} ·
-        Result {item.resultRevision}
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <Button
-          variant="outline"
-          disabled={busy || !canMark}
-          onClick={() => void changeMark(item.isRead ? "unread" : "read")}
-        >
-          {item.isRead ? "Mark unread" : "Mark read"}
-        </Button>
-        <Button
-          variant="outline"
-          disabled={busy || !canMark}
-          onClick={() => void changeMark(item.isDone ? "reopen" : "done")}
-        >
-          {item.isDone ? "Undo done" : "Mark done"}
-        </Button>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Marking done only organizes your inbox. It does not approve a result or answer a question.
-      </p>
       <div className="space-y-3">
         <Button variant="outline" onClick={() => setShowEvidence(!showEvidence)}>
           {showEvidence ? "Hide evidence" : "Review tests, changes and artifacts"}
@@ -165,7 +171,14 @@ export function InboxDetail({
               disabled={
                 busy || !canDecide || (pendingAction !== null && pendingAction !== "approve")
               }
-              onClick={() => void decide("approve")}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Approve result revision ${item.resultRevision} for “${item.title}”? This lets the workflow continue.`,
+                  )
+                )
+                  void decide("approve");
+              }}
             >
               Approve revision
             </Button>
@@ -174,7 +187,14 @@ export function InboxDetail({
               disabled={
                 busy || !canDecide || (pendingAction !== null && pendingAction !== "reject")
               }
-              onClick={() => void decide("reject")}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Reject result revision ${item.resultRevision} for “${item.title}”?`,
+                  )
+                )
+                  void decide("reject");
+              }}
             >
               Reject revision
             </Button>
@@ -302,6 +322,42 @@ export function InboxDetail({
           </Button>
         ) : null}
       </nav>
+      {!canDecide && item.active ? (
+        <p className="text-sm text-muted-foreground">
+          You can review this item, but your current session cannot make run decisions.
+        </p>
+      ) : null}
+      <details className="border-t pt-3">
+        <summary className="cursor-pointer text-sm text-muted-foreground">
+          Inbox organization and revision details
+        </summary>
+        <div className="space-y-3 pt-3">
+          <p className="text-xs text-muted-foreground">
+            {item.active ? "Current" : "Resolved or superseded"} · Revision {item.expectedRevision}{" "}
+            · Result {item.resultRevision}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              disabled={busy || !canMark}
+              onClick={() => void changeMark(item.isRead ? "unread" : "read")}
+            >
+              {item.isRead ? "Mark unread" : "Mark read"}
+            </Button>
+            <Button
+              variant="outline"
+              disabled={busy || !canMark}
+              onClick={() => void changeMark(item.isDone ? "reopen" : "done")}
+            >
+              {item.isDone ? "Undo done" : "Mark done"}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Marking done only organizes your inbox. It does not approve a result or answer a
+            question.
+          </p>
+        </div>
+      </details>
       {message ? (
         <p role="status" className="text-sm">
           {message}

@@ -1212,11 +1212,11 @@ function OpenCommandPaletteDialog(props: {
   const automationAvailable = useAutomationAvailable();
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
   if (automationAvailable)
-    for (const view of ["factories", "runs", "inbox"] as const)
+    for (const view of ["factories", "work", "inbox", "runs", "resources"] as const)
       actionItems.push({
         kind: "action",
         value: `action:foundry:${view}`,
-        title: `Open ${view}`,
+        title: `Open ${view === "inbox" ? "decisions" : view}`,
         searchTerms: ["foundry", "factory", view],
         icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
         run: async () => {

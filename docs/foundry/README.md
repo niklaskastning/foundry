@@ -1,6 +1,6 @@
 # Foundry-Entwicklung
 
-Einstieg für die Weiterentwicklung unseres dauerhaften T3-Code-Forks. Foundry soll eine selbst gehostete Single-User-Software-Factory innerhalb von T3 Code werden: mit einer Hauptdomain, registrierten Devices, produktbezogenen Factories, Factory as Code und später Sandboxes. Warp Factories dient als Referenz für Funktionsumfang und Seitenaufteilung; Gestaltung und interaktive Agentenarbeit kommen aus T3 Code. Die Main Node steuert; ein eigener Host-Worker führt zunächst Agenten aus.
+Einstieg für die Weiterentwicklung unseres dauerhaften T3-Code-Forks. Foundry ist als selbst gehostete Single-User-Software-Factory auf T3 Code ausgerichtet. Factories sind Home und Hauptanwendung; Chats bleiben als Arbeitsdetails eines Auftrags und als sekundärer interaktiver Einstieg erreichbar: mit einer Hauptdomain, registrierten Devices, produktbezogenen Factories, Factory as Code und später Sandboxes. Warp Factories dient als Referenz für Funktionsumfang und Seitenaufteilung; Gestaltung und interaktive Agentenarbeit kommen aus T3 Code. Die Main Node steuert; ein eigener Host-Worker führt zunächst Agenten aus.
 
 ## Wo anfangen?
 
@@ -24,7 +24,7 @@ Architektur und Deployment erklären **was und warum**; der Umsetzungsplan besit
 
 Main, Instanz-PostgreSQL/Access, Gateway und dauerhafter Linux-Worker sind integriert. Der Factory-Kern umfasst sequenzielle Runs, Steuerung/Inbox, GitHub-Polling und PR-Publishing, Zeitpläne, zentrale Archive, Git-Definitionen und T3-Handoff. P58a stellt eine versionierte HTTP-API für vorhandene Benutzersitzungen sowie Factory-begrenzte Maschinen-Leseabfragen mit eigenen Credentials bereit. Maschinen-Start/-Steuerung und Factory-MCP bleiben offen; der öffentliche Maschinenzugang durch Access benötigt eine eigene Betriebsabnahme. Windows-Anmeldung ist praktisch bestätigt, die vollständige Factory-Bedienung unter Windows noch nicht.
 
-Der [Warp-Vergleich](warp-comparison.md) trennt vorhandene Funktionen von fehlender zentraler Integration und UI-Arbeit. **Nächster großer Schnitt: wiederverwendbare Factory-Agenten mit einem zusammenhängenden Arbeitsplatz (P28/P52a/P49b).** Danach folgen koordinierte Parallelität mit realer Kapazität, Sandboxes und messbare Qualität. Der [Umsetzungsplan](implementation-plan.md#nächste-produktlieferungen) besitzt Reihenfolge und funktionale Abnahme; technische Nachweise stehen in [Basic-Leitplanken](basic-leitplanken.md). Native Anmeldung, zentrale Kontoverbindungen und der Einstieg ohne getrenntes Main-T3-Pairing bleiben eigenständige Produktlücken. Die Definitionen liegen im separaten privaten Repository [foundry-definitions](https://github.com/niklaskastning/foundry-definitions).
+Der [Warp-Vergleich](warp-comparison.md) trennt vorhandene Funktionen von fehlender zentraler Integration und UI-Arbeit. **P28/erster P52a-Schnitt sind implementiert; die gemeinsame Abnahme bleibt offen.** Der Factories-first-Arbeitsplatz (P49b) priorisiert jetzt Factory, Arbeit und Entscheidungen, mit Rollen, Runs und T3-Rückkehr im Auftragskontext. Der integrierte Browserpass und die native Windows-Abnahme sind gesondert nachzuweisen. Funktional folgen koordinierte Parallelität mit realer Kapazität, Sandboxes und messbare Qualität. Der [Umsetzungsplan](implementation-plan.md#nächste-produktlieferungen) besitzt Reihenfolge und funktionale Abnahme; technische Nachweise stehen in [Basic-Leitplanken](basic-leitplanken.md). Native Anmeldung, zentrale Kontoverbindungen und der Einstieg ohne getrenntes Main-T3-Pairing bleiben eigenständige Produktlücken. Die Definitionen liegen im separaten privaten Repository [foundry-definitions](https://github.com/niklaskastning/foundry-definitions).
 
 ## Arbeitsweise
 
@@ -36,9 +36,8 @@ Das abgeschlossene [Issue #13](https://github.com/niklaskastning/foundry/issues/
 
 ## Manuell mit Factories arbeiten
 
-Bei aktivierter Automation öffnen **Factories**, **Runs** und **Inbox** in der
-Navigation, der Befehlspalette oder den Verbindungseinstellungen dieselben Ansichten.
-Foundry-Anmeldung und die T3-Verbindung zu Main sind beide erforderlich.
+Bei aktivierter Automation öffnet Home die **Factories**. **Work** führt zur Factory-Auswahl für Aufträge, **Decisions** zur persönlichen Inbox; Runs und Ressourcen sind nachgeordnet erreichbar. Innerhalb der Factory stehen Übersicht, Arbeit, Agenten, Runs, Definition und Trigger im selben Kontext. **Chats** öffnet die interaktive T3-Arbeit; direkte Threadlinks, Tastaturbefehle und der Rückweg zum Auftrag bleiben erhalten. Ohne Foundry-Fähigkeit bleibt der normale T3-Einstieg bestehen.
+Foundry-Anmeldung und die T3-Verbindung zu Main sind weiterhin beide erforderlich.
 
 Eine Factory legt Repository-Bindungsschlüssel fest. Im Factory-Bereich **Definition** lässt sich eine noch lokal verwaltete
 Definition bearbeiten oder als kanonischer Dateisatz importieren und exportieren.

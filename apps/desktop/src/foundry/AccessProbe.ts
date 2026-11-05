@@ -278,9 +278,11 @@ export async function runAccessProbe(
       if (new URL(url).origin !== origin) event.preventDefault();
     });
     const closed = new Promise<void>((resolve) => window.once("closed", () => resolve()));
-    void window.loadURL(onboardingRoot ? `${origin}/foundry?desktop=1` : origin).catch(() => {
-      if (!window.isDestroyed()) window.destroy();
-    });
+    void window
+      .loadURL(onboardingRoot ? `${origin}/foundry?view=factories&desktop=1` : origin)
+      .catch(() => {
+        if (!window.isDestroyed()) window.destroy();
+      });
     await closed;
   }
 

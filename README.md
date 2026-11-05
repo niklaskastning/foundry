@@ -1,8 +1,8 @@
 # Foundry
 
-A permanent fork of [T3 Code](https://github.com/pingdotgg/t3code), preparing a platform for automated software development. T3 supplies the agent runtime and shared Web/desktop interface; the planned Automation layer coordinates workflows, repositories, and execution machines.
+A self-hosted software factory and permanent fork of [T3 Code](https://github.com/pingdotgg/t3code). Factories are the main application: organize work, run versioned agent workflows and review decisions and results. T3 supplies the runtime and interactive threads used to inspect or take over a work item.
 
-**Status: isolated base deployment.** Foundry has Linux container/Compose and Windows x64 build entry points, separate product/data identities, and manual updates. The integrated instance gateway, device registry, Automation engine, and sandbox provisioning remain planned. Official T3 installers and `npx t3` install upstream, not Foundry.
+**Status: development implementation.** Main, the instance gateway, device registry, Linux worker, sequential Automation, Git definitions and reusable agent roles are implemented. The Factories-first Web shell makes chats a secondary workspace; integrated browser and native Windows acceptance remain separately tracked in the [implementation plan](docs/foundry/implementation-plan.md). Sandbox provisioning remains planned. Foundry uses separate product/data identities and manual updates. Official T3 installers and `npx t3` install upstream, not Foundry.
 
 The Linux VPS origin is `http://127.0.0.1:3783`; the operator routes `foundry.heavenforgeprod.com` through Cloudflare Tunnel and Access. See the [deployment runbook](docs/foundry/operations.md) for setup, pairing, limits, and recovery.
 
@@ -12,8 +12,9 @@ The Linux VPS origin is `http://127.0.0.1:3783`; the operator routes `foundry.he
 - One instance URL for login, devices, and Automation; an integrated Main Node gateway instead of a separate Connect deployment.
 - Single user first, with Cloudflare Access; a dedicated Linux host worker executes agents. Clerk and team access are later options.
 - Web and Windows desktop first; no initial mobile development or distribution.
-- Inspectable workflow steps backed by ordinary T3 threads, starting with one reliable issue-to-PR flow.
-- Later: reusable agents and skills, multiple repositories/workers, ephemeral sandboxes, and persistent memory.
+- Factories as Home, with work and decisions first; direct threads and keyboard commands remain reachable.
+- Versioned roles and instruction skills, workflow steps backed by T3 threads, and explicit takeover/return.
+- Later: coordinated parallel execution, multiple repositories/workers, ephemeral sandboxes, and persistent memory.
 
 Start with [Foundry development](docs/foundry/README.md) for the architecture, deployment design, PR-sized implementation plan, and operations. Design documents include future work and acceptance gates, not claims of shipped features.
 

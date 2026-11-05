@@ -51,6 +51,8 @@ import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
 import { GUEST_PAGE_PATH } from "../guestPage";
 import { isStandaloneFoundryPage } from "../foundry/pageMode";
+import { discoverFactoryHome } from "../foundry/home";
+import { resolvePrimaryEnvironmentHttpUrl } from "../environments/primary";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 import { useHostedPromptLinkLanding } from "../components/promptLinks/HostedPromptLinkLanding";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
@@ -63,6 +65,16 @@ import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
+    if (
+      location.pathname === "/" &&
+      !isLocalEnvironmentDisabled() &&
+      !isHostedStaticApp(new URL(window.location.href)) &&
+      (await discoverFactoryHome(
+        resolvePrimaryEnvironmentHttpUrl("/.well-known/foundry", { protocolVersion: "1" }),
+      ))
+    ) {
+      throw redirect({ to: "/foundry", search: { view: "factories" }, replace: true });
+    }
     // Guest links open on the owner's tunnel host in a browser with no T3 session, and must
     // not trigger pairing or an environment connection.
     if (

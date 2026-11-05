@@ -1,6 +1,6 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useSearch, useNavigate, Link } from "@tanstack/react-router";
-import { FactoryNavigation, useAutomationAvailable } from "./FactoryNavigation";
+import { useSearch, useNavigate } from "@tanstack/react-router";
+import { FactoryNavigation, useAutomationCapability } from "./FactoryNavigation";
 import { hasConfirmedAutomationView } from "./pageMode";
 import { lazy, Suspense, useState } from "react";
 import { AsyncResult } from "effect/reactivity";
@@ -9,6 +9,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { StandalonePage } from "../components/ui/standalone-page";
 import { useAtomCommand } from "../state/use-atom-command";
+import { DeviceCatalog } from "./DeviceCatalog";
 import {
   instanceCommand,
   instanceEntry,
@@ -36,7 +37,7 @@ export function FoundryPage() {
   const navigate = useNavigate({ from: "/foundry" });
   const [origin, setOrigin] = useState(window.location.origin);
   const [state, setState] = useState<OnboardingResult>(initialState);
-  const automationAvailable = useAutomationAvailable(state.binding?.instanceId);
+  const capability = useAutomationCapability(state.binding?.instanceId);
   const [message, setMessage] = useState(state.message);
   const [busy, setBusy] = useState(false);
   const run = useAtomCommand(instanceCommand, { reportFailure: false });
@@ -75,16 +76,49 @@ export function FoundryPage() {
     }
   }
 
-  if (automationAvailable && state.binding && hasConfirmedAutomationView(search.view, state))
+  if (hasConfirmedAutomationView(search.view, state) && capability !== "available") {
     return (
-      <div className="h-dvh min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both bg-background text-foreground p-4">
-        <div className="mx-auto max-w-6xl space-y-4">
-          <div className="flex items-center justify-between">
-            <FactoryNavigation />
-            <Link to="/">Back to threads</Link>
+      <main className="min-w-0 flex-1 p-8 pt-20" aria-label="Factory workspace">
+        <h1 className="text-xl font-semibold">Factories</h1>
+        <p role="status" className="mt-3 text-sm text-muted-foreground">
+          {capability === "loading"
+            ? "Connecting to your factory workspace…"
+            : capability === "unsupported"
+              ? "This instance does not support Factories."
+              : "Could not verify the instance capability. Check your connection and retry."}
+        </p>
+        {capability !== "loading" ? (
+          <div className="mt-4">
+            <Button onClick={() => window.location.reload()}>Retry connection</Button>
           </div>
+        ) : null}
+      </main>
+    );
+  }
+  if (capability === "available" && state.binding && hasConfirmedAutomationView(search.view, state))
+    return (
+      <main
+        id="foundry-content"
+        aria-label="Factory workspace"
+        tabIndex={-1}
+        className="h-dvh min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both bg-background text-foreground pt-12"
+      >
+        <div className="mx-auto max-w-6xl">
           <Suspense fallback={<p>Loading…</p>}>
-            {search.view === "inbox" ? (
+            {search.view === "resources" ? (
+              <div className="space-y-6 p-4 sm:p-8">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Instance
+                  </p>
+                  <h1 className="mt-1 text-2xl font-semibold">Resources</h1>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Workers and their authorized access to factory work.
+                  </p>
+                </div>
+                <DeviceCatalog />
+              </div>
+            ) : search.view === "inbox" ? (
               <InboxPage
                 environmentId={state.binding.mainEnvironmentId}
                 {...(search.factoryId ? { factoryId: search.factoryId } : {})}
@@ -101,7 +135,9 @@ export function FoundryPage() {
               <FactoryPage
                 key={`${search.view}:${search.factoryId}`}
                 environmentId={state.binding.mainEnvironmentId}
-                initialView={search.view === "runs" ? "runs" : "factories"}
+                initialView={
+                  search.view === "runs" ? "runs" : search.view === "work" ? "work" : "factories"
+                }
                 {...(search.factoryId ? { factoryId: search.factoryId } : {})}
                 {...(search.runId ? { initialRunId: search.runId } : {})}
                 {...(search.workItemId ? { initialWorkItemId: search.workItemId } : {})}
@@ -109,7 +145,7 @@ export function FoundryPage() {
             )}
           </Suspense>
         </div>
-      </div>
+      </main>
     );
   return (
     <StandalonePage>
