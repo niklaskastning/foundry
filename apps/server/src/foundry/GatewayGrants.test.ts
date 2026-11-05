@@ -42,6 +42,11 @@ import * as DeviceConfig from "./DeviceConfig.ts";
 import * as FoundrySessions from "./FoundrySessions.ts";
 import * as GatewayGrants from "./GatewayGrants.ts";
 import * as GatewayHttp from "./gatewayHttp.ts";
+import * as AutomationApiHttp from "../automation/ApiHttp.ts";
+import * as AutomationApplication from "../automation/Application.ts";
+import * as AutomationControl from "../automation/Control.ts";
+import * as AutomationInbox from "../automation/Inbox.ts";
+import * as AutomationTriggers from "../automation/Triggers.ts";
 
 const origin = "https://main.example.test";
 const csrf = "a".repeat(43);
@@ -254,6 +259,49 @@ const fixture = Effect.gen(function* () {
     },
   };
 });
+
+it.live("reauthenticates the versioned Factory contract with both sessions on every request", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    const handler = HttpRouter.toWebHandler(
+      AutomationApiHttp.layer.pipe(
+        Layer.provide(Layer.succeed(GatewayGrants.GatewayGrants, f.grants)),
+        Layer.provide(Layer.mock(AutomationApplication.Application)({})),
+        Layer.provide(Layer.mock(AutomationControl.Control)({})),
+        Layer.provide(Layer.mock(AutomationInbox.Inbox)({})),
+        Layer.provide(Layer.mock(AutomationTriggers.Triggers)({})),
+      ),
+      { disableLogger: true },
+    );
+    yield* Effect.addFinalizer(() => Effect.promise(() => handler.dispose()));
+    const send = (token: string, overrides: Record<string, string> = {}) =>
+      Effect.promise(() =>
+        handler.handler(
+          new Request(`${origin}/api/foundry/v1/automation/contract`, {
+            method: "POST",
+            headers: f.request(token, overrides).headers,
+            body: "{}",
+          }),
+        ),
+      );
+    expect((yield* send(f.read.token)).status).toBe(200);
+    for (const overrides of [
+      { origin: "https://foreign.example.test" },
+      { "x-foundry-csrf": "wrong" },
+      { cookie: "" },
+    ])
+      expect((yield* send(f.read.token, overrides)).status).toBe(403);
+    const other = yield* f.sessions.issue({
+      scopes: ["orchestration:read"],
+      subject: "second-api-client",
+      method: "bearer-access-token",
+    });
+    yield* f.sessions.revoke(other.sessionId);
+    expect((yield* send(other.token)).status).toBe(403);
+    f.logout();
+    expect((yield* send(f.read.token)).status).toBe(403);
+  }).pipe(Effect.scoped),
+);
 
 it.effect(
   "issues only explicit read grants and binds each use to the caller, target and live channel",

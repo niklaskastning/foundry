@@ -12,6 +12,7 @@ import * as DateTime from "effect/DateTime";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { AutomationTriggerError } from "@t3tools/contracts";
 import * as AutomationHttp from "./Http.ts";
+import * as ApiHttp from "./ApiHttp.ts";
 import * as Application from "./Application.ts";
 import * as Control from "./Control.ts";
 import * as Inbox from "./Inbox.ts";
@@ -151,7 +152,7 @@ export const layer = Layer.unwrap(
           return yield* new Scheduler.SchedulerError({ reason: "invalid_binding" });
       }),
     ).pipe(Layer.provide(database));
-    return Layer.mergeAll(routes, AutomationHttp.layer, reconciliationLayer)
+    return Layer.mergeAll(routes, AutomationHttp.layer, ApiHttp.layer, reconciliationLayer)
       .pipe(
         Layer.provide(Application.layer.pipe(Layer.provide(Handoffs.layer))),
         Layer.provide(DefinitionSync.layer.pipe(Layer.provideMerge(DefinitionSources.layer))),
