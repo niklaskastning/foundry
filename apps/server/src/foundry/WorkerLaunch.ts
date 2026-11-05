@@ -73,7 +73,7 @@ export function workerLaunchIds(input: FoundryWorkerLaunchInput, binding: string
   return {
     commandId: CommandId.make(`foundry-launch:${key}`),
     threadId: ThreadId.make(
-      `foundry-launch:${digest(JSON.stringify([1, key, binding, input.projectId, input.title, input.model, input.prompt, ...(input.options ? [input.options] : []), ...(input.workspaceMode === "worktree" ? ["worktree"] : []), ...(input.previousExecution ? [input.previousExecution.commandId, input.previousExecution.generation] : []), ...(input.previousHandoff ? [input.previousHandoff.handoffId, input.previousHandoff.commitSha] : []), ...(input.publishEvidence ? [input.publishEvidence] : []), ...(input.inputArtifacts?.length ? [input.inputArtifacts.map((item) => [item.reference.instanceId, item.reference.artifactId, item.reference.owner.environmentId, item.reference.owner.threadId, item.name, item.mimeType, item.sizeBytes, item.sha256])] : [])]))}`,
+      `foundry-launch:${digest(JSON.stringify([1, key, binding, input.projectId, input.title, input.model, input.prompt, ...(input.options ? [input.options] : []), ...(input.workspaceMode === "worktree" ? ["worktree"] : []), ...(input.workspaceRevision ? [input.workspaceRevision] : []), ...(input.previousExecution ? [input.previousExecution.commandId, input.previousExecution.generation] : []), ...(input.previousHandoff ? [input.previousHandoff.handoffId, input.previousHandoff.commitSha] : []), ...(input.publishEvidence ? [input.publishEvidence] : []), ...(input.inputArtifacts?.length ? [input.inputArtifacts.map((item) => [item.reference.instanceId, item.reference.artifactId, item.reference.owner.environmentId, item.reference.owner.threadId, item.name, item.mimeType, item.sizeBytes, item.sha256])] : [])]))}`,
     ),
   };
 }
@@ -322,6 +322,7 @@ export const layer = Layer.effect(
                     runId: run.id,
                     checkpointId: ready ? checkpoint.id : null,
                     checkpointRef: ready ? checkpoint.ref : null,
+                    ...(ready ? { workspacePath: scope.cwd } : {}),
                     outcome: stopped ? "stopped" : "completed",
                     ...publishResult,
                   });
@@ -770,6 +771,8 @@ export const layer = Layer.effect(
       launch: Effect.fn("WorkerLaunch.launch")(
         function* (input: FoundryWorkerLaunchInput) {
           if (!enabled || !binding) return yield* failure("not_enabled");
+          if (input.workspaceRevision && input.workspaceMode !== "worktree")
+            return yield* failure("project_denied");
           const project = yield* projects.getById(input.projectId);
           if (
             Option.isNone(project) ||
@@ -860,7 +863,15 @@ export const layer = Layer.effect(
               input.publishEvidence,
             );
           }
-          const execution = yield* executions.reserve(input.commandId, ids.threadId);
+          const execution = yield* executions
+            .reserve(input.commandId, ids.threadId, status.capacity ?? 1)
+            .pipe(
+              Effect.mapError((error) =>
+                failure(
+                  error.code === "capacity_unavailable" ? "capacity_unavailable" : "launch_failed",
+                ),
+              ),
+            );
           // Uncertain retries may recover receipts; ExecutionStore.starting still fences native entry.
           if (execution.stopRequested === 1 && execution.writerEnded === 1)
             return yield* failure("launch_failed");
@@ -870,6 +881,7 @@ export const layer = Layer.effect(
             generation: execution.generation,
             repositoryPath: workspace,
             mode: input.workspaceMode ?? "checkout",
+            ...(input.workspaceRevision ? { revision: input.workspaceRevision } : {}),
           });
           yield* verifyHandoff(input, workspace).pipe(
             Effect.catch((error) =>

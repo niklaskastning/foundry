@@ -32,6 +32,7 @@ export const FactoryExecutionDefaults = Schema.Struct({
   factoryId: Key,
   repository: Key,
   generation: Schema.Int.check(Schema.isGreaterThan(0)),
+  workers: ManualStart.fields.workers,
   projectId: ManualStart.fields.projectId,
   model: ManualStart.fields.model,
   checks: ManualStart.fields.checks,
@@ -57,7 +58,10 @@ export const AutomationApplicationQuery = Schema.Union([
   Schema.Struct({ op: Schema.Literal("definitionSource"), factoryId: Key }),
   Schema.Struct({ op: Schema.Literal("definitionRevisions"), factoryId: Key, ...Page }),
   Schema.Struct({ op: Schema.Literal("definitionRevision"), factoryId: Key, revisionId: Key }),
-  Schema.Struct({ op: Schema.Literal("workerBinding") }),
+  Schema.Struct({
+    op: Schema.Literal("workerBinding"),
+    deviceId: Schema.optional(FoundryDeviceId),
+  }),
   Schema.Struct({
     op: Schema.Literal("factories"),
     ...Page,
@@ -85,11 +89,17 @@ export const AutomationApplicationQuery = Schema.Union([
 ]);
 export type AutomationApplicationQuery = typeof AutomationApplicationQuery.Type;
 export const AutomationApplicationCommand = Schema.Union([
+  Schema.Struct({
+    op: Schema.Literal("setWorkerPaused"),
+    deviceId: FoundryDeviceId,
+    paused: Schema.Boolean,
+  }),
   ...AutomationHandoffCommand.members,
   Schema.Struct({
     op: Schema.Literal("configureExecutionDefaults"),
     factoryId: Key,
     repository: Key,
+    workers: ManualStart.fields.workers,
     projectId: ManualStart.fields.projectId,
     model: ManualStart.fields.model,
     checks: ManualStart.fields.checks,
@@ -132,10 +142,19 @@ export const AutomationAttemptSummary = Schema.Struct({
   threadId: Schema.NullOr(ThreadId),
   environmentId: Schema.NullOr(EnvironmentId),
   hasResult: Schema.Boolean,
+  workerId: Schema.optional(Schema.NullOr(FoundryDeviceId)),
+  capacityReleased: Schema.optional(Schema.Boolean),
 });
 export type AutomationAttemptSummary = typeof AutomationAttemptSummary.Type;
 const Next = { next: Schema.NullOr(Key) };
 export const AutomationApplicationResult = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("workerCapacity"),
+    workerId: FoundryDeviceId,
+    capacity: Schema.Int,
+    occupied: Schema.Int,
+    paused: Schema.Boolean,
+  }),
   Schema.Struct({
     kind: Schema.Literal("executionDefaults"),
     defaults: Schema.NullOr(FactoryExecutionDefaults),
@@ -167,6 +186,11 @@ export const AutomationApplicationResult = Schema.Union([
     deviceId: FoundryDeviceId,
     environmentId: EnvironmentId,
     status: FoundryWorkerStatus,
+    paused: Schema.optional(Schema.Boolean),
+    reserved: Schema.optional(Schema.Int),
+    workers: Schema.optional(
+      Schema.Array(Schema.Struct({ deviceId: FoundryDeviceId, environmentId: EnvironmentId })),
+    ),
     projects: Schema.Array(
       Schema.Struct({ id: ProjectId, title: Schema.String, workspaceRoot: Schema.String }),
     ),
@@ -202,6 +226,7 @@ export const AutomationApplicationResult = Schema.Union([
     executionBinding: Schema.optional(
       Schema.NullOr(
         Schema.Struct({
+          workers: ManualStart.fields.workers,
           projectId: ManualStart.fields.projectId,
           model: ManualStart.fields.model,
           checks: ManualStart.fields.checks,

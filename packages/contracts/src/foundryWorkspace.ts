@@ -5,6 +5,7 @@ export const FoundryWorkspaceRequest = Schema.Struct({
   requestId: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
   repositoryPath: TrimmedNonEmptyString,
   mode: Schema.Literals(["checkout", "worktree"]),
+  revision: Schema.optional(Schema.String.check(Schema.isPattern(/^[a-f0-9]{40}$/))),
   managedRoot: TrimmedNonEmptyString,
 });
 export type FoundryWorkspaceRequest = typeof FoundryWorkspaceRequest.Type;

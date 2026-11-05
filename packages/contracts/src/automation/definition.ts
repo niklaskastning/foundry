@@ -5,6 +5,8 @@ import {
   FactoryAgentSkill,
   FactoryAgentExecution,
   FactoryDefinitionSteps,
+  FactoryWorkflowExecution,
+  factoryWorkflowExecutionCheck,
 } from "./factory.ts";
 
 const Key = AutomationFactory.fields.id;
@@ -20,7 +22,7 @@ const Repositories = Schema.Array(Key).check(
   Schema.makeFilter((values) => new Set(values).size === values.length),
 );
 const Catalog = {
-  schemaVersion: Schema.Literals([1, 2]),
+  schemaVersion: Schema.Literals([1, 2, 3]),
   roles: Schema.optional(
     Schema.Array(FactoryAgentRole).check(
       Schema.isMaxLength(100),
@@ -49,12 +51,19 @@ export const FactoryDefinitionManifest = Schema.Struct({
     ),
   ),
 });
-export const FactoryWorkflowFile = Schema.Struct({ steps: FactoryDefinitionSteps });
+export const FactoryWorkflowFile = Schema.Struct({
+  steps: FactoryDefinitionSteps,
+  execution: Schema.optional(FactoryWorkflowExecution),
+}).check(factoryWorkflowExecutionCheck);
 export const CanonicalFactoryDefinition = Schema.Struct({
   ...Catalog,
   factoryId: Key,
   repositories: Repositories,
-  workflows: Schema.Array(Schema.Struct({ id: WorkflowKey, steps: FactoryDefinitionSteps })),
+  workflows: Schema.Array(
+    Schema.Struct({ id: WorkflowKey, ...FactoryWorkflowFile.fields }).check(
+      factoryWorkflowExecutionCheck,
+    ),
+  ),
 });
 export type CanonicalFactoryDefinition = typeof CanonicalFactoryDefinition.Type;
 export const FactoryDefinitionFiles = Schema.Array(

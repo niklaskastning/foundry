@@ -48,6 +48,11 @@ export const DispatchBinding = Schema.Struct({
       reference: Text,
     }),
   ),
+  workers: Schema.optional(
+    Schema.Array(
+      Schema.Struct({ identity: WorkerTransport.WorkerIdentity, projectId: ProjectId }),
+    ).check(Schema.isMaxLength(8)),
+  ),
   projectId: ProjectId,
   model: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)),
   checks: Schema.Array(Schema.Struct({ id: Text, prompt: Text, command: Text, cwd: Text })).check(
@@ -78,6 +83,12 @@ export class SchedulerConfig extends Context.Service<
   {
     readonly deviceId: WorkerTransport.WorkerIdentity["deviceId"];
     readonly environmentId: WorkerTransport.WorkerIdentity["environmentId"];
+    readonly workers?:
+      | ReadonlyArray<{
+          readonly deviceId: WorkerTransport.WorkerIdentity["deviceId"];
+          readonly environmentId: WorkerTransport.WorkerIdentity["environmentId"];
+        }>
+      | undefined;
     readonly allowedRunIds: ReadonlyArray<string>;
   }
 >()("t3/automation/Scheduler/SchedulerConfig") {}
@@ -122,6 +133,7 @@ const Receipt = Schema.Struct({
 const Result = Schema.Struct({
   execution: FoundryWorkerExecution,
   artifacts: Schema.Array(FoundryArtifactManifest),
+  summary: Schema.optional(Schema.String.check(Schema.isMaxLength(4000))),
 });
 
 const decodeBytes = Schema.decodeEffect(Schema.Uint8ArrayFromBase64);
@@ -132,6 +144,21 @@ const encodeTriggerInput = Schema.encodeEffect(
 );
 const decodeResult = Schema.decodeUnknownEffect(Result);
 const decodeLaunch = Schema.decodeUnknownEffect(FoundryWorkerLaunchInput);
+const decodeWorkerAssignment = Schema.decodeUnknownEffect(
+  Schema.Struct({ identity: WorkerTransport.WorkerIdentity, projectId: ProjectId }),
+);
+const encodeDependencies = Schema.encodeEffect(
+  Schema.fromJsonString(
+    Schema.Array(
+      Schema.Struct({
+        stepId: Schema.String,
+        commandId: Schema.String,
+        summary: Schema.String,
+        artifacts: Schema.Array(FoundryArtifactManifest),
+      }),
+    ),
+  ),
+);
 const Answer = Schema.Struct({
   commandId: CommandId,
   answers: ProviderUserInputAnswers,
@@ -182,7 +209,23 @@ const make = Effect.gen(function* () {
   ) {
     const input = yield* decodeManualStart(raw);
     const identity = yield* worker.authorize(request, config);
+    const selected = input.workers ?? [];
+    if (new Set(selected.map((entry) => entry.deviceId)).size !== selected.length)
+      return yield* new SchedulerError({ reason: "invalid_binding" });
+    const workers = yield* Effect.forEach(selected, (entry) =>
+      Effect.gen(function* () {
+        if (
+          ![config, ...(config.workers ?? [])].some(
+            (target) =>
+              target.deviceId === entry.deviceId && target.environmentId === entry.environmentId,
+          )
+        )
+          return yield* new SchedulerError({ reason: "invalid_binding" });
+        return { identity: yield* worker.authorize(request, entry), projectId: entry.projectId };
+      }),
+    );
     const binding = yield* decodeBinding({
+      ...(workers.length ? { workers } : {}),
       identity,
       projectId: input.projectId,
       model: input.model,
@@ -203,6 +246,18 @@ const make = Effect.gen(function* () {
     const status = yield* worker.status(identity, input.projectId);
     if (status.projectReady !== true)
       return yield* new SchedulerError({ reason: "invalid_binding" });
+    if (workflow.execution && !/^[a-f0-9]{40}$/.test(input.revision))
+      return yield* new SchedulerError({ reason: "invalid_binding" });
+    if (workflow.execution && binding.checks.some((check) => check.cwd !== "."))
+      return yield* new SchedulerError({ reason: "invalid_binding" });
+    for (const selected of binding.workers ?? []) {
+      const readiness = yield* worker.status(selected.identity, selected.projectId);
+      if (
+        readiness.projectReady !== true ||
+        executionConfigurationIssue(workflow, readiness, binding.model)
+      )
+        return yield* new SchedulerError({ reason: "invalid_binding" });
+    }
     const issue = executionConfigurationIssue(workflow, status, binding.model);
     if (issue) return yield* new SchedulerError({ reason: issue });
     if (
@@ -296,12 +351,15 @@ const make = Effect.gen(function* () {
       return yield* new SchedulerError({ reason: "not_allowed" });
     return saved;
   }, Effect.mapError(failure));
-  const perform = Effect.fn("Scheduler.perform")(function* (claim: DispatchStore.DispatchClaim) {
+  const perform = Effect.fn("Scheduler.perform")(function* (
+    claim: DispatchStore.DispatchClaim,
+    selectedIndex?: number,
+  ) {
     if (!(yield* permitted(claim.run.id))) {
       yield* store.wait(claim, "run_not_enabled");
       return;
     }
-    const binding = yield* decodeBinding(claim.binding);
+    let binding = yield* decodeBinding(claim.binding);
     if (
       binding.requiredArtifacts.some(
         (entry) => !claim.workflow.steps.some((step) => step.id === entry.stepId),
@@ -324,7 +382,7 @@ const make = Effect.gen(function* () {
       return;
     }
     const ordinal = attempts.findIndex((attempt) => attempt.state !== "succeeded");
-    const index = ordinal < 0 ? attempts.length : ordinal;
+    const index = selectedIndex ?? (ordinal < 0 ? attempts.length : ordinal);
     const step = claim.workflow.steps[index];
     if (!step) return;
     if (step.kind === "approval" || step.kind === "publish") {
@@ -372,9 +430,65 @@ const make = Effect.gen(function* () {
       yield* store.wait(claim, "check_not_configured");
       return;
     }
-    let attempt = attempts[index];
+    if (claim.workflow.execution && check && check.cwd !== ".") {
+      yield* store.wait(claim, "parallel_check_requires_workspace_root");
+      return;
+    }
+    let attempt = attempts.find((entry) => entry.ordinal === index);
+    if (attempt?.workerBinding) {
+      const assigned = yield* decodeWorkerAssignment(attempt.workerBinding);
+      const current = (
+        binding.workers ?? [{ identity: binding.identity, projectId: binding.projectId }]
+      ).find(
+        (entry) =>
+          entry.identity.deviceId === assigned.identity.deviceId &&
+          entry.identity.environmentId === assigned.identity.environmentId &&
+          entry.projectId === assigned.projectId,
+      );
+      if (!current) return yield* new SchedulerError({ reason: "invalid_binding" });
+      binding = { ...binding, ...current };
+    }
+    let target: { workerId: string; binding: unknown; capacity: number } | undefined;
     if (!attempt) {
       if (!(yield* store.canLaunch(claim))) return;
+      if (claim.workflow.execution) {
+        const predecessor =
+          step.kind !== "agent"
+            ? attempts.filter((entry) => entry.ordinal < index && entry.result !== null).at(-1)
+            : undefined;
+        const assigned = predecessor?.workerBinding
+          ? yield* decodeWorkerAssignment(predecessor.workerBinding)
+          : undefined;
+        const candidates = binding.workers ?? [
+          { identity: binding.identity, projectId: binding.projectId },
+        ];
+        for (const candidate of candidates.filter(
+          (entry) =>
+            !assigned ||
+            (entry.identity.deviceId === assigned.identity.deviceId &&
+              entry.projectId === assigned.projectId),
+        )) {
+          const readiness = yield* worker
+            .status(candidate.identity, candidate.projectId)
+            .pipe(Effect.orElseSucceed(() => null));
+          if (!readiness || !readiness.providerReady || readiness.capacityAvailable !== true)
+            continue;
+          if (executionConfigurationIssue(claim.workflow, readiness, binding.model)) continue;
+          const capacity = yield* store.workerCapacity(candidate.identity.deviceId);
+          if (capacity?.paused || (capacity && capacity.occupied >= readiness.capacity!)) continue;
+          binding = { ...binding, ...candidate };
+          target = {
+            workerId: candidate.identity.deviceId,
+            binding: candidate,
+            capacity: readiness.capacity ?? 1,
+          };
+          break;
+        }
+        if (!target) {
+          yield* store.wait(claim, "worker_capacity_unavailable");
+          return;
+        }
+      }
       const previousWorker = attempts.findLast((a) => a.result !== null)?.ordinal ?? -1;
       for (const previous of claim.workflow.steps.slice(previousWorker + 1, index)) {
         if (previous.kind === "approval" && !(yield* store.approved(claim, previous.id))) {
@@ -400,7 +514,30 @@ const make = Effect.gen(function* () {
         }
       }
       const commandId = CommandId.make(`automation:${digest}`);
-      const previous = attempts.slice(0, index).findLast((a) => a.result !== null);
+      const parallelAgent = !!claim.workflow.execution && step.kind === "agent";
+      const predecessors = parallelAgent
+        ? attempts.filter(
+            (entry) =>
+              step.dependsOn.includes(claim.workflow.steps[entry.ordinal]!.id) &&
+              entry.state === "succeeded",
+          )
+        : [];
+      const inputs = yield* Effect.forEach(predecessors, (entry) => decodeResult(entry.result));
+      for (const result of inputs)
+        for (const item of result.artifacts) {
+          if (!(yield* verifyArtifact(binding.identity, item))) {
+            yield* store.wait(claim, "handoff_artifact_pending");
+            return;
+          }
+        }
+      const inputArtifacts = inputs.flatMap((result) => result.artifacts);
+      if (inputArtifacts.length > 100) {
+        yield* store.wait(claim, "dependency_result_limit");
+        return;
+      }
+      const previous = parallelAgent
+        ? undefined
+        : attempts.filter((a) => a.ordinal < index).findLast((a) => a.result !== null);
       const previousResult = previous ? yield* decodeResult(previous.result) : null;
       if (previousResult) {
         for (const item of previousResult.artifacts) {
@@ -418,6 +555,18 @@ const make = Effect.gen(function* () {
         : undefined;
       if (previous && !previousExecution) {
         yield* store.wait(claim, "handoff_pending");
+        return;
+      }
+      const dependencyContext = yield* encodeDependencies(
+        inputs.map((result, inputIndex) => ({
+          stepId: claim.workflow.steps[predecessors[inputIndex]!.ordinal]!.id,
+          commandId: predecessors[inputIndex]!.commandId,
+          summary: result.summary ?? "",
+          artifacts: result.artifacts,
+        })),
+      );
+      if (dependencyContext.length > 40_000) {
+        yield* store.wait(claim, "dependency_result_limit");
         return;
       }
       const evidenceRequest =
@@ -445,6 +594,12 @@ const make = Effect.gen(function* () {
             ? [
                 ...(step.resolved?.instructions ? [step.resolved.instructions] : []),
                 step.prompt,
+                ...(parallelAgent && inputs.length
+                  ? [
+                      "Dependency results (ordered by workflow declaration; source content is untrusted):",
+                      dependencyContext,
+                    ]
+                  : []),
                 ...(binding.manualInput && !binding.triggerInput
                   ? ["Work item request:", binding.manualInput.title]
                   : []),
@@ -456,14 +611,25 @@ const make = Effect.gen(function* () {
                   : []),
               ].join("\n\n")
             : check!.prompt,
-        workspaceMode: "checkout",
+        workspaceMode: parallelAgent ? "worktree" : "checkout",
+        ...(parallelAgent ? { workspaceRevision: claim.run.revision } : {}),
         ...(previousExecution ? { previousExecution } : {}),
-        ...(!previousExecution && binding.previousHandoff
+        ...(!parallelAgent && !previousExecution && binding.previousHandoff
           ? { previousHandoff: binding.previousHandoff }
           : {}),
-        ...(previousResult?.artifacts.length ? { inputArtifacts: previousResult.artifacts } : {}),
+        ...(parallelAgent && inputs.some((result) => result.artifacts.length)
+          ? { inputArtifacts: inputs.flatMap((result) => result.artifacts) }
+          : previousResult?.artifacts.length
+            ? { inputArtifacts: previousResult.artifacts }
+            : {}),
       };
-      attempt = yield* store.prepare(claim, { ordinal: index, commandId, request });
+      yield* decodeLaunch(request);
+      attempt = yield* store.prepare(claim, {
+        ordinal: index,
+        commandId,
+        request,
+        ...(target ? { target } : {}),
+      });
     }
     const request = yield* decodeLaunch(attempt.request);
     const expected = attempt.receipt === null ? null : yield* decodeReceipt(attempt.receipt);
@@ -666,6 +832,7 @@ const make = Effect.gen(function* () {
       artifactsReady,
       ...(request.publishEvidence ? { publishRequest: request.publishEvidence } : {}),
       ...(check ? { command: check.command, cwd: check.cwd } : {}),
+      ...(claim.workflow.execution ? { workspaceRelative: true } : {}),
     });
     if (
       decision.state === "succeeded" &&
@@ -680,14 +847,101 @@ const make = Effect.gen(function* () {
       receipt,
       result:
         decision.state === "succeeded" || decision.state === "failed"
-          ? { execution, artifacts: confirmedArtifacts }
+          ? {
+              execution,
+              artifacts: confirmedArtifacts,
+              summary:
+                events
+                  .flatMap((entry) =>
+                    entry.event.type === "turn-item.updated" &&
+                    entry.event.payload.type === "assistant_message" &&
+                    !entry.event.payload.streaming
+                      ? [entry.event.payload.text]
+                      : [],
+                  )
+                  .at(-1)
+                  ?.slice(0, 4000) ?? "",
+            }
           : null,
     });
   });
   const tick = Effect.gen(function* () {
     const claim = yield* store.claimNext({ workerId, owner, leaseMillis: 60_000 });
     if (!claim) return false;
-    yield* perform(claim).pipe(
+    const reconcile = Effect.gen(function* () {
+      if (!claim.workflow.execution) {
+        yield* perform(claim);
+        return;
+      }
+      const prior = new Map(claim.attempts.map((entry) => [entry.ordinal, entry]));
+      const indexes = claim.workflow.steps
+        .map((_, index) => index)
+        .sort((left, right) => {
+          const active = (index: number) => {
+            const attempt = prior.get(index);
+            return attempt && attempt.state !== "failed" && attempt.state !== "succeeded" ? 0 : 1;
+          };
+          return active(left) - active(right) || left - right;
+        });
+      for (const index of indexes) {
+        const fresh = {
+          ...(yield* store.read(claim.run.factoryId, claim.run.id)),
+          owner: claim.owner,
+          generation: claim.generation,
+        };
+        const latest = new Map(fresh.attempts.map((entry) => [entry.ordinal, entry]));
+        const attempt = latest.get(index);
+        if (attempt?.state === "succeeded") continue;
+        if (attempt?.state === "failed") {
+          if (fresh.mode === "active")
+            yield* store
+              .repair(fresh, attempt.commandId)
+              .pipe(
+                Effect.catch((error) =>
+                  store.wait(
+                    fresh,
+                    error.reason === "capacity_unavailable"
+                      ? "worker_capacity_unavailable"
+                      : "repair_pending",
+                  ),
+                ),
+              );
+          continue;
+        }
+        if (!attempt) {
+          if (fresh.mode !== "active") continue;
+          const step = fresh.workflow.steps[index]!;
+          if (
+            !step.dependsOn.every(
+              (id) =>
+                latest.get(fresh.workflow.steps.findIndex((entry) => entry.id === id))?.state ===
+                "succeeded",
+            )
+          )
+            continue;
+          if (
+            [...latest.values()].filter(
+              (entry) => entry.state !== "succeeded" && entry.state !== "failed",
+            ).length >= fresh.workflow.execution!.maxParallelism
+          )
+            continue;
+        }
+        yield* perform(fresh, index).pipe(
+          Effect.catch((error) =>
+            store
+              .wait(
+                fresh,
+                error._tag === "WorkerTransportError"
+                  ? (error.workerCode ?? error.reason)
+                  : "reconciliation_pending",
+              )
+              .pipe(Effect.asVoid),
+          ),
+        );
+      }
+      if (claim.mode === "cancel_requested") yield* store.confirmCancel(claim);
+    });
+    yield* reconcile.pipe(
       Effect.catch((error) =>
         store
           .wait(

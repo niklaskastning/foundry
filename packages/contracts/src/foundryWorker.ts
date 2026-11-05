@@ -21,6 +21,10 @@ export const FoundryWorkerStatus = Schema.Struct({
   online: Schema.Literal(true),
   projectReady: Schema.optional(Schema.Boolean),
   roleExecutionVersion: Schema.optional(Schema.Literal(1)),
+  parallelExecutionVersion: Schema.optional(Schema.Literal(1)),
+  capacity: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(8))),
+  occupied: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  free: Schema.optional(Schema.NullOr(NonNegativeInt)),
   models: Schema.optional(
     Schema.Array(
       Schema.Struct({
@@ -100,6 +104,7 @@ export const FoundryWorkerLaunchInput = Schema.Struct({
     Schema.Array(FoundryArtifactManifest).check(Schema.isMaxLength(100)),
   ),
   workspaceMode: Schema.optional(Schema.Literals(["checkout", "worktree"])),
+  workspaceRevision: Schema.optional(PublishSha),
   previousExecution: Schema.optional(
     Schema.Struct({ commandId: CommandId, generation: NonNegativeInt }),
   ),
@@ -132,6 +137,7 @@ export class FoundryWorkerLaunchError extends Schema.TaggedError<FoundryWorkerLa
       "project_denied",
       "provider_disabled",
       "provider_not_ready",
+      "capacity_unavailable",
       "command_conflict",
       "launch_failed",
       "handoff_unavailable",
@@ -141,6 +147,7 @@ export class FoundryWorkerLaunchError extends Schema.TaggedError<FoundryWorkerLa
 ) {}
 
 export const FoundryWorkerManifest = Schema.Struct({
+  workspacePath: Schema.optional(TrimmedNonEmptyString),
   publishEvidenceFailure: Schema.optional(
     Schema.Literals(["dirty_commit", "test_failed", "changed_commit", "unavailable"]),
   ),
