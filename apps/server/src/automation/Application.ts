@@ -1,3 +1,4 @@
+import { factoryDefinitionPreview } from "@t3tools/shared/factoryDefinitionPreview";
 import * as McpBindings from "./McpBindings.ts";
 import * as MachineAccess from "./MachineAccess.ts";
 import * as Handoffs from "./Handoffs.ts";
@@ -358,9 +359,10 @@ const make = Effect.gen(function* () {
               : input.activeVersionId
                 ? yield* definitions.exportVersion(input.factoryId, input.activeVersionId)
                 : [];
+          const file = files.find((file) => file.path === input.path);
           return {
             kind: "definitionRevisionFile" as const,
-            file: files.find((file) => file.path === input.path) ?? null,
+            file: file ? factoryDefinitionPreview(file) : null,
           };
         }
         case "workerBinding": {

@@ -1,3 +1,4 @@
+import { factoryDefinitionPreview } from "@t3tools/shared/factoryDefinitionPreview";
 import { useState } from "react";
 import { parseDiffFromFile } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
@@ -668,8 +669,10 @@ function FileComparison({
   files,
   activeFiles,
 }: {
-  files: FactoryDefinitionFiles;
-  activeFiles: FactoryDefinitionFiles | null;
+  files: ReadonlyArray<FactoryDefinitionFiles[number] & { readonly size?: number | undefined }>;
+  activeFiles: ReadonlyArray<
+    FactoryDefinitionFiles[number] & { readonly size?: number | undefined }
+  > | null;
 }) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const theme = useRenderedAppearance();
@@ -680,8 +683,10 @@ function FileComparison({
     ]),
   ].sort();
   const path = selectedPath ?? paths[0];
-  const before = activeFiles?.find((file) => file.path === path);
-  const after = files.find((file) => file.path === path);
+  const beforeFile = activeFiles?.find((file) => file.path === path);
+  const afterFile = files.find((file) => file.path === path);
+  const before = beforeFile ? factoryDefinitionPreview(beforeFile) : undefined;
+  const after = afterFile ? factoryDefinitionPreview(afterFile) : undefined;
   const diff =
     path &&
     before?.encoding !== "base64" &&
@@ -706,7 +711,8 @@ function FileComparison({
             ? "Added"
             : !candidate
               ? "Deleted"
-              : previous.content === candidate.content &&
+              : previous.sha256 === candidate.sha256 &&
+                  previous.content === candidate.content &&
                   previous.mode === candidate.mode &&
                   previous.encoding === candidate.encoding
                 ? "Unchanged"
@@ -739,7 +745,8 @@ function FileComparison({
         </div>
       ) : (
         <p className="text-sm">
-          {before?.content === after?.content &&
+          {before?.sha256 === after?.sha256 &&
+          before?.content === after?.content &&
           before?.mode === after?.mode &&
           before?.encoding === after?.encoding
             ? "This file matches the active definition."
@@ -756,7 +763,7 @@ function FileComparison({
           >
             {before
               ? before.encoding === "base64"
-                ? `Binary file · SHA-256 ${before.sha256} · mode ${before.mode}`
+                ? `Binary file · SHA-256 ${before.sha256} · mode ${before.mode} · ${before.size} bytes`
                 : `${before.mode ? `Mode ${before.mode}\n` : ""}${before.content}`
               : "File absent"}
           </pre>
@@ -770,7 +777,7 @@ function FileComparison({
           >
             {after
               ? after.encoding === "base64"
-                ? `Binary file · SHA-256 ${after.sha256} · mode ${after.mode}`
+                ? `Binary file · SHA-256 ${after.sha256} · mode ${after.mode} · ${after.size} bytes`
                 : `${after.mode ? `Mode ${after.mode}\n` : ""}${after.content}`
               : "File absent"}
           </pre>

@@ -197,7 +197,16 @@ export const AutomationApplicationResult = Schema.Union([
   }),
   Schema.Struct({
     kind: Schema.Literal("definitionRevisionFile"),
-    file: Schema.NullOr(Schema.Struct({ path: Schema.String, content: Schema.String })),
+    file: Schema.NullOr(
+      Schema.Struct({
+        path: Schema.String,
+        content: Schema.String,
+        encoding: Schema.optional(Schema.Literals(["utf8", "base64"])),
+        mode: Schema.optional(Schema.Literals(["100644", "100755"])),
+        sha256: Schema.optional(Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))),
+        size: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+      }),
+    ),
   }),
   Schema.Struct({
     kind: Schema.Literal("workerBinding"),
