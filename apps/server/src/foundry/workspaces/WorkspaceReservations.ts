@@ -137,6 +137,8 @@ export const layer = (allowedRoots: ReadonlyArray<string>) =>
             ),
           );
           const repositoryPath = yield* real(decoded.repositoryPath);
+          if (decoded.revision && decoded.mode !== "worktree")
+            return yield* new FoundryWorkspaceError({ code: "invalid_request" });
           const managedRoot = yield* real(decoded.managedRoot);
           if (
             !roots.includes(managedRoot) ||
@@ -156,6 +158,7 @@ export const layer = (allowedRoots: ReadonlyArray<string>) =>
             if (
               existing.repositoryPath !== repositoryPath ||
               existing.mode !== input.mode ||
+              existing.revision !== input.revision ||
               existing.managedRoot !== managedRoot
             )
               return yield* new FoundryWorkspaceError({ code: "request_conflict" });
@@ -179,7 +182,7 @@ export const layer = (allowedRoots: ReadonlyArray<string>) =>
           )
             return yield* new FoundryWorkspaceError({ code: "path_denied" });
           const base = yield* git
-            .resolveCommit({ cwd: repositoryPath, revision: "HEAD" })
+            .resolveCommit({ cwd: repositoryPath, revision: decoded.revision ?? "HEAD" })
             .pipe(Effect.mapError(gitError));
           const reservation: FoundryWorkspaceReservation = {
             ...decoded,

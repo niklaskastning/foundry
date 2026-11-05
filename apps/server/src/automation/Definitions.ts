@@ -165,6 +165,7 @@ const make = Effect.gen(function* () {
             factoryId: input.factoryId,
             factoryVersionId,
             steps: resolveFactoryWorkflow(definition, workflow.id),
+            ...(workflow.execution ? { execution: workflow.execution } : {}),
           });
           workflowVersions.push({ id: workflow.id, versionId });
         }

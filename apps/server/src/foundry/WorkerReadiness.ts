@@ -19,7 +19,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
-import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ExecutionStore from "./ExecutionStore.ts";
 
 const decodeRoots = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
 
@@ -60,6 +60,7 @@ export const layer = Layer.effect(
   WorkerReadiness,
   Effect.gen(function* () {
     const enabled = yield* Config.Boolean("FOUNDRY_WORKER_ENABLED").pipe(Config.withDefault(false));
+    const capacity = yield* Config.Int("FOUNDRY_WORKER_CAPACITY").pipe(Config.withDefault(1));
     const binding = yield* Config.String("FOUNDRY_WORKER_PROVIDER_INSTANCE_ID").pipe(
       Config.withDefault(""),
     );
@@ -72,7 +73,7 @@ export const layer = Layer.effect(
     const managed = yield* ManagedProjectFolders.ManagedProjectFolders;
     const threads = yield* ThreadManagement.ThreadManagementService;
     const registry = yield* ProviderRegistry.ProviderRegistry;
-    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const executions = yield* ExecutionStore.ExecutionStore;
     const projectReady = Effect.fn("WorkerReadiness.projectReady")(
       function* (projectId: ProjectId) {
         const project = yield* projects.getById(projectId);
@@ -112,6 +113,8 @@ export const layer = Layer.effect(
     return {
       read: Effect.fn("WorkerReadiness.read")(function* (projectId?: ProjectId) {
         if (!enabled) return yield* new FoundryWorkerError({ code: "not_enabled" });
+        if (capacity < 1 || capacity > 8)
+          return yield* new FoundryWorkerError({ code: "probe_failed" });
         const started = yield* Clock.currentTimeMillis;
         const instanceId = binding ? ProviderInstanceId.make(binding) : null;
         const providers = instanceId
@@ -125,13 +128,15 @@ export const layer = Layer.effect(
         if (provider && !(Date.parse(provider.checkedAt) >= started))
           return yield* new FoundryWorkerError({ code: "probe_failed" });
         const state = instanceId ? providerState(provider) : "unbound";
-        const activeRuns = yield* projections
-          .countActiveRuns()
-          .pipe(Effect.orElseSucceed(() => null));
+        const occupied = yield* executions.occupied.pipe(Effect.orElseSucceed(() => null));
         return {
           online: true as const,
           ...(projectId ? { projectReady: yield* projectReady(projectId) } : {}),
           roleExecutionVersion: 1 as const,
+          parallelExecutionVersion: 1 as const,
+          capacity,
+          occupied,
+          free: occupied === null ? null : Math.max(0, capacity - occupied),
           models: (provider?.models ?? []).map((model) => ({
             id: model.slug,
             aliases: model.aliases ?? [],
@@ -147,8 +152,8 @@ export const layer = Layer.effect(
           providerState: state,
           version: provider?.version ?? null,
           checkedAt: DateTime.formatIso(yield* DateTime.now),
-          capacityAvailable: activeRuns === null ? null : activeRuns === 0,
-          activeRuns,
+          capacityAvailable: occupied === null ? null : occupied < capacity,
+          activeRuns: occupied,
         };
       }),
     };

@@ -49,6 +49,9 @@ const decodeSummary = Schema.decodeUnknownOption(
 const encodeRepairFeedback = Schema.encodeEffect(Schema.fromJsonString(RepairFeedback));
 const isPublish = Schema.is(Schema.Struct({ kind: Schema.Literal("publish") }));
 const isApproval = Schema.is(Schema.Struct({ kind: Schema.Literal("approval") }));
+const cancelledBeforeStart = Schema.is(
+  Schema.Struct({ cancelledBeforeStart: Schema.Literal(true) }),
+);
 const latestAttempts = (attempts: ReadonlyArray<DispatchAttempt>) => [
   ...new Map(attempts.map((attempt) => [attempt.ordinal, attempt])).values(),
 ];
@@ -238,6 +241,10 @@ export class DispatchStore extends Context.Service<
       claim: DispatchClaim,
       stepId: string,
     ) => Effect.Effect<boolean, DispatchError>;
+    readonly confirmUndelivered: (
+      claim: DispatchClaim,
+      commandId: string,
+    ) => Effect.Effect<boolean, DispatchError>;
     readonly confirmCancel: (claim: DispatchClaim) => Effect.Effect<boolean, DispatchError>;
     readonly release: (claim: DispatchClaim) => Effect.Effect<void, DispatchError>;
   }
@@ -289,14 +296,10 @@ const make = Effect.gen(function* () {
   ) {
     if (!Number.isSafeInteger(target.capacity) || target.capacity < 1 || target.capacity > 8)
       return yield* new DispatchError({ reason: "conflict" });
-    yield* sql`INSERT INTO foundry_automation.dispatch_capacity(worker_id,capacity) VALUES(${target.workerId},${target.capacity}) ON CONFLICT DO NOTHING`;
+    yield* sql`INSERT INTO foundry_automation.dispatch_capacity(worker_id,capacity) VALUES(${target.workerId},${target.capacity}) ON CONFLICT(worker_id) DO UPDATE SET capacity=EXCLUDED.capacity`;
     yield* sql`SELECT worker_id FROM foundry_automation.dispatch_capacity WHERE worker_id=${target.workerId} FOR UPDATE`;
     const capacity = yield* workerCapacity(target.workerId);
-    if (
-      !capacity ||
-      capacity.paused ||
-      capacity.occupied >= Math.min(capacity.capacity, target.capacity)
-    )
+    if (!capacity || capacity.paused || capacity.occupied >= capacity.capacity)
       return yield* new DispatchError({ reason: "capacity_unavailable" });
   });
   const read = Effect.fn("DispatchStore.read")(function* (factoryId: string, runId: string) {
@@ -670,6 +673,7 @@ const make = Effect.gen(function* () {
         }>`SELECT state FROM foundry_automation.dispatch_outbox WHERE command_id=${commandId}`;
         if (delivery[0]?.state === "pending") {
           const workerId = attempt.workerId ?? claim.workerId;
+          yield* sql`INSERT INTO foundry_automation.dispatch_capacity(worker_id,capacity) VALUES(${workerId},1) ON CONFLICT DO NOTHING`;
           yield* sql`SELECT worker_id FROM foundry_automation.dispatch_capacity WHERE worker_id=${workerId} FOR UPDATE`;
           const capacity = yield* workerCapacity(workerId);
           if (capacity?.paused) return false;
@@ -751,6 +755,29 @@ const make = Effect.gen(function* () {
       }),
     );
   }, Effect.mapError(operationError));
+  const confirmUndelivered = Effect.fn("DispatchStore.confirmUndelivered")(function* (
+    claim: DispatchClaim,
+    commandId: string,
+  ) {
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        if (!(yield* lockClaim(claim))) return false;
+        const saved = yield* read(claim.run.factoryId, claim.run.id);
+        if (saved.mode !== "cancel_requested") return false;
+        const attempt = latestAttempts(saved.attempts).find(
+          (entry) => entry.commandId === commandId,
+        );
+        if (!attempt || attempt.receipt !== null) return false;
+        if (cancelledBeforeStart(attempt.result)) return true;
+        const rows =
+          yield* sql`UPDATE foundry_automation.step_attempts a SET state='failed',reason='cancelled',result='{"cancelledBeforeStart":true}'::jsonb,capacity_released=true FROM foundry_automation.dispatch_outbox o WHERE a.command_id=${commandId} AND a.command_id=o.command_id AND a.run_id=${claim.run.id} AND a.state='pending' AND a.receipt IS NULL AND o.state IN ('pending','sending') RETURNING a.command_id`;
+        if (!rows.length) return false;
+        yield* sql`UPDATE foundry_automation.dispatch_outbox SET state='confirmed' WHERE command_id=${commandId}`;
+        yield* sql`UPDATE foundry_automation.run_controls SET revision=revision+1,result_revision=result_revision+1 WHERE run_id=${claim.run.id}`;
+        return true;
+      }),
+    );
+  }, Effect.mapError(operationError));
   const confirmCancel = Effect.fn("DispatchStore.confirmCancel")(function* (claim: DispatchClaim) {
     return yield* sql.withTransaction(
       Effect.gen(function* () {
@@ -758,10 +785,19 @@ const make = Effect.gen(function* () {
         const saved = yield* read(claim.run.factoryId, claim.run.id);
         if (saved.mode !== "cancel_requested") return false;
         for (const attempt of saved.attempts) {
-          if (writerEnded(attempt.result) || isApproval(attempt.request)) continue;
+          if (
+            writerEnded(attempt.result) ||
+            isApproval(attempt.request) ||
+            cancelledBeforeStart(attempt.result)
+          )
+            continue;
           const undelivered =
             yield* sql`SELECT command_id FROM foundry_automation.dispatch_outbox WHERE command_id=${attempt.commandId} AND state='pending'`;
           if (!undelivered.length) return false;
+        }
+        if (saved.workflow.execution) {
+          yield* sql`UPDATE foundry_automation.step_attempts a SET state='failed',reason='cancelled' FROM foundry_automation.dispatch_outbox o WHERE a.run_id=${claim.run.id} AND a.command_id=o.command_id AND o.state='pending'`;
+          yield* sql`UPDATE foundry_automation.dispatch_outbox o SET state='confirmed' FROM foundry_automation.step_attempts a WHERE a.run_id=${claim.run.id} AND a.command_id=o.command_id AND o.state='pending'`;
         }
         yield* sql`UPDATE foundry_automation.step_attempts SET capacity_released=true WHERE run_id=${claim.run.id}`;
         yield* sql`UPDATE foundry_automation.run_controls SET mode='cancelled',revision=revision+1 WHERE run_id=${claim.run.id}`;
@@ -901,6 +937,7 @@ const make = Effect.gen(function* () {
     );
   }, Effect.mapError(operationError));
   return DispatchStore.of({
+    confirmUndelivered,
     deliveryState,
     renewClaim,
     configureWorker,

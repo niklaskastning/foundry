@@ -19,6 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Schedule from "effect/Schedule";
 import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as DispatchStore from "./DispatchStore.ts";
 import * as Publish from "./Publish.ts";
@@ -243,7 +244,8 @@ const make = Effect.gen(function* () {
     const replay = yield* store.replayManual(runInput, workerId, binding, identity);
     if (replay) return replay;
     const workflow = yield* store.readWorkflow(input.factoryId, input.workflowVersionId);
-    const status = yield* worker.status(identity, input.projectId);
+    const primary = binding.workers?.[0] ?? { identity, projectId: input.projectId };
+    const status = yield* worker.status(primary.identity, primary.projectId);
     if (status.projectReady !== true)
       return yield* new SchedulerError({ reason: "invalid_binding" });
     if (workflow.execution && !/^[a-f0-9]{40}$/.test(input.revision))
@@ -623,6 +625,10 @@ const make = Effect.gen(function* () {
             ? { inputArtifacts: previousResult.artifacts }
             : {}),
       };
+      if (request.prompt.length > 100_000) {
+        yield* store.wait(claim, "dependency_result_limit");
+        return;
+      }
       yield* decodeLaunch(request);
       attempt = yield* store.prepare(claim, {
         ordinal: index,
@@ -640,6 +646,20 @@ const make = Effect.gen(function* () {
         return;
       }
       if (claim.mode === "cancel_requested") {
+        const cancelId = Hex.encode(
+          yield* crypto.digest("SHA-256", new TextEncoder().encode(attempt.commandId)),
+        );
+        const proof = yield* worker.cancel(binding.identity, {
+          commandId: CommandId.make(`automation:cancel:${cancelId}`),
+          launchCommandId: request.commandId,
+        });
+        if (
+          proof.status === "not_started" &&
+          proof.noStartConfirmed &&
+          proof.launchCommandId === request.commandId &&
+          proof.commandId === `automation:cancel:${cancelId}`
+        )
+          yield* store.confirmUndelivered(claim, attempt.commandId);
         if (!(yield* store.confirmCancel(claim)))
           yield* store.wait(claim, "cancel_delivery_uncertain");
         return;
@@ -649,7 +669,8 @@ const make = Effect.gen(function* () {
         return;
       }
       const status = yield* worker.status(binding.identity);
-      if (!status.providerReady || status.capacityAvailable !== true) {
+      const delivery = yield* store.deliveryState(attempt.commandId);
+      if (!status.providerReady || (status.capacityAvailable !== true && delivery !== "sending")) {
         yield* store.wait(claim, "worker_not_ready");
         return;
       }
@@ -865,6 +886,39 @@ const make = Effect.gen(function* () {
           : null,
     });
   });
+  const heartbeat = Effect.fn("Scheduler.heartbeat")(function* (
+    claim: DispatchStore.DispatchClaim,
+  ) {
+    if (!(yield* store.renewClaim(claim, 60_000))) return;
+    const current = yield* store.read(claim.run.factoryId, claim.run.id);
+    const binding = yield* decodeBinding(current.binding);
+    yield* Effect.forEach(
+      current.attempts.filter(
+        (attempt) =>
+          attempt.receipt !== null && attempt.state !== "failed" && attempt.state !== "succeeded",
+      ),
+      (attempt) =>
+        Effect.gen(function* () {
+          const receipt = yield* decodeReceipt(attempt.receipt);
+          const assigned = attempt.workerBinding
+            ? yield* decodeWorkerAssignment(attempt.workerBinding)
+            : { identity: binding.identity, projectId: binding.projectId };
+          const identity = (
+            binding.workers ?? [{ identity: binding.identity, projectId: binding.projectId }]
+          ).find(
+            (entry) =>
+              entry.identity.deviceId === assigned.identity.deviceId &&
+              entry.identity.environmentId === assigned.identity.environmentId,
+          )?.identity;
+          if (!identity) return;
+          yield* worker.renew(identity, {
+            commandId: CommandId.make(attempt.commandId),
+            generation: receipt.generation,
+          });
+        }).pipe(Effect.ignore),
+      { concurrency: 8, discard: true },
+    );
+  });
   const tick = Effect.gen(function* () {
     const claim = yield* store.claimNext({ workerId, owner, leaseMillis: 60_000 });
     if (!claim) return false;
@@ -941,7 +995,17 @@ const make = Effect.gen(function* () {
       }
       if (claim.mode === "cancel_requested") yield* store.confirmCancel(claim);
     });
-    yield* reconcile.pipe(
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        if (claim.workflow.execution)
+          yield* heartbeat(claim).pipe(
+            Effect.ignore,
+            Effect.repeat(Schedule.spaced("15 seconds")),
+            Effect.forkScoped,
+          );
+        yield* reconcile;
+      }),
+    ).pipe(
       Effect.catch((error) =>
         store
           .wait(

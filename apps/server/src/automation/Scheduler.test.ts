@@ -32,6 +32,9 @@ import {
 } from "@t3tools/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -565,6 +568,11 @@ it.effect(
       let generation = 0;
       let mode: NonNullable<DispatchStore.DispatchRun["mode"]> = "active";
       let renewals = 0;
+      let blockedCommand: CommandId | null = null;
+      const readBlocked = yield* Deferred.make<void>();
+      const releaseRead = yield* Deferred.make<void>();
+      const heartbeatRenewals = new Map<string, number>();
+      let claimRenewals = 0;
       let cancellations = 0;
       let confirmedCancellations = 0;
       let deliveryAllowed = true;
@@ -639,6 +647,13 @@ it.effect(
       let projectReady = true;
       const store = DispatchStore.DispatchStore.of({
         configureWorker: () => unsupported,
+        confirmUndelivered: () => Effect.succeed(true),
+        deliveryState: () => Effect.succeed("pending"),
+        renewClaim: () =>
+          Effect.sync(() => {
+            if (blockedCommand) claimRenewals++;
+            return true;
+          }),
         workerCapacity: (workerId) =>
           Effect.succeed({ workerId, capacity: 2, occupied: 0, paused: workerPaused }),
         repair: (_claim, commandId) =>
@@ -771,10 +786,22 @@ it.effect(
             parallelExecutionVersion: 1,
             activeRuns: 0,
           }),
-        read: (_identity, input) => Effect.sync(() => executions.get(input.commandId) ?? null),
-        renew: () =>
+        read: (_identity, input) =>
+          Effect.gen(function* () {
+            if (input.commandId === blockedCommand) {
+              yield* Deferred.succeed(readBlocked, undefined);
+              yield* Deferred.await(releaseRead);
+            }
+            return executions.get(input.commandId) ?? null;
+          }),
+        renew: (_identity, input) =>
           Effect.sync(() => {
             renewals++;
+            if (blockedCommand)
+              heartbeatRenewals.set(
+                input.commandId,
+                (heartbeatRenewals.get(input.commandId) ?? 0) + 1,
+              );
           }),
         launch: (_identity, input) =>
           Effect.gen(function* () {
@@ -1059,6 +1086,20 @@ it.effect(
         assert.equal(attempts[1]?.state, "running");
         yield* scheduler.tick;
         assert.equal(launches.length, parallelStart + 2);
+        blockedCommand = left.commandId;
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const blockedTick = yield* scheduler.tick.pipe(Effect.forkScoped);
+            yield* Deferred.await(readBlocked);
+            yield* TestClock.adjust("75 seconds");
+            assert.isAtLeast(claimRenewals, 4);
+            assert.isAtLeast(heartbeatRenewals.get(left.commandId) ?? 0, 4);
+            assert.isAtLeast(heartbeatRenewals.get(right.commandId) ?? 0, 4);
+            yield* Deferred.succeed(releaseRead, undefined);
+            yield* Fiber.join(blockedTick);
+          }),
+        );
+        blockedCommand = null;
         const complete = (commandId: CommandId) => {
           const current = executions.get(commandId)!;
           executions.set(commandId, { ...proof.execution, receipt: current.receipt });

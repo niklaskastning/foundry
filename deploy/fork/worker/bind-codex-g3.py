@@ -84,7 +84,10 @@ def quiet_database(database):
         raise RuntimeError("Worker SQLite missing")
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
         active = connection.execute("SELECT count(*) FROM orchestration_v2_projection_runs WHERE status NOT IN ('completed','interrupted','cancelled','failed','rolled_back','superseded')").fetchone()[0]
-        unfinished = connection.execute("SELECT count(*) FROM foundry_executions WHERE manifest IS NULL").fetchone()[0]
+        cancelled = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='foundry_execution_cancellations'").fetchone()
+        unfinished = connection.execute("SELECT count(*) FROM foundry_executions e WHERE manifest IS NULL" + (
+            " AND NOT (state='stopped' AND writer_ended=1 AND provider_thread_id IS NULL AND EXISTS(SELECT 1 FROM foundry_execution_cancellations c WHERE c.launch_command_id=e.command_id))" if cancelled else ""
+        )).fetchone()[0]
     if active or unfinished:
         raise RuntimeError("Active or unresolved work; refuse binding/restart")
     journal = database.with_name("foundry-workspaces.sqlite")

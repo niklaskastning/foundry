@@ -58,7 +58,7 @@ const make = Effect.gen(function* () {
           }>`SELECT version FROM foundry_automation.schema_version`;
           if (
             versions.length !== 1 ||
-            ![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(versions[0]?.version ?? 0)
+            ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(versions[0]?.version ?? 0)
           )
             return yield* new AutomationMigrationError({ reason: "schema_incompatible" });
           if (versions[0]?.version === 1) {
@@ -126,6 +126,15 @@ const make = Effect.gen(function* () {
             yield* sql`CREATE TABLE IF NOT EXISTS foundry_automation.execution_defaults_commands (id text PRIMARY KEY, payload jsonb NOT NULL, result jsonb NOT NULL, instance_id text NOT NULL, operator_id text NOT NULL)`;
             yield* sql`UPDATE foundry_automation.schema_version SET version=9`;
           }
+          if ((versions[0]?.version ?? 0) < 10) {
+            yield* sql`ALTER TABLE foundry_automation.workflow_versions ADD COLUMN execution jsonb`;
+            yield* sql`ALTER TABLE foundry_automation.step_attempts ADD COLUMN worker_id text, ADD COLUMN worker_binding jsonb, ADD COLUMN capacity_released boolean NOT NULL DEFAULT false`;
+            yield* sql`CREATE TABLE foundry_automation.dispatch_capacity (worker_id text PRIMARY KEY, capacity integer NOT NULL CHECK(capacity BETWEEN 1 AND 8), paused boolean NOT NULL DEFAULT false)`;
+            yield* sql`CREATE INDEX step_attempts_capacity ON foundry_automation.step_attempts(worker_id) WHERE NOT capacity_released`;
+            yield* sql`UPDATE foundry_automation.schema_version SET version=10`;
+          }
+          yield* sql`GRANT INSERT, UPDATE ON foundry_automation.dispatch_capacity TO ${sql(runtimeRole)}`;
+          yield* sql`GRANT UPDATE(capacity_released) ON foundry_automation.step_attempts TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT, UPDATE ON foundry_automation.execution_defaults TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT ON foundry_automation.execution_defaults_commands TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT, UPDATE ON foundry_automation.work_item_handoffs, foundry_automation.handoff_commands TO ${sql(runtimeRole)}`;

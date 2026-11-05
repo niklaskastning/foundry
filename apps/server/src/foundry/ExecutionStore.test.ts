@@ -23,6 +23,48 @@ const threadId = ThreadId.make("foundry-launch:lease-test");
 const start = { threadId, providerThreadId: ProviderThreadId.make("native-thread"), runOrdinal: 1 };
 const testLayer = ExecutionStore.layer.pipe(Layer.provideMerge(Sqlite.layerMemory));
 
+it.effect("reserves bounded capacity atomically and retains uncertain writers across restart", () =>
+  Effect.gen(function* () {
+    const store = yield* ExecutionStore.ExecutionStore;
+    const attempts = yield* Effect.forEach(
+      [0, 1, 2],
+      (index) =>
+        store
+          .reserve(
+            CommandId.make(`capacity-${index}`),
+            ThreadId.make(`foundry-launch:capacity-${index}`),
+            2,
+          )
+          .pipe(Effect.result),
+      { concurrency: "unbounded" },
+    );
+    assert.equal(attempts.filter((result) => result._tag === "Success").length, 2);
+    assert.equal(yield* store.occupied, 2);
+    const first = attempts.find((result) => result._tag === "Success")!;
+    assert.equal(first._tag, "Success");
+    if (first._tag !== "Success") return;
+    const row = first.success;
+    assert.deepEqual(yield* store.reserve(row.commandId, row.threadId, 2), row);
+    assert.isTrue(yield* store.starting({ ...start, threadId: row.threadId }));
+    yield* store.stop(row.commandId);
+    assert.equal(yield* store.occupied, 2);
+    yield* Effect.gen(function* () {
+      const recovered = yield* ExecutionStore.ExecutionStore;
+      assert.equal(yield* recovered.occupied, 2);
+      yield* recovered.confirm(row.commandId, row.generation + 1);
+      assert.equal(yield* recovered.occupied, 2);
+      yield* recovered.confirm(row.commandId, row.generation);
+      assert.equal(yield* recovered.occupied, 1);
+      yield* recovered.reserve(
+        CommandId.make("replacement"),
+        ThreadId.make("foundry-launch:replacement"),
+        2,
+      );
+      assert.equal(yield* recovered.occupied, 2);
+    }).pipe(Effect.provide(Layer.fresh(ExecutionStore.layer)));
+  }).pipe(Effect.provide(testLayer)),
+);
+
 it.effect(
   "persists admission, renewal and monotone generations without reviving expired writers",
   () =>
@@ -42,6 +84,7 @@ it.effect(
       const second = yield* store.reserve(
         CommandId.make("another"),
         ThreadId.make("foundry-launch:another"),
+        2,
       );
       assert.isAbove(second.generation, first.generation);
       assert.isTrue(
@@ -61,6 +104,43 @@ it.effect("cancel before start fences future invocation and proves the writer ne
     assert.deepInclude(yield* store.read(commandId), { state: "finalizing", writerEnded: 1 });
     assert.isFalse(yield* store.starting(start));
     assert.deepInclude(yield* store.read(commandId), { state: "finalizing", writerEnded: 1 });
+    const abandoned = CommandId.make("never-delivered");
+    const cancellation = CommandId.make("cancel-never-delivered");
+    assert.isTrue(yield* store.cancelUnstarted(cancellation, abandoned));
+    yield* Effect.gen(function* () {
+      const recovered = yield* ExecutionStore.ExecutionStore;
+      assert.equal(yield* recovered.cancellation(cancellation), abandoned);
+      assert.isTrue(yield* recovered.cancelUnstarted(cancellation, abandoned));
+      assert.equal(
+        (yield* recovered
+          .reserve(abandoned, ThreadId.make("foundry-launch:never-delivered"))
+          .pipe(Effect.result))._tag,
+        "Failure",
+      );
+      assert.equal(yield* recovered.occupied, 0);
+      assert.equal(
+        (yield* recovered.cancelUnstarted(cancellation, commandId).pipe(Effect.result))._tag,
+        "Failure",
+      );
+      const reserved = yield* recovered.reserve(
+        CommandId.make("reserved-cancel"),
+        ThreadId.make("foundry-launch:reserved-cancel"),
+      );
+      assert.isTrue(
+        yield* recovered.cancelUnstarted(CommandId.make("cancel-reserved"), reserved.commandId),
+      );
+      assert.isFalse(yield* recovered.starting({ ...start, threadId: reserved.threadId }));
+      assert.equal(yield* recovered.occupied, 0);
+      const active = yield* recovered.reserve(
+        CommandId.make("active-cancel"),
+        ThreadId.make("foundry-launch:active-cancel"),
+      );
+      assert.isTrue(yield* recovered.starting({ ...start, threadId: active.threadId }));
+      assert.isFalse(
+        yield* recovered.cancelUnstarted(CommandId.make("cancel-active"), active.commandId),
+      );
+      assert.equal(yield* recovered.occupied, 1);
+    }).pipe(Effect.provide(Layer.fresh(ExecutionStore.layer)));
   }).pipe(Effect.provide(testLayer)),
 );
 

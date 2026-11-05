@@ -47,6 +47,7 @@ def inventory(root="/"):
         "workspaceRoots": config["workspaceRoots"],
         "providerInstanceId": config.get("providerInstanceId"),
         "providerReady": None,
+        "capacity": config.get("capacity", 1),
         "g3Accepted": False,
         "paidTurns": 0,
         "runtimeVerifiedAsWorker": False,

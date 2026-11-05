@@ -608,7 +608,6 @@ export const layer = Layer.effect(
         return false;
       const launchId = CommandId.make(`foundry-launch:${digest(commandId)}`);
       if (
-        Option.isSome(yield* receipts.getByCommandId(launchId)) ||
         Option.isSome(yield* receipts.getByCommandId(CommandId.make(`${launchId}:initial-message`)))
       )
         return false;
@@ -663,8 +662,30 @@ export const layer = Layer.effect(
       );
     const cancel = Effect.fn("WorkerLaunch.cancel")(
       function* (input: FoundryWorkerCancelInput) {
-        const execution = yield* read({ commandId: input.launchCommandId });
+        if (!enabled) return yield* new FoundryWorkerCancelError({ code: "not_enabled" });
         const commandId = CommandId.make(`foundry-cancel:${digest(input.commandId)}`);
+        const prior = yield* executions.cancellation(input.commandId);
+        if (prior && prior !== input.launchCommandId)
+          return yield* new FoundryWorkerCancelError({ code: "command_conflict" });
+        const execution = yield* read({ commandId: input.launchCommandId }).pipe(
+          Effect.catch((error) =>
+            error.code === "not_found" ? Effect.succeed(null) : Effect.fail(error),
+          ),
+        );
+        if (!execution) {
+          if (Option.isSome(yield* receipts.getByCommandId(commandId)))
+            return yield* new FoundryWorkerCancelError({ code: "command_conflict" });
+          if (!(yield* executions.cancelUnstarted(input.commandId, input.launchCommandId)))
+            return yield* new FoundryWorkerCancelError({ code: "cancel_failed" });
+          const row = yield* executions.read(input.launchCommandId);
+          if (row) yield* releaseUnstarted(row.commandId, row.threadId, row.generation);
+          return {
+            commandId: input.commandId,
+            launchCommandId: input.launchCommandId,
+            status: "not_started" as const,
+            noStartConfirmed: true as const,
+          };
+        }
         const acceptedCancellation = Effect.fn("WorkerLaunch.acceptedCancellation")(function* () {
           const stored = yield* receipts.getByCommandId(commandId);
           if (Option.isNone(stored)) return Option.none();
@@ -726,6 +747,7 @@ export const layer = Layer.effect(
                 : "cancel_failed",
         });
       }),
+      launchLane.withPermits(1),
     );
     if (enabled) {
       yield* Effect.gen(function* () {

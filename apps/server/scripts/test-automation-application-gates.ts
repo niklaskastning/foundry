@@ -1,3 +1,4 @@
+import * as DispatchStore from "../src/automation/DispatchStore.ts";
 import * as MachineAccess from "../src/automation/MachineAccess.ts";
 import * as MachineCredentials from "../src/foundry/MachineCredentials.ts";
 import * as Handoffs from "../src/automation/Handoffs.ts";
@@ -115,6 +116,7 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     Layer.provide(database),
   );
   const layer = Application.layer.pipe(
+    Layer.provide(DispatchStore.layer),
     Layer.provide(machineAccess),
     Layer.provide(Layer.mock(Handoffs.Handoffs)({ query: unused, execute: unused })),
     Layer.provide(DefinitionSources.layer),

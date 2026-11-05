@@ -6,6 +6,7 @@ import {
   AutomationHandoffCommand,
   AutomationHandoffQuery,
   CommandId,
+  ProjectId,
   FoundryWorkerExecution,
   FoundryWorkerHandoffOpen,
   FoundryWorkerHandoffResult,
@@ -27,6 +28,9 @@ import * as Artifacts from "../foundry/Artifacts.ts";
 import * as ThreadArchive from "../foundry/ThreadArchive.ts";
 
 const decodeBinding = Schema.decodeUnknownEffect(DispatchBinding);
+const decodeAssignment = Schema.decodeUnknownEffect(
+  Schema.Struct({ identity: WorkerTransport.WorkerIdentity, projectId: ProjectId }),
+);
 const decodeOpen = Schema.decodeUnknownEffect(FoundryWorkerHandoffOpen);
 const decodeResult = Schema.decodeUnknownEffect(FoundryWorkerHandoffResult);
 const decodeExecution = Schema.decodeUnknownEffect(
@@ -142,13 +146,33 @@ const make = Effect.gen(function* () {
     raw: AutomationHandoffCommand,
   ) {
     const input = yield* decodeCommand(raw);
-    const identity = yield* worker.authorize(request, target);
-    yield* worker.identityForWrite(request);
+    const principal = yield* worker.identityForWrite(request);
     const existing = input.op === "takeOver" ? null : yield* read(input.handoffId);
     if (existing && existing.factoryId !== input.factoryId) return yield* fail("not_found");
     const runId = input.op === "takeOver" ? input.runId : existing!.runId;
     const run = yield* store.read(input.factoryId, runId);
-    const binding = yield* decodeBinding(run.binding);
+    const originalBinding = yield* decodeBinding(run.binding);
+    const sourceCommandId =
+      input.op === "takeOver" ? input.sourceCommandId : existing!.sourceCommandId;
+    const assignedAttempt = run.attempts.find((attempt) => attempt.commandId === sourceCommandId);
+    if (!assignedAttempt) return yield* fail("not_found");
+    const assignment = assignedAttempt.workerBinding
+      ? yield* decodeAssignment(assignedAttempt.workerBinding)
+      : originalBinding;
+    const binding = { ...originalBinding, ...assignment };
+    if (
+      principal.instanceId !== originalBinding.identity.instanceId ||
+      principal.operatorId !== originalBinding.identity.operatorId ||
+      binding.identity.instanceId !== originalBinding.identity.instanceId ||
+      binding.identity.operatorId !== originalBinding.identity.operatorId ||
+      (existing && existing.environmentId !== binding.identity.environmentId)
+    )
+      return yield* fail("forbidden");
+    const sourceTarget = {
+      deviceId: binding.identity.deviceId,
+      environmentId: binding.identity.environmentId,
+    };
+    const identity = yield* worker.authorize(request, sourceTarget);
     if (
       identity.instanceId !== binding.identity.instanceId ||
       identity.operatorId !== binding.identity.operatorId ||
@@ -160,7 +184,7 @@ const make = Effect.gen(function* () {
     )
       return yield* fail("forbidden");
     const reauthorize = Effect.fn("Handoffs.reauthorize")(function* () {
-      const fresh = yield* worker.authorize(request, target);
+      const fresh = yield* worker.authorize(request, sourceTarget);
       if (
         fresh.instanceId !== identity.instanceId ||
         fresh.operatorId !== identity.operatorId ||
@@ -202,7 +226,7 @@ const make = Effect.gen(function* () {
           )
             return yield* fail("writer_not_ended");
           const held =
-            yield* sql`SELECT h.id FROM foundry_automation.work_item_handoffs h JOIN foundry_automation.dispatch_runs d ON d.run_id=h.run_id WHERE h.run_id=${runId} OR (d.worker_id=${target.deviceId} AND h.state<>'returned')`;
+            yield* sql`SELECT h.id FROM foundry_automation.work_item_handoffs h JOIN foundry_automation.dispatch_runs d ON d.run_id=h.run_id WHERE h.run_id=${runId} OR (h.environment_id=${identity.environmentId} AND h.state<>'returned')`;
           if (held.length) return yield* fail("conflict");
           const other =
             yield* sql`SELECT r.id FROM foundry_automation.runs r JOIN foundry_automation.dispatch_runs d ON d.run_id=r.id JOIN foundry_automation.run_controls c ON c.run_id=r.id WHERE r.work_item_id=${run.run.workItemId} AND r.id<>${runId} AND d.state IN ('running','waiting') AND c.mode<>'cancelled'`;
@@ -211,7 +235,7 @@ const make = Effect.gen(function* () {
             state: string;
             result: unknown;
             request: unknown;
-          }>`SELECT o.state,a.result,a.request FROM foundry_automation.step_attempts a JOIN foundry_automation.dispatch_outbox o ON o.command_id=a.command_id JOIN foundry_automation.dispatch_runs d ON d.run_id=a.run_id WHERE d.worker_id=${target.deviceId}`;
+          }>`SELECT o.state,a.result,a.request FROM foundry_automation.step_attempts a JOIN foundry_automation.dispatch_outbox o ON o.command_id=a.command_id JOIN foundry_automation.dispatch_runs d ON d.run_id=a.run_id WHERE a.run_id=${runId} OR COALESCE(a.worker_id,d.worker_id)=${identity.deviceId}`;
           if (
             deliveries.some(
               (attempt) =>
@@ -364,6 +388,9 @@ const make = Effect.gen(function* () {
       return yield* fail("archive_missing");
     yield* reauthorize();
     const continuationRunId = `handoff:run:${hash}`;
+    const coordinatorIdentity = run.workflow.execution
+      ? yield* worker.authorize(request, target)
+      : identity;
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         yield* lock(run.run.workItemId, runId);
@@ -389,10 +416,12 @@ const make = Effect.gen(function* () {
           runId: continuationRunId,
           workerId: target.deviceId,
           binding: {
-            ...binding,
-            identity,
+            ...originalBinding,
+            identity: coordinatorIdentity,
             projectId: result.receipt.projectId,
-            previousHandoff: { handoffId: id, commitSha: result.commitSha },
+            ...(run.workflow.execution
+              ? { workers: [{ identity, projectId: result.receipt.projectId }] }
+              : { previousHandoff: { handoffId: id, commitSha: result.commitSha } }),
           },
         });
         yield* sql`UPDATE foundry_automation.run_controls SET mode='paused' WHERE run_id=${continuationRunId}`;

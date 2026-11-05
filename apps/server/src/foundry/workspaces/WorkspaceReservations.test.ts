@@ -120,26 +120,50 @@ it.live(
 it.live("allocates separate real Git worktrees with idempotent recovery and root boundaries", () =>
   Effect.gen(function* () {
     const f = yield* fixture();
+    const revision = (yield* f.git.resolveCommit({ cwd: f.repositoryPath, revision: "HEAD" }))
+      .commitSha;
+    yield* f.fs.writeFileString(`${f.repositoryPath}/later.txt`, "not part of the pinned run");
+    yield* f.git.execute({ cwd: f.repositoryPath, operation: "test.add", args: ["add", "."] });
+    yield* f.git.execute({
+      cwd: f.repositoryPath,
+      operation: "test.commit",
+      args: [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-m",
+        "advance base",
+      ],
+    });
     yield* f.fs.writeFileString(`${f.temp}/outside.txt`, "untouched");
     yield* f.fs.symlink(f.temp, `${f.root}/escape`);
     yield* Effect.gen(function* () {
       const service = yield* WorkspaceReservations.WorkspaceReservations;
       const reservations = yield* Effect.forEach(
         ["a", "b"],
-        (id) => service.reserve(f.request(id, "worktree")),
+        (id) => service.reserve({ ...f.request(id, "worktree"), revision }),
         { concurrency: "unbounded" },
       );
       assert.notStrictEqual(reservations[0]!.workspacePath, reservations[1]!.workspacePath);
       for (const reservation of reservations) {
+        assert.equal(reservation.baseCommit, revision);
+        assert.isFalse(yield* f.fs.exists(`${reservation.workspacePath}/later.txt`));
         assert.strictEqual(
           yield* f.fs.readFileString(`${reservation.workspacePath}/user.txt`),
           "preserve me",
         );
         assert.deepStrictEqual(
-          yield* service.reserve(f.request(reservation.requestId, "worktree")),
+          yield* service.reserve({ ...f.request(reservation.requestId, "worktree"), revision }),
           reservation,
         );
         assert.deepStrictEqual(yield* service.recover(reservation.requestId), reservation);
+        assert.equal(
+          (yield* service.reserve(f.request(reservation.requestId, "worktree")).pipe(Effect.flip))
+            .code,
+          "request_conflict",
+        );
       }
       const retries = yield* Effect.forEach(
         [0, 1],

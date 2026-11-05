@@ -232,6 +232,12 @@ const workerCancellationFields = {
 };
 export const FoundryWorkerCancellation = Schema.Union([
   Schema.Struct({
+    commandId: CommandId,
+    launchCommandId: CommandId,
+    status: Schema.Literal("not_started"),
+    noStartConfirmed: Schema.Literal(true),
+  }),
+  Schema.Struct({
     ...workerCancellationFields,
     status: Schema.Literal("requested"),
     sequence: NonNegativeInt,
