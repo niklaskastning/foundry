@@ -1,6 +1,6 @@
 # Foundry – Implementierungsplan für Features und Funktionen
 
-Stand: 5. November 2026. Dieser Plan beschreibt Produktfunktionen, ihre Reihenfolge und funktionale Abnahmen. Sicherheits-, Betriebs-, Backup-, Performance- und technische Prüfthemen stehen im separaten [Plan für Basic-Leitplanken](basic-leitplanken.md). Architektur und Deployment bleiben die zugehörigen Entwürfe. Paket-IDs P01–P60 bleiben erhalten und sind keine GitHub-PR-Nummern.
+Stand: 5. November 2026. Dieser Plan beschreibt Produktfunktionen, ihre Reihenfolge und funktionale Abnahmen. Sicherheits-, Betriebs-, Backup-, Performance- und technische Prüfthemen stehen im separaten [Plan für Basic-Leitplanken](basic-leitplanken.md). Architektur und Deployment bleiben die zugehörigen Entwürfe. Paket-IDs P01–P60 bleiben erhalten und sind keine GitHub-PR-Nummern. Der [Warp-Abgleich](warp-comparison.md) dokumentiert Code- und Browserbefunde getrennt nach Funktionen und UI; dieser Plan besitzt weiterhin Reihenfolge und Abnahme.
 
 ## Erledigte Implementierung und verbleibende Abnahmen
 
@@ -8,9 +8,10 @@ Stand: 5. November 2026. Dieser Plan beschreibt Produktfunktionen, ihre Reihenfo
 - [x] **P18a/P18b, P47:** Factories, Aufträge, Workflow-Versionen und kanonischer Definitionsimport/-export integriert ([#36](https://github.com/niklaskastning/foundry/pull/36), [#46](https://github.com/niklaskastning/foundry/pull/46), [#47](https://github.com/niklaskastning/foundry/pull/47)).
 - [x] **P38a/P38b:** Zentrale Anhänge und fortlaufende Thread-Archive integriert und auf der Entwicklungs-VPS aktiviert ([#48](https://github.com/niklaskastning/foundry/pull/48), [#50](https://github.com/niklaskastning/foundry/pull/50)).
 - [x] **P19:** Sequenzieller Workflow-Dispatch integriert ([#51](https://github.com/niklaskastning/foundry/pull/51)).
-- [x] **P20/P21/P49:** Run-Steuerung, manueller Definitions-/Startfluss und persönliche Inbox integriert; Automation auf der Entwicklungs-VPS aktiviert ([#52](https://github.com/niklaskastning/foundry/pull/52)).
+- [x] **P20/P21/P49a – Basisschnitt:** Run-Steuerung, manueller Definitions-/Startfluss, Navigationseinstiege und persönliche Inbox integriert; Automation auf der Entwicklungs-VPS aktiviert ([#52](https://github.com/niklaskastning/foundry/pull/52)).
 - [x] **P22/P23/P24 – Implementierung:** GitHub-Polling, PR-Publishing und Zeitpläne implementiert. Die reale GitHub-App-Verbindung und ein betreuter nativer Issue-bis-PR-Workflow sind bestätigt ([#56](https://github.com/niklaskastning/foundry/pull/56)).
 - [ ] **Funktionale Restabnahmen:** Instanzwechsel/Entfernen mit zwei realen Instanzen, Worker auf zweiter Maschine, Wiederverbindung beider Clients und Wiederaufnahme laufender Aufträge. Windows-Laufzeit und Bedienung der Factory bleiben offen; der bestätigte native G4-Durchstich schließt diese Restabnahmen nicht.
+- [ ] **Factory-Arbeitsplatz P49b:** Kontextbeständige Navigation, operative Übersicht, verständlicher Auftragseinstieg sowie verbundene Run-/Review-Ansicht fehlen gegenüber dem vollständigen UI-Ziel. P49a bleibt als gelieferter Basisschnitt anerkannt.
 - [ ] **Produktlücken:** Native Foundry-Anmeldung P03N, automatischer Katalog-Erstabruf, Einstieg ohne getrenntes T3-Pairing und Windows-Downloads im Foundry-Einstieg.
 - [ ] **Zentrale Verbindungen P14Z:** Provider-, Source-Control- und MCP-Konten einmal in Foundry einrichten und auf Workern/Sandboxes nutzen.
 - [x] **P48 / funktionales G11:** Git-Quellbindung, lesende Synchronisierung, Driftabgleich, dauerhafte Git-Ownership und explizite Aktivierung/Rollback sind implementiert ([#57](https://github.com/niklaskastning/foundry/pull/57)). Isoliertes PostgreSQL bestätigt Import → Git-Änderung → ungültigen Folgecommit → Runs und Inbox-Entscheidungen mit erhaltenen alten Revisionen. Der gemeinsame lokale Browserpass bestätigt Quelle/Diff/Fehler, Übernahme und gepinnte Run-Herkunft mit Inbox-Entscheidung. Die Entwicklungs-VPS liest das private Definitionsrepository; die bestehende G4-Definition wurde unverändert über [Definitions-PR #1](https://github.com/niklaskastning/foundry-definitions/pull/1) übernommen. Kein neuer nativer Writer-, Windows- oder öffentlicher SSO-Nachweis.
@@ -27,35 +28,51 @@ Funktionale HTTP-/PostgreSQL-Nachweise bestätigen UI/API-Gleichheit,
 Command-Wiederholung und Rechteabweisung. Maschinen-Credentials, P58b/MCP und
 vollständiges G12 bleiben offen; der Schnitt erteilt keine neue Provider-Freigabe.
 
-## Umsetzungsreihenfolge ab P17
+## Nächste Produktlieferungen
 
-1. **Worker:** P17 / G3 abschließen; die Basis P01–P16 ist integriert.
-2. **Factory-MVP:** P18a → P18b → P47 → P38a → P38b → P19 → P20 → P21 → P49 → P22 → P23 → P24 / G4. P22/P24 können nach P19 unabhängig vom UI-Anschluss entstehen.
-3. **Git-Verwaltung:** P48 / funktionales G11 abgeschlossen; Live-Import und isolierte funktionale Nachweise sind getrennt belegt.
-4. **Zusammenarbeit:** P51 implementiert; P58a liefert zunächst die versionierte HTTP-API für bestehende Benutzersitzungen. Eigenständige Maschinen-Credentials und P58b bleiben offen; danach P28 → P52; P29 → P50 → P53; P30/P31 / G6 und G12. P50 bleibt optional.
-5. **Qualitätsfunktionen:** P54 → P55 → P56 → P57 / G13. Dashboard, Scorers, Benchmarks und Verbesserungsvorschläge sind Produktfunktionen; technische Performance-Optimierung steht im separaten Plan.
-6. **Weitere Worker und Sandboxes:** P14Za vor zentral verbundenen zusätzlichen Workern; P32/P33 / G7, danach P34–P40 / G8. Dieser Pfad kann nach dem Factory-MVP parallel zur Zusammenarbeit entstehen.
-7. **Weitere Integrationen:** P25, P41–P43, P59/P60 / G9 und G14 nach Bedarf; P44/P45 / G10 für zusätzliche Anmeldeanbieter und Device-Gruppen.
+Priorität haben große nutzbare Fähigkeiten. P17/G3, der sequenzielle Factory-Kern, Git-Ownership und T3-Handoff werden nicht erneut implementiert; offene Plattform-/Betriebsabnahmen oben und in Basic-Leitplanken bleiben davon unabhängig bestehen. Die Etappen sind Ergebnisse, keine Aufforderung zu einem einzigen großen PR. Bestehende P-IDs bleiben die fachlichen Arbeitspakete.
 
-P02, P11, P26, P27 und P46 sowie G5 werden im [Leitplanken-Plan](basic-leitplanken.md) geführt. Sie bilden keine eigene Etappe der Feature-Reihenfolge. P18 bezeichnet weiterhin P18a/P18b; P38 umfasst P38a/P38b/P38c. Bestehende technische Voraussetzungen stehen beim jeweiligen Paket im separaten Plan.
+| Reihenfolge                                 | Nutzbares Ergebnis                                                                                                                                   | Pakete und Voraussetzung                                                                                                                                                                        |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1 · Wiederverwendbare Factory-Agenten**   | Benannte Rollen/Skills aus Git verwenden, wirksame Einstellungen ansehen, Auftrag starten und bis zur Entscheidung im selben Arbeitsplatz verfolgen. | P28 → erster durchgängiger Schnitt P52a, begleitet von P49b und dem P21-Anschluss. Bestehendes P48/P51 wiederverwenden. Codex zuerst; weitere Provider erst mit P14Zb.                          |
+| **2 · Koordinierte parallele Ausführung**   | Unabhängige Schritte gleichzeitig ausführen, Ergebnisse zusammenführen und Teilfehler begrenzt reparieren.                                           | P29 mit P32/P33 koordinieren; vor zentral verbundenen zusätzlichen Workern P14Za. Ein einzelner serieller Worker ist kein Parallelitätsnachweis. P53 nutzt anschließend die Rollen und Abläufe. |
+| **3 · Reproduzierbare Sandboxes**           | Frische Linux-Umgebung mit Profil starten, beobachten, archivieren, löschen und Arbeit wieder aufnehmen.                                             | P34–P40 einschließlich P37 und bestehender Archive P38a/P38b; interaktiver und Workflow-Zugang gehören zusammen.                                                                                |
+| **4 · Qualität vergleichen und verbessern** | Runs bewerten, Konfigurationen auf denselben Aufgaben vergleichen und belegte Änderungs-PRs vorschlagen.                                             | P54 → P55 → P56 → P57. P54a darf früh mit den Rollen eingeführt werden; vollständige Kostencharts und Self-improvement blockieren die vorherigen Lieferungen nicht.                             |
+| **5 · Repositoryübergreifende Arbeit**      | Ein Auftrag liefert getrennte Änderungen/PRs über mehrere Repositories, später gemeinsamer Agent-Step.                                               | P30 → P31, auf Rollen, Workspace-Zuordnung und Ausführungskapazität aufbauen. Bei einem konkreten Multi-Repo-Auftrag vor Etappe 4 priorisierbar.                                                |
+
+**Begleitende Produktpfade:** P58a-Maschinen-Credentials und P58b erschließen dieselben Services für CI und Agenten; sie müssen die Rollenlieferung nicht blockieren. P03N/P05/P12 schließen native Anmeldung und vollständigen Instanzeinstieg; der bestehende Access-Modus erlaubt vorherige Featurearbeit. P14Z/P52 bauen zentrale Ressourcen passend zu den jeweils benötigten Workern und Rollen aus. P50 bleibt ein optionaler Koordinator auf der vorhandenen Steuerung. P25/P41–P43/P59/P60 sowie P44/P45 folgen konkretem Integrations-, Memory-, Verifikations- oder Identitätsbedarf. Mobile bleibt zurückgestellt.
+
+P02, P11, P26, P27 und P46 sowie G5 werden im [Leitplanken-Plan](basic-leitplanken.md) geführt. Sie bilden keine eigene Etappe der Feature-Reihenfolge; notwendige technische Gates gelten weiterhin vor Aktivierung. P18 bezeichnet P18a/P18b; P38 umfasst P38a/P38b/P38c. **P49a/P49b** präzisieren den gelieferten Basisumfang und den noch offenen Arbeitsplatz innerhalb der bisherigen P49-ID.
+
+### Abnahme der nächsten Lieferung
+
+P28/P52a/P49b werden als gemeinsamer Produktdurchstich abgenommen:
+
+1. Zwei Workflows verwenden dieselbe versionierte Rolle mit Instruktionen, Skills und unterstützter Modellkonfiguration. Git bleibt Owner; die App zeigt aktive Revision und Änderungsweg ins Definitionsrepository.
+2. Eine neu aktivierte Definitionsrevision gilt nur für neue Runs. Ein bestehender Run zeigt weiterhin seine aufgelöste Rolle, Skills, Modell und Ressourcenreferenzen. Fehlende Ressourcen und nicht unterstützte Provider werden vor Dispatch verständlich abgewiesen.
+3. Factory öffnen → Rolle ansehen → Auftrag mit geprüften Defaults starten → Step/Attempt und Ergebnis verfolgen → vorhandene Inbox-Entscheidung bearbeiten → in T3 übernehmen und zum selben Auftrag zurückkehren. Technische Bindings werden einmal eingerichtet; explizite Freigaben bleiben erhalten.
+4. Refresh, Browser-Zurück und direkte Links erhalten Factory, Auftrag, Run, Tab und relevante Filter. Auftragsnamen, Phase und Handlungsbedarf sind der Einstieg; vollständige technische Herkunft bleibt erreichbar.
+5. Der gemeinsame Web-/Windows-Client verwendet dieselben Services und Berechtigungen; Einstiege in Sidebar, Settings und Command Palette führen zum gleichen Kontext. Web-Rundgang und Windows-Laufzeitabnahme werden getrennt belegt. Bestehende sequenzielle Definitionen und laufende Runs bleiben kompatibel.
+
+Nicht Teil dieses ersten Schnitts sind ein freier Workflow-Canvas, neue Provider-Laufzeiten, automatische Modellrouter, unbeschränkte Swarms, neue Qualitätscharts oder leere Sandbox-Menüs. Weitere Teile von P52a, insbesondere noch nicht unterstützte Ressourcenadapter, werden ausdrücklich als offen ausgewiesen; ein erster Rollen-Durchstich schließt nicht pauschal P52 oder G6.
 
 ## Funktionale Meilensteine
 
-| Meilenstein                        | Nutzbares Ergebnis                                                                                                                                                  |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| G1 · Instanzeinstieg               | Web und Windows: Instanz wählen, anmelden, wechseln und entfernen; Access und native Anmeldung separat.                                                             |
-| G2 · Device-Zugriff                | Zwei Clients nutzen Device-Katalog, Threads, Terminal, Dateien, Diffs und Anhänge über Main.                                                                        |
-| G3 · Worker                        | Agentenauftrag ohne Eltern-Agenten starten, verfolgen, abbrechen und Ergebnis öffnen.                                                                               |
-| G4 · Workflow-MVP                  | Definition bearbeiten/importieren → manuell oder über GitHub/Zeitplan starten → Analyse, Änderung, Test und Freigabe → PR; Inbox und Ergebnisse bedienen.           |
-| G6 · Wiederverwendung / Multi-Repo | Agenten/Skills wiederverwenden, Arbeit aufteilen und Ergebnisse je Repository öffnen; Multi-Repo-Step erst mit P31.                                                 |
-| G7 · Mehrere Worker                | Feste Ziele und Pools wählen und Aufträge verschiedenen Workern zuordnen.                                                                                           |
-| G8 · Sandboxes                     | Dasselbe Profil interaktiv und im Workflow nutzen, Sandbox löschen und Arbeit aus dem Archiv fortsetzen.                                                            |
-| G9 · Connectoren / Memory          | Gewählten Connector nutzen beziehungsweise Wissen speichern, suchen und löschen.                                                                                    |
-| G10 · Identität / Gruppen          | Gewählten Anmeldeanbieter verbinden oder Device-Gruppen gemeinsam nutzen.                                                                                           |
-| G11 · Factory als Produkt          | Lokale Definition ausdrücklich nach Git übernehmen; Git-Änderung und ungültigen Folgecommit prüfen; gepinnte Revision am Run und Inbox-Entscheidung nachvollziehen. |
-| G12 · Zusammenarbeit               | Auftrag über Koordinator, T3-Übernahme und Rückgabe bis zum PR über UI/API/MCP bearbeiten.                                                                          |
-| G13 · Qualitätsfunktionen          | Dashboard öffnen, Runs bewerten, Benchmarks vergleichen und Verbesserungsvorschläge übernehmen.                                                                     |
-| G14 · Weitere Einsatzfälle         | Jeden zusätzlichen Connector und jede Browser-/Incident-Vorlage einzeln nutzen.                                                                                     |
+| Meilenstein                        | Nutzbares Ergebnis                                                                                                                                                        |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1 · Instanzeinstieg               | Web und Windows: Instanz wählen, anmelden, wechseln und entfernen; Access und native Anmeldung separat.                                                                   |
+| G2 · Device-Zugriff                | Zwei Clients nutzen Device-Katalog, Threads, Terminal, Dateien, Diffs und Anhänge über Main.                                                                              |
+| G3 · Worker                        | Agentenauftrag ohne Eltern-Agenten starten, verfolgen, abbrechen und Ergebnis öffnen.                                                                                     |
+| G4 · Workflow-MVP                  | Definition bearbeiten/importieren → manuell oder über GitHub/Zeitplan starten → Analyse, Änderung, Test und Freigabe → PR; Inbox und Ergebnisse bedienen.                 |
+| G6 · Wiederverwendung / Multi-Repo | Agenten/Skills wiederverwenden, Arbeit aufteilen und Ergebnisse je Repository öffnen; Multi-Repo-Step erst mit P31.                                                       |
+| G7 · Mehrere Worker                | Feste Ziele und Pools wählen und Aufträge verschiedenen Workern zuordnen.                                                                                                 |
+| G8 · Sandboxes                     | Dasselbe Profil interaktiv und im Workflow nutzen, Sandbox löschen und Arbeit aus dem Archiv fortsetzen.                                                                  |
+| G9 · Connectoren / Memory          | Gewählten Connector nutzen beziehungsweise Wissen speichern, suchen und löschen.                                                                                          |
+| G10 · Identität / Gruppen          | Gewählten Anmeldeanbieter verbinden oder Device-Gruppen gemeinsam nutzen.                                                                                                 |
+| G11 · Factory als Produkt          | Lokale Definition ausdrücklich nach Git übernehmen; Git-Änderung und ungültigen Folgecommit prüfen; gepinnte Revision am Run und Inbox-Entscheidung nachvollziehen.       |
+| G12 · Zusammenarbeit               | Auftrag mit T3-Übernahme und Rückgabe bis zum PR über UI/API/MCP bearbeiten; Maschinenzugang separat nachweisen. Koordinator P50 nur bei Aktivierung zusätzlich abnehmen. |
+| G13 · Qualitätsfunktionen          | Dashboard öffnen, Runs bewerten, Benchmarks vergleichen und Verbesserungsvorschläge übernehmen.                                                                           |
+| G14 · Weitere Einsatzfälle         | Jeden zusätzlichen Connector und jede Browser-/Incident-Vorlage einzeln nutzen.                                                                                           |
 
 ## Instanzeinstieg und Devices
 
@@ -165,7 +182,9 @@ Factory und Auftrag auswählen, Definitionen übergangsweise im Formular bearbei
 
 ### P49 · Factory-Navigation und persönliche Inbox
 
-Globale und Factory-bezogene Navigation mit Listenfiltern anbieten. Persönliche Inbox für Fragen, Antworten, Reviews, Blocker und Fehler mit Links zum Auftrag, Run und Thread; gelesen, erledigt und rückgängig getrennt bedienen.
+**P49a – implementierter Basisschnitt:** Einstiege in Sidebar, Settings und Command Palette; Factory-/Run-Listen und persönliche Inbox für Fragen, Antworten, Reviews, Blocker und Fehler. Gelesen, erledigt und rückgängig sind getrennt von fachlichen Entscheidungen.
+
+**P49b – offener Factory-Arbeitsplatz:** Globale und Factory-bezogene Navigation mit sichtbarem Scope und beständigen URLs; operative Übersicht über offene Arbeit, Entscheidungen und Ergebnisse. Aufträge, Schritte und Attempts zusammenhängend darstellen, Freigaben mit ihrer Evidence verbinden und den Rückweg aus T3 erhalten. Vorhandene Ansichten und Services ausbauen. Keine neue Workflow-Steuerung oder Metrikdefinition in der UI; die vollständige Zielstruktur steht in Architekturabschnitt 12, Kennzahlen gehören P54.
 
 ### P22 · GitHub-Polling mit persistentem Eingang
 
@@ -205,15 +224,15 @@ Abnahme von P58b, unabhängig von der späteren Eval-Produktoberfläche.
 
 ### P28 · Versionierter Agent- und Skill-Katalog
 
-Agenten und Skills im Definitionsformat versionieren, auswählen und die verwendete Version am Run festhalten.
+Agenten und Skills im Definitionsformat versionieren, in mehreren Workflows wiederverwenden und die verwendete Version am Run festhalten. Agent-Steps referenzieren Rollen; Aktivierung validiert Referenzen, Ausführung löst Instruktionen und Skills unveränderlich auf. Bestehende Prompt-Schritte bleiben kompatibel.
 
 ### P52 · Agentenressourcen und Ausführungseinstellungen
 
-**P52a** zeigt Agenteninstruktionen, Automationen, Version und Einstellungen. MCP-, Secret- und Connector-Ressourcen an Factory und Rolle binden; Provider, Modell, Optionen sowie Defaults/Overrides wählen. **P52b** ergänzt Modell-Routing nach Aufgabenklasse mit sichtbarer aufgelöster Auswahl.
+**P52a** verbindet die versionierten Rollen mit tatsächlich unterstützten Worker-Fähigkeiten und zeigt Agenteninstruktionen, Automationen, Version und Einstellungen. MCP-, Secret- und Connector-Ressourcen an Factory und Rolle binden; Provider, Modell, Optionen sowie Defaults/Overrides wählen. Die wirksame Step-Konfiguration muss bis zum Worker durchgereicht und am Run sichtbar sein; ein UI-Selektor allein erfüllt dieses Paket nicht. **P52b** ergänzt Modell-Routing nach Aufgabenklasse mit sichtbarer aufgelöster Auswahl.
 
 ### P29 · Fan-out/Join und begrenzte Reparaturschleifen
 
-Workflow-Arbeit parallel aufteilen und wieder zusammenführen. Join-Verhalten, Umgang mit Teilfehlern, Parallelität und Anzahl der Reparaturdurchläufe konfigurieren.
+Workflow-Arbeit parallel aufteilen und wieder zusammenführen. Join-Verhalten, Umgang mit Teilfehlern, Parallelität und Anzahl der Reparaturdurchläufe konfigurieren. Abnahme mit mindestens zwei gleichzeitig ausführbaren, voneinander getrennten Workspaces; Kapazität und Worker-Auswahl aus P32/P33 einbeziehen.
 
 ### P50 · Optionaler Koordinator als Agentenrolle
 

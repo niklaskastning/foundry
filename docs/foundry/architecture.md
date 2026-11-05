@@ -2,7 +2,7 @@
 
 Stand: 1. November 2026 · Planabgleich mit Fork-Stand `ba1ed2f4e` und öffentlicher Warp-Factories-Dokumentation
 
-Status: Zielplan, keine Implementierungs- oder Produktionsfreigabe. Technische Nachweise sind als Abnahmegates ausgewiesen. Neben dem isolierten Main-Deployment sind inzwischen Instanz-Descriptor, PostgreSQL-Anbindung und Access-Session-Bausteine unter `apps/server/src/foundry/` vorhanden. Das belegt keine vollständige G1-/Windows-Abnahme. Gateway, Factory-/Workflow-Domäne und Sandboxes bleiben geplant. Diese versionierten Entwurfsdokumente sind ausdrücklich angeforderte Projektdokumente.
+Status: Zielarchitektur, keine pauschale Implementierungs- oder Produktionsfreigabe. Instanz-/Gateway-/Worker-Grundlagen und der sequenzielle Factory-Kern sind inzwischen integriert; der aktuelle Funktionsstand und offene Abnahmen stehen ausschließlich im [Umsetzungsplan](implementation-plan.md). Sandboxes und weitere Ausbaustufen bleiben geplant. Der [Warp-Abgleich vom 5. November](warp-comparison.md) ergänzt den ursprünglichen Referenzvergleich um Code- und Browserbefunde zu Funktionen und UI. Diese versionierten Entwurfsdokumente sind ausdrücklich angeforderte Projektdokumente.
 
 ## 1. Festgelegtes Ziel
 
