@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- GitHub installation authentication requires an RSA-signed JWT.
+import { FactoryDefinitionFiles, FactoryDefinitionGitLocation } from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -28,6 +29,7 @@ const Repository = Schema.Struct({
   fullName: Schema.String,
   bindingKey: Schema.String,
   baseBranch: Schema.String,
+  purpose: Schema.optional(Schema.Literals(["automation", "definitions"])),
 });
 const Configuration = Schema.Struct({
   appId: Schema.String,
@@ -64,6 +66,37 @@ const PullRequest = Schema.Struct({
   }),
   base: Schema.Struct({ ref: Schema.String, repo: Schema.Struct({ full_name: Schema.String }) }),
 });
+const Sha = Schema.String.check(Schema.isPattern(/^[a-f0-9]{40}$/));
+const Commit = Schema.Struct({ sha: Sha });
+const Tree = Schema.Struct({
+  truncated: Schema.Boolean,
+  tree: Schema.Array(
+    Schema.Struct({
+      path: Schema.String,
+      mode: Schema.String,
+      type: Schema.String,
+      sha: Sha,
+      size: Schema.optional(Schema.Int),
+    }),
+  ).check(Schema.isMaxLength(4096)),
+});
+const Contents = Schema.Struct({
+  type: Schema.Literal("file"),
+  path: Schema.String,
+  sha: Sha,
+  size: Schema.Int,
+  encoding: Schema.Literal("base64"),
+  content: Schema.String,
+});
+const safePath = (path: string) =>
+  path.length <= 200 &&
+  /^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(path) &&
+  path.split("/").every((part) => part !== "." && part !== "..");
+const decodeDefinitionLocation = Schema.decodeUnknownEffect(FactoryDefinitionGitLocation);
+const decodeDefinitionFiles = Schema.decodeEffect(FactoryDefinitionFiles);
+const decodeCommit = Schema.decodeUnknownEffect(Commit);
+const decodeTree = Schema.decodeUnknownEffect(Tree);
+const decodeContents = Schema.decodeUnknownEffect(Contents);
 const decodeConfiguration = Schema.decodeEffect(Schema.fromJsonString(Configuration));
 const decodeJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeToken = Schema.decodeUnknownEffect(Token);
@@ -83,6 +116,9 @@ export interface PublishedPullRequest {
 export class GitHubApp extends Context.Service<
   GitHubApp,
   {
+    readonly readDefinition: (
+      input: GitHubRepositoryBinding & { generation: number; branch: string; path: string },
+    ) => Effect.Effect<{ commitSha: string; files: FactoryDefinitionFiles }, GitHubAppError>;
     readonly listIssues: (
       input: GitHubRepositoryBinding & { since: string; page: number; perPage: number },
     ) => Effect.Effect<
@@ -212,8 +248,12 @@ export const layer = Layer.effect(
       Effect.timeout("20 seconds"),
       Effect.mapError((error) => (isGitHubAppError(error) ? error : unavailable())),
     );
-    const credential = Effect.fn("GitHubApp.credential")(function* (
-      input: GitHubRepositoryBinding & { generation: number; write: boolean },
+    const installationToken = Effect.fn("GitHubApp.installationToken")(function* (
+      input: GitHubRepositoryBinding & { generation: number },
+      permissions:
+        | { contents: "read" }
+        | { issues: "read" }
+        | { contents: "write"; pull_requests: "write" },
     ) {
       const config = yield* configuration();
       const current = yield* binding(input.repository);
@@ -221,6 +261,16 @@ export const layer = Layer.effect(
         input.connectionId !== current.connectionId ||
         input.repositoryId !== current.repositoryId ||
         input.generation !== current.generation
+      )
+        return yield* denied();
+      const repository = config.repositories.find(
+        (item) => item.id === input.repositoryId && item.fullName === input.repository,
+      );
+      if (
+        config.generation !== input.generation ||
+        !repository ||
+        (repository.purpose === "definitions" &&
+          !("contents" in permissions && permissions.contents === "read"))
       )
         return yield* denied();
       const now = Math.floor((yield* Clock.currentTimeMillis) / 1000);
@@ -244,9 +294,7 @@ export const layer = Layer.effect(
         `app/installations/${config.installationId}/access_tokens`,
         {
           repository_ids: [input.repositoryId],
-          permissions: input.write
-            ? { contents: "write", pull_requests: "write" }
-            : { issues: "read" },
+          permissions,
         },
       );
       const token = yield* decodeToken(result).pipe(Effect.mapError(unavailable));
@@ -260,6 +308,112 @@ export const layer = Layer.effect(
         return yield* denied();
       return Redacted.make(token.token);
     });
+    const credential = Effect.fn("GitHubApp.credential")(
+      (input: GitHubRepositoryBinding & { generation: number; write: boolean }) =>
+        installationToken(
+          input,
+          input.write ? { contents: "write", pull_requests: "write" } : { issues: "read" },
+        ),
+    );
+    const checkGrant = Effect.fn("GitHubApp.checkDefinitionGrant")(function* (
+      input: GitHubRepositoryBinding & { generation: number },
+    ) {
+      const current = yield* binding(input.repository);
+      if (
+        current.connectionId !== input.connectionId ||
+        current.repositoryId !== input.repositoryId ||
+        current.repository !== input.repository ||
+        current.generation !== input.generation
+      )
+        return yield* denied();
+    });
+    const readDefinition = Effect.fn("GitHubApp.readDefinition")(
+      function* (
+        input: GitHubRepositoryBinding & { generation: number; branch: string; path: string },
+      ) {
+        yield* decodeDefinitionLocation(input);
+        yield* checkGrant(input);
+        const token = yield* installationToken(input, { contents: "read" });
+        const get = Effect.fn("GitHubApp.readDefinitionRequest")(function* (path: string) {
+          yield* checkGrant(input);
+          const result = yield* request(token, path);
+          yield* checkGrant(input);
+          return result;
+        });
+        const base = `repos/${input.repository}`;
+        const commit = yield* get(`${base}/commits/${encodeURIComponent(input.branch)}`).pipe(
+          Effect.flatMap(decodeCommit),
+        );
+        const tree = yield* get(`${base}/git/trees/${commit.sha}?recursive=1`).pipe(
+          Effect.flatMap(decodeTree),
+        );
+        if (tree.truncated) return yield* unavailable();
+        const prefix = input.path ? `${input.path}/` : "";
+        if (
+          input.path &&
+          !tree.tree.some(
+            (entry) =>
+              entry.path === input.path && entry.type === "tree" && entry.mode === "040000",
+          )
+        )
+          return yield* unavailable();
+        const entries = tree.tree.filter((entry) => entry.path.startsWith(prefix));
+        const paths = new Set<string>();
+        const selected: typeof entries = [];
+        let total = 0;
+        for (const entry of entries) {
+          const path = entry.path.slice(prefix.length);
+          if (!safePath(path) || paths.has(path)) return yield* unavailable();
+          paths.add(path);
+          if (entry.type === "tree" && entry.mode === "040000") continue;
+          if (entry.type !== "blob" || (entry.mode !== "100644" && entry.mode !== "100755"))
+            return yield* unavailable();
+          if (!/\.ya?ml$/.test(path)) continue;
+          if (entry.size === undefined || entry.size < 0 || entry.size > 256 * 1024)
+            return yield* unavailable();
+          total += entry.size;
+          selected.push(entry);
+        }
+        if (
+          selected.length > 101 ||
+          total > 2 * 1024 * 1024 ||
+          !selected.some((entry) => entry.path === `${prefix}factory.yaml`)
+        )
+          return yield* unavailable();
+        const files: Array<{ path: string; content: string }> = [];
+        for (const entry of selected.sort((a, b) => a.path.localeCompare(b.path))) {
+          const file = yield* get(
+            `${base}/contents/${entry.path.split("/").map(encodeURIComponent).join("/")}?ref=${commit.sha}`,
+          ).pipe(Effect.flatMap(decodeContents));
+          if (file.path !== entry.path || file.sha !== entry.sha || file.size !== entry.size)
+            return yield* unavailable();
+          const content = yield* Effect.try({
+            try: () => {
+              const encoded = file.content.replace(/\n/g, "");
+              const bytes = Buffer.from(encoded, "base64");
+              if (
+                bytes.toString("base64") !== encoded ||
+                bytes.length !== file.size ||
+                NodeCrypto.createHash("sha1")
+                  .update(`blob ${bytes.length}\0`)
+                  .update(bytes)
+                  .digest("hex") !== entry.sha
+              )
+                throw new Error("Invalid Git blob");
+              return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+            },
+            catch: unavailable,
+          });
+          files.push({ path: entry.path.slice(prefix.length), content });
+        }
+        yield* checkGrant(input);
+        return {
+          commitSha: commit.sha,
+          files: yield* decodeDefinitionFiles(files),
+        };
+      },
+      Effect.mapError((error) => (isGitHubAppError(error) ? error : unavailable())),
+    );
     const listIssues = Effect.fn("GitHubApp.listIssues")(function* (
       input: GitHubRepositoryBinding & { since: string; page: number; perPage: number },
     ) {
@@ -357,6 +511,6 @@ export const layer = Layer.effect(
         operationKey: input.operationKey,
       };
     });
-    return GitHubApp.of({ binding, credential, listIssues, publish });
+    return GitHubApp.of({ binding, credential, listIssues, publish, readDefinition });
   }),
 );

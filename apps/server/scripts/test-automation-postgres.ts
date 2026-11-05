@@ -1,3 +1,4 @@
+import { definitionSourceGates } from "./test-automation-definition-source-gates.ts";
 import { triggerGates } from "./test-automation-trigger-gates.ts";
 import * as Publish from "../src/automation/Publish.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- The isolated harness owns its temporary cluster and filesystem.
@@ -293,6 +294,7 @@ try {
   const beforeUpgrade = await call((s) => s.readWorkItem("a", "w1"));
   // Reconstruct the deployed v1 schema around existing P18a data before testing its upgrade.
   for (const statement of [
+    "DROP TABLE foundry_automation.definition_sources,foundry_automation.definition_git_revisions,foundry_automation.definition_source_commands",
     "DROP TABLE foundry_automation.publish_operations,foundry_automation.trigger_commands,foundry_automation.trigger_admissions,foundry_automation.trigger_events,foundry_automation.unattended_grants,foundry_automation.trigger_bindings",
     "DROP TABLE foundry_automation.inbox_marks,foundry_automation.inbox_entries,foundry_automation.inbox_commands,foundry_automation.manual_admissions,foundry_automation.run_questions,foundry_automation.run_decisions,foundry_automation.control_commands,foundry_automation.run_controls,foundry_automation.dispatch_outbox,foundry_automation.step_attempts,foundry_automation.dispatch_workers,foundry_automation.dispatch_runs",
     "DROP TABLE foundry_automation.definition_heads,foundry_automation.definition_versions,foundry_automation.outbox,foundry_automation.runs,foundry_automation.workflow_versions",
@@ -304,7 +306,7 @@ try {
   NodeAssert.deepEqual(await call((s) => s.readWorkItem("a", "w1")), beforeUpgrade);
   NodeAssert.equal(
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
-    6,
+    7,
   );
   const definitions = await Promise.all(
     Array.from({ length: 8 }, () => workflowCall((s) => s.createVersion(workflow))),
@@ -489,6 +491,7 @@ try {
   NodeAssert.equal((await query("SELECT * FROM foundry_automation.runs")).length, 3);
   NodeAssert.equal((await call((s) => s.readWorkItem("a", "w1"))).state, "completed");
   for (const statement of [
+    "DROP TABLE foundry_automation.definition_sources,foundry_automation.definition_git_revisions,foundry_automation.definition_source_commands",
     "DROP TABLE foundry_automation.publish_operations,foundry_automation.trigger_commands,foundry_automation.trigger_admissions,foundry_automation.trigger_events,foundry_automation.unattended_grants,foundry_automation.trigger_bindings",
     "DROP TABLE foundry_automation.inbox_marks,foundry_automation.inbox_entries,foundry_automation.inbox_commands,foundry_automation.manual_admissions,foundry_automation.run_questions,foundry_automation.run_decisions,foundry_automation.control_commands,foundry_automation.run_controls,foundry_automation.dispatch_outbox,foundry_automation.step_attempts,foundry_automation.dispatch_workers,foundry_automation.dispatch_runs",
     "DROP TABLE foundry_automation.definition_heads,foundry_automation.definition_versions",
@@ -754,7 +757,7 @@ try {
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
     99,
   );
-  await query("UPDATE foundry_automation.schema_version SET version=6", "automation_migrator");
+  await query("UPDATE foundry_automation.schema_version SET version=7", "automation_migrator");
   await run(migration);
   const preservedQueries = [
     "SELECT * FROM foundry_automation.definition_versions ORDER BY id",
@@ -766,6 +769,10 @@ try {
   ];
   const schema3Data = await Promise.all(preservedQueries.map((statement) => query(statement)));
   NodeAssert.ok(schema3Data.every((rows) => rows.length > 0));
+  await query(
+    "DROP TABLE foundry_automation.definition_sources,foundry_automation.definition_git_revisions,foundry_automation.definition_source_commands",
+    "automation_migrator",
+  );
   await query(
     "DROP TABLE foundry_automation.publish_operations,foundry_automation.trigger_commands,foundry_automation.trigger_admissions,foundry_automation.trigger_events,foundry_automation.unattended_grants,foundry_automation.trigger_bindings",
     "automation_migrator",
@@ -783,7 +790,7 @@ try {
   await run(migration);
   NodeAssert.equal(
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
-    6,
+    7,
   );
   NodeAssert.deepEqual(
     await Promise.all(preservedQueries.map((statement) => query(statement))),
@@ -2222,6 +2229,23 @@ try {
   await run(
     Console.log(
       "PASS P20 stale questions: ended attempt, unaccepted retry and replacement thread cannot receive an answer to the previous attempt's question.",
+    ),
+  );
+  await run(
+    definitionSourceGates(
+      db("automation_runtime"),
+      Effect.tryPromise({
+        try: async () => {
+          await stop();
+          await start();
+        },
+        catch: () => new AutomationTriggerError({ code: "unavailable" }),
+      }),
+    ),
+  );
+  await run(
+    Console.log(
+      "PASS P48 PostgreSQL: explicit drift recovery, permanent Git ownership, immutable snapshots, exact revision activation, late sync fencing, revoked reads and pause, idempotent rollback; functional G11 import/change/invalid commit, two pinned manual admissions and Inbox decisions across restart.",
     ),
   );
   await run(applicationGates(db("automation_runtime")));

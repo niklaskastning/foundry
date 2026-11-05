@@ -1,3 +1,4 @@
+import * as DefinitionSync from "./DefinitionSync.ts";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -19,6 +20,7 @@ it.effect(
       const releaseInputs = yield* Deferred.make<void>();
       const dispatches = yield* Queue.unbounded<void>();
       const dependencies = Layer.mergeAll(
+        Layer.mock(DefinitionSync.DefinitionSync)({ tick: Effect.void }),
         Layer.mock(GitHubPolling.GitHubPolling)({
           tick: Deferred.succeed(pollStarted, undefined).pipe(
             Effect.andThen(Deferred.await(releaseInputs)),

@@ -50,10 +50,22 @@ export const FactoryDefinitionIssue = Schema.Struct({
   message: Schema.String,
 });
 export type FactoryDefinitionIssue = typeof FactoryDefinitionIssue.Type;
-export const FactoryDefinitionSource = Schema.Struct({
+const LocalFactoryDefinitionSource = Schema.Struct({
   kind: Schema.Literals(["foundry", "files"]),
   reference: Key,
 });
+export const FactoryDefinitionSource = Schema.Union([
+  LocalFactoryDefinitionSource,
+  Schema.Struct({
+    kind: Schema.Literal("github"),
+    reference: Key,
+    repositoryId: Schema.Int,
+    repository: Schema.String,
+    branch: Schema.String,
+    path: Schema.String,
+    commitSha: Schema.String.check(Schema.isPattern(/^[a-f0-9]{40}$/)),
+  }),
+]);
 export const FactoryDefinitionVersion = Schema.Struct({
   id: Key,
   commandId: Key,
@@ -72,5 +84,5 @@ export const ActivateFactoryDefinition = Schema.Struct({
   scopeVersionId: Key,
   expectedVersionId: Schema.NullOr(Key),
   files: FactoryDefinitionFiles,
-  source: FactoryDefinitionSource,
+  source: LocalFactoryDefinitionSource,
 });

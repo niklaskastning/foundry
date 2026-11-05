@@ -1,3 +1,11 @@
+import {
+  FactoryDefinitionSourceBinding,
+  FactoryDefinitionGitRevision,
+  ConfigureDefinitionSource,
+  SyncDefinitionSource,
+  SetDefinitionSourceEnabled,
+  ActivateDefinitionRevision,
+} from "./definitionSource.ts";
 import * as Schema from "effect/Schema";
 import { EnvironmentId, ThreadId, ProjectId } from "../baseSchemas.ts";
 import { FoundryArtifactManifest } from "../foundryArtifact.ts";
@@ -21,6 +29,17 @@ const Page = {
 };
 const FactoryFilter = { factoryId: Schema.optional(Key) };
 export const AutomationApplicationQuery = Schema.Union([
+  Schema.Struct({
+    op: Schema.Literal("definitionRevisionFile"),
+    factoryId: Key,
+    revisionId: Key,
+    path: Schema.String.check(Schema.isMaxLength(200)),
+    side: Schema.Literals(["revision", "active"]),
+    activeVersionId: Schema.NullOr(Key),
+  }),
+  Schema.Struct({ op: Schema.Literal("definitionSource"), factoryId: Key }),
+  Schema.Struct({ op: Schema.Literal("definitionRevisions"), factoryId: Key, ...Page }),
+  Schema.Struct({ op: Schema.Literal("definitionRevision"), factoryId: Key, revisionId: Key }),
   Schema.Struct({ op: Schema.Literal("workerBinding") }),
   Schema.Struct({
     op: Schema.Literal("factories"),
@@ -43,6 +62,19 @@ export const AutomationApplicationQuery = Schema.Union([
 ]);
 export type AutomationApplicationQuery = typeof AutomationApplicationQuery.Type;
 export const AutomationApplicationCommand = Schema.Union([
+  Schema.Struct({
+    op: Schema.Literal("configureDefinitionSource"),
+    ...ConfigureDefinitionSource.fields,
+  }),
+  Schema.Struct({ op: Schema.Literal("syncDefinitionSource"), ...SyncDefinitionSource.fields }),
+  Schema.Struct({
+    op: Schema.Literal("setDefinitionSourceEnabled"),
+    ...SetDefinitionSourceEnabled.fields,
+  }),
+  Schema.Struct({
+    op: Schema.Literal("activateDefinitionRevision"),
+    ...ActivateDefinitionRevision.fields,
+  }),
   Schema.Struct({
     op: Schema.Literal("createFactory"),
     commandId: Key,
@@ -69,6 +101,26 @@ export const AutomationAttemptSummary = Schema.Struct({
 export type AutomationAttemptSummary = typeof AutomationAttemptSummary.Type;
 const Next = { next: Schema.NullOr(Key) };
 export const AutomationApplicationResult = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("definitionSource"),
+    binding: Schema.NullOr(FactoryDefinitionSourceBinding),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("definitionRevisions"),
+    items: Schema.Array(FactoryDefinitionGitRevision),
+    ...Next,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("definitionRevision"),
+    revision: FactoryDefinitionGitRevision,
+    files: Schema.Array(Schema.String),
+    activeFiles: Schema.NullOr(Schema.Array(Schema.String)),
+    activeVersionId: Schema.NullOr(Key),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("definitionRevisionFile"),
+    file: Schema.NullOr(Schema.Struct({ path: Schema.String, content: Schema.String })),
+  }),
   Schema.Struct({
     kind: Schema.Literal("workerBinding"),
     deviceId: FoundryDeviceId,
@@ -98,6 +150,7 @@ export const AutomationApplicationResult = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("runs"), items: Schema.Array(AutomationRun), ...Next }),
   Schema.Struct({
     kind: Schema.Literal("run"),
+    definition: Schema.NullOr(FactoryDefinitionVersion),
     run: AutomationRun,
     workflow: AutomationWorkflowVersion,
     control: Schema.NullOr(AutomationControlSnapshot),

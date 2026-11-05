@@ -56,7 +56,7 @@ const make = Effect.gen(function* () {
           const versions = yield* sql<{
             version: number;
           }>`SELECT version FROM foundry_automation.schema_version`;
-          if (versions.length !== 1 || ![1, 2, 3, 4, 5, 6].includes(versions[0]?.version ?? 0))
+          if (versions.length !== 1 || ![1, 2, 3, 4, 5, 6, 7].includes(versions[0]?.version ?? 0))
             return yield* new AutomationMigrationError({ reason: "schema_incompatible" });
           if (versions[0]?.version === 1) {
             yield* sql`ALTER TABLE foundry_automation.work_items ADD CONSTRAINT work_items_factory_id_id_key UNIQUE(factory_id,id)`;
@@ -103,6 +103,16 @@ const make = Effect.gen(function* () {
             yield* sql`CREATE TABLE foundry_automation.publish_operations (operation_key text PRIMARY KEY, run_id text NOT NULL REFERENCES foundry_automation.runs(id), step_id text NOT NULL, commit_sha text NOT NULL, result_revision integer NOT NULL, repository text NOT NULL, request jsonb NOT NULL, state text NOT NULL DEFAULT 'pending', result jsonb, UNIQUE(run_id,step_id,result_revision))`;
             yield* sql`UPDATE foundry_automation.schema_version SET version=6`;
           }
+          if ((versions[0]?.version ?? 0) < 7) {
+            yield* sql`CREATE TABLE foundry_automation.definition_sources (factory_id text PRIMARY KEY REFERENCES foundry_automation.factories(id), location jsonb NOT NULL, scope_version_id text NOT NULL, instance_id text NOT NULL, operator_id text NOT NULL, app_generation integer NOT NULL CHECK(app_generation>0), generation integer NOT NULL DEFAULT 1 CHECK(generation>0), ownership text NOT NULL DEFAULT 'pending' CHECK(ownership IN ('pending','git')), enabled boolean NOT NULL DEFAULT true, import_version_id text, import_content_hash text, selected_revision_id text, status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','ready','invalid','error','paused')), error text, next_sync_at bigint NOT NULL DEFAULT 0, FOREIGN KEY(factory_id,scope_version_id) REFERENCES foundry_automation.versions(factory_id,id), FOREIGN KEY(factory_id,import_version_id) REFERENCES foundry_automation.definition_versions(factory_id,id))`;
+            yield* sql`CREATE TABLE foundry_automation.definition_git_revisions (id text PRIMARY KEY, factory_id text NOT NULL REFERENCES foundry_automation.factories(id), commit_sha text NOT NULL CHECK(commit_sha ~ '^[a-f0-9]{40}$'), content_hash text, valid boolean NOT NULL, issues jsonb NOT NULL, files jsonb NOT NULL, created_at bigint NOT NULL, UNIQUE(factory_id,commit_sha), UNIQUE(factory_id,id))`;
+            yield* sql`ALTER TABLE foundry_automation.definition_sources ADD FOREIGN KEY(factory_id,selected_revision_id) REFERENCES foundry_automation.definition_git_revisions(factory_id,id)`;
+            yield* sql`CREATE TABLE foundry_automation.definition_source_commands (id text PRIMARY KEY, payload jsonb NOT NULL, result jsonb NOT NULL, instance_id text NOT NULL, operator_id text NOT NULL)`;
+            yield* sql`CREATE INDEX definition_sources_due ON foundry_automation.definition_sources(next_sync_at,factory_id) WHERE enabled`;
+            yield* sql`UPDATE foundry_automation.schema_version SET version=7`;
+          }
+          yield* sql`GRANT INSERT, UPDATE ON foundry_automation.definition_sources TO ${sql(runtimeRole)}`;
+          yield* sql`GRANT INSERT ON foundry_automation.definition_git_revisions, foundry_automation.definition_source_commands TO ${sql(runtimeRole)}`;
           yield* sql`GRANT SELECT, INSERT, UPDATE ON foundry_automation.trigger_bindings, foundry_automation.unattended_grants, foundry_automation.trigger_events, foundry_automation.trigger_admissions, foundry_automation.trigger_commands, foundry_automation.publish_operations TO ${sql(runtimeRole)}`;
           yield* sql`GRANT USAGE ON SCHEMA foundry_automation TO ${sql(runtimeRole)}`;
           yield* sql`GRANT SELECT ON ALL TABLES IN SCHEMA foundry_automation TO ${sql(runtimeRole)}`;

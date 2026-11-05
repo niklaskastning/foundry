@@ -350,7 +350,7 @@ class ActivationTest(unittest.TestCase):
                     if len([a for a in actions if a[0] == 'status']) == 2 and failure == 'verify':
                         raise RuntimeError('verification failed')
                     candidate = len([a for a in actions if a[0] == 'status']) == 2
-                    return {'schemaVersion': current_schema, 'automationEnabled': automation_schema, 'automationSchemaVersion': 6 if candidate and automation_schema else 5 if automation_schema else None,
+                    return {'schemaVersion': current_schema, 'automationEnabled': automation_schema, 'automationSchemaVersion': 7 if candidate and automation_schema else 6 if automation_schema else None,
                             'image': activate.REGISTRY + '@' + (DIGEST if candidate else 'sha256:' + 'c' * 64),
                             'revision': REVISION if candidate else 'd' * 40}
 
@@ -391,7 +391,7 @@ class ActivationTest(unittest.TestCase):
                         return '1' if failure == 'connections' else '0'
                     if failure == 'disable' and 'NOLOGIN' in statement:
                         raise RuntimeError('disable failed')
-                    if 'SELECT version FROM foundry_automation.schema_version' in statement: return '6'
+                    if 'SELECT version FROM foundry_automation.schema_version' in statement: return '7'
                     return ''
 
                 with patch.object(activate, 'CONFIG', config), patch.object(activate, 'STATE', state), \

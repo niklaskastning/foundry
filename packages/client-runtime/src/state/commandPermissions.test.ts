@@ -581,6 +581,10 @@ it.effect.each([
 it.effect.each([
   "createFactory",
   "activateDefinition",
+  "configureDefinitionSource",
+  "syncDefinitionSource",
+  "setDefinitionSourceEnabled",
+  "activateDefinitionRevision",
   "create",
   "activate",
   "deactivate",
@@ -589,7 +593,14 @@ it.effect.each([
   Effect.scoped(
     Effect.gen(function* () {
       const registry = yield* setup;
-      const method = ["createFactory", "activateDefinition"].includes(op)
+      const method = [
+        "createFactory",
+        "activateDefinition",
+        "configureDefinitionSource",
+        "syncDefinitionSource",
+        "setDefinitionSourceEnabled",
+        "activateDefinitionRevision",
+      ].includes(op)
         ? WS_METHODS.foundryAutomationCommand
         : WS_METHODS.foundryAutomationTriggerCommand;
       const command = createCommandPermissions(runtime, method);

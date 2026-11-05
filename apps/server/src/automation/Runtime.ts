@@ -1,3 +1,5 @@
+import * as DefinitionSources from "./DefinitionSources.ts";
+import * as DefinitionSync from "./DefinitionSync.ts";
 import * as Triggers from "./Triggers.ts";
 import * as Unattended from "./Unattended.ts";
 import * as GitHubPolling from "./GitHubPolling.ts";
@@ -97,6 +99,7 @@ export const reconciliationLayer = Layer.effectDiscard(
     const scheduler = yield* Scheduler.Scheduler;
     const triggers = yield* Triggers.Triggers;
     const polling = yield* GitHubPolling.GitHubPolling;
+    const definitionSync = yield* DefinitionSync.DefinitionSync;
     const schedules = yield* ScheduleTriggers.ScheduleTriggers;
     const start = Effect.fn("AutomationRuntime.reconcile")(<A, E>(tick: Effect.Effect<A, E>) =>
       tick.pipe(
@@ -107,6 +110,7 @@ export const reconciliationLayer = Layer.effectDiscard(
     );
     // Slow external input must not delay the active writer's lease renewal.
     yield* start(polling.tick);
+    yield* start(definitionSync.tick);
     yield* start(schedules.tick);
     yield* start(triggers.tick);
     yield* start(scheduler.tick);
@@ -142,44 +146,46 @@ export const layer = Layer.unwrap(
           version: number;
           safe: boolean;
         }>`SELECT version, NOT (r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls OR has_schema_privilege(current_user,'foundry_automation','CREATE') OR has_database_privilege(current_user,current_database(),'CREATE')) AS safe FROM foundry_automation.schema_version,pg_roles r WHERE r.rolname=current_user`;
-        if (rows.length !== 1 || rows[0]?.version !== 6 || !rows[0].safe)
+        if (rows.length !== 1 || rows[0]?.version !== 7 || !rows[0].safe)
           return yield* new Scheduler.SchedulerError({ reason: "invalid_binding" });
       }),
     ).pipe(Layer.provide(database));
-    return Layer.mergeAll(routes, AutomationHttp.layer, reconciliationLayer).pipe(
-      Layer.provide(Application.layer),
-      Layer.provide(GitHubPolling.layer),
-      Layer.provide(ScheduleTriggers.layer),
-      Layer.provide(Triggers.layer),
-      Layer.provide(Inbox.layer),
-      Layer.provide(Control.layer),
-      Layer.provide(Definitions.layer),
-      Layer.provide(Scheduler.layer),
-      Layer.provide(Publish.layer),
-      Layer.provide(GitHubApp.layer),
-      Layer.provide(WorkerTransport.layer),
-      Layer.provide(Unattended.layer),
-      Layer.provide(DispatchStore.layer),
-      Layer.provide(Workflows.layer),
-      Layer.provide(Factories.layer),
-      Layer.provide(Layer.succeed(Scheduler.SchedulerConfig, target)),
-      Layer.provide(
-        Layer.succeed(Triggers.TriggerConfig, {
-          ...target,
-          nextSchedule: Effect.fn("Triggers.TriggerConfig.nextSchedule")((config, now) =>
-            Effect.try({
-              try: () =>
-                DateTime.toEpochMillis(
-                  DateTime.makeUnsafe(nextScheduleOccurrence(config, DateTime.makeUnsafe(now))),
-                ),
-              catch: () => new AutomationTriggerError({ code: "invalid_input" }),
-            }),
-          ),
-        }),
-      ),
-      Layer.provide(FetchHttpClient.layer),
-      Layer.provide(database),
-      Layer.provide(ready),
-    );
+    return Layer.mergeAll(routes, AutomationHttp.layer, reconciliationLayer)
+      .pipe(
+        Layer.provide(Application.layer),
+        Layer.provide(DefinitionSync.layer.pipe(Layer.provideMerge(DefinitionSources.layer))),
+        Layer.provide(GitHubPolling.layer),
+        Layer.provide(ScheduleTriggers.layer),
+        Layer.provide(Triggers.layer),
+        Layer.provide(Inbox.layer),
+        Layer.provide(Control.layer),
+        Layer.provide(Definitions.layer),
+        Layer.provide(Scheduler.layer),
+        Layer.provide(Publish.layer),
+        Layer.provide(GitHubApp.layer),
+        Layer.provide(WorkerTransport.layer),
+        Layer.provide(Unattended.layer),
+        Layer.provide(DispatchStore.layer),
+        Layer.provide(Workflows.layer),
+        Layer.provide(Factories.layer),
+        Layer.provide(Layer.succeed(Scheduler.SchedulerConfig, target)),
+        Layer.provide(
+          Layer.succeed(Triggers.TriggerConfig, {
+            ...target,
+            nextSchedule: Effect.fn("Triggers.TriggerConfig.nextSchedule")((config, now) =>
+              Effect.try({
+                try: () =>
+                  DateTime.toEpochMillis(
+                    DateTime.makeUnsafe(nextScheduleOccurrence(config, DateTime.makeUnsafe(now))),
+                  ),
+                catch: () => new AutomationTriggerError({ code: "invalid_input" }),
+              }),
+            ),
+          }),
+        ),
+        Layer.provide(FetchHttpClient.layer),
+        Layer.provide(database),
+      )
+      .pipe(Layer.provide(ready));
   }),
 );
