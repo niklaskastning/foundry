@@ -8,16 +8,7 @@ Status: Finalisierter Zielplan mit technischen Abnahmegates. Ergänzt [Architekt
 
 Ein Foundry-Client verbindet sich durch Eingabe der Hauptdomain mit einer selbst gehosteten Instanz. Nach Anmeldung erhält er Devices, Projekte, Automation und später Sandboxes. Die erste Version ist Single-Tenant/Single-User. Mehrere produktbezogene Factories teilen diese Instanz; sie benötigen keine eigenen Main-Prozesse, Domains oder Datenbanken. Factory-Konfiguration, Inbox und Auswertung erweitern die Automation-Domäne, nicht die Deployment-Topologie. Die Main Node besitzt Registry, Anmeldung, Gateway und Automation; ein separates Connect-Produkt oder eine eigene Clerk-Instanz sind keine Voraussetzung.
 
-| Bereits vorhanden                                                                            | Noch umzusetzen                                                           |
-| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| Fork `niklaskastning/foundry`, eigene Build-Identität und manuelle Updates                   | Vollständiger Instanzeinstieg, zentrale Discovery und integrierte Abnahme |
-| Main-Container mit Web und eigener lokaler SQLite-Persistenz                                 | Instanz-Registry, Device-Enrollment und ausgehender Gateway-Transport     |
-| PostgreSQL 17, eigene Instanz-Migrationen und Access-Session-Bausteine im Code               | Automation-Schemas und abgenommene Aktivierung des Instanzbetriebs        |
-| `foundry.heavenforgeprod.com` über betreiberverwalteten Tunnel und Access → `127.0.0.1:3783` | Getestete Desktop-Anmeldung sowie Machine-Auth für Device-Verbindungen    |
-| Browser-Pairing zum Main-Environment                                                         | Eigenständiger Host-Worker; Provider-Verfügbarkeit und Anmeldung dort     |
-| Linux-/Windows-Build-Einstieg, ein automatischer PR-Check                                    | Windows-Laufzeitabnahme, Automation und Sandbox-Provisionierung           |
-
-Die vorhandenen Descriptor-/Access-/PostgreSQL-Bausteine und Aktivierungshelfer belegen noch keine vollständige G1-/Windows-Abnahme; dieser Plan behauptet keine Prüfung des aktuellen Live-Deployments.
+Der aktuelle Implementierungsstand steht im [Umsetzungsplan](implementation-plan.md#erledigte-implementierung-und-verbleibende-abnahmen), der tatsächlich eingerichtete Betrieb im [Runbook](operations.md). Instanz-Registry, Enrollment, Gateway, Access-Anmeldung, dauerhafter Worker und sequenzielle Automation sind inzwischen integriert. Offen bleiben unter anderem native Anmeldung, der vollständige zentrale Einstieg und Sandbox-Provisionierung. Frühere Grundbetriebsnachweise sind keine pauschale Abnahme aller Web-/Windows-Verbindungsfälle; dieser Deployment-Entwurf führt keine zweite Statusliste.
 
 Das Main-Environment benötigt für seine Steuerungsrolle keine Codex-CLI. Echte Agenten starten auf einem registrierten Ausführungs-Device. Bestehendes persönliches T3 und dessen `~/.t3/userdata` werden weder migriert noch als Foundry-Worker vereinnahmt.
 
