@@ -1,6 +1,6 @@
 # Foundry – Implementierungsplan für Features und Funktionen
 
-Stand: 4. November 2026. Dieser Plan beschreibt Produktfunktionen, ihre Reihenfolge und funktionale Abnahmen. Sicherheits-, Betriebs-, Backup-, Performance- und technische Prüfthemen stehen im separaten [Plan für Basic-Leitplanken](basic-leitplanken.md). Architektur und Deployment bleiben die zugehörigen Entwürfe. Paket-IDs P01–P60 bleiben erhalten und sind keine GitHub-PR-Nummern.
+Stand: 5. November 2026. Dieser Plan beschreibt Produktfunktionen, ihre Reihenfolge und funktionale Abnahmen. Sicherheits-, Betriebs-, Backup-, Performance- und technische Prüfthemen stehen im separaten [Plan für Basic-Leitplanken](basic-leitplanken.md). Architektur und Deployment bleiben die zugehörigen Entwürfe. Paket-IDs P01–P60 bleiben erhalten und sind keine GitHub-PR-Nummern.
 
 ## Erledigte Implementierung und verbleibende Abnahmen
 
@@ -13,7 +13,7 @@ Stand: 4. November 2026. Dieser Plan beschreibt Produktfunktionen, ihre Reihenfo
 - [ ] **Funktionale Restabnahmen:** Instanzwechsel/Entfernen mit zwei realen Instanzen, Worker auf zweiter Maschine, Wiederverbindung beider Clients und Wiederaufnahme laufender Aufträge. Windows-Laufzeit und Bedienung der Factory bleiben offen; der bestätigte native G4-Durchstich schließt diese Restabnahmen nicht.
 - [ ] **Produktlücken:** Native Foundry-Anmeldung P03N, automatischer Katalog-Erstabruf, Einstieg ohne getrenntes T3-Pairing und Windows-Downloads im Foundry-Einstieg.
 - [ ] **Zentrale Verbindungen P14Z:** Provider-, Source-Control- und MCP-Konten einmal in Foundry einrichten und auf Workern/Sandboxes nutzen.
-- [ ] **Git-Verwaltung P48:** Das private [Definitions-Repository](https://github.com/niklaskastning/foundry-definitions) ist angelegt; die App-Anbindung folgt über P23/P48. Bis dahin manueller P47-Import/-Export.
+- [x] **P48 / funktionales G11:** Git-Quellbindung, lesende Synchronisierung, Driftabgleich, dauerhafte Git-Ownership und explizite Aktivierung/Rollback sind implementiert ([#57](https://github.com/niklaskastning/foundry/pull/57)). Isoliertes PostgreSQL bestätigt Import → Git-Änderung → ungültigen Folgecommit → Runs und Inbox-Entscheidungen mit erhaltenen alten Revisionen. Der gemeinsame lokale Browserpass bestätigt Quelle/Diff/Fehler, Übernahme und gepinnte Run-Herkunft mit Inbox-Entscheidung. Die Entwicklungs-VPS liest das private Definitionsrepository; die bestehende G4-Definition wurde unverändert über [Definitions-PR #1](https://github.com/niklaskastning/foundry-definitions/pull/1) übernommen. Kein neuer nativer Writer-, Windows- oder öffentlicher SSO-Nachweis.
 
 Der zentrale Benutzerzugang ist noch ein Übergangsstand: Foundry-Anmeldung und eine separat autorisierte Main-T3-Sitzung werden gemeinsam geprüft. Worker-Zugriff benötigt kein eigenes Geräte-Pairing, reicht aber bisher nur die freigegebenen Thread-, Terminal- und Dateileserechte weiter; `settings:write` gehört noch nicht zum Gateway-Vertrag. Eine Anmeldung mit vollständig daraus abgeleiteten zentralen Benutzerrechten ist damit noch nicht abgenommen. Dies betrifft den Benutzerzugang, nicht die getrennte Provider-Autorisierung aus P14Z.
 
@@ -23,7 +23,7 @@ Die ausführlichen bisherigen Prüf- und Deploymentnachweise sind nach [Basic-Le
 
 1. **Worker:** P17 / G3 abschließen; die Basis P01–P16 ist integriert.
 2. **Factory-MVP:** P18a → P18b → P47 → P38a → P38b → P19 → P20 → P21 → P49 → P22 → P23 → P24 / G4. P22/P24 können nach P19 unabhängig vom UI-Anschluss entstehen.
-3. **Git-Verwaltung:** P48 / G11 als nächster Feature-Ausbau.
+3. **Git-Verwaltung:** P48 / funktionales G11 abgeschlossen; Live-Import und isolierte funktionale Nachweise sind getrennt belegt.
 4. **Zusammenarbeit:** P51 → P58; P28 → P52; P29 → P50 → P53; danach P30/P31 / G6 und G12. P50 bleibt optional.
 5. **Qualitätsfunktionen:** P54 → P55 → P56 → P57 / G13. Dashboard, Scorers, Benchmarks und Verbesserungsvorschläge sind Produktfunktionen; technische Performance-Optimierung steht im separaten Plan.
 6. **Weitere Worker und Sandboxes:** P14Za vor zentral verbundenen zusätzlichen Workern; P32/P33 / G7, danach P34–P40 / G8. Dieser Pfad kann nach dem Factory-MVP parallel zur Zusammenarbeit entstehen.
@@ -33,21 +33,21 @@ P02, P11, P26, P27 und P46 sowie G5 werden im [Leitplanken-Plan](basic-leitplank
 
 ## Funktionale Meilensteine
 
-| Meilenstein                        | Nutzbares Ergebnis                                                                                                                                        |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| G1 · Instanzeinstieg               | Web und Windows: Instanz wählen, anmelden, wechseln und entfernen; Access und native Anmeldung separat.                                                   |
-| G2 · Device-Zugriff                | Zwei Clients nutzen Device-Katalog, Threads, Terminal, Dateien, Diffs und Anhänge über Main.                                                              |
-| G3 · Worker                        | Agentenauftrag ohne Eltern-Agenten starten, verfolgen, abbrechen und Ergebnis öffnen.                                                                     |
-| G4 · Workflow-MVP                  | Definition bearbeiten/importieren → manuell oder über GitHub/Zeitplan starten → Analyse, Änderung, Test und Freigabe → PR; Inbox und Ergebnisse bedienen. |
-| G6 · Wiederverwendung / Multi-Repo | Agenten/Skills wiederverwenden, Arbeit aufteilen und Ergebnisse je Repository öffnen; Multi-Repo-Step erst mit P31.                                       |
-| G7 · Mehrere Worker                | Feste Ziele und Pools wählen und Aufträge verschiedenen Workern zuordnen.                                                                                 |
-| G8 · Sandboxes                     | Dasselbe Profil interaktiv und im Workflow nutzen, Sandbox löschen und Arbeit aus dem Archiv fortsetzen.                                                  |
-| G9 · Connectoren / Memory          | Gewählten Connector nutzen beziehungsweise Wissen speichern, suchen und löschen.                                                                          |
-| G10 · Identität / Gruppen          | Gewählten Anmeldeanbieter verbinden oder Device-Gruppen gemeinsam nutzen.                                                                                 |
-| G11 · Factory als Produkt          | Definition aus Dateien, Formular oder Git aktivieren; Git-Revision und Auftrag mit Inbox-Entscheidung nachvollziehen.                                     |
-| G12 · Zusammenarbeit               | Auftrag über Koordinator, T3-Übernahme und Rückgabe bis zum PR über UI/API/MCP bearbeiten.                                                                |
-| G13 · Qualitätsfunktionen          | Dashboard öffnen, Runs bewerten, Benchmarks vergleichen und Verbesserungsvorschläge übernehmen.                                                           |
-| G14 · Weitere Einsatzfälle         | Jeden zusätzlichen Connector und jede Browser-/Incident-Vorlage einzeln nutzen.                                                                           |
+| Meilenstein                        | Nutzbares Ergebnis                                                                                                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1 · Instanzeinstieg               | Web und Windows: Instanz wählen, anmelden, wechseln und entfernen; Access und native Anmeldung separat.                                                             |
+| G2 · Device-Zugriff                | Zwei Clients nutzen Device-Katalog, Threads, Terminal, Dateien, Diffs und Anhänge über Main.                                                                        |
+| G3 · Worker                        | Agentenauftrag ohne Eltern-Agenten starten, verfolgen, abbrechen und Ergebnis öffnen.                                                                               |
+| G4 · Workflow-MVP                  | Definition bearbeiten/importieren → manuell oder über GitHub/Zeitplan starten → Analyse, Änderung, Test und Freigabe → PR; Inbox und Ergebnisse bedienen.           |
+| G6 · Wiederverwendung / Multi-Repo | Agenten/Skills wiederverwenden, Arbeit aufteilen und Ergebnisse je Repository öffnen; Multi-Repo-Step erst mit P31.                                                 |
+| G7 · Mehrere Worker                | Feste Ziele und Pools wählen und Aufträge verschiedenen Workern zuordnen.                                                                                           |
+| G8 · Sandboxes                     | Dasselbe Profil interaktiv und im Workflow nutzen, Sandbox löschen und Arbeit aus dem Archiv fortsetzen.                                                            |
+| G9 · Connectoren / Memory          | Gewählten Connector nutzen beziehungsweise Wissen speichern, suchen und löschen.                                                                                    |
+| G10 · Identität / Gruppen          | Gewählten Anmeldeanbieter verbinden oder Device-Gruppen gemeinsam nutzen.                                                                                           |
+| G11 · Factory als Produkt          | Lokale Definition ausdrücklich nach Git übernehmen; Git-Änderung und ungültigen Folgecommit prüfen; gepinnte Revision am Run und Inbox-Entscheidung nachvollziehen. |
+| G12 · Zusammenarbeit               | Auftrag über Koordinator, T3-Übernahme und Rückgabe bis zum PR über UI/API/MCP bearbeiten.                                                                          |
+| G13 · Qualitätsfunktionen          | Dashboard öffnen, Runs bewerten, Benchmarks vergleichen und Verbesserungsvorschläge übernehmen.                                                                     |
+| G14 · Weitere Einsatzfälle         | Jeden zusätzlichen Connector und jede Browser-/Incident-Vorlage einzeln nutzen.                                                                                     |
 
 ## Instanzeinstieg und Devices
 

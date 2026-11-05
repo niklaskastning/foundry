@@ -100,7 +100,15 @@ export function clientRpcRequiredScopes(
     typeof input === "object" &&
     input !== null &&
     "op" in input &&
-    (input.op === "createFactory" || input.op === "activateDefinition")
+    typeof input.op === "string" &&
+    [
+      "createFactory",
+      "activateDefinition",
+      "configureDefinitionSource",
+      "syncDefinitionSource",
+      "setDefinitionSourceEnabled",
+      "activateDefinitionRevision",
+    ].includes(input.op)
   )
     return [AuthAccessWriteScope];
   if (method === WS_METHODS.gitPreparePullRequestThread && input !== undefined) {

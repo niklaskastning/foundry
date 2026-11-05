@@ -87,3 +87,5 @@ export * from "./automation/application.ts";
 export * from "./automation/inbox.ts";
 
 export * from "./automation/trigger.ts";
+
+export * from "./automation/definitionSource.ts";

@@ -1,3 +1,5 @@
+import * as DefinitionSources from "../src/automation/DefinitionSources.ts";
+import * as GitHubApp from "../src/automation/GitHubApp.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- Assertions run inside the isolated PostgreSQL harness.
 import * as NodeAssert from "node:assert/strict";
 import {
@@ -9,6 +11,7 @@ import {
   AutomationControlError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -22,6 +25,8 @@ import * as Scheduler from "../src/automation/Scheduler.ts";
 import * as Control from "../src/automation/Control.ts";
 import * as WorkerTransport from "../src/automation/WorkerTransport.ts";
 import * as GatewayGrants from "../src/foundry/GatewayGrants.ts";
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 export const applicationGates = Effect.fn("Application.postgresGates")(function <E>(
   database: Layer.Layer<Database.AutomationDatabase, E>,
@@ -69,6 +74,8 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     }),
   );
   const layer = Application.layer.pipe(
+    Layer.provide(DefinitionSources.layer),
+    Layer.provide(Layer.mock(GitHubApp.GitHubApp)({ binding: unused })),
     Layer.provide(
       Definitions.layer.pipe(
         Layer.provideMerge(Workflows.layer.pipe(Layer.provideMerge(Factories.layer))),
@@ -189,6 +196,44 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     NodeAssert.equal(active.kind, "definition");
     if (active.kind !== "definition")
       return yield* new AutomationApplicationError({ code: "unavailable" });
+    const largeFiles = exportFactoryFiles({
+      schemaVersion: 1,
+      factoryId: "p21-a",
+      repositories: ["fixture-repo"],
+      workflows: Array.from({ length: 8 }, (_, workflow) => ({
+        id: `large-${workflow}`,
+        steps: Array.from({ length: 12 }, (_, step) => ({
+          id: `review-${step}`,
+          kind: "approval" as const,
+          dependsOn: [],
+          prompt: "x".repeat(19000),
+        })),
+      })),
+    });
+    yield* sql`INSERT INTO foundry_automation.definition_git_revisions(id,factory_id,commit_sha,content_hash,valid,issues,files,created_at) VALUES('p21-large','p21-a',${"a".repeat(40)},NULL,true,'[]',${sql.json(largeFiles)},1)`;
+    const metadata = yield* app.query(operate, {
+      op: "definitionRevision",
+      factoryId: "p21-a",
+      revisionId: "p21-large",
+    });
+    NodeAssert.ok(encodeJson(metadata).length < 10000);
+    if (metadata.kind === "definitionRevision") {
+      NodeAssert.deepEqual(
+        metadata.files,
+        largeFiles.map((file) => file.path),
+      );
+      const file = yield* app.query(operate, {
+        op: "definitionRevisionFile",
+        factoryId: "p21-a",
+        revisionId: "p21-large",
+        path: largeFiles[1]!.path,
+        side: "revision",
+        activeVersionId: metadata.activeVersionId,
+      });
+      NodeAssert.equal(file.kind, "definitionRevisionFile");
+      if (file.kind === "definitionRevisionFile") NodeAssert.deepEqual(file.file, largeFiles[1]);
+      NodeAssert.ok(encodeJson(file).length < 3 * 1024 * 1024);
+    }
     yield* app.command(operate, {
       op: "createWorkItem",
       input: {

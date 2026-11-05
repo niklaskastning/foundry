@@ -1,3 +1,4 @@
+import * as DefinitionSources from "./DefinitionSources.ts";
 import {
   AutomationApplicationCommand,
   AutomationApplicationError,
@@ -90,6 +91,16 @@ const make = Effect.gen(function* () {
   const sql = yield* AutomationDatabase.AutomationDatabase;
   const factories = yield* Factories.Factories;
   const definitions = yield* Definitions.Definitions;
+  const sources = yield* DefinitionSources.DefinitionSources;
+  const runDefinition = Effect.fn("AutomationApplication.runDefinition")(function* (
+    factoryId: string,
+    factoryVersionId: string,
+  ) {
+    const rows = yield* sql<{
+      id: string;
+    }>`SELECT id FROM foundry_automation.definition_versions WHERE factory_id=${factoryId} AND factory_version_id=${factoryVersionId}`;
+    return rows[0] ? yield* definitions.readVersion(factoryId, rows[0].id) : null;
+  });
   const workflows = yield* Workflows.Workflows;
   const scheduler = yield* Scheduler.Scheduler;
   const target = yield* Scheduler.SchedulerConfig;
@@ -125,6 +136,39 @@ const make = Effect.gen(function* () {
     });
     const result = yield* Effect.gen(function* () {
       switch (input.op) {
+        case "definitionSource":
+          return {
+            kind: "definitionSource" as const,
+            binding: yield* sources.source(input.factoryId),
+          };
+        case "definitionRevisions":
+          return {
+            kind: "definitionRevisions" as const,
+            ...(yield* sources.listRevisions(input.factoryId, input.after, input.limit)),
+          };
+        case "definitionRevision": {
+          const detail = yield* sources.readRevision(input.factoryId, input.revisionId);
+          return {
+            kind: "definitionRevision" as const,
+            revision: detail.revision,
+            files: detail.files.map((file) => file.path),
+            activeFiles: detail.activeFiles?.map((file) => file.path) ?? null,
+            activeVersionId: detail.activeVersionId,
+          };
+        }
+        case "definitionRevisionFile": {
+          const detail = yield* sources.readRevision(input.factoryId, input.revisionId);
+          const files =
+            input.side === "revision"
+              ? detail.files
+              : input.activeVersionId
+                ? yield* definitions.exportVersion(input.factoryId, input.activeVersionId)
+                : [];
+          return {
+            kind: "definitionRevisionFile" as const,
+            file: files.find((file) => file.path === input.path) ?? null,
+          };
+        }
         case "workerBinding": {
           const identity = yield* worker.authorize(request, target);
           const status = yield* worker.status(identity);
@@ -194,6 +238,7 @@ const make = Effect.gen(function* () {
           const run = yield* workflows.readRun(input.factoryId, input.runId);
           return {
             kind: "run" as const,
+            definition: yield* runDefinition(run.factoryId, run.factoryVersionId),
             run,
             workflow: yield* workflows.readVersion(input.factoryId, run.workflowVersionId),
             control: enrolled ? yield* control.read(request, input.factoryId, input.runId) : null,
@@ -235,12 +280,38 @@ const make = Effect.gen(function* () {
     const input = yield* decodeCommand(raw).pipe(
       Effect.mapError(() => new AutomationApplicationError({ code: "invalid_input" })),
     );
-    const scope =
-      input.op === "createFactory" || input.op === "activateDefinition"
-        ? "access:write"
-        : "orchestration:operate";
-    yield* gateway.identityForWrite(request, scope);
+    const scope = [
+      "createFactory",
+      "activateDefinition",
+      "configureDefinitionSource",
+      "syncDefinitionSource",
+      "setDefinitionSourceEnabled",
+      "activateDefinitionRevision",
+    ].includes(input.op)
+      ? "access:write"
+      : "orchestration:operate";
+    const identity = yield* gateway.identityForWrite(request, scope);
     switch (input.op) {
+      case "configureDefinitionSource":
+        return {
+          kind: "definitionSource" as const,
+          binding: yield* sources.configure(input, identity),
+        };
+      case "syncDefinitionSource":
+        return {
+          kind: "definitionSource" as const,
+          binding: yield* sources.requestSync(input, identity),
+        };
+      case "setDefinitionSourceEnabled":
+        return {
+          kind: "definitionSource" as const,
+          binding: yield* sources.setEnabled(input, identity),
+        };
+      case "activateDefinitionRevision":
+        return {
+          kind: "definition" as const,
+          version: yield* sources.activateRevision(input, identity),
+        };
       case "createFactory":
         yield* sql.withTransaction(
           Effect.gen(function* () {
@@ -267,6 +338,7 @@ const make = Effect.gen(function* () {
         const run = yield* workflows.readRun(input.input.factoryId, input.input.id);
         return {
           kind: "run" as const,
+          definition: yield* runDefinition(run.factoryId, run.factoryVersionId),
           run,
           workflow: yield* workflows.readVersion(input.input.factoryId, run.workflowVersionId),
           control: yield* control.read(request, input.input.factoryId, input.input.id),

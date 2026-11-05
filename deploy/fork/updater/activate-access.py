@@ -181,7 +181,7 @@ def active_status(expected_schema=None, expected_automation_schema=None):
     automation_schema = None
     if automation_enabled:
         automation_schema = int(sql("BEGIN READ ONLY; SELECT version FROM foundry_automation.schema_version; COMMIT;", database='fork_automation'))
-        if automation_schema not in ([expected_automation_schema] if expected_automation_schema else [5, 6]):
+        if automation_schema not in ([expected_automation_schema] if expected_automation_schema else [5, 6, 7]):
             raise RuntimeError('Automation schema is incompatible.')
     return {'automationSchemaVersion': automation_schema, 'automationEnabled': automation_enabled, 'gatewayEnabled': gateway_enabled, 'artifactsEnabled': artifacts_enabled, 'revision': revision, 'image': configured_image, 'schemaVersion': database['version'],
             'instanceId': INSTANCE, 'environmentId': ENVIRONMENT, 'ready': True,
@@ -250,9 +250,9 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archi
         raise ValueError('Use an immutable image digest and its exact reviewed source SHA.')
     if sum([same_schema, artifact_schema, archive_schema, automation_schema]) > 1:
         raise ValueError('A schema upgrade cannot be a same-schema update.')
-    previous = active_status(expected_schema=7, expected_automation_schema=5) if automation_schema else active_status(expected_schema=None if same_schema else 6 if archive_schema else 5 if artifact_schema else 2)
+    previous = active_status(expected_schema=7, expected_automation_schema=6) if automation_schema else active_status(expected_schema=None if same_schema else 6 if archive_schema else 5 if artifact_schema else 2)
     if automation_schema and not previous.get('automationEnabled'):
-        raise RuntimeError('Automation schema upgrade requires the active schema-5 profile.')
+        raise RuntimeError('Automation schema upgrade requires the active schema-6 profile.')
     if same_schema and previous['schemaVersion'] not in [5, 6, 7]:
         raise RuntimeError('Same-schema updates require gateway schema 5, 6 or 7.')
     target_schema = previous['schemaVersion'] if same_schema or automation_schema else 7 if archive_schema else 6 if artifact_schema else 5
@@ -267,7 +267,7 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archi
     backup = Path(tempfile.mkdtemp(prefix='upgrade-', dir=STATE))
     write_private(backup / 'manifest.json', json.dumps({
         'previous': previous, 'candidateImage': image, 'revision': revision,
-        'targetSchema': target_schema, 'targetAutomationSchema': 6 if automation_schema else previous.get('automationSchemaVersion'), 'instanceId': INSTANCE, 'environmentId': ENVIRONMENT,
+        'targetSchema': target_schema, 'targetAutomationSchema': 7 if automation_schema else previous.get('automationSchemaVersion'), 'instanceId': INSTANCE, 'environmentId': ENVIRONMENT,
     }, indent=2) + '\n')
     for name in ['access-runtime.env', 'access-compose.json']:
         write_private(backup / name, (CONFIG / name).read_text())
@@ -312,8 +312,8 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archi
                 sql(f"ALTER ROLE foundry_automation_migrator LOGIN PASSWORD '{password}';")
                 run_cli(image, migration_file, 'automation-migrate', '--database', 'fork_automation',
                         '--runtime-role', 'foundry_automation_runtime')
-                if sql("SELECT version FROM foundry_automation.schema_version;", database='fork_automation') != '6':
-                    raise RuntimeError('Automation migration did not confirm schema 6.')
+                if sql("SELECT version FROM foundry_automation.schema_version;", database='fork_automation') != '7':
+                    raise RuntimeError('Automation migration did not confirm schema 7.')
             finally:
                 try:
                     sql('ALTER ROLE foundry_automation_migrator NOLOGIN PASSWORD NULL;')
@@ -325,7 +325,7 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archi
         docker('compose', '--project-name', 'foundry', '--env-file', '/dev/null',
                '--file', str(CONFIG / 'access-compose.json'), 'up', '--detach', '--no-deps',
                '--no-build', '--pull', 'never', '--wait', '--wait-timeout', '180', 'main')
-        result = active_status(expected_schema=target_schema, expected_automation_schema=6) if automation_schema else active_status(expected_schema=target_schema)
+        result = active_status(expected_schema=target_schema, expected_automation_schema=7) if automation_schema else active_status(expected_schema=target_schema)
         if result['image'] != image or result['revision'] != revision:
             raise RuntimeError('Candidate image verification failed.')
         write_private(backup / 'success', revision + '\n')

@@ -12,6 +12,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { automationCommands } from "./commands";
 import { useAutomationQuery } from "./useAutomationQuery";
 import { TriggerPanel } from "./TriggerPanel";
+import { DefinitionSourcePanel } from "./DefinitionSourcePanel";
 import { DefinitionEditor } from "./DefinitionEditor";
 import { RunDetail } from "./RunDetail";
 import { RunList } from "./RunList";
@@ -252,6 +253,7 @@ function FactoryDetail({
     op: "factory",
     factoryId,
   });
+  const source = useAutomationQuery(environmentId, { op: "definitionSource", factoryId });
   const [tab, setTab] = useState<"definition" | "work" | "runs" | "triggers">(
     initialWorkItemId ? "work" : "definition",
   );
@@ -327,17 +329,50 @@ function FactoryDetail({
         </Link>
       </nav>
       {tab === "definition" && detail ? (
-        <DefinitionEditor
-          key={detail.active?.id ?? "new"}
-          environmentId={environmentId}
-          factoryId={factoryId}
-          scopeVersionId={detail.active?.scopeVersionId ?? detail.versions[0]?.id ?? ""}
-          repositories={
-            detail.active?.definition.repositories ?? detail.versions[0]?.repositories ?? []
-          }
-          active={detail.active}
-          onActivated={refresh}
-        />
+        <div className="space-y-5">
+          {source.error ? <p role="alert">{source.error}</p> : null}
+          {source.loading ? <p role="status">Loading definition ownership…</p> : null}
+          <Button
+            variant="outline"
+            onClick={() => {
+              source.refresh();
+              refresh();
+            }}
+          >
+            Reload definition
+          </Button>
+          {source.result?.kind === "definitionSource" && !source.error ? (
+            <>
+              <DefinitionSourcePanel
+                environmentId={environmentId}
+                factoryId={factoryId}
+                scopeVersionId={detail.active?.scopeVersionId ?? detail.versions[0]?.id ?? ""}
+                active={detail.active}
+                binding={source.result.binding}
+                onChanged={() => {
+                  source.refresh();
+                  refresh();
+                }}
+              />
+              {source.result.binding?.ownership !== "git" && !source.loading ? (
+                <DefinitionEditor
+                  key={detail.active?.id ?? "new"}
+                  environmentId={environmentId}
+                  factoryId={factoryId}
+                  scopeVersionId={detail.active?.scopeVersionId ?? detail.versions[0]?.id ?? ""}
+                  repositories={
+                    detail.active?.definition.repositories ?? detail.versions[0]?.repositories ?? []
+                  }
+                  active={detail.active}
+                  onActivated={() => {
+                    refresh();
+                    source.refresh();
+                  }}
+                />
+              ) : null}
+            </>
+          ) : null}
+        </div>
       ) : null}
       {tab === "triggers" ? (
         <TriggerPanel
