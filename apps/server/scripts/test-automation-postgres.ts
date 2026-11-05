@@ -1,3 +1,5 @@
+import { v4Gates } from "./test-automation-v4-gates.ts";
+import * as McpBindings from "../src/automation/McpBindings.ts";
 import { parallelGates } from "./test-automation-parallel-gates.ts";
 import { handoffGates } from "./test-automation-handoff-gates.ts";
 import { definitionSourceGates } from "./test-automation-definition-source-gates.ts";
@@ -308,7 +310,7 @@ try {
   NodeAssert.deepEqual(await call((s) => s.readWorkItem("a", "w1")), beforeUpgrade);
   NodeAssert.equal(
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
-    10,
+    11,
   );
   const definitions = await Promise.all(
     Array.from({ length: 8 }, () => workflowCall((s) => s.createVersion(workflow))),
@@ -559,6 +561,9 @@ try {
   );
   NodeAssert.equal(roundtrip.contentHash, initialDefinition.contentHash);
   NodeAssert.deepEqual(roundtrip.definition, initialDefinition.definition);
+  if (initialDefinition.definition.schemaVersion === 4)
+    throw new Error("Expected legacy definition fixture");
+  const legacyInitialDefinition = initialDefinition.definition;
   const edits = await Promise.allSettled(
     ["left", "right"].map((edit) =>
       definitionCall((s) =>
@@ -567,7 +572,7 @@ try {
           commandId: "edit-" + edit,
           expectedVersionId: roundtrip.id,
           files: exportFactoryFiles({
-            ...initialDefinition.definition,
+            ...legacyInitialDefinition,
             workflows: [
               {
                 id: "main",
@@ -878,7 +883,7 @@ try {
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
     99,
   );
-  await query("UPDATE foundry_automation.schema_version SET version=10", "automation_migrator");
+  await query("UPDATE foundry_automation.schema_version SET version=11", "automation_migrator");
   await run(migration);
   const preservedQueries = [
     "SELECT * FROM foundry_automation.definition_versions ORDER BY id",
@@ -915,7 +920,7 @@ try {
   await run(migration);
   NodeAssert.equal(
     (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
-    10,
+    11,
   );
   NodeAssert.deepEqual(
     await Promise.all(preservedQueries.map((statement) => query(statement))),
@@ -1293,6 +1298,7 @@ try {
                 Layer.provide(db("automation_runtime")),
               ),
               Layer.mock(Publish.Publish)({ prepareEvidence: () => Effect.succeed(null) }),
+              Layer.mock(McpBindings.McpBindings)({ authorize: () => Effect.succeed([]) }),
               Layer.succeed(WorkerTransport.WorkerTransport, networkWorker),
               Layer.succeed(ThreadArchive.ThreadArchive, networkArchive),
               Layer.succeed(Artifacts.Artifacts, networkArtifacts),
@@ -1496,6 +1502,7 @@ try {
                 Layer.provide(db("automation_runtime")),
               ),
               Layer.mock(Publish.Publish)({ prepareEvidence: () => Effect.succeed(null) }),
+              Layer.mock(McpBindings.McpBindings)({ authorize: () => Effect.succeed([]) }),
               Layer.succeed(WorkerTransport.WorkerTransport, {
                 ...networkWorker,
                 read: Effect.fn("Fixture.readArchivedExecution")(() =>
@@ -2446,7 +2453,6 @@ try {
       "PASS P51 isolated PostgreSQL: takeover/dispatch fencing, lost acknowledgement and restart, explicit reopen, revision and grant conflicts, confirmed return and paused continuation; Worker transport fixture and real archive authorization, no native provider turn.",
     ),
   );
-  await run(applicationGates(db("automation_runtime")));
   await run(
     parallelGates(
       db("automation_runtime"),
@@ -2464,6 +2470,24 @@ try {
       "PASS P29/P32 PostgreSQL: competing capacity reservations, independent ready branches, dependency-gated join, paused worker admission, idempotent repair across PostgreSQL restart, stale-claim fencing, bounded repair exhaustion, and cancellation retains uncertain sends until writer end. This tests persistence, not native execution overlap.",
     ),
   );
+  await run(
+    v4Gates(
+      db("automation_runtime"),
+      Effect.tryPromise({
+        try: async () => {
+          await stop();
+          await start();
+        },
+        catch: () => new AutomationTriggerError({ code: "unavailable" }),
+      }),
+    ),
+  );
+  await run(
+    Console.log(
+      "PASS v4 PostgreSQL: pinned modular snapshot, duplicate reservation, review/fix checkpoint and carry, restart, stale claim fencing and durable execution budget.",
+    ),
+  );
+  await run(applicationGates(db("automation_runtime")));
   await run(
     triggerGates(
       db("automation_runtime"),

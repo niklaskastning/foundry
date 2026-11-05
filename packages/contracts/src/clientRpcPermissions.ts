@@ -109,6 +109,7 @@ export function clientRpcRequiredScopes(
       "activateDefinition",
       "configureDefinitionSource",
       "configureExecutionDefaults",
+      "setMcpBinding",
       "syncDefinitionSource",
       "setDefinitionSourceEnabled",
       "activateDefinitionRevision",

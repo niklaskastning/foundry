@@ -29,6 +29,8 @@ export type FoundrySearch = {
   after?: string | undefined;
   attemptsAfter?: string | undefined;
   attemptId?: string | undefined;
+  nodeOffset?: string | undefined;
+  nodePath?: string | undefined;
   inboxId?: string | undefined;
   inboxStatus?: "open" | "done" | "all" | undefined;
   inboxKind?: "question" | "answer" | "approval" | "blocker" | "error" | undefined;
@@ -47,6 +49,8 @@ const fields = [
   "after",
   "attemptsAfter",
   "attemptId",
+  "nodeOffset",
+  "nodePath",
   "inboxId",
   "inboxUnread",
   "inboxCursor",

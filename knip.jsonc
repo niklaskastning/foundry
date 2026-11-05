@@ -52,6 +52,8 @@
         "scripts/update-test-shard-weights.ts",
         "scripts/verify-background-live.ts",
         "src/provider/testFixtures/*.mjs",
+        // Native Foundry gate launches this deterministic MCP peer as a subprocess.
+        "src/foundry/testFixtures/mcpResourcePeer.mjs",
         // graphqlgen reads its config.
         "graphql.config.ts",
       ],

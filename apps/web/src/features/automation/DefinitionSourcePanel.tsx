@@ -683,7 +683,10 @@ function FileComparison({
   const before = activeFiles?.find((file) => file.path === path);
   const after = files.find((file) => file.path === path);
   const diff =
-    path && before?.content !== after?.content
+    path &&
+    before?.encoding !== "base64" &&
+    after?.encoding !== "base64" &&
+    before?.content !== after?.content
       ? parseDiffFromFile(
           { name: path, contents: before?.content ?? "" },
           { name: path, contents: after?.content ?? "" },
@@ -703,7 +706,9 @@ function FileComparison({
             ? "Added"
             : !candidate
               ? "Deleted"
-              : previous.content === candidate.content
+              : previous.content === candidate.content &&
+                  previous.mode === candidate.mode &&
+                  previous.encoding === candidate.encoding
                 ? "Unchanged"
                 : "Modified";
           return (
@@ -733,7 +738,13 @@ function FileComparison({
           />
         </div>
       ) : (
-        <p className="text-sm">This file matches the active definition.</p>
+        <p className="text-sm">
+          {before?.content === after?.content &&
+          before?.mode === after?.mode &&
+          before?.encoding === after?.encoding
+            ? "This file matches the active definition."
+            : "Binary content or file mode changed. Review the pinned hashes and modes below."}
+        </p>
       )}
       <div className="grid min-w-0 gap-3 md:grid-cols-2">
         <div className="min-w-0">
@@ -743,7 +754,11 @@ function FileComparison({
             aria-label="Active file contents"
             className="max-h-96 overflow-auto rounded border p-3 text-xs"
           >
-            {before?.content ?? "File absent"}
+            {before
+              ? before.encoding === "base64"
+                ? `Binary file · SHA-256 ${before.sha256} · mode ${before.mode}`
+                : `${before.mode ? `Mode ${before.mode}\n` : ""}${before.content}`
+              : "File absent"}
           </pre>
         </div>
         <div className="min-w-0">
@@ -753,7 +768,11 @@ function FileComparison({
             aria-label="Candidate file contents"
             className="max-h-96 overflow-auto rounded border p-3 text-xs"
           >
-            {after?.content ?? "File absent"}
+            {after
+              ? after.encoding === "base64"
+                ? `Binary file · SHA-256 ${after.sha256} · mode ${after.mode}`
+                : `${after.mode ? `Mode ${after.mode}\n` : ""}${after.content}`
+              : "File absent"}
           </pre>
         </div>
       </div>

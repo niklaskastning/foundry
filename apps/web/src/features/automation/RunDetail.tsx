@@ -1,3 +1,5 @@
+import { V4AgentConfiguration } from "./V4Configuration";
+import { V4RunProgress } from "./V4RunProgress";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { isDefinitiveAutomationFailure } from "./failures";
 import { randomUUID } from "../../lib/utils";
@@ -31,8 +33,12 @@ export function RunDetail({
   runId: string;
   onBack: () => void;
 }) {
-  const run = useAutomationQuery(environmentId, { op: "run", factoryId, runId });
   const navigation = useWorkspaceNavigation();
+  const offset = Number(navigation.search.nodeOffset ?? "0");
+  const nodesAfter = Number.isInteger(offset) && offset >= 0 && offset <= 20000 ? offset : 0;
+  const setNodesAfter = (value: number) =>
+    navigation.update({ nodeOffset: String(value), nodePath: undefined });
+  const run = useAutomationQuery(environmentId, { op: "run", factoryId, runId, nodesAfter });
   const after = navigation.search.attemptsAfter;
   const setAfter = (attemptsAfter?: string) =>
     navigation.update({ attemptsAfter, attemptId: undefined });
@@ -59,7 +65,7 @@ export function RunDetail({
     pause: !terminal && state !== "paused" && state !== "failed" && state !== "cancel_requested",
     resume: state === "paused" || state === "waiting",
     cancel: !terminal,
-    retry: state === "failed",
+    retry: state === "failed" && !detail?.runtimeWorkflow,
   };
   async function act(action: "pause" | "resume" | "cancel" | "retry") {
     if (busy || !detail?.control) return;
@@ -176,7 +182,9 @@ export function RunDetail({
                   (state === "succeeded"
                     ? "Execution completed. Review the step results below."
                     : state === "failed"
-                      ? "Execution failed. Inspect the failed attempt before retrying."
+                      ? detail.runtimeWorkflow
+                        ? "Execution failed. Inspect the result and exhausted budgets. A new run requires an explicit start."
+                        : "Execution failed. Inspect the failed attempt before retrying."
                       : state === "paused"
                         ? "Execution is paused. Resume when ready, or take over in T3."
                         : state === "waiting"
@@ -353,176 +361,190 @@ export function RunDetail({
           </p>
         </section>
       ) : null}
+      {detail?.runtimeWorkflow ? (
+        <V4RunProgress
+          state={detail.runtimeState}
+          workflow={detail.runtimeWorkflow}
+          environmentId={environmentId}
+          factoryId={factoryId}
+          runId={runId}
+          onPage={setNodesAfter}
+        />
+      ) : null}
       <h3 className="text-lg font-semibold">Execution & results</h3>
       {detail && attempts.result?.kind === "attempts" ? (
         <>
           <ol className="space-y-3">
-            {detail.workflow.steps.map((step, ordinal) => (
-              <li
-                key={step.id}
-                id={`run-step-${step.id}`}
-                className="min-w-0 scroll-mt-16 space-y-3 rounded-lg border bg-card p-4"
-              >
-                <h4 className="font-medium">
-                  {ordinal + 1}. {step.id} ·{" "}
-                  {step.kind === "agent" ? (step.resolved?.role?.name ?? "Agent") : step.kind}
-                </h4>
-                {execution ? (
-                  <div className="flex flex-wrap items-center gap-2 text-sm">
-                    <Badge variant={step.id === execution.joinStepId ? "info" : "outline"}>
-                      {step.id === execution.joinStepId
-                        ? "Join"
-                        : topology && ordinal < topology.joinIndex
-                          ? "Branch"
-                          : "Serial follow-up"}
-                    </Badge>
-                    <span className="text-muted-foreground">
-                      {step.dependsOn.length ? "Depends on:" : "No step dependencies"}
-                    </span>
-                    {step.dependsOn.map((dependency) => (
-                      <a
-                        key={dependency}
-                        className="underline"
-                        href={`#run-step-${encodeURIComponent(dependency)}`}
-                      >
-                        {dependency}
-                      </a>
-                    ))}
-                  </div>
-                ) : null}
-                {step.kind === "agent" || step.kind === "approval" ? (
-                  <details className="text-sm">
-                    <summary className="cursor-pointer text-muted-foreground">
-                      Step instructions
-                    </summary>
-                    <p className="whitespace-pre-wrap break-words pt-2">{step.prompt}</p>
-                  </details>
-                ) : null}
-                {step.kind === "agent" && step.resolved ? (
-                  <details className="text-sm">
-                    <summary className="cursor-pointer">Pinned agent configuration</summary>
-                    <div className="space-y-2 pt-2">
-                      <p>
-                        Codex ·{" "}
-                        {step.resolved.execution.model ??
-                          detail.executionBinding?.model ??
-                          "Run binding model"}{" "}
-                        ·{" "}
-                        {step.resolved.execution.options?.reasoningEffort ??
-                          "Provider reasoning default"}
-                      </p>
-                      <p>
-                        Skills:{" "}
-                        {step.resolved.skills.map((skill) => skill.name).join(", ") || "None"}
-                      </p>
-                      <p className="whitespace-pre-wrap">{step.resolved.instructions}</p>
+            {detail.workflow.steps.map((step, index) => {
+              const ordinal =
+                detail.runtimeState?.nodes.find((node) => node.path === step.id)?.ordinal ?? index;
+              return (
+                <li
+                  key={step.id}
+                  id={`run-step-${encodeURIComponent(step.id)}`}
+                  className="min-w-0 scroll-mt-16 space-y-3 rounded-lg border bg-card p-4"
+                >
+                  <h4 className="font-medium">
+                    {ordinal + 1}. {step.id} ·{" "}
+                    {step.kind === "agent" ? (step.resolved?.role?.name ?? "Agent") : step.kind}
+                  </h4>
+                  {execution ? (
+                    <div className="flex flex-wrap items-center gap-2 text-sm">
+                      <Badge variant={step.id === execution.joinStepId ? "info" : "outline"}>
+                        {step.id === execution.joinStepId
+                          ? "Join"
+                          : topology && ordinal < topology.joinIndex
+                            ? "Branch"
+                            : "Serial follow-up"}
+                      </Badge>
+                      <span className="text-muted-foreground">
+                        {step.dependsOn.length ? "Depends on:" : "No step dependencies"}
+                      </span>
+                      {step.dependsOn.map((dependency) => (
+                        <a
+                          key={dependency}
+                          className="underline"
+                          href={`#run-step-${encodeURIComponent(dependency)}`}
+                        >
+                          {dependency}
+                        </a>
+                      ))}
                     </div>
-                  </details>
-                ) : null}
-                {attempts.result?.kind === "attempts" &&
-                  attempts.result.items
-                    .filter((attempt) => attempt.ordinal === ordinal)
-                    .map((attempt) => (
-                      <div key={attempt.commandId} className="space-y-2 border-t pt-3">
-                        <div className="flex flex-wrap items-center gap-2 text-sm">
-                          <span className="font-medium">Attempt {attempt.attemptNumber + 1}</span>
-                          {execution && topology && ordinal < topology.joinIndex ? (
-                            <Badge variant="outline">
-                              {attempt.attemptNumber === 0
-                                ? "Initial execution"
-                                : `Repair round ${attempt.attemptNumber}`}
-                            </Badge>
-                          ) : null}
-                          <Badge variant={attempt.hasResult ? "secondary" : "info"}>
-                            {attempt.state.replaceAll("_", " ")}
-                          </Badge>
-                          {attempt.reason ? (
-                            <span className="text-muted-foreground">
-                              {attempt.reason.replaceAll("_", " ")}
-                            </span>
-                          ) : null}
-                        </div>
-                        <p className="break-all text-xs text-muted-foreground">
-                          {attempt.workerId ? <>Worker: {attempt.workerId} · </> : null}
-                          Environment: {attempt.environmentId ?? "Not assigned"}
-                          {attempt.capacityReleased === true
-                            ? " · Capacity released"
-                            : attempt.capacityReleased === false && attempt.workerId
-                              ? " · Capacity reserved"
-                              : ""}
+                  ) : null}
+                  {step.kind === "agent" || step.kind === "approval" ? (
+                    <details className="text-sm">
+                      <summary className="cursor-pointer text-muted-foreground">
+                        Step instructions
+                      </summary>
+                      <p className="whitespace-pre-wrap break-words pt-2">{step.prompt}</p>
+                    </details>
+                  ) : null}
+                  {step.kind === "agent" && step.resolved ? (
+                    <details className="text-sm">
+                      <summary className="cursor-pointer">Pinned agent configuration</summary>
+                      <div className="space-y-2 pt-2">
+                        <p>
+                          Codex ·{" "}
+                          {step.resolved.execution.model ??
+                            detail.executionBinding?.model ??
+                            "Run binding model"}{" "}
+                          ·{" "}
+                          {step.resolved.execution.options?.reasoningEffort ??
+                            "Provider reasoning default"}
                         </p>
-                        <div className="flex flex-wrap gap-3 text-sm">
-                          {attempt.threadId && attempt.environmentId ? (
-                            <>
-                              <a
-                                className="underline"
-                                href={`/${encodeURIComponent(attempt.environmentId)}/${encodeURIComponent(attempt.threadId)}?factoryId=${encodeURIComponent(factoryId)}&runId=${encodeURIComponent(runId)}`}
-                              >
-                                Open T3 thread
-                              </a>
-                              <a
-                                className="underline"
-                                href={`/foundry?archiveEnvironmentId=${encodeURIComponent(attempt.environmentId)}&archiveThreadId=${encodeURIComponent(attempt.threadId)}`}
-                              >
-                                Read central archive
-                              </a>
-                            </>
-                          ) : null}
-                          <Button
-                            variant="outline"
-                            aria-expanded={selected === attempt.commandId}
-                            aria-controls={`attempt-${attempt.commandId}`}
-                            onClick={() =>
-                              setSelected(
-                                selected === attempt.commandId ? undefined : attempt.commandId,
-                              )
-                            }
-                          >
-                            {selected === attempt.commandId
-                              ? "Close details"
-                              : attempt.hasResult
-                                ? "Review result & evidence"
-                                : "Inspect execution"}
-                          </Button>
-                        </div>
-                        {selected === attempt.commandId ? (
-                          <div id={`attempt-${attempt.commandId}`}>
-                            <AttemptResult
-                              environmentId={environmentId}
-                              factoryId={factoryId}
-                              runId={runId}
-                              commandId={attempt.commandId}
-                            />
-                          </div>
-                        ) : null}
-                        {!attempt.hasResult ? (
-                          <p className="text-xs text-muted-foreground">
-                            {step.kind === "approval"
-                              ? "This step records a human decision without a provider turn."
-                              : "No confirmed final result yet. Completion also requires writer shutdown and complete archival."}
-                          </p>
-                        ) : null}
+                        <p>
+                          Skills:{" "}
+                          {step.resolved.skills.map((skill) => skill.name).join(", ") || "None"}
+                        </p>
+                        <p className="whitespace-pre-wrap">{step.resolved.instructions}</p>
                       </div>
-                    ))}
-                {attempts.result?.kind === "attempts" &&
-                !attempts.result.items.some((attempt) => attempt.ordinal === ordinal) ? (
-                  step.kind === "approval" ? (
-                    <div className="space-y-1 text-sm">
-                      <p>This step requires a revision-bound human decision.</p>
-                      <Link
-                        className="underline"
-                        to="/foundry"
-                        search={{ view: "inbox", factoryId, inboxKind: "approval" }}
-                      >
-                        Review the current decision and evidence in Inbox
-                      </Link>
-                    </div>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">No attempt on this page.</p>
-                  )
-                ) : null}
-              </li>
-            ))}
+                    </details>
+                  ) : null}
+                  {attempts.result?.kind === "attempts" &&
+                    attempts.result.items
+                      .filter((attempt) => attempt.ordinal === ordinal)
+                      .map((attempt) => (
+                        <div key={attempt.commandId} className="space-y-2 border-t pt-3">
+                          <div className="flex flex-wrap items-center gap-2 text-sm">
+                            <span className="font-medium">Attempt {attempt.attemptNumber + 1}</span>
+                            {execution && topology && ordinal < topology.joinIndex ? (
+                              <Badge variant="outline">
+                                {attempt.attemptNumber === 0
+                                  ? "Initial execution"
+                                  : `Repair round ${attempt.attemptNumber}`}
+                              </Badge>
+                            ) : null}
+                            <Badge variant={attempt.hasResult ? "secondary" : "info"}>
+                              {attempt.state.replaceAll("_", " ")}
+                            </Badge>
+                            {attempt.reason ? (
+                              <span className="text-muted-foreground">
+                                {attempt.reason.replaceAll("_", " ")}
+                              </span>
+                            ) : null}
+                          </div>
+                          <p className="break-all text-xs text-muted-foreground">
+                            {attempt.workerId ? <>Worker: {attempt.workerId} · </> : null}
+                            Environment: {attempt.environmentId ?? "Not assigned"}
+                            {attempt.capacityReleased === true
+                              ? " · Capacity released"
+                              : attempt.capacityReleased === false && attempt.workerId
+                                ? " · Capacity reserved"
+                                : ""}
+                          </p>
+                          <div className="flex flex-wrap gap-3 text-sm">
+                            {attempt.threadId && attempt.environmentId ? (
+                              <>
+                                <a
+                                  className="underline"
+                                  href={`/${encodeURIComponent(attempt.environmentId)}/${encodeURIComponent(attempt.threadId)}?factoryId=${encodeURIComponent(factoryId)}&runId=${encodeURIComponent(runId)}`}
+                                >
+                                  Open T3 thread
+                                </a>
+                                <a
+                                  className="underline"
+                                  href={`/foundry?archiveEnvironmentId=${encodeURIComponent(attempt.environmentId)}&archiveThreadId=${encodeURIComponent(attempt.threadId)}`}
+                                >
+                                  Read central archive
+                                </a>
+                              </>
+                            ) : null}
+                            <Button
+                              variant="outline"
+                              aria-expanded={selected === attempt.commandId}
+                              aria-controls={`attempt-${attempt.commandId}`}
+                              onClick={() =>
+                                setSelected(
+                                  selected === attempt.commandId ? undefined : attempt.commandId,
+                                )
+                              }
+                            >
+                              {selected === attempt.commandId
+                                ? "Close details"
+                                : attempt.hasResult
+                                  ? "Review result & evidence"
+                                  : "Inspect execution"}
+                            </Button>
+                          </div>
+                          {selected === attempt.commandId ? (
+                            <div id={`attempt-${attempt.commandId}`}>
+                              <AttemptResult
+                                environmentId={environmentId}
+                                factoryId={factoryId}
+                                runId={runId}
+                                commandId={attempt.commandId}
+                              />
+                            </div>
+                          ) : null}
+                          {!attempt.hasResult ? (
+                            <p className="text-xs text-muted-foreground">
+                              {step.kind === "approval"
+                                ? "This step records a human decision without a provider turn."
+                                : "No confirmed final result yet. Completion also requires writer shutdown and complete archival."}
+                            </p>
+                          ) : null}
+                        </div>
+                      ))}
+                  {attempts.result?.kind === "attempts" &&
+                  !attempts.result.items.some((attempt) => attempt.ordinal === ordinal) ? (
+                    step.kind === "approval" ? (
+                      <div className="space-y-1 text-sm">
+                        <p>This step requires a revision-bound human decision.</p>
+                        <Link
+                          className="underline"
+                          to="/foundry"
+                          search={{ view: "inbox", factoryId, inboxKind: "approval" }}
+                        >
+                          Review the current decision and evidence in Inbox
+                        </Link>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">No attempt on this page.</p>
+                    )
+                  ) : null}
+                </li>
+              );
+            })}
           </ol>
           <div className="flex gap-2">
             <Button variant="outline" disabled={!after} onClick={() => setAfter(undefined)}>
@@ -609,6 +631,7 @@ export function AttemptResult({
       {error ? <p role="alert">{error}</p> : null}
       {result?.kind === "attempt" ? (
         <>
+          {result.resources ? <V4AgentConfiguration agent={result.resources} /> : null}
           {result.launch ? (
             <details>
               <summary className="cursor-pointer text-sm">

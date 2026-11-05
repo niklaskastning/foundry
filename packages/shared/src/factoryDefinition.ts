@@ -1,5 +1,12 @@
 import {
+  validateFactoryV4Files,
+  parseFactoryYaml,
+  factoryFileBytes,
+} from "./factoryDefinitionV4.ts";
+export { resolveFactoryV4Agent } from "./factoryDefinitionV4.ts";
+import {
   type CanonicalFactoryDefinition,
+  type LegacyCanonicalFactoryDefinition,
   type AutomationWorkflowVersion,
   FactoryResolvedAgent,
   type FactoryDefinitionIssue,
@@ -72,9 +79,36 @@ export function validateFactoryFiles(
 ): Result.Result<CanonicalFactoryDefinition, ReadonlyArray<FactoryDefinitionIssue>> {
   const bundle = decodeFiles(files);
   if (Result.isFailure(bundle)) return Result.fail(schemaIssues("factory.yaml", bundle.failure));
+  try {
+    const entry = files.find((file) => file.path === "factory.yaml");
+    const manifest = entry
+      ? parseFactoryYaml(new TextDecoder("utf-8", { fatal: true }).decode(factoryFileBytes(entry)))
+      : null;
+    if (
+      manifest &&
+      typeof manifest === "object" &&
+      "schemaVersion" in manifest &&
+      manifest.schemaVersion === 4
+    )
+      return validateFactoryV4Files(files);
+  } catch {}
+  if (files.length > 101)
+    return Result.fail([
+      { file: "factory.yaml", path: [], message: "Definition bundle exceeds its size limit." },
+    ]);
   const contents = new Map<string, string>();
   let size = 0;
-  for (const file of bundle.success) {
+  for (const [fileIndex, file] of bundle.success.entries()) {
+    if (file.encoding === "base64" || !/\.ya?ml$/.test(file.path))
+      return Result.fail([{ file: file.path, path: [], message: "Unsupported legacy file." }]);
+    if (file.content.length > 256 * 1024)
+      return Result.fail([
+        {
+          file: file.path,
+          path: [fileIndex, "content"],
+          message: "Definition file exceeds its size limit.",
+        },
+      ]);
     const bytes = new TextEncoder().encode(file.content).byteLength;
     size += bytes;
     if (bytes > 256 * 1024 || size > 2 * 1024 * 1024)
@@ -103,7 +137,7 @@ export function validateFactoryFiles(
         message: "Roles, skills and execution defaults require schemaVersion 2.",
       },
     ]);
-  const workflows: Array<CanonicalFactoryDefinition["workflows"][number]> = [];
+  const workflows: Array<LegacyCanonicalFactoryDefinition["workflows"][number]> = [];
   const referenced = new Set(["factory.yaml"]);
   for (const [index, workflow] of manifest.success.workflows.entries()) {
     const content = contents.get(workflow.file);
@@ -262,6 +296,7 @@ export function canonicalFactoryJson(definition: CanonicalFactoryDefinition): st
 }
 
 export function exportFactoryFiles(definition: CanonicalFactoryDefinition): FactoryDefinitionFiles {
+  if (definition.schemaVersion === 4) return definition.files;
   const workflows = definition.workflows.map((workflow) => ({
     id: workflow.id,
     file: `workflows/${workflow.id}.yaml`,
@@ -299,6 +334,7 @@ export function resolveFactoryWorkflow(
   definition: CanonicalFactoryDefinition,
   workflowId: string,
 ): AutomationWorkflowVersion["steps"] {
+  if (definition.schemaVersion === 4) return [];
   const workflow = definition.workflows.find((entry) => entry.id === workflowId);
   if (!workflow) throw new Error("Workflow is missing from the definition.");
   if (definition.schemaVersion === 1) return workflow.steps;
@@ -334,4 +370,142 @@ export function resolveFactoryWorkflow(
     });
     return { ...step, resolved };
   });
+}
+
+export function migrateFactoryDefinitionV4(
+  definition: LegacyCanonicalFactoryDefinition,
+): FactoryDefinitionFiles {
+  const files: Array<FactoryDefinitionFiles[number]> = [];
+  const names = (ids: readonly string[]) => {
+    const used = new Set<string>();
+    return new Map(
+      ids.map((id, index) => {
+        const base = id
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "");
+        let value = (/^[a-z]/.test(base) ? base : `resource-${base}`)
+          .slice(0, 55)
+          .replace(/-+$/g, "");
+        if (!value || used.has(value)) value = `resource-${index}`;
+        used.add(value);
+        return [id, value];
+      }),
+    );
+  };
+  const skillIds = names((definition.skills ?? []).map((skill) => skill.id));
+  const roleIds = names((definition.roles ?? []).map((role) => role.id));
+  const workflowIds = names(definition.workflows.map((workflow) => workflow.id));
+  const agents = (definition.roles ?? []).map((role) => ({
+    id: roleIds.get(role.id)!,
+    name: role.name,
+    description: role.description,
+    instructions: role.instructions,
+    skills: role.skills.map((id) => skillIds.get(id)!),
+    mcp: [],
+    ...(role.execution ? { execution: role.execution } : {}),
+  }));
+  for (const skill of definition.skills ?? []) {
+    const id = skillIds.get(skill.id)!;
+    files.push({
+      path: `skills/${id}/SKILL.md`,
+      content: `---\n${stringify({ name: id, description: skill.name })}---\n\n${skill.instructions}\n`,
+    });
+  }
+  const workflows = definition.workflows.map((workflow, workflowIndex) => {
+    const ids = names(workflow.steps.map((step) => step.id));
+    const steps = workflow.steps.map((step, index) => {
+      const previousWriter = workflow.steps
+        .slice(0, index)
+        .findLast((prior) => prior.kind === "agent");
+      const workspaceFrom =
+        !workflow.execution && previousWriter
+          ? { from: { ref: `steps.${ids.get(previousWriter.id)!}.artifacts.checkpoint` } }
+          : {};
+      const common = {
+        id: ids.get(step.id)!,
+        dependsOn: workflow.execution
+          ? step.dependsOn.map((id) => ids.get(id)!)
+          : index
+            ? [ids.get(workflow.steps[index - 1]!.id)!]
+            : [],
+      };
+      if (step.kind === "agent") {
+        let agent = step.role ? roleIds.get(step.role) : undefined;
+        if (!agent) {
+          agent = `step-${workflowIndex}-${index}`;
+          agents.push({
+            id: agent,
+            name: step.id,
+            description: "Migrated workflow agent",
+            instructions: "Perform the assigned workflow task.",
+            skills: [],
+            mcp: [],
+          });
+        }
+        return {
+          ...common,
+          kind: "agent",
+          agent,
+          instructions: step.prompt,
+          workspace: { access: "write", ...workspaceFrom },
+          ...(step.skills
+            ? { extend: { skills: step.skills.map((id) => skillIds.get(id)!) } }
+            : {}),
+          ...(step.execution ? { execution: step.execution } : {}),
+          ...(workflow.execution
+            ? { retry: { maxAttempts: workflow.execution.maxRepairRounds + 1 } }
+            : {}),
+        };
+      }
+      if (step.kind === "approval")
+        return { ...common, kind: "approval", instructions: step.prompt };
+      if (step.kind === "test" && previousWriter)
+        return {
+          ...step,
+          ...common,
+          workspace: {
+            access: "read",
+            from: { ref: `steps.${ids.get(previousWriter.id)!}.artifacts.checkpoint` },
+          },
+        };
+      return { ...step, ...common };
+    });
+    const id = workflowIds.get(workflow.id)!;
+    files.push({
+      path: `workflows/${id}.yaml`,
+      content: stringify({
+        id,
+        limits: {
+          maxConcurrentAgents: workflow.execution?.maxParallelism ?? 1,
+          maxAgentExecutions: Math.max(
+            1,
+            workflow.steps.filter((step) => step.kind === "agent").length *
+              ((workflow.execution?.maxRepairRounds ?? 0) + 1),
+          ),
+        },
+        steps,
+      }),
+    });
+    return { id, file: `workflows/${id}.yaml` };
+  });
+  for (const agent of agents)
+    files.push({ path: `agents/${agent.id}.yaml`, content: stringify(agent) });
+  files.unshift({
+    path: "factory.yaml",
+    content: stringify({
+      schemaVersion: 4,
+      factoryId: definition.factoryId,
+      repositories: definition.repositories,
+      workflows,
+      agents: agents.map((agent) => ({ id: agent.id, file: `agents/${agent.id}.yaml` })),
+      skills: [...skillIds.values()].map((id) => ({ id, directory: `skills/${id}` })),
+      mcp: [],
+      ...(definition.defaults ? { defaults: { execution: definition.defaults } } : {}),
+    }),
+  });
+  const validated = validateFactoryFiles(files);
+  if (Result.isFailure(validated))
+    throw new Error("The generated migration requires manual resolution before import.");
+  return exportFactoryFiles(validated.success);
 }

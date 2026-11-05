@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- GitHub installation authentication requires an RSA-signed JWT.
+import { parseFactoryYaml } from "@t3tools/shared/factoryDefinitionV4";
 import { FactoryDefinitionFiles, FactoryDefinitionGitLocation } from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
 import * as Clock from "effect/Clock";
@@ -360,7 +361,6 @@ export const layer = Layer.effect(
         const entries = tree.tree.filter((entry) => entry.path.startsWith(prefix));
         const paths = new Set<string>();
         const selected: typeof entries = [];
-        let total = 0;
         for (const entry of entries) {
           const path = entry.path.slice(prefix.length);
           if (!safePath(path) || paths.has(path)) return yield* unavailable();
@@ -368,20 +368,33 @@ export const layer = Layer.effect(
           if (entry.type === "tree" && entry.mode === "040000") continue;
           if (entry.type !== "blob" || (entry.mode !== "100644" && entry.mode !== "100755"))
             return yield* unavailable();
-          if (!/\.ya?ml$/.test(path)) continue;
-          if (entry.size === undefined || entry.size < 0 || entry.size > 256 * 1024)
+          if (
+            path === "factory.yaml" &&
+            (entry.size === undefined || entry.size < 0 || entry.size > 256 * 1024)
+          )
             return yield* unavailable();
-          total += entry.size;
           selected.push(entry);
         }
-        if (
-          selected.length > 101 ||
-          total > 2 * 1024 * 1024 ||
-          !selected.some((entry) => entry.path === `${prefix}factory.yaml`)
-        )
+        if (!selected.some((entry) => entry.path === `${prefix}factory.yaml`))
           return yield* unavailable();
-        const files: Array<{ path: string; content: string }> = [];
-        for (const entry of selected.sort((a, b) => a.path.localeCompare(b.path))) {
+        const files: Array<FactoryDefinitionFiles[number]> = [];
+        let v4 = false;
+        const ordered = selected.sort((a, b) =>
+          a.path === `${prefix}factory.yaml`
+            ? -1
+            : b.path === `${prefix}factory.yaml`
+              ? 1
+              : a.path.localeCompare(b.path),
+        );
+        for (const entry of ordered) {
+          if (!v4 && entry.path !== `${prefix}factory.yaml` && !/\.ya?ml$/.test(entry.path))
+            continue;
+          if (
+            !v4 &&
+            entry.path !== `${prefix}factory.yaml` &&
+            (entry.size! > 256 * 1024 || files.length >= 101)
+          )
+            return yield* unavailable();
           const file = yield* get(
             `${base}/contents/${entry.path.split("/").map(encodeURIComponent).join("/")}?ref=${commit.sha}`,
           ).pipe(Effect.flatMap(decodeContents));
@@ -400,11 +413,47 @@ export const layer = Layer.effect(
                   .digest("hex") !== entry.sha
               )
                 throw new Error("Invalid Git blob");
-              return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+              if (entry.path === `${prefix}factory.yaml`) {
+                const manifest = parseFactoryYaml(
+                  new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+                );
+                v4 =
+                  !!manifest &&
+                  typeof manifest === "object" &&
+                  "schemaVersion" in manifest &&
+                  manifest.schemaVersion === 4;
+                if (
+                  v4 &&
+                  (selected.length > 2048 ||
+                    selected.some(
+                      (item) => item.size === undefined || item.size < 0 || item.size > 1024 * 1024,
+                    ) ||
+                    selected.reduce((sum, item) => sum + (item.size ?? 0), 0) > 16 * 1024 * 1024)
+                )
+                  throw new Error("V4 definition size limit");
+                const legacyFiles = selected.filter((item) => /\.ya?ml$/.test(item.path));
+                if (
+                  !v4 &&
+                  (legacyFiles.length > 101 ||
+                    legacyFiles.some(
+                      (item) => item.size === undefined || item.size < 0 || item.size > 256 * 1024,
+                    ) ||
+                    legacyFiles.reduce((sum, item) => sum + item.size!, 0) > 2 * 1024 * 1024)
+                )
+                  throw new Error("Legacy definition size limit");
+              }
+              if (v4)
+                return {
+                  content: bytes.toString("base64"),
+                  encoding: "base64" as const,
+                  mode: entry.mode as "100644" | "100755",
+                  sha256: NodeCrypto.createHash("sha256").update(bytes).digest("hex"),
+                };
+              return { content: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
             },
             catch: unavailable,
           });
-          files.push({ path: entry.path.slice(prefix.length), content });
+          files.push({ path: entry.path.slice(prefix.length), ...content });
         }
         yield* checkGrant(input);
         return {

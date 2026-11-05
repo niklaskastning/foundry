@@ -220,6 +220,7 @@ const make = Effect.gen(function* () {
         } else if (input.action === "retry") {
           if (
             run.workflow.execution ||
+            run.workflow.v4 ||
             current.state !== "failed" ||
             !active ||
             active.state !== "failed"
@@ -288,17 +289,21 @@ const make = Effect.gen(function* () {
           if (
             !step ||
             (step.kind !== "approval" && step.kind !== "publish") ||
-            (run.workflow.execution
-              ? !step.dependsOn.every((id) => {
-                  const dependency = run.workflow.steps.findIndex(
-                    (candidate) => candidate.id === id,
-                  );
-                  return latest.some(
-                    (attempt) => attempt.ordinal === dependency && attempt.state === "succeeded",
-                  );
-                })
-              : latest.some((a) => a.ordinal < ordinal && a.state !== "succeeded") ||
-                latest.filter((a) => a.ordinal < ordinal).length !== ordinal)
+            (run.workflow.v4
+              ? !run.v4State?.nodes.some(
+                  (node) => node.ordinal === ordinal && node.status === "ready",
+                )
+              : run.workflow.execution
+                ? !step.dependsOn.every((id) => {
+                    const dependency = run.workflow.steps.findIndex(
+                      (candidate) => candidate.id === id,
+                    );
+                    return latest.some(
+                      (attempt) => attempt.ordinal === dependency && attempt.state === "succeeded",
+                    );
+                  })
+                : latest.some((a) => a.ordinal < ordinal && a.state !== "succeeded") ||
+                  latest.filter((a) => a.ordinal < ordinal).length !== ordinal)
           )
             return yield* fail("invalid_transition");
           yield* sql`INSERT INTO foundry_automation.run_decisions(command_id,run_id,step_id,revision,result_revision,approved) VALUES(${input.commandId},${input.runId},${input.stepId},${current.revision + 1},${current.resultRevision},${input.action === "approve"})`;

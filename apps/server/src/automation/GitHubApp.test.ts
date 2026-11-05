@@ -327,6 +327,7 @@ it.effect("pins all definition contents to one commit with only contents:read", 
     test.setFiles([
       { path: "definitions/factory.yaml", bytes: Buffer.from("schemaVersion: 1\n") },
       { path: "definitions/workflows/build.yaml", bytes: Buffer.from("steps: []\n") },
+      { path: "definitions/ignored.png", bytes: Buffer.alloc(2 * 1024 * 1024) },
     ]);
     yield* Effect.gen(function* () {
       const app = yield* GitHubApp.GitHubApp;
@@ -348,6 +349,35 @@ it.effect("pins all definition contents to one commit with only contents:read", 
       expect(test.reads).toContain(
         `https://api.github.com/repos/owner/test/git/trees/${sha}?recursive=1`,
       );
+      test.setFiles([
+        { path: "definitions/factory.yaml", bytes: Buffer.from("schemaVersion: 4\n") },
+        {
+          path: "definitions/skills/proof/SKILL.md",
+          bytes: Buffer.from("---\nname: proof\ndescription: Evidence\n---\nRead scripts."),
+        },
+        {
+          path: "definitions/skills/proof/scripts/run.sh",
+          bytes: Buffer.from("#!/bin/sh\nexit 0\n"),
+        },
+        { path: "definitions/skills/proof/assets/data.bin", bytes: Buffer.from([0, 255, 1]) },
+      ]);
+      const v4Tree = test.definitionTree();
+      test.setTree({
+        ...v4Tree,
+        tree: v4Tree.tree.map((entry) =>
+          entry.path.endsWith("run.sh") ? { ...entry, mode: "100755" } : entry,
+        ),
+      });
+      const v4 = yield* app.readDefinition(definitionInput);
+      expect(v4.files).toHaveLength(4);
+      expect(v4.files.find((file) => file.path.endsWith("run.sh"))).toMatchObject({
+        mode: "100755",
+        encoding: "base64",
+        sha256: NodeCrypto.createHash("sha256").update("#!/bin/sh\nexit 0\n").digest("hex"),
+      });
+      expect(v4.files.find((file) => file.path.endsWith("data.bin"))?.content).toBe(
+        Buffer.from([0, 255, 1]).toString("base64"),
+      );
       const foreign = yield* app
         .readDefinition({ ...definitionInput, repositoryId: 99 })
         .pipe(Effect.flip);
@@ -356,12 +386,12 @@ it.effect("pins all definition contents to one commit with only contents:read", 
       expect((yield* app.readDefinition(definitionInput).pipe(Effect.flip)).reason).toBe(
         "forbidden",
       );
-      expect(test.scopes).toHaveLength(1);
+      expect(test.scopes).toHaveLength(2);
     }).pipe(Effect.provide(test.layer));
   }),
 );
 it.effect(
-  "rejects missing, truncated, unsafe and oversized definition trees before downloading files",
+  "rejects unsafe trees before downloads and applies legacy limits after reading the manifest",
   () =>
     Effect.gen(function* () {
       const test = fixture();
@@ -408,7 +438,11 @@ it.effect(
             "unavailable",
           );
         }
-        expect(test.reads.some((url) => url.includes("/contents/"))).toBe(false);
+        expect(
+          test.reads
+            .filter((url) => url.includes("/contents/"))
+            .every((url) => url.includes("/contents/definitions/factory.yaml?")),
+        ).toBe(true);
       }).pipe(Effect.provide(test.layer));
     }),
 );

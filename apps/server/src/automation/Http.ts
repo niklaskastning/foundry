@@ -38,13 +38,31 @@ export const layer = Layer.unwrap(
         `/api/foundry/automation/${path}`,
         Effect.gen(function* () {
           const request = yield* HttpServerRequest.HttpServerRequest;
-          const input = yield* HttpServerRequest.schemaBodyJson(schema);
+          const body = yield* request.text;
+          const input = yield* Schema.decodeEffect(Schema.fromJsonString(schema))(body);
+          if (
+            new TextEncoder().encode(body).byteLength > 3 * 1024 * 1024 &&
+            !(
+              path === "command" &&
+              typeof input === "object" &&
+              input !== null &&
+              "op" in input &&
+              input.op === "activateDefinition"
+            )
+          )
+            return HttpServerResponse.jsonUnsafe(
+              { _tag: "AutomationApplicationError", code: "invalid_input" },
+              { status: 409 },
+            );
           const result = yield* operation(request, input);
           return HttpServerResponse.jsonUnsafe(result, {
             headers: { "cache-control": "no-store" },
           });
         }).pipe(
-          Effect.provideService(HttpIncomingMessage.MaxBodySize, ByteSize.bytes(3 * 1024 * 1024)),
+          Effect.provideService(
+            HttpIncomingMessage.MaxBodySize,
+            ByteSize.bytes((path === "command" ? 64 : 3) * 1024 * 1024),
+          ),
           Effect.catch((error) =>
             Effect.succeed(
               HttpServerResponse.jsonUnsafe(

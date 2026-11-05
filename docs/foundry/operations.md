@@ -1226,3 +1226,43 @@ Gezielte Nachweise, jeweils ausschließlich gegen eigene temporäre PostgreSQL-C
 FOUNDRY_TEST_PG_BIN=/path/to/postgresql/bin vp run --filter t3 test:automation-postgres
 (cd apps/server && FOUNDRY_TEST_PG_BIN=/path/to/postgresql/bin node scripts/test-automation-session-reference.ts)
 ```
+
+### Modulare Definitionen v4 aktualisieren
+
+V4 verwendet getrennte Agenten-, Workflow- und MCP-Dateien sowie vollständige
+Skillverzeichnisse. Bestehende v1–v3-Definitionen werden nicht automatisch migriert.
+Die lokale Definition kann eine v4-Migration als Dateisatz für Review exportieren;
+Git-gebundene Factories übernehmen sie erst über ihren normalen PR-, Sync- und
+Aktivierungspfad. Laufende Runs behalten den vollständigen ursprünglichen Snapshot.
+
+Main benötigt Instanzschema 8 und Automation-Schema 11. Der Worker muss
+`definitionExecutionVersion: 4` melden; der Codex-Pfad verlangt mindestens CLI
+0.166.0. Ein älterer dedizierter Provider muss zuerst ohne Änderung seiner
+Anmeldedaten aktualisiert werden. Den getesteten Worker zuerst installieren,
+danach das immutable Main-Image aus demselben Revisionstand verwenden:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-factory-definition-v4 sha256:<digest> <commit>
+```
+
+Der Updater verlangt das aktive Schema-10-Profil, hält den gemeinsamen Lock,
+stoppt Main, sichert den koordinierten Stand und migriert die separate
+Automation-Datenbank. Migratorzugang wird anschließend wieder gesperrt.
+`manifest.json` und `success` halten vorherige und aktuelle Revision fest.
+Recovery auf Schema-10-Code benötigt den koordinierten Daten-/State-Stand;
+ein reiner Image-Downgrade reicht nicht. Updates innerhalb Schema 11 verwenden
+wieder `update`. Ein Update aktiviert keine neue Factorydefinition.
+
+MCP-Definitionen benötigen unter **Agents & skills → MCP runtime authorization**
+eine ausdrückliche Factory-Bindung an die konkrete Definition und deren Tools.
+Die Verbindung referenziert vorhandene Secret-Provider-Einträge; Secretwerte
+gehören weder ins Definitionsrepository noch in das Bindungsformular.
+Geänderte Ziele verlangen eine neue Bindung. Widerruf verhindert neue Starts;
+bereits laufende Arbeit wird über den Run-Abbruch beendet. Skillskripte werden
+beim Import nicht ausgeführt. Nur Codex mit den geprüften v4-Fähigkeiten wird
+für diesen Ausführungspfad zugelassen.
+
+Beim Auftrag werden die gepinnte Git-Basis und optional strukturierte
+Workflow-Eingaben angegeben. Die Run-Ansicht zeigt gespeicherte Conditions,
+Swarm-Zweige und Iterationen; einzelne Eingaben und Resultate werden auf Wunsch
+geladen. Technische Retries und fachliche Schleifen verwenden getrennte Budgets.

@@ -145,6 +145,36 @@ it.live(
         expect(rejected.status).toBe(400);
         expect(yield* Effect.promise(() => rejected.json())).toEqual({ code: "invalid_input" });
       }
+      const largeDefinition = yield* f.send(
+        `${AUTOMATION_API_V1}/command`,
+        " ".repeat(3 * 1024 * 1024) +
+          json({
+            op: "activateDefinition",
+            input: {
+              commandId: "definition",
+              factoryId: "factory",
+              scopeVersionId: "scope",
+              expectedVersionId: null,
+              files: [{ path: "factory.yaml", content: "schemaVersion: 4" }],
+              source: { kind: "files", reference: "fixture" },
+            },
+          }),
+      );
+      expect(largeDefinition.status).toBe(409);
+      expect(yield* Effect.promise(() => largeDefinition.json())).toEqual({ code: "conflict" });
+      const largeOrdinary = yield* f.send(
+        `${AUTOMATION_API_V1}/command`,
+        " ".repeat(3 * 1024 * 1024) +
+          json({
+            op: "createFactory",
+            commandId: "command",
+            id: "factory",
+            name: "Factory",
+            scopeVersionId: "scope",
+            repositories: ["repo"],
+          }),
+      );
+      expect(largeOrdinary.status).toBe(400);
       for (const method of ["POST", "GET"]) {
         const missing = yield* f.send("/api/foundry/v99/automation/command", json(input), method);
         expect(missing.status).toBe(404);

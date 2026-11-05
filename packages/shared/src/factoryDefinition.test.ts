@@ -157,6 +157,7 @@ describe("canonical factory definitions", () => {
     ];
     const parsed = validateFactoryFiles(input);
     if (Result.isFailure(parsed)) throw new Error(JSON.stringify(parsed.failure));
+    if (parsed.success.schemaVersion === 4) throw new Error("Expected legacy fixture");
     expect(validateFactoryFiles(exportFactoryFiles(parsed.success))).toEqual(parsed);
     const before = resolveFactoryWorkflow(parsed.success, "build");
     expect(before[0]).toMatchObject({
@@ -287,6 +288,7 @@ describe("canonical factory definitions", () => {
     input[1]!.content = JSON.stringify({ execution, steps });
     const parsed = validateFactoryFiles(input);
     if (Result.isFailure(parsed)) throw new Error(JSON.stringify(parsed.failure));
+    if (parsed.success.schemaVersion === 4) throw new Error("Expected legacy fixture");
     expect(parsed.success.workflows[0]?.execution).toEqual(execution);
     expect(validateFactoryFiles(exportFactoryFiles(parsed.success))).toEqual(parsed);
     expect(resolveFactoryWorkflow(parsed.success, "main")[0]).toMatchObject({
@@ -374,6 +376,7 @@ describe("canonical factory definitions", () => {
       input[1]!.content = JSON.stringify({ steps });
       const legacy = validateFactoryFiles(input);
       if (Result.isFailure(legacy)) throw new Error(JSON.stringify(legacy.failure));
+      if (legacy.success.schemaVersion === 4) throw new Error("Expected legacy fixture");
       expect(legacy.success.workflows[0]?.execution).toBeUndefined();
       expect(validateFactoryFiles(exportFactoryFiles(legacy.success))).toEqual(legacy);
     }

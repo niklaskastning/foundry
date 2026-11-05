@@ -1,3 +1,4 @@
+import { V4WorkflowConfiguration } from "./V4Configuration";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { isDefinitiveAutomationFailure } from "./failures";
 import { randomUUID } from "../../lib/utils";
@@ -6,10 +7,15 @@ import { useAtomValue } from "@effect/atom-react";
 import type {
   AutomationApplicationCommand,
   CanonicalFactoryDefinition,
+  LegacyCanonicalFactoryDefinition,
   EnvironmentId,
   FactoryDefinitionVersion,
 } from "@t3tools/contracts";
-import { exportFactoryFiles, validateFactoryFiles } from "@t3tools/shared/factoryDefinition";
+import {
+  exportFactoryFiles,
+  validateFactoryFiles,
+  migrateFactoryDefinitionV4,
+} from "@t3tools/shared/factoryDefinition";
 import * as Result from "effect/Result";
 import { AsyncResult } from "effect/reactivity";
 import { Button } from "../../components/ui/button";
@@ -18,7 +24,7 @@ import { Textarea } from "../../components/ui/textarea";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { automationCommands } from "./commands";
 
-type Step = CanonicalFactoryDefinition["workflows"][number]["steps"][number];
+type Step = LegacyCanonicalFactoryDefinition["workflows"][number]["steps"][number];
 export function DefinitionEditor({
   environmentId,
   factoryId,
@@ -64,6 +70,7 @@ export function DefinitionEditor({
     automationCommands.command.permissionAtom(environmentId, { op: "activateDefinition" }),
   );
   function replaceStep(workflowIndex: number, stepIndex: number, step: Step) {
+    if (definition.schemaVersion === 4) return;
     setPending(null);
     setDefinition({
       ...definition,
@@ -119,6 +126,70 @@ export function DefinitionEditor({
         "Activation failed. Check your permissions and refresh the current version before editing. Unconfirmed requests retain their command ID.",
       );
   }
+  if (definition.schemaVersion === 4)
+    return (
+      <section className="space-y-4" aria-label="Factory definition">
+        <h2 className="text-lg font-medium">Modular definition draft · v4</h2>
+        <p className="text-sm">
+          Review the complete file bundle before activation. Existing runs keep their pinned
+          resources.
+        </p>
+        {definition.workflows.map((workflow) => (
+          <details key={workflow.id} className="rounded-lg border p-3">
+            <summary className="cursor-pointer">{workflow.id}</summary>
+            <V4WorkflowConfiguration definition={definition} workflow={workflow} />
+          </details>
+        ))}
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={validate}>
+            Validate
+          </Button>
+          <Button disabled={busy || !permission} onClick={() => void activate()}>
+            Activate reviewed draft
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => setFilesText(JSON.stringify(exportFactoryFiles(definition), null, 2))}
+          >
+            Export files
+          </Button>
+          <Button variant="outline" onClick={onActivated}>
+            Reload active version
+          </Button>
+        </div>
+        <Textarea
+          aria-label="Definition files JSON"
+          value={filesText}
+          onChange={(event) => setFilesText(event.target.value)}
+        />
+        <Button
+          variant="outline"
+          onClick={() => {
+            try {
+              const parsed = validateFactoryFiles(JSON.parse(filesText));
+              if (Result.isFailure(parsed))
+                setMessage(
+                  parsed.failure.map((issue) => `${issue.file}: ${issue.message}`).join("\n"),
+                );
+              else {
+                setDefinition(parsed.success);
+                setPending(null);
+                setMessage("Imported locally. Review and activate explicitly.");
+              }
+            } catch {
+              setMessage("Enter a valid definition file bundle.");
+            }
+          }}
+        >
+          Import reviewed files
+        </Button>
+        {message ? (
+          <p role="status" className="whitespace-pre-wrap text-sm">
+            {message}
+          </p>
+        ) : null}
+      </section>
+    );
   return (
     <section className="space-y-4" aria-label="Factory definition">
       <div>
@@ -295,6 +366,23 @@ export function DefinitionEditor({
           Export files
         </Button>
       </div>
+      <Button
+        variant="outline"
+        onClick={() => {
+          try {
+            setFilesText(JSON.stringify(migrateFactoryDefinitionV4(definition), null, 2));
+            setMessage(
+              "Migration exported for review. Import it explicitly to prepare activation; the active definition is unchanged.",
+            );
+          } catch {
+            setMessage(
+              "This definition could not be migrated. Review its resource IDs and execution policy.",
+            );
+          }
+        }}
+      >
+        Prepare v4 migration for review
+      </Button>
       <details>
         <summary className="cursor-pointer text-sm">Import / export definition files</summary>
         <div className="space-y-2 pt-2">

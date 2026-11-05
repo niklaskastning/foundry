@@ -1,3 +1,4 @@
+import * as WorkerResources from "../../foundry/WorkerResources.ts";
 import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
 import {
   makeProviderTextDeltaCoalescer,
@@ -219,6 +220,54 @@ describe("CodexAdapterV2 runtime policy", () => {
       assert.equal(fullAccess.approvalPolicy, "never");
       assert.equal(fullAccess.approvalsReviewer, "user");
       assert.equal(fullAccess.sandboxPolicy?.type, "dangerFullAccess");
+      for (const access of ["read", "write"] as const) {
+        const resources = {
+          factoryId: "factory",
+          workspaceAccess: access,
+          mcpBindings: [],
+          resultSchema: { type: "boolean" as const },
+          resources: {
+            agent: { id: "reviewer", name: "Reviewer" },
+            instructions: "Review",
+            skills: [
+              {
+                id: "review",
+                name: "review",
+                description: "Review code",
+                directory: "skills/review",
+                files: [],
+              },
+            ],
+            mcp: [],
+            execution: { provider: "codex" as const },
+            provenance: {
+              instructions: [],
+              skills: [],
+              mcp: [],
+              execution: { provider: "factory" as const },
+            },
+          },
+        };
+        const pinned = yield* CodexAdapterV2.buildCodexTurnStartParams({
+          nativeThreadId: "foundry",
+          codexInput: [{ type: "text", text: "Review" }],
+          runtimePolicy: {
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            cwd: "/isolated/worktree",
+          },
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+          foundryResources: { directory: "/isolated/resources", request: resources },
+        });
+        assert.equal(pinned.approvalPolicy, "never");
+        assert.equal(pinned.sandboxPolicy?.type, access === "read" ? "readOnly" : "workspaceWrite");
+        assert.deepEqual(pinned.outputSchema, { type: "boolean" });
+        assert.deepEqual(pinned.input.at(-1), {
+          type: "skill",
+          name: "review",
+          path: "/isolated/resources/skills/review/SKILL.md",
+        });
+      }
     }),
   );
 
@@ -290,6 +339,7 @@ describe("CodexAdapterV2 native protocol logging", () => {
           params: {
             id: "evt-1",
             http_headers: { Authorization: "Bearer secret-codex-token" },
+            env: { DOCUMENTATION_CREDENTIAL: "secret-from-reference" },
             usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
           },
         },
@@ -316,6 +366,7 @@ describe("CodexAdapterV2 native protocol logging", () => {
             params: {
               id: "evt-1",
               http_headers: { Authorization: "[REDACTED]" },
+              env: "[REDACTED]",
               usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
             },
           },
@@ -2600,6 +2651,99 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(resumed.nativeThreadRef?.nativeId, nativeThreadId);
         assert.equal(resumed.status, "idle");
         assert.equal(DateTime.toEpochMillis(resumed.updatedAt), 1782622450000);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("initializes a recovered v4 session before reading inherited MCP configuration", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = "codex-v4-recovered-config";
+        const nativeThreadId = "native-v4-recovered";
+        const resources = {
+          factoryId: "fixture",
+          workspaceAccess: "read" as const,
+          mcpBindings: [],
+          resources: {
+            agent: { id: "review", name: "Review" },
+            instructions: "Review",
+            skills: [],
+            mcp: [],
+            execution: { provider: "codex" as const },
+            provenance: {
+              instructions: [],
+              skills: [],
+              mcp: [],
+              execution: { provider: "factory" as const },
+            },
+          },
+        };
+        const transcript = makeCodexReplayTranscript({
+          scenario,
+          entries: [
+            ...codexReplayPreamble({
+              nativeThreadId,
+              nativeTurnId: "unused",
+              prompt: "unused",
+            }).slice(0, 3),
+            {
+              type: "expect_outbound",
+              label: "config/read",
+              frame: {
+                id: 2,
+                method: "config/read",
+                params: { cwd: CODEX_TEST_RUNTIME_POLICY.cwd, includeLayers: false },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "config/read",
+              frame: { id: 2, result: { config: {}, origins: {} } },
+            },
+            {
+              type: "expect_outbound",
+              label: "thread/resume",
+              frame: {
+                id: 3,
+                method: "thread/resume",
+                params: {
+                  threadId: nativeThreadId,
+                  excludeTurns: true,
+                  config: {
+                    ...CodexAdapterV2.CODEX_THREAD_CONFIG,
+                    ...WorkerResources.codexResourceConfig(resources, {}),
+                  },
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "thread/resume",
+              frame: { id: 3, result: { thread: { id: nativeThreadId, updatedAt: 1782622450 } } },
+            },
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(
+          transcript,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          nativeThreadId,
+        );
+        yield* WorkerResources.prepareResources(
+          harness.serverConfig.stateDir,
+          harness.threadId,
+          resources,
+        );
+        const resumed = yield* harness.runtime.resumeThread({
+          providerThread: harness.providerThread,
+        });
+        assert.equal(resumed.status, "idle");
       }).pipe(
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),

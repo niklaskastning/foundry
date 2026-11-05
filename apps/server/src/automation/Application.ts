@@ -1,9 +1,11 @@
+import * as McpBindings from "./McpBindings.ts";
 import * as MachineAccess from "./MachineAccess.ts";
 import * as Handoffs from "./Handoffs.ts";
 import * as DefinitionSources from "./DefinitionSources.ts";
 import {
   ManualStart,
   FactoryExecutionDefaults,
+  FactoryDefinitionVersion,
   FoundryWorkerLaunchInput,
   AutomationApplicationCommand,
   AutomationApplicationError,
@@ -14,6 +16,8 @@ import {
   AutomationFactoryVersion,
   AutomationRun,
   AutomationWorkItem,
+  type AutomationWorkflowVersion,
+  type FactoryV4RunState,
   FoundryWorkerExecution,
   FoundryArtifactManifest,
 } from "@t3tools/contracts";
@@ -34,6 +38,48 @@ import * as WorkerTransport from "./WorkerTransport.ts";
 import * as Workflows from "./Workflows.ts";
 
 type Request = HttpServerRequest.HttpServerRequest;
+const publicWorkflow = (workflow: AutomationWorkflowVersion, ordinals?: ReadonlySet<number>) => ({
+  id: workflow.id,
+  factoryId: workflow.factoryId,
+  factoryVersionId: workflow.factoryVersionId,
+  ...(workflow.execution ? { execution: workflow.execution } : {}),
+  steps: workflow.steps
+    .filter((_, ordinal) => !ordinals || ordinals.has(ordinal))
+    .map((step) => {
+      if (!workflow.v4) return step;
+      const common = { id: step.id, dependsOn: step.dependsOn };
+      if (step.kind === "agent") return { ...common, kind: step.kind, prompt: step.id };
+      if (step.kind === "approval") return { ...common, kind: step.kind, prompt: step.id };
+      return { ...step, ...common };
+    }),
+});
+const publicRuntimeState = (state: FactoryV4RunState, offset: number) => ({
+  status: state.status,
+  ...(state.reason ? { reason: state.reason.slice(0, 500) } : {}),
+  startedAgentExecutions: state.startedAgentExecutions,
+  nodes: state.nodes.slice(offset, offset + 100).map((node) => ({
+    path: node.path,
+    scope: node.scope,
+    definition: { id: node.definition.id, kind: node.definition.kind },
+    status: node.status,
+    base: node.base,
+    ...(node.ordinal !== undefined ? { ordinal: node.ordinal } : {}),
+    ...(node.condition !== undefined ? { condition: node.condition } : {}),
+    ...(node.until !== undefined ? { until: node.until } : {}),
+    ...(node.iteration !== undefined ? { iteration: node.iteration } : {}),
+    ...(node.checkpoint ? { checkpoint: node.checkpoint } : {}),
+    ...(node.workspaceCheckpoint ? { workspaceCheckpoint: node.workspaceCheckpoint } : {}),
+    ...(node.reason ? { reason: node.reason.slice(0, 500) } : {}),
+    ...(node.cancelRequested !== undefined ? { cancelRequested: node.cancelRequested } : {}),
+    ...(node.approvalPath ? { approvalPath: node.approvalPath } : {}),
+  })),
+  nodesTotal: state.nodes.length,
+  nextNodeOffset: offset + 100 < state.nodes.length ? offset + 100 : null,
+});
+const publicOrigin = (definition: FactoryDefinitionVersion | null) =>
+  definition
+    ? { id: definition.id, contentHash: definition.contentHash, source: definition.source }
+    : null;
 const isApplicationError = Schema.is(AutomationApplicationError);
 const decodeQuery = Schema.decodeEffect(AutomationApplicationQuery, { onExcessProperty: "error" });
 const decodeCommand = Schema.decodeEffect(AutomationApplicationCommand, {
@@ -70,7 +116,7 @@ const error = (cause: unknown) => {
   if (isApplicationError(cause)) return cause;
   if (cause && typeof cause === "object") {
     const reason = "reason" in cause ? cause.reason : "code" in cause ? cause.code : null;
-    if (reason === "forbidden" || reason === "not_allowed")
+    if (reason === "forbidden" || reason === "not_allowed" || reason === "permission_denied")
       return new AutomationApplicationError({ code: "forbidden" });
     if (
       reason === "unsupported_provider" ||
@@ -151,6 +197,7 @@ const make = Effect.gen(function* () {
   const control = yield* Control.Control;
   const worker = yield* WorkerTransport.WorkerTransport;
   const dispatch = yield* DispatchStore.DispatchStore;
+  const mcpBindings = yield* McpBindings.McpBindings;
   const gateway = yield* GatewayGrants.GatewayGrants;
   const factory = Effect.fn("AutomationApplication.factory")(function* (factoryId: string) {
     const item = yield* factories.readFactory(factoryId);
@@ -246,6 +293,7 @@ const make = Effect.gen(function* () {
             "run",
             "attempts",
             "attempt",
+            "runtimeNode",
           ] as ReadonlyArray<string>
         ).includes(input.op)
       )
@@ -267,6 +315,9 @@ const make = Effect.gen(function* () {
     });
     const result = yield* Effect.gen(function* () {
       switch (input.op) {
+        case "mcpBindings":
+          yield* factories.readFactory(input.factoryId);
+          return { kind: "mcpBindings" as const, items: yield* mcpBindings.list(input.factoryId) };
         case "executionDefaults":
           return {
             kind: "executionDefaults" as const,
@@ -389,18 +440,48 @@ const make = Effect.gen(function* () {
         case "run": {
           const enrolled = yield* ownedRun(input.runId);
           const run = yield* workflows.readRun(input.factoryId, input.runId);
+          const pinnedWorkflow = yield* workflows.readVersion(
+            input.factoryId,
+            run.workflowVersionId,
+          );
+          const dispatchRun =
+            enrolled && pinnedWorkflow.v4
+              ? yield* dispatch.read(input.factoryId, input.runId)
+              : null;
+          const workflow = dispatchRun?.workflow ?? pinnedWorkflow;
+          const runtimeState = dispatchRun?.v4State
+            ? publicRuntimeState(dispatchRun.v4State, input.nodesAfter ?? 0)
+            : null;
+          const ordinals = runtimeState
+            ? new Set(
+                runtimeState.nodes.flatMap((node) =>
+                  node.ordinal === undefined ? [] : [node.ordinal],
+                ),
+              )
+            : undefined;
           return {
             kind: "run" as const,
             factoryName: (yield* factories.readFactory(run.factoryId)).name,
             workItem: yield* factories.readWorkItem(run.factoryId, run.workItemId),
             executionBinding: yield* runBinding(run.id),
-            definition: yield* runDefinition(run.factoryId, run.factoryVersionId),
+            definition: publicOrigin(yield* runDefinition(run.factoryId, run.factoryVersionId)),
             run,
-            workflow: yield* workflows.readVersion(input.factoryId, run.workflowVersionId),
+            workflow: publicWorkflow(workflow, ordinals),
+            ...(workflow.v4 ? { runtimeWorkflow: { limits: workflow.v4.workflow.limits } } : {}),
+            ...(runtimeState ? { runtimeState } : {}),
             control: enrolled
               ? yield* control.readAuthorized(identity, input.factoryId, input.runId)
               : null,
           };
+        }
+        case "runtimeNode": {
+          if (!(yield* ownedRun(input.runId)))
+            return yield* new AutomationApplicationError({ code: "not_found" });
+          yield* workflows.readRun(input.factoryId, input.runId);
+          const state = yield* dispatch.read(input.factoryId, input.runId);
+          const node = state.v4State?.nodes.find((item) => item.path === input.path);
+          if (!node) return yield* new AutomationApplicationError({ code: "not_found" });
+          return { kind: "runtimeNode" as const, node };
         }
         case "attempts": {
           yield* ownedRun(input.runId);
@@ -423,9 +504,27 @@ const make = Effect.gen(function* () {
           }>`SELECT result,request FROM foundry_automation.step_attempts WHERE run_id=${input.runId} AND command_id=${input.commandId}`;
           if (!rows[0]) return yield* new AutomationApplicationError({ code: "not_found" });
           const parsed = yield* decodeResult(rows[0].result ?? { execution: null, artifacts: [] });
+          const launch = Option.getOrNull(decodeLaunch(rows[0].request));
+          const resources = launch?.definitionV4?.resources;
+          const publicLaunch = launch
+            ? (() => {
+                const { definitionV4: _definitionV4, ...value } = launch;
+                return value;
+              })()
+            : null;
           return {
             kind: "attempt" as const,
-            launch: Option.getOrNull(decodeLaunch(rows[0].request)),
+            launch: publicLaunch,
+            ...(resources
+              ? {
+                  resources: {
+                    agent: resources.agent,
+                    instructions: resources.instructions,
+                    execution: resources.execution,
+                    provenance: resources.provenance,
+                  },
+                }
+              : {}),
             ...("publish" in parsed ? { ...parsed, execution: null, artifacts: [] } : parsed),
           };
         }
@@ -444,6 +543,7 @@ const make = Effect.gen(function* () {
       "setWorkerPaused",
       "createFactory",
       "configureExecutionDefaults",
+      "setMcpBinding",
       "activateDefinition",
       "configureDefinitionSource",
       "syncDefinitionSource",
@@ -468,6 +568,8 @@ const make = Effect.gen(function* () {
         });
         return { kind: "workerCapacity" as const, ...capacity, workerId: selected.deviceId };
       }
+      case "setMcpBinding":
+        return { kind: "mcpBinding" as const, binding: yield* mcpBindings.set(input.input) };
       case "configureExecutionDefaults":
         return {
           kind: "executionDefaults" as const,
@@ -526,9 +628,11 @@ const make = Effect.gen(function* () {
           factoryName: (yield* factories.readFactory(run.factoryId)).name,
           workItem: yield* factories.readWorkItem(run.factoryId, run.workItemId),
           executionBinding: yield* runBinding(run.id),
-          definition: yield* runDefinition(run.factoryId, run.factoryVersionId),
+          definition: publicOrigin(yield* runDefinition(run.factoryId, run.factoryVersionId)),
           run,
-          workflow: yield* workflows.readVersion(input.input.factoryId, run.workflowVersionId),
+          workflow: publicWorkflow(
+            yield* workflows.readVersion(input.input.factoryId, run.workflowVersionId),
+          ),
           control: yield* control.read(request, input.input.factoryId, input.input.id),
         };
       }

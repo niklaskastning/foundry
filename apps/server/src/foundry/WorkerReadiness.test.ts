@@ -16,7 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ExecutionStore from "./ExecutionStore.ts";
-import { WorkerReadiness, layer, providerState } from "./WorkerReadiness.ts";
+import { WorkerReadiness, layer, providerState, supportsDefinitionV4 } from "./WorkerReadiness.ts";
 
 const instanceId = ProviderInstanceId.make("codex-worker");
 const ready: ServerProvider = {
@@ -62,6 +62,15 @@ it("keeps installation, authentication, compatibility and availability failures 
   assert.strictEqual(providerState(undefined), "missing");
   for (const [changes, expected] of cases)
     assert.strictEqual(providerState({ ...ready, ...changes }), expected);
+  for (const [version, supported] of [
+    ["0.165.9", false],
+    ["0.166.0", true],
+    ["codex-cli 0.166.0", true],
+    ["1.0.0", true],
+    ["unknown", false],
+    [null, false],
+  ] as const)
+    assert.strictEqual(supportsDefinitionV4(version), supported);
 });
 
 function fixture(input: {

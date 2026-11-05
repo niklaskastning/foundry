@@ -13,6 +13,8 @@ describe("factory workspace links", () => {
       after: "cursor",
       attemptsAfter: "attempt-cursor",
       attemptId: "attempt",
+      nodeOffset: "100",
+      nodePath: "improve/iteration-2/review",
       inboxId: "decision",
       inboxStatus: "open",
       inboxKind: "approval",

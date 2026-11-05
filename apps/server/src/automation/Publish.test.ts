@@ -344,3 +344,79 @@ it.effect(
       expect(test.counts()).toEqual({ creations: 0, transfers: 0 });
     }),
 );
+
+it.effect("publishes the dependency checkpoint when v4 declares publish before its test", () =>
+  Effect.gen(function* () {
+    const test = fixture();
+    const publishNode = {
+      id: "publish",
+      kind: "publish" as const,
+      dependsOn: ["test"],
+      target: "pull_request" as const,
+    };
+    const testNode = { id: "test", kind: "test" as const, dependsOn: [], checkId: "check" };
+    const execution = test.execution;
+    const claim: DispatchStore.DispatchClaim = {
+      ...test.claim,
+      workflow: {
+        ...test.claim.workflow,
+        steps: [publishNode, testNode, { ...testNode, id: "unrelated", checkId: "unrelated" }],
+        v4: {
+          workflow: {
+            id: "flow",
+            limits: { maxConcurrentAgents: 1, maxAgentExecutions: 2 },
+            steps: [publishNode, testNode, { ...testNode, id: "unrelated", checkId: "unrelated" }],
+          },
+          agents: [],
+          skills: [],
+          mcp: [],
+          files: [],
+        },
+      },
+      v4State: {
+        status: "waiting",
+        inputs: {},
+        startedAgentExecutions: 0,
+        nodes: [
+          {
+            path: "publish",
+            scope: "",
+            definition: publishNode,
+            status: "ready",
+            ordinal: 0,
+            base: "a".repeat(40),
+          },
+          {
+            path: "test",
+            scope: "",
+            definition: testNode,
+            status: "succeeded",
+            ordinal: 1,
+            base: "a".repeat(40),
+          },
+        ],
+      },
+      attempts: test.claim.attempts.map((attempt) => ({
+        ...attempt,
+        ordinal: 1,
+        result: {
+          execution: {
+            ...execution,
+            lifecycle: {
+              ...execution.lifecycle!,
+              manifest: { ...execution.lifecycle!.manifest!, workspacePath: "/fixture" },
+            },
+          },
+          artifacts: [],
+        },
+      })),
+    };
+    test.setCurrent(claim);
+    const run = Publish.Publish.pipe(
+      Effect.flatMap((publisher) => publisher.execute(claim, "publish")),
+      Effect.provide(test.layer),
+    );
+    expect((yield* run.pipe(Effect.result))._tag).toBe("Failure");
+    expect((yield* run).state).toBe("published");
+  }),
+);

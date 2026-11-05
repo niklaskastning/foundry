@@ -1,3 +1,6 @@
+import { validateFactoryFiles } from "@t3tools/shared/factoryDefinition";
+import { stableStringify } from "@t3tools/shared/relaySigning";
+import * as Result from "effect/Result";
 import {
   type AutomationWorkflowVersion,
   type AutomationRun,
@@ -64,19 +67,22 @@ const make = Effect.gen(function* () {
   });
   const readVersion = Effect.fn("Workflows.readVersion")(function* (factoryId: string, id: string) {
     const rows = yield* sql<
-      Omit<AutomationWorkflowVersion, "execution"> & {
+      Omit<AutomationWorkflowVersion, "execution" | "v4"> & {
         execution: AutomationWorkflowVersion["execution"] | null;
+        v4: AutomationWorkflowVersion["v4"] | null;
       }
-    >`SELECT id,factory_id AS "factoryId",factory_version_id AS "factoryVersionId",steps,execution FROM foundry_automation.workflow_versions WHERE factory_id=${factoryId} AND id=${id}`;
+    >`SELECT id,factory_id AS "factoryId",factory_version_id AS "factoryVersionId",steps,execution,v4 FROM foundry_automation.workflow_versions WHERE factory_id=${factoryId} AND id=${id}`;
     if (!rows[0]) return yield* new Factories.AutomationError({ reason: "not_found" });
-    const { execution, ...version } = rows[0];
-    return { ...version, ...(execution ? { execution } : {}) };
+    const { execution, v4, ...version } = rows[0];
+    return { ...version, ...(execution ? { execution } : {}), ...(v4 ? { v4 } : {}) };
   }, Effect.mapError(operationError));
   const readRun = Effect.fn("Workflows.readRun")(function* (factoryId: string, id: string) {
-    const rows =
-      yield* sql<AutomationRun>`SELECT r.id,r.factory_id AS "factoryId",r.work_item_id AS "workItemId",r.workflow_version_id AS "workflowVersionId",r.factory_version_id AS "factoryVersionId",r.repository,r.revision,CASE WHEN c.mode IS NOT NULL AND c.mode<>'active' THEN c.mode ELSE COALESCE(d.state,r.state) END AS state FROM foundry_automation.runs r LEFT JOIN foundry_automation.dispatch_runs d ON d.run_id=r.id LEFT JOIN foundry_automation.run_controls c ON c.run_id=r.id WHERE r.factory_id=${factoryId} AND r.id=${id}`;
+    const rows = yield* sql<
+      Omit<AutomationRun, "inputs"> & { inputs: AutomationRun["inputs"] | null }
+    >`SELECT r.inputs,r.id,r.factory_id AS "factoryId",r.work_item_id AS "workItemId",r.workflow_version_id AS "workflowVersionId",r.factory_version_id AS "factoryVersionId",r.repository,r.revision,CASE WHEN c.mode IS NOT NULL AND c.mode<>'active' THEN c.mode ELSE COALESCE(d.state,r.state) END AS state FROM foundry_automation.runs r LEFT JOIN foundry_automation.dispatch_runs d ON d.run_id=r.id LEFT JOIN foundry_automation.run_controls c ON c.run_id=r.id WHERE r.factory_id=${factoryId} AND r.id=${id}`;
     if (!rows[0]) return yield* new Factories.AutomationError({ reason: "not_found" });
-    return rows[0];
+    const { inputs, ...run } = rows[0];
+    return { ...run, ...(inputs ? { inputs } : {}) };
   }, Effect.mapError(operationError));
   const createVersion = Effect.fn("Workflows.createVersion")(function* (
     raw: typeof CreateAutomationWorkflowVersion.Type,
@@ -84,11 +90,37 @@ const make = Effect.gen(function* () {
     const input = yield* decodeVersion(raw).pipe(
       Effect.mapError((cause) => new Factories.AutomationError({ reason: "invalid_input", cause })),
     );
+    if (input.v4) {
+      const parsed = validateFactoryFiles(input.v4.files);
+      if (
+        Result.isFailure(parsed) ||
+        parsed.success.schemaVersion !== 4 ||
+        input.steps.length ||
+        input.execution
+      )
+        return yield* new Factories.AutomationError({ reason: "invalid_input" });
+      const definition = parsed.success;
+      const workflow = definition.workflows.find((item) => item.id === input.v4!.workflow.id);
+      const expected = {
+        workflow,
+        agents: definition.agents,
+        skills: definition.skills,
+        mcp: definition.mcp,
+        files: definition.files,
+        ...(definition.defaults ? { defaults: definition.defaults } : {}),
+      };
+      if (
+        definition.factoryId !== input.factoryId ||
+        !workflow ||
+        stableStringify(expected) !== stableStringify(input.v4)
+      )
+        return yield* new Factories.AutomationError({ reason: "invalid_input" });
+    }
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         if (yield* claim(input.commandId, "workflowVersion", input)) {
           yield* factories.readVersion(input.factoryId, input.factoryVersionId);
-          yield* sql`INSERT INTO foundry_automation.workflow_versions(id,factory_id,factory_version_id,steps,execution) VALUES(${input.id},${input.factoryId},${input.factoryVersionId},${sql.json(input.steps)},${input.execution ? sql.json(input.execution) : null})`;
+          yield* sql`INSERT INTO foundry_automation.workflow_versions(id,factory_id,factory_version_id,steps,execution,v4) VALUES(${input.id},${input.factoryId},${input.factoryVersionId},${sql.json(input.steps)},${input.execution ? sql.json(input.execution) : null},${input.v4 ? sql.json(input.v4) : null})`;
         }
         return yield* readVersion(input.factoryId, input.id);
       }),
@@ -107,13 +139,15 @@ const make = Effect.gen(function* () {
             Effect.gen(function* () {
               const work = yield* factories.readWorkItem(input.factoryId, input.workItemId);
               const workflow = yield* readVersion(input.factoryId, input.workflowVersionId);
+              if (input.inputs && !workflow.v4)
+                return yield* new Factories.AutomationError({ reason: "invalid_input" });
               const version = yield* factories.readVersion(
                 input.factoryId,
                 workflow.factoryVersionId,
               );
               if (!version.repositories.includes(work.repository))
                 return yield* new Factories.AutomationError({ reason: "scope_mismatch" });
-              yield* sql`INSERT INTO foundry_automation.runs(id,factory_id,work_item_id,workflow_version_id,factory_version_id,repository,revision,state) VALUES(${input.id},${input.factoryId},${input.workItemId},${workflow.id},${version.id},${work.repository},${input.revision},'pending')`.pipe(
+              yield* sql`INSERT INTO foundry_automation.runs(id,factory_id,work_item_id,workflow_version_id,factory_version_id,repository,revision,inputs,state) VALUES(${input.id},${input.factoryId},${input.workItemId},${workflow.id},${version.id},${work.repository},${input.revision},${input.inputs ? sql.json(input.inputs) : null},'pending')`.pipe(
                 Effect.mapError(storageError),
               );
               yield* sql`INSERT INTO foundry_automation.outbox(id,run_id,kind,payload) VALUES(${input.commandId},${input.id},'run.created',${sql.json({ runId: input.id })})`.pipe(

@@ -179,10 +179,12 @@ function StartWorkflow({
     (workflow) => workflow.versionId === workflowVersionId,
   );
   const [workersOverride, setWorkers] = useState<ManualStart["workers"] | null>();
-  const execution = active?.definition.workflows.find(
-    (entry) => entry.id === workflow?.id,
-  )?.execution;
-  const parallel = execution?.mode === "parallel";
+  const execution =
+    active?.definition.schemaVersion !== 4
+      ? active?.definition.workflows.find((entry) => entry.id === workflow?.id)?.execution
+      : undefined;
+  const v4 = active?.definition.schemaVersion === 4;
+  const parallel = v4 || execution?.mode === "parallel";
   const workers = parallel
     ? workersOverride === undefined
       ? defaults?.workers
@@ -191,6 +193,7 @@ function StartWorkflow({
   const [projectOverride, setProjectId] = useState<string>();
   const [modelOverride, setModel] = useState<string>();
   const [revision, setRevision] = useState(`work-item:${item.id}`);
+  const [workflowInputs, setWorkflowInputs] = useState("{}");
   const [checksOverride, setChecks] = useState<string>();
   const [artifactsOverride, setArtifacts] = useState<string>();
   const projectId = projectOverride ?? defaults?.projectId ?? "";
@@ -203,7 +206,9 @@ function StartWorkflow({
   const model =
     modelOverride ??
     defaults?.model ??
-    active?.definition.defaults?.model ??
+    (active?.definition.schemaVersion === 4
+      ? active.definition.defaults?.execution.model
+      : active?.definition.defaults?.model) ??
     (firstAgent?.kind === "agent" ? firstAgent.resolved?.execution.model : undefined) ??
     "";
   const checks = checksOverride ?? JSON.stringify(defaults?.checks ?? [], null, 2);
@@ -237,6 +242,7 @@ function StartWorkflow({
           workItemId: item.id,
           workflowVersionId,
           revision,
+          ...(v4 ? { inputs: JSON.parse(workflowInputs) } : {}),
           projectId: workers?.[0]?.projectId ?? ProjectId.make(projectId),
           ...(workers ? { workers } : {}),
           model,
@@ -319,8 +325,9 @@ function StartWorkflow({
         {parallel ? (
           <div className="space-y-2 rounded-lg border p-3 text-sm">
             <p>
-              Parallel workflow · Up to {execution.maxParallelism} branches ·{" "}
-              {execution.maxRepairRounds} repair rounds
+              {v4
+                ? "Modular workflow · Limits and technical retries follow the pinned definition"
+                : `Parallel workflow · Up to ${execution?.maxParallelism} branches · ${execution?.maxRepairRounds} repair rounds`}
             </p>
             <label className="block space-y-1">
               <span>Repository commit SHA</span>
@@ -331,10 +338,22 @@ function StartWorkflow({
               />
             </label>
             <p className="text-xs text-muted-foreground">
-              Every agent starts from this pinned commit in an isolated worktree. Checks must use
-              cwd: "." to run in the join worktree.
+              The workflow starts from this pinned commit. Later steps use their explicit checkpoint
+              basis. Checks must use cwd: ".".
             </p>
           </div>
+        ) : null}
+        {v4 ? (
+          <label className="block space-y-1">
+            <span className="text-sm">Workflow inputs (JSON object)</span>
+            <Textarea
+              value={workflowInputs}
+              onChange={(event) => setWorkflowInputs(event.target.value)}
+            />
+            <span className="text-xs text-muted-foreground">
+              Pinned for this run. Use connection references for secrets.
+            </span>
+          </label>
         ) : null}
         {target ? (
           <div className="flex flex-wrap items-center gap-2 text-sm">

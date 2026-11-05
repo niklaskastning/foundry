@@ -1,4 +1,6 @@
 import { pipe } from "effect/Function";
+import * as WorkerResources from "../../foundry/WorkerResources.ts";
+import type { FoundryWorkerDefinitionV4 } from "@t3tools/contracts";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
@@ -748,6 +750,10 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     /** ChatGPT token sharing does not accept service tiers. */
     readonly omitServiceTier?: boolean;
     readonly appContext?: ProviderAdapter.ProviderAdapterV2TurnInput["appContext"];
+    readonly foundryResources?: {
+      readonly directory: string;
+      readonly request: FoundryWorkerDefinitionV4;
+    } | null;
   }) {
     const runtimeModeDefaults = codexRuntimeModeTurnDefaults(input.runtimePolicy.runtimeMode);
     const approvalPolicy =
@@ -790,7 +796,14 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
         : { ...t3Context, ...appContext };
     return yield* decodeCodexTurnStartParamsWithCollaborationMode({
       threadId: input.nativeThreadId,
-      input: input.codexInput,
+      input: [
+        ...input.codexInput,
+        ...(input.foundryResources?.request.resources.skills.map((skill) => ({
+          type: "skill",
+          name: skill.id,
+          path: `${input.foundryResources!.directory}/${skill.directory}/SKILL.md`,
+        })) ?? []),
+      ],
       ...(additionalContext ? { additionalContext } : {}),
       cwd: input.runtimePolicy.cwd,
       model: input.modelSelection.model,
@@ -802,6 +815,24 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
       ...(sandboxPolicy === undefined ? {} : { sandboxPolicy }),
       ...(effort === undefined ? {} : { effort }),
       ...(serviceTier === undefined ? {} : { serviceTier }),
+      ...(input.foundryResources
+        ? {
+            approvalPolicy: "never",
+            sandboxPolicy:
+              input.foundryResources.request.workspaceAccess === "read"
+                ? { type: "readOnly" }
+                : {
+                    type: "workspaceWrite",
+                    writableRoots: [input.runtimePolicy.cwd],
+                    networkAccess: false,
+                    excludeTmpdirEnvVar: true,
+                    excludeSlashTmp: true,
+                  },
+            ...(input.foundryResources.request.resultSchema
+              ? { outputSchema: input.foundryResources.request.resultSchema }
+              : {}),
+          }
+        : {}),
       // Codex supplies its own mode instructions; send both modes to clear Plan on exit.
       collaborationMode: {
         mode: input.runtimePolicy.interactionMode,
@@ -1337,6 +1368,7 @@ function codexThreadRuntimeParams(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly modelSelection?: { readonly model: string };
   readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+  readonly resourceConfig?: Readonly<Record<string, Schema.Json>>;
 }): {
   readonly cwd?: string;
   readonly model?: string;
@@ -1360,6 +1392,7 @@ function codexThreadRuntimeParams(input: {
               },
             },
           }),
+      ...input.resourceConfig,
     },
   };
 }
@@ -1485,6 +1518,7 @@ function redactCodexProtocolValue(value: unknown): unknown {
 function isSensitiveCodexProtocolKey(key: string): boolean {
   const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
   return (
+    normalized === "env" ||
     normalized.endsWith("authorization") ||
     normalized.endsWith("apikey") ||
     normalized.endsWith("token") ||
@@ -1637,6 +1671,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
     // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
     threadId === null ? Effect.succeed(undefined) : mcpSessions.read(threadId);
   const { clientFactory, crypto, fileSystem, idAllocator, serverConfig } = adapterOptions;
+  const foundryConfig = Effect.fn("CodexAdapterV2.foundryConfig")(function* (
+    threadId: ThreadId | null,
+  ) {
+    if (!threadId) return undefined;
+    const resources = yield* WorkerResources.readResources(serverConfig.stateDir, threadId);
+    if (!resources) return undefined;
+    if (resources.request.resources.skills.length && !resources.nativeDirectory)
+      return yield* new WorkerResources.WorkerResourceError({ reason: "invalid_resource" });
+    const secrets = yield* WorkerResources.resolveResourceSecrets(resources.request);
+    return WorkerResources.codexResourceConfig(resources.request, secrets);
+  });
   const continuationRequests = adapterOptions.continuationRequests;
 
   return ProviderAdapter.ProviderAdapterV2.of({
@@ -1671,6 +1716,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
           environment: resolvedRuntime?.environment ?? adapterOptions.environment,
+        });
+        const isolatedFoundryConfig = Effect.fn("CodexAdapterV2.isolatedFoundryConfig")(function* (
+          threadId: ThreadId | null,
+        ) {
+          const resourceConfig = yield* foundryConfig(threadId);
+          if (!resourceConfig) return undefined;
+          const inherited = yield* client.request("config/read", {
+            cwd: input.runtimePolicy.cwd,
+            includeLayers: false,
+          });
+          return WorkerResources.isolateCodexMcpConfig(
+            resourceConfig,
+            Reflect.get(inherited.config, "mcp_servers"),
+          );
         });
         const additionalContextByThread = yield* Ref.make(
           new Map<
@@ -6643,12 +6702,60 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           ) {
             const threadId = yield* getNativeThreadId(turnInput.providerThread);
             const mcpSession = yield* mcpSessions.read(turnInput.threadId);
+            const foundryResources = yield* WorkerResources.readResources(
+              serverConfig.stateDir,
+              turnInput.threadId,
+            );
+            if (foundryResources) {
+              const inventory = yield* client.request("mcpServerStatus/list", {
+                threadId,
+                detail: "full",
+                limit: 100,
+              });
+              WorkerResources.verifyMcpInventory(
+                foundryResources.request,
+                inventory.data,
+                inventory.nextCursor,
+              );
+              if (foundryResources.request.resources.skills.length) {
+                if (!foundryResources.nativeDirectory || !turnInput.runtimePolicy.cwd)
+                  return yield* new WorkerResources.WorkerResourceError({
+                    reason: "invalid_resource",
+                  });
+                const catalog = yield* client.request("skills/list", {
+                  cwds: [turnInput.runtimePolicy.cwd],
+                  forceReload: true,
+                });
+                for (const skill of foundryResources.request.resources.skills) {
+                  const expected = `${foundryResources.nativeDirectory}/${skill.directory}/SKILL.md`;
+                  if (
+                    !catalog.data.some((entry) =>
+                      entry.skills.some(
+                        (candidate) =>
+                          candidate.name === skill.id &&
+                          candidate.path === expected &&
+                          candidate.enabled,
+                      ),
+                    )
+                  )
+                    return yield* new WorkerResources.WorkerResourceError({
+                      reason: "invalid_resource",
+                    });
+                }
+              }
+            }
             const turnStartParams = yield* buildCodexTurnStartParams({
               nativeThreadId: threadId,
               codexInput,
               runtimePolicy: turnInput.runtimePolicy,
               modelSelection: turnInput.modelSelection,
-              hasT3Mcp: mcpSession !== undefined,
+              hasT3Mcp: !foundryResources && mcpSession !== undefined,
+              foundryResources: foundryResources
+                ? {
+                    ...foundryResources,
+                    directory: foundryResources.nativeDirectory ?? foundryResources.directory,
+                  }
+                : null,
               browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
@@ -7012,15 +7119,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           ensureThread: (threadInput) =>
             ensureInitialized.pipe(
               Effect.andThen(mcpSessions.read(threadInput.threadId)),
-              Effect.flatMap((mcpSession) =>
-                client.request(
-                  "thread/start",
-                  codexThreadRuntimeParams({
-                    mcpSession,
-                    modelSelection: threadInput.modelSelection,
-                    runtimePolicy: threadInput.runtimePolicy,
-                  }),
-                ),
+              Effect.flatMap(
+                Effect.fn("CodexAdapterV2.startConfiguredThread")(function* (mcpSession) {
+                  const resourceConfig = yield* isolatedFoundryConfig(threadInput.threadId);
+                  return yield* client.request(
+                    "thread/start",
+                    codexThreadRuntimeParams({
+                      mcpSession,
+                      modelSelection: threadInput.modelSelection,
+                      runtimePolicy: threadInput.runtimePolicy,
+                      ...(resourceConfig ? { resourceConfig } : {}),
+                    }),
+                  );
+                }),
               ),
               Effect.map((response): OrchestrationV2ProviderThread =>
                 providerThreadFromCodexThread({
@@ -7043,11 +7154,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             ),
           resumeThread: Effect.fn("CodexAdapterV2.resumeThread")(
             function* (threadInput) {
+              yield* ensureInitialized;
               const nativeThreadId = yield* getNativeThreadId(threadInput.providerThread);
+              const resourceConfig = yield* isolatedFoundryConfig(
+                threadInput.threadId ?? threadInput.providerThread.appThreadId,
+              );
               const resume = client.raw.request("thread/resume", {
                 threadId: nativeThreadId,
                 excludeTurns: true,
                 ...codexThreadRuntimeParams({
+                  ...(resourceConfig ? { resourceConfig } : {}),
                   mcpSession: yield* readMcpSession(
                     threadInput.threadId ?? threadInput.providerThread.appThreadId,
                   ),
@@ -7831,11 +7947,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
               // thread/revert requires the thread loaded in this app-server; resume after restart or idle release.
               if (!loaded) {
+                const resourceConfig = yield* isolatedFoundryConfig(
+                  threadInput.providerThread.appThreadId,
+                );
                 yield* client.raw.request("thread/resume", {
                   threadId,
                   excludeTurns: true,
                   ...codexThreadRuntimeParams({
                     mcpSession: yield* readMcpSession(threadInput.providerThread.appThreadId),
+                    ...(resourceConfig ? { resourceConfig } : {}),
                     modelSelection: input.modelSelection,
                     runtimePolicy: input.runtimePolicy,
                   }),

@@ -76,6 +76,7 @@ export class Publish extends Context.Service<
   {
     readonly prepareEvidence: (
       claim: DispatchStore.DispatchClaim,
+      stepId?: string,
     ) => Effect.Effect<typeof FoundryPublishRequest.Type | null, PublishError>;
     readonly execute: (
       claim: DispatchStore.DispatchClaim,
@@ -83,6 +84,23 @@ export class Publish extends Context.Service<
     ) => Effect.Effect<PublishOutcome, PublishError>;
   }
 >()("t3/automation/Publish") {}
+
+const v4PublishTests = (claim: DispatchStore.DispatchRun, stepId: string) => {
+  const nodes = claim.workflow.v4?.workflow.steps ?? [];
+  const publish = nodes.find((node) => node.id === stepId && node.kind === "publish");
+  const ancestors = new Set<string>();
+  const visit = (id: string) => {
+    if (ancestors.has(id)) return;
+    ancestors.add(id);
+    for (const dependency of nodes.find((node) => node.id === id)?.dependsOn ?? [])
+      visit(dependency);
+  };
+  for (const dependency of publish?.dependsOn ?? []) visit(dependency);
+  return nodes.filter(
+    (node): node is Extract<typeof node, { kind: "test" }> =>
+      node.kind === "test" && ancestors.has(node.id),
+  );
+};
 
 const validateEvidence = (
   claim: DispatchStore.DispatchRun,
@@ -96,28 +114,39 @@ const validateEvidence = (
     ...new Map(claim.attempts.map((attempt) => [attempt.ordinal, attempt])).values(),
   ];
   if (
-    index < 1 ||
-    attempts.filter((attempt) => attempt.ordinal < index).length !== index ||
-    attempts.some((attempt) => attempt.ordinal < index && attempt.state !== "succeeded")
+    (claim.workflow.v4 ? index < 0 : index < 1) ||
+    (claim.workflow.v4
+      ? !claim.v4State?.nodes.some((node) => node.path === stepId && node.status === "ready")
+      : attempts.filter((attempt) => attempt.ordinal < index).length !== index ||
+        attempts.some((attempt) => attempt.ordinal < index && attempt.state !== "succeeded"))
   )
     return null;
-  const required = claim.workflow.steps.slice(0, index).filter((step) => step.kind === "test");
+  const required = claim.workflow.v4
+    ? v4PublishTests(claim, stepId)
+    : claim.workflow.steps.slice(0, index).filter((step) => step.kind === "test");
   if (required.length === 0) return null;
-  const last = attempts.findLast((attempt) => attempt.ordinal < index && isResult(attempt.result));
+  const last = attempts.findLast(
+    (attempt) =>
+      isResult(attempt.result) &&
+      (claim.workflow.v4
+        ? required.some((node) => node.id === claim.workflow.steps[attempt.ordinal]?.id) &&
+          attempt.state === "succeeded"
+        : attempt.ordinal < index),
+  );
   const result = last ? decodeResult(last.result) : null;
   if (!result || result._tag === "None") return null;
   const execution = result.value.execution;
   const evidence = execution.lifecycle?.manifest?.publishEvidence;
   if (
     !evidence ||
-    (claim.workflow.execution &&
+    ((claim.workflow.execution || claim.workflow.v4) &&
       evidence.sourceCwd !== execution.lifecycle?.manifest?.workspacePath) ||
     !execution.lifecycle?.writerEnded ||
     execution.lifecycle.manifest?.outcome !== "completed"
   )
     return null;
   if (
-    evidence.checks.length !== required.length ||
+    (!claim.workflow.v4 && evidence.checks.length !== required.length) ||
     required.some((step) => {
       const configured = checks.find((check) => check.id === step.checkId);
       const confirmed = evidence.checks.find((check) => check.id === step.checkId);
@@ -133,6 +162,25 @@ const validateEvidence = (
     })
   )
     return null;
+  if (claim.workflow.v4) {
+    const tested = claim.v4State?.nodes.find((node) => node.ordinal === last?.ordinal);
+    if (
+      !tested ||
+      tested.status !== "succeeded" ||
+      evidence.commitSha !== tested.base ||
+      required.some(
+        (test) =>
+          !claim.v4State?.nodes.some(
+            (node) =>
+              node.scope === "" &&
+              node.definition.id === test.id &&
+              node.status === "succeeded" &&
+              node.base === evidence.commitSha,
+          ),
+      )
+    )
+      return null;
+  }
   if (evidence.bundle.reference.owner.threadId !== execution.receipt.threadId) return null;
   return { evidence, source: last! };
 };
@@ -280,13 +328,20 @@ export const serviceLayer = Layer.effect(
     const artifacts = yield* Artifacts.Artifacts;
     const prepareEvidence = Effect.fn("Publish.prepareEvidence")(function* (
       claim: DispatchStore.DispatchClaim,
+      stepId?: string,
     ) {
       if (!claim.workflow.steps.some((step) => step.kind === "publish")) return null;
       const configured = yield* decodeBinding(claim.binding);
       const binding = yield* github.binding(claim.run.repository);
-      const ids = claim.workflow.steps
-        .filter((step) => step.kind === "test")
-        .map((step) => step.checkId);
+      const tests = claim.workflow.v4
+        ? claim.workflow.v4.workflow.steps
+            .filter((node) => node.kind === "publish")
+            .map((node) => v4PublishTests(claim, node.id))
+            .filter((tests) => !stepId || tests.some((test) => test.id === stepId))
+            .flat()
+        : claim.workflow.steps.filter((step) => step.kind === "test");
+      if (claim.workflow.v4 && stepId && !tests.some((test) => test.id === stepId)) return null;
+      const ids = [...new Set(tests.map((step) => step.checkId))];
       const checks = ids.map((id) => configured.checks.find((check) => check.id === id));
       if (!ids.length || checks.some((check) => !check))
         return yield* new PublishError({ reason: "evidence_required" });

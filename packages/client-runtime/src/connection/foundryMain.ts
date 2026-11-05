@@ -75,6 +75,20 @@ export const make = Effect.fn("FoundryMain.make")(function* (
         : Effect.fail(blocked());
     const response = Effect.fn("FoundryGateway.request")(
       function* (path: string, body?: unknown, acceptErrors = false) {
+        const definitionTransfer =
+          path.startsWith("/api/foundry/automation/") &&
+          typeof body === "object" &&
+          body !== null &&
+          "op" in body &&
+          [
+            "factory",
+            "definitionRevision",
+            "definitionRevisionFile",
+            "runtimeNode",
+            "activateDefinition",
+            "activateDefinitionRevision",
+          ].includes(String(body.op));
+        const responseLimit = definitionTransfer ? 64 * 1024 * 1024 : 3 * 1024 * 1024;
         const url = `${origin}${path}`;
         let req = HttpClientRequest.make(body === undefined ? "GET" : "POST")(url).pipe(
           HttpClientRequest.setHeaders({
@@ -128,7 +142,7 @@ export const make = Effect.fn("FoundryMain.make")(function* (
             (state, bytes) => {
               if (
                 state.size + bytes.byteLength >
-                Math.min(options.maxResponseBytes ?? 512 * 1024, 3 * 1024 * 1024)
+                Math.min(options.maxResponseBytes ?? 512 * 1024, responseLimit)
               )
                 return Effect.fail(unavailable());
               state.parts.push(bytes);

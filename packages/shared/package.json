@@ -526,6 +526,10 @@
     "./foundryBuild": {
       "types": "./src/foundryBuild.ts",
       "import": "./src/foundryBuild.ts"
+    },
+    "./factoryDefinitionV4": {
+      "types": "./src/factoryDefinitionV4.ts",
+      "import": "./src/factoryDefinitionV4.ts"
     }
   },
   "scripts": {

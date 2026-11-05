@@ -1,3 +1,4 @@
+import { V4Catalog, V4WorkflowConfiguration } from "./V4Configuration";
 import type { FactoryDefinitionVersion } from "@t3tools/contracts";
 import { resolveFactoryWorkflow } from "@t3tools/shared/factoryDefinition";
 
@@ -7,16 +8,17 @@ export function AgentCatalog({ active }: { active: FactoryDefinitionVersion | nu
       <p className="text-sm">Activate a definition to see its agents, skills and workflows.</p>
     );
   const definition = active.definition;
-  const roles = definition.roles ?? [];
+  const roles = definition.schemaVersion === 4 ? [] : (definition.roles ?? []);
   return (
     <section className="space-y-6" aria-label="Factory agents and skills">
       <div>
         <h2 className="text-lg font-medium">Agents & skills</h2>
         <p className="text-sm text-muted-foreground">
-          Roles available to new runs. Each workflow adds its own task and can override the model.
+          Reusable agents for new runs. Each workflow adds its task and execution settings.
         </p>
       </div>
-      {roles.length === 0 ? (
+      {definition.schemaVersion === 4 ? <V4Catalog definition={definition} /> : null}
+      {roles.length === 0 && definition.schemaVersion !== 4 ? (
         <p className="text-sm">
           This definition uses prompt steps without reusable roles. Its existing workflows remain
           available.
@@ -31,10 +33,14 @@ export function AgentCatalog({ active }: { active: FactoryDefinitionVersion | nu
               <div>
                 <dt className="text-xs text-muted-foreground">Model / reasoning</dt>
                 <dd className="mt-1 break-words">
-                  {role.execution?.model ?? definition.defaults?.model ?? "Worker binding default"}
+                  {role.execution?.model ??
+                    (definition.schemaVersion !== 4 ? definition.defaults?.model : undefined) ??
+                    "Worker binding default"}
                   {" · "}
                   {role.execution?.options?.reasoningEffort ??
-                    definition.defaults?.options?.reasoningEffort ??
+                    (definition.schemaVersion !== 4
+                      ? definition.defaults?.options?.reasoningEffort
+                      : undefined) ??
                     "Provider default"}
                 </dd>
               </div>
@@ -55,7 +61,9 @@ export function AgentCatalog({ active }: { active: FactoryDefinitionVersion | nu
                 <dd className="mt-1 break-words">
                   {definition.workflows
                     .filter((workflow) =>
-                      workflow.steps.some((step) => step.kind === "agent" && step.role === role.id),
+                      workflow.steps.some(
+                        (step) => step.kind === "agent" && "role" in step && step.role === role.id,
+                      ),
                     )
                     .map((workflow) => workflow.id)
                     .join(", ") || "Not used by a workflow yet"}
@@ -71,7 +79,7 @@ export function AgentCatalog({ active }: { active: FactoryDefinitionVersion | nu
           </article>
         ))}
       </div>
-      {definition.skills?.length ? (
+      {definition.schemaVersion !== 4 && definition.skills?.length ? (
         <section className="space-y-2" aria-label="Versioned skills">
           <h3 className="font-medium">Versioned instruction skills</h3>
           {definition.skills.map((skill) => (
@@ -106,12 +114,14 @@ export function AgentCatalog({ active }: { active: FactoryDefinitionVersion | nu
           <summary className="cursor-pointer">Revision and configuration rules</summary>
           <div className="space-y-2 break-words pt-3 text-muted-foreground">
             <p>
-              Settings: factory defaults → role settings → step overrides. A missing model uses the
-              worker binding.
+              {definition.schemaVersion === 4
+                ? "Settings: factory → agent → workflow → step. Resources are added without changing the base agent."
+                : "Settings: factory defaults → role settings → step overrides."}{" "}
+              A missing model uses the worker binding.
             </p>
             <p>
-              Execution supports Codex, instruction skills, model and reasoning settings. Worker
-              projects and permissions are configured separately.
+              Execution uses Codex with checked capabilities. Worker projects, MCP authorization and
+              permissions are configured separately.
             </p>
             <dl className="space-y-2">
               <div>
@@ -152,6 +162,12 @@ export function WorkflowConfiguration({
   active: FactoryDefinitionVersion;
   workflowId: string;
 }) {
+  if (active.definition.schemaVersion === 4) {
+    const workflow = active.definition.workflows.find((item) => item.id === workflowId);
+    return workflow ? (
+      <V4WorkflowConfiguration definition={active.definition} workflow={workflow} />
+    ) : null;
+  }
   const steps = resolveFactoryWorkflow(active.definition, workflowId);
   return (
     <ol className="space-y-3 pt-3 text-sm">

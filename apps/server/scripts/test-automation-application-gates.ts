@@ -1,3 +1,4 @@
+import * as McpBindings from "../src/automation/McpBindings.ts";
 import * as DispatchStore from "../src/automation/DispatchStore.ts";
 import * as MachineAccess from "../src/automation/MachineAccess.ts";
 import * as MachineCredentials from "../src/foundry/MachineCredentials.ts";
@@ -116,6 +117,7 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     Layer.provide(database),
   );
   const layer = Application.layer.pipe(
+    Layer.provide(McpBindings.layer),
     Layer.provide(DispatchStore.layer),
     Layer.provide(machineAccess),
     Layer.provide(Layer.mock(Handoffs.Handoffs)({ query: unused, execute: unused })),
@@ -602,6 +604,104 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
         NodeAssert.equal(nextRecent.next, null);
       }
     }
+    const approvalNode = {
+      id: "review",
+      kind: "approval",
+      instructions: "Review pinned result",
+      dependsOn: [],
+    } as const;
+    const loopNode = {
+      id: "loop",
+      kind: "loop",
+      dependsOn: [],
+      maxIterations: 100,
+      onExhausted: "fail",
+      until: { eq: [{ value: false }, { value: true }] },
+      steps: [approvalNode],
+    } as const;
+    const snapshot = {
+      workflow: {
+        id: "paged",
+        limits: { maxConcurrentAgents: 1, maxAgentExecutions: 100 },
+        steps: [loopNode],
+      },
+      agents: [],
+      skills: [],
+      mcp: [],
+      files: [],
+    };
+    const nodeState = {
+      status: "running",
+      startedAgentExecutions: 0,
+      inputs: {},
+      nodes: [
+        {
+          path: "loop",
+          scope: "",
+          definition: loopNode,
+          status: "running",
+          base: "a".repeat(40),
+          iteration: 100,
+        },
+        ...Array.from({ length: 100 }, (_, ordinal) => ({
+          path: `loop/iteration-${ordinal + 1}/review`,
+          scope: `loop/iteration-${ordinal + 1}`,
+          definition: approvalNode,
+          status: ordinal === 99 ? "ready" : "succeeded",
+          base: "a".repeat(40),
+          ordinal,
+          output: { text: "x".repeat(60000) },
+        })),
+      ],
+    };
+    yield* sql`INSERT INTO foundry_automation.workflow_versions(id,factory_id,factory_version_id,steps,v4) VALUES('p21-v4-workflow','p21-a',${active.version.factoryVersionId},'[]',${sql.json(snapshot)})`;
+    yield* sql`INSERT INTO foundry_automation.runs(id,factory_id,work_item_id,workflow_version_id,factory_version_id,repository,revision,state) VALUES('p21-v4-run','p21-a','p21-work','p21-v4-workflow',${active.version.factoryVersionId},'fixture-repo',${"a".repeat(40)},'pending')`;
+    yield* sql`INSERT INTO foundry_automation.dispatch_runs(run_id,worker_id,binding,v4_state) VALUES('p21-v4-run','fixture-worker',${sql.json({ identity, projectId: "worker-project", model: "fixture", checks: [], requiredArtifacts: [] })},${sql.json(nodeState)})`;
+    yield* sql`INSERT INTO foundry_automation.run_controls(run_id) VALUES('p21-v4-run')`;
+    const runtimePage = yield* app.query(operate, {
+      op: "run",
+      factoryId: "p21-a",
+      runId: "p21-v4-run",
+    });
+    NodeAssert.equal(runtimePage.kind, "run");
+    if (runtimePage.kind === "run") {
+      NodeAssert.equal(runtimePage.runtimeState?.nodes.length, 100);
+      NodeAssert.equal(runtimePage.runtimeState?.nodesTotal, 101);
+      NodeAssert.equal(runtimePage.runtimeState?.nextNodeOffset, 100);
+      NodeAssert.ok(encodeJson(runtimePage).length < 100000);
+      NodeAssert.ok(!encodeJson(runtimePage).includes("x".repeat(100)));
+    }
+    const nextNodes = yield* app.query(operate, {
+      op: "run",
+      factoryId: "p21-a",
+      runId: "p21-v4-run",
+      nodesAfter: 100,
+    });
+    if (nextNodes.kind === "run") {
+      NodeAssert.equal(nextNodes.runtimeState?.nodes[0]?.ordinal, 99);
+      NodeAssert.equal(nextNodes.runtimeState?.nextNodeOffset, null);
+      NodeAssert.equal(nextNodes.workflow.steps[0]?.id, "loop/iteration-100/review");
+    }
+    const node = yield* app.query(operate, {
+      op: "runtimeNode",
+      factoryId: "p21-a",
+      runId: "p21-v4-run",
+      path: "loop/iteration-100/review",
+    });
+    NodeAssert.equal(node.kind, "runtimeNode");
+    if (node.kind === "runtimeNode")
+      NodeAssert.deepEqual(node.node.output, { text: "x".repeat(60000) });
+    NodeAssert.equal(
+      (yield* app
+        .query(machineB, {
+          op: "runtimeNode",
+          factoryId: "p21-a",
+          runId: "p21-v4-run",
+          path: "loop/iteration-100/review",
+        })
+        .pipe(Effect.flip)).code,
+      "forbidden",
+    );
     yield* sql`UPDATE foundry_automation.work_items SET state='completed' WHERE id='p21-work'`;
     const openWork = yield* app.query(operate, {
       op: "workItems",

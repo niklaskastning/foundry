@@ -46,6 +46,7 @@ export const decideStep = (input: {
     execution.run.checkpointId !== manifest.checkpointId
   )
     return { state: "finalizing", reason: "checkpoint_pending" };
+  if (manifest.resourceFailure) return { state: "failed", reason: "resources_changed" };
   if (manifest.publishEvidenceFailure)
     return {
       state: "failed",

@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  type FactoryV4RunState,
   AuthSessionId,
   CheckpointId,
   CheckpointRef,
@@ -43,6 +44,7 @@ import * as Artifacts from "../foundry/Artifacts.ts";
 import * as ThreadArchive from "../foundry/ThreadArchive.ts";
 import * as DispatchStore from "./DispatchStore.ts";
 import * as Publish from "./Publish.ts";
+import * as McpBindings from "./McpBindings.ts";
 import * as Scheduler from "./Scheduler.ts";
 import * as WorkerTransport from "./WorkerTransport.ts";
 import { decideStep } from "./stepDecision.ts";
@@ -301,6 +303,16 @@ it("requires matching final worker, checkpoint, archive and test evidence", () =
     });
     assert.deepEqual(result, { state: "failed", reason: `publish_${reason}` });
   }
+  assert.deepEqual(
+    decideStep({
+      ...good,
+      execution: {
+        ...good.execution,
+        lifecycle: { ...lifecycle, manifest: { ...manifest, resourceFailure: "changed" } },
+      },
+    }),
+    { state: "failed", reason: "resources_changed" },
+  );
   const testEvent = good.events[3]!;
   assert.equal(testEvent.event.type, "turn-item.updated");
   if (
@@ -635,6 +647,7 @@ it.effect(
       };
       const unsupported = Effect.die("Unexpected fixture operation");
       let activeWorkflow = run.workflow;
+      let activeV4State: FactoryV4RunState | undefined;
       let activeBinding = run.binding;
       let workerPaused = false;
       const repairRequests: string[] = [];
@@ -646,6 +659,17 @@ it.effect(
       let reasoningEfforts = ["high"];
       let projectReady = true;
       const store = DispatchStore.DispatchStore.of({
+        reconcileV4: () =>
+          Effect.succeed({
+            ...run,
+            workflow: activeWorkflow,
+            binding: activeBinding,
+            mode,
+            state,
+            reason,
+            attempts: [...attempts],
+            ...(activeV4State ? { v4State: activeV4State } : {}),
+          }),
         configureWorker: () => unsupported,
         confirmUndelivered: () => Effect.succeed(true),
         deliveryState: () => Effect.succeed("pending"),
@@ -691,6 +715,7 @@ it.effect(
           Effect.succeed({
             ...run,
             workflow: activeWorkflow,
+            ...(activeV4State ? { v4State: activeV4State } : {}),
             binding: activeBinding,
             mode,
             state,
@@ -701,6 +726,7 @@ it.effect(
           Effect.sync(() => ({
             ...run,
             workflow: activeWorkflow,
+            ...(activeV4State ? { v4State: activeV4State } : {}),
             binding: activeBinding,
             mode,
             state,
@@ -784,6 +810,7 @@ it.effect(
             occupied: 0,
             free: 2,
             parallelExecutionVersion: 1,
+            definitionExecutionVersion: 4,
             activeRuns: 0,
           }),
         read: (_identity, input) =>
@@ -1140,6 +1167,7 @@ it.effect(
         const cancelCount = cancellations;
         yield* scheduler.tick;
         assert.equal(launches.length, cancelStart + 2);
+
         mode = "cancel_requested";
         yield* scheduler.tick;
         assert.equal(cancellations, cancelCount + 2);
@@ -1159,12 +1187,137 @@ it.effect(
         yield* scheduler.tick;
         assert.deepEqual(repairRequests, [failedCommand]);
         assert.equal(launches.length, cancelStart + 2);
+        const otherIdentity = {
+          ...proof.identity,
+          deviceId: FoundryDeviceId.make("99999999-9999-4999-8999-999999999999"),
+        };
+        const source = {
+          id: "source",
+          kind: "agent" as const,
+          agent: "fixture-agent",
+          instructions: "Source",
+          dependsOn: [],
+        };
+        const unrelated = { ...source, id: "unrelated" };
+        const checkNode = {
+          id: "check",
+          kind: "test" as const,
+          dependsOn: ["source"],
+          checkId: "check",
+          workspace: {
+            access: "read" as const,
+            from: { ref: "steps.source.artifacts.checkpoint" },
+          },
+        };
+        const checkpoint = {
+          commitSha: "b".repeat(40),
+          commandId: "source-command",
+          generation: 1,
+          workerId: otherIdentity.deviceId,
+        };
+        activeWorkflow = {
+          ...run.workflow,
+          steps: [
+            { id: "source", kind: "agent", prompt: "Source", dependsOn: [] },
+            { id: "unrelated", kind: "agent", prompt: "Unrelated", dependsOn: [] },
+            { id: "check", kind: "test", checkId: "check", dependsOn: [] },
+          ],
+          v4: {
+            workflow: {
+              id: "fixture",
+              limits: { maxConcurrentAgents: 2, maxAgentExecutions: 4 },
+              steps: [source, unrelated, checkNode],
+            },
+            agents: [
+              {
+                id: "fixture-agent",
+                name: "Fixture",
+                description: "Fixture",
+                instructions: "Fixture",
+                skills: [],
+                mcp: [],
+              },
+            ],
+            skills: [],
+            mcp: [],
+            files: [],
+          },
+        };
+        activeV4State = {
+          status: "running",
+          startedAgentExecutions: 2,
+          inputs: {},
+          nodes: [
+            {
+              path: "source",
+              scope: "",
+              definition: source,
+              ordinal: 0,
+              status: "succeeded",
+              base: "a".repeat(40),
+              checkpoint,
+            },
+            {
+              path: "unrelated",
+              scope: "",
+              definition: unrelated,
+              ordinal: 1,
+              status: "succeeded",
+              base: "a".repeat(40),
+            },
+            {
+              path: "check",
+              scope: "",
+              definition: checkNode,
+              ordinal: 2,
+              status: "ready",
+              base: checkpoint.commitSha,
+              workspaceCheckpoint: checkpoint,
+            },
+          ],
+        };
+        const projectId = ProjectId.make("own-fixture-project");
+        activeBinding = {
+          ...decodeDispatchBinding(run.binding),
+          checks: [{ id: "check", prompt: "Run check", command: "test -f checked", cwd: "." }],
+          requiredArtifacts: [],
+          workers: [
+            { identity: proof.identity, projectId },
+            { identity: otherIdentity, projectId },
+          ],
+        };
+        attempts.length = 0;
+        executions.clear();
+        mode = "active";
+        for (const [ordinal, identity] of [
+          [0, otherIdentity],
+          [1, proof.identity],
+        ] as const)
+          attempts.push({
+            ordinal,
+            commandId: `completed-${ordinal}`,
+            request: {},
+            state: "succeeded",
+            reason: null,
+            receipt: null,
+            result: { execution: proof.execution, artifacts: [] },
+            workerId: identity.deviceId,
+            workerBinding: { identity, projectId },
+            capacityReleased: true,
+          });
+        const beforeV4 = launches.length;
+        yield* scheduler.tick;
+        assert.equal(launches.length, beforeV4 + 1);
+        assert.equal(attempts[2]?.workerId, otherIdentity.deviceId);
+        assert.equal(launches.at(-1)?.workspaceRevision, checkpoint.commitSha);
+        assert.equal(launches.at(-1)?.definitionV4?.workspaceAccess, "read");
       }).pipe(
         Effect.provide(
           Scheduler.layer.pipe(
             Layer.provide(
               Layer.mergeAll(
                 Layer.succeed(DispatchStore.DispatchStore, store),
+                Layer.mock(McpBindings.McpBindings)({ authorize: () => Effect.succeed([]) }),
                 Layer.succeed(WorkerTransport.WorkerTransport, worker),
                 Layer.succeed(ThreadArchive.ThreadArchive, archive),
                 Layer.succeed(Artifacts.Artifacts, artifacts),

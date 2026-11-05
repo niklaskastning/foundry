@@ -50,7 +50,7 @@ const make = Effect.gen(function* () {
     yield* sql`
       WITH owned AS (
         SELECT r.id AS run_id,r.factory_id,r.work_item_id,w.title,d.state,d.reason,d.binding,
-          c.revision,c.result_revision,c.mode,v.steps,
+          c.revision,c.result_revision,c.mode,v.steps,d.v4_state,
           (SELECT a.receipt->'receipt'->>'threadId' FROM foundry_automation.step_attempts a
             WHERE a.run_id=r.id ORDER BY a.ordinal DESC,a.attempt_number DESC LIMIT 1) AS thread_id
         FROM foundry_automation.runs r
@@ -98,8 +98,9 @@ const make = Effect.gen(function* () {
               'No confirmed publish commit. Publishing stays blocked until matching commit and test evidence exists.')
             ELSE COALESCE(s.step->>'prompt','Review the current result before publication.') END
         FROM owned o CROSS JOIN LATERAL (
-          SELECT step,ordinality FROM jsonb_array_elements(o.steps) WITH ORDINALITY AS steps(step,ordinality)
-          WHERE NOT EXISTS (SELECT 1 FROM foundry_automation.step_attempts a
+          SELECT step,ordinality FROM (
+            SELECT step,ordinality FROM jsonb_array_elements(o.steps) WITH ORDINALITY AS steps(step,ordinality)
+            WHERE o.v4_state IS NULL AND (NOT EXISTS (SELECT 1 FROM foundry_automation.step_attempts a
             WHERE a.run_id=o.run_id AND a.ordinal=ordinality-1 AND a.state='succeeded')
           OR (o.reason='approval_revision_changed' AND step->>'kind'='approval'
             AND NOT EXISTS (SELECT 1 FROM foundry_automation.run_decisions decision
@@ -107,7 +108,15 @@ const make = Effect.gen(function* () {
                 AND decision.result_revision=o.result_revision AND decision.revision=(
                   SELECT max(latest.revision) FROM foundry_automation.run_decisions latest
                   WHERE latest.run_id=o.run_id AND latest.step_id=decision.step_id)))
-          ORDER BY ordinality LIMIT 1
+            )
+
+            UNION ALL
+            SELECT (node->'definition') || jsonb_build_object('id',node->>'path','prompt',node->'definition'->>'instructions'),
+              ((node->>'ordinal')::bigint + 1) AS ordinality
+            FROM jsonb_array_elements(o.v4_state->'nodes') node
+            WHERE node->>'status' IN ('ready','waiting')
+              AND node->'definition'->>'kind' IN ('approval','publish')
+          ) eligible ORDER BY ordinality LIMIT 1
         ) s
         WHERE s.step->>'kind' IN ('approval','publish')
         UNION ALL
