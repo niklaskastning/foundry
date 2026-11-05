@@ -1,3 +1,4 @@
+import { machineBearerToken } from "./MachineCredentials.ts";
 import { FoundryAuthError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -9,6 +10,8 @@ import * as FoundrySessions from "./FoundrySessions.ts";
 
 export const authenticate = Effect.fn("ClientIdentity.authenticate")(
   function* (request: HttpServerRequest.HttpServerRequest) {
+    if (machineBearerToken(request.headers.authorization) !== undefined)
+      return yield* new FoundryAuthError({ code: "invalid_session" });
     const sessions = yield* FoundrySessions.FoundrySessions;
     const auth = yield* EnvironmentAuth.EnvironmentAuth;
     const { origin } = yield* DeviceConfig.DeviceOrigin;

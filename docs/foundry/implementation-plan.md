@@ -24,7 +24,7 @@ Die ausführlichen bisherigen Prüf- und Deploymentnachweise sind nach [Basic-Le
 **P58a – erster Schnitt:** Die versionierte HTTP-API und ihr maschinenlesbarer
 Vertrag verwenden die vorhandenen Benutzersitzungen und zentralen Services.
 Funktionale HTTP-/PostgreSQL-Nachweise bestätigen UI/API-Gleichheit,
-Command-Wiederholung und Rechteabweisung. Maschinen-Credentials, P58b/MCP und
+Command-Wiederholung und Rechteabweisung. Maschinen-Ausführung, P58b/MCP und
 vollständiges G12 bleiben offen; der Schnitt erteilt keine neue Provider-Freigabe.
 
 ## Umsetzungsreihenfolge ab P17
@@ -32,7 +32,7 @@ vollständiges G12 bleiben offen; der Schnitt erteilt keine neue Provider-Freiga
 1. **Worker:** P17 / G3 abschließen; die Basis P01–P16 ist integriert.
 2. **Factory-MVP:** P18a → P18b → P47 → P38a → P38b → P19 → P20 → P21 → P49 → P22 → P23 → P24 / G4. P22/P24 können nach P19 unabhängig vom UI-Anschluss entstehen.
 3. **Git-Verwaltung:** P48 / funktionales G11 abgeschlossen; Live-Import und isolierte funktionale Nachweise sind getrennt belegt.
-4. **Zusammenarbeit:** P51 implementiert; P58a liefert zunächst die versionierte HTTP-API für bestehende Benutzersitzungen. Eigenständige Maschinen-Credentials und P58b bleiben offen; danach P28 → P52; P29 → P50 → P53; P30/P31 / G6 und G12. P50 bleibt optional.
+4. **Zusammenarbeit:** P51 implementiert; P58a liefert zunächst die versionierte HTTP-API für bestehende Benutzersitzungen. Begrenzter Maschinen-Lesezugang folgt als eigener Schnitt; Maschinen-Start/-Steuerung und P58b bleiben offen; danach P28 → P52; P29 → P50 → P53; P30/P31 / G6 und G12. P50 bleibt optional.
 5. **Qualitätsfunktionen:** P54 → P55 → P56 → P57 / G13. Dashboard, Scorers, Benchmarks und Verbesserungsvorschläge sind Produktfunktionen; technische Performance-Optimierung steht im separaten Plan.
 6. **Weitere Worker und Sandboxes:** P14Za vor zentral verbundenen zusätzlichen Workern; P32/P33 / G7, danach P34–P40 / G8. Dieser Pfad kann nach dem Factory-MVP parallel zur Zusammenarbeit entstehen.
 7. **Weitere Integrationen:** P25, P41–P43, P59/P60 / G9 und G14 nach Bedarf; P44/P45 / G10 für zusätzliche Anmeldeanbieter und Device-Gruppen.
@@ -196,8 +196,10 @@ Einen Auftrag in T3 übernehmen, im zugehörigen Thread/Workspace bearbeiten und
 **P58a** stellt eine versionierte HTTP-API mit maschinenlesbarem Vertrag bereit.
 Der erste Schnitt verwendet die vorhandenen Foundry-/T3-Benutzersitzungen und
 dieselben Services für Suche, Start, Steuerung, Übergabe, Inbox und Konfiguration.
-Eigenständige begrenzte Maschinen-Credentials einschließlich Ausgabe, Ablauf und
-Widerruf bleiben eine gesonderte Abnahme; interaktive Cookies sind kein CI-Zugang.
+Ein gesonderter Schnitt ergänzt eigenständige Maschinen-Credentials mit Ausgabe,
+Ablauf und Widerruf für Factory-begrenzte Leseabfragen. Maschinen-Start und -Steuerung
+bleiben offen; interaktive Cookies sind kein CI-Zugang. Der öffentliche Zugang durch
+vorgeschaltetes Access benötigt weiterhin eine eigene Betriebsabnahme.
 **P58b** ergänzt Factory-MCP für Suche, Start, Steuerung, Übergabe und
 Definitionsvalidierung. Vorhandene T3-MCP-Tokens besitzen keine Foundry-Identität
 und dürfen nicht als solche verwendet werden. MCP-Instruktionsevals gehören zur

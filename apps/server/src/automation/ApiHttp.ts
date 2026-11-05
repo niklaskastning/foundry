@@ -1,6 +1,8 @@
+import * as MachineAccess from "./MachineAccess.ts";
 import {
   AUTOMATION_API_V1,
   AutomationApiError,
+  AutomationMachineCredentialError,
   AutomationApiOperations,
   AutomationApplicationError,
   AutomationControlError,
@@ -17,7 +19,6 @@ import * as Stream from "effect/Stream";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
-import * as GatewayGrants from "../foundry/GatewayGrants.ts";
 import * as Application from "./Application.ts";
 import * as Control from "./Control.ts";
 import * as Inbox from "./Inbox.ts";
@@ -26,6 +27,7 @@ import * as Triggers from "./Triggers.ts";
 const headers = { "cache-control": "no-store" };
 const isDomainError = Schema.is(
   Schema.Union([
+    AutomationMachineCredentialError,
     AutomationApplicationError,
     AutomationControlError,
     AutomationInboxError,
@@ -135,7 +137,7 @@ export const layer = Layer.unwrap(
     const control = yield* Control.Control;
     const inbox = yield* Inbox.Inbox;
     const triggers = yield* Triggers.Triggers;
-    const gateway = yield* GatewayGrants.GatewayGrants;
+    const machineAccess = yield* MachineAccess.MachineAccess;
     const route = <A, I, E>(
       operation: { readonly path: string; readonly input: Schema.Codec<A, I> },
       execute: (
@@ -171,6 +173,9 @@ export const layer = Layer.unwrap(
         }).pipe(Effect.catch((error) => Effect.succeed(failure(error)))),
       );
     return Layer.mergeAll(
+      route(AutomationApiOperations.credentialIssue, machineAccess.issue),
+      route(AutomationApiOperations.credentialList, machineAccess.list),
+      route(AutomationApiOperations.credentialRevoke, machineAccess.revoke),
       route(AutomationApiOperations.query, application.query),
       route(AutomationApiOperations.command, application.command),
       route(AutomationApiOperations.control, control.execute),
@@ -183,7 +188,7 @@ export const layer = Layer.unwrap(
         `${AUTOMATION_API_V1}/contract`,
         Effect.gen(function* () {
           const request = yield* HttpServerRequest.HttpServerRequest;
-          yield* gateway.identityForRead(request);
+          yield* machineAccess.read(request);
           return HttpServerResponse.jsonUnsafe(contract, { headers });
         }).pipe(Effect.catch((error) => Effect.succeed(failure(error)))),
       ),

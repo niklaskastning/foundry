@@ -4,14 +4,14 @@ import {
   AutomationApiOperations,
   AutomationApplicationError,
   AutomationInboxError,
-  FoundryGatewayError,
+  AutomationMachineCredentialError,
   FoundryInstanceId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as HttpRouter from "effect/http/HttpRouter";
-import * as GatewayGrants from "../foundry/GatewayGrants.ts";
+import * as MachineAccess from "./MachineAccess.ts";
 import * as ApiHttp from "./ApiHttp.ts";
 import * as Application from "./Application.ts";
 import * as Control from "./Control.ts";
@@ -75,10 +75,11 @@ const fixture = Effect.fn("ApiHttpTest.fixture")(function* () {
             mark: () => Effect.fail(new AutomationInboxError({ reason: "stale_revision" })),
           }),
           Layer.mock(Triggers.Triggers)({}),
-          Layer.mock(GatewayGrants.GatewayGrants)({
-            identityForRead: () =>
+          Layer.mock(MachineAccess.MachineAccess)({
+            issue: () => Effect.fail(new AutomationMachineCredentialError({ code: "conflict" })),
+            read: () =>
               denied
-                ? Effect.fail(new FoundryGatewayError({ code: "forbidden" }))
+                ? Effect.fail(new AutomationMachineCredentialError({ code: "forbidden" }))
                 : Effect.succeed({
                     instanceId: FoundryInstanceId.make("00000000-0000-4000-8000-000000000001"),
                     operatorId: "operator",
@@ -172,6 +173,22 @@ it.live("returns safe domain errors and protects the complete machine-readable c
     );
     expect(rejected.status).toBe(403);
     expect(yield* Effect.promise(() => rejected.json())).toEqual({ code: "forbidden" });
+    const credential = {
+      id: "00000000-0000-4000-8000-000000000002",
+      label: "Fixture reader",
+      factoryIds: ["factory"],
+      expiresAt: 1,
+    };
+    const conflict = yield* f.send(`${AUTOMATION_API_V1}/credentials/issue`, json(credential));
+    expect(conflict.status).toBe(409);
+    expect(yield* Effect.promise(() => conflict.json())).toEqual({ code: "conflict" });
+    for (const extra of [{ scope: "access:write" }, { factoryIds: [] }]) {
+      const invalid = yield* f.send(
+        `${AUTOMATION_API_V1}/credentials/issue`,
+        json({ ...credential, ...extra }),
+      );
+      expect(invalid.status).toBe(400);
+    }
     const stale = yield* f.send(
       `${AUTOMATION_API_V1}/inbox/mark`,
       json({ commandId: "mark", itemId: "item", sourceRevision: "old", action: "done" }),

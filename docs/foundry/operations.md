@@ -914,13 +914,14 @@ Ausgabe-JSON-Schemas; `query`, `command`, `control`, `inbox/query`, `inbox/mark`
 `triggers/query` und `triggers/command` rufen dieselben Services wie die UI auf.
 Die bisherigen UI-Endpunkte bleiben erhalten.
 
-Dieser Schnitt benötigt weiterhin die bestehende Foundry-Benutzersitzung samt
+Benutzeroperationen benötigen weiterhin die bestehende Foundry-Benutzersitzung samt
 Origin/CSRF-Nachweis und eine gültige Main-T3-Sitzung mit den jeweiligen Scopes.
 Der bestehende authentifizierte Clienttransport muss diese Nachweise liefern;
 ein gewöhnlicher unauthentifizierter `fetch` genügt nicht. DPoP wird für die
-tatsächlich aufgerufene URL erstellt. Es gibt keinen neuen API-Key, keinen
-CI-Zugang und keinen Factory-MCP-Endpunkt. Interaktive Cookies nicht in CI
-übernehmen; T3-MCP- und Worker-Credentials werden nicht in Benutzerrechte übersetzt.
+tatsächlich aufgerufene URL erstellt. Der unten beschriebene Maschinen-Lesezugang
+ist davon getrennt; ein Factory-MCP-Endpunkt besteht noch nicht. Interaktive Cookies
+nicht in CI übernehmen; T3-MCP- und Worker-Credentials werden nicht in Benutzerrechte
+übersetzt.
 
 Beispielkörper für `query`:
 
@@ -944,6 +945,56 @@ ungültiger Eingabe, 403 bei fehlendem Recht, 404 bei fehlendem Objekt, 503 bei
 nicht verfügbarem Service und 409 bei fachlichen Konflikten oder Sperren.
 Unbekannte API-Versionen führen keine Operation aus. Die API begrenzt JSON-Körper
 auf 3 MiB; die engeren fachlichen Größenlimits bleiben zusätzlich wirksam.
+
+### Begrenzter Maschinen-Lesezugang
+
+Unter demselben API-Präfix verwalten `credentials/issue`, `credentials/list` und
+`credentials/revoke` eigenständige Credentials. Verwaltung verlangt eine gültige
+Foundry-/T3-Benutzersitzung mit `access:write`, Ausgabe zusätzlich
+`orchestration:read`. `issue` nimmt eine vor dem Senden gespeicherte UUID `id`,
+`label`, eine explizite Liste vorhandener `factoryIds` (1–32) und `expiresAt`
+(Unix-Millisekunden, höchstens 30 Tage in der Zukunft) an. Der einzige Scope ist
+`automation:read`; Wildcards und Schreibscopes werden nicht angenommen.
+
+Die erste Antwort enthält `credential` und `token`. Das Token sicher speichern;
+PostgreSQL hält nur seinen Hash. Exakte Wiederholung derselben ID und Eingabe
+liefert dieselben Metadaten, aber `token: null`. Ein verlorenes Token lässt sich
+nicht auslesen: alte ID widerrufen und ausdrücklich mit neuer ID ausstellen.
+Geänderte Eingaben unter derselben ID ergeben 409, auch nach Ablauf/Widerruf.
+`list` nimmt `{}` an und zeigt höchstens 100 Einträge, alle aktuell gültigen zuerst,
+danach zuletzt ablaufende inaktive. Höchstens 100 Credentials dürfen gleichzeitig
+gültig sein. `revoke` nimmt `{ "id": "<credential UUID>" }` an; Wiederholung ist
+sicher, die Antwort ist `null`. Credential-Verwaltung bietet noch keine eigene UI.
+
+Maschinen senden das Token als `Authorization: Bearer <token>` an `contract` oder
+`query`. Zulässige Abfragen sind `factories`, `factory`, `workItems`, `workItem`,
+`runs`, `run`, `attempts` und `attempt`. Listen filtern vor der Pagination auf die
+freigegebenen Factories; Run-/Attempt-Zugriffe prüfen zusätzlich den Betreiber.
+Jeder Aufruf prüft Ablauf, Widerruf und Instanz-/Betreibergeneration erneut.
+Benutzer-Logout beendet diese eigenständigen Credentials nicht. Ein Maschinen-Token
+wird auch bei zusätzlich vorhandenen Benutzer-Cookies nicht zum Schreibzugang.
+
+Der Zugang umfasst weder Start/Steuerung noch Handoff, Inbox, Trigger, einzelne
+Definitionsdateien oder Live-Worker-/Archivzugriff. Vorhandene T3-MCP-Tokens werden
+nicht zu Foundry-Credentials. Factory-MCP und seine Instruktionsevals folgen separat.
+
+Ein vorgeschaltetes Access muss den nicht interaktiven API-Zugang zusätzlich erlauben.
+Der bestehende Device-Service-Zugang gilt nicht automatisch für diese API-Pfade.
+Dieses Upgrade verändert keine Access-/Domainregeln; eine Loopback-Probe belegt
+keinen öffentlichen CI-Zugang.
+
+Main benötigt Instanzschema 8; Automation bleibt bei Schema 8. Den getesteten
+unveränderlichen Build mit dem bestehenden Updater aktivieren:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-machine-credentials sha256:<digest> <commit>
+```
+
+Der Helfer hält die bestehende Deploymentsperre, sichert den bisherigen Stand und
+migriert bei gestopptem Main. `manifest.json` und `success` im ausgegebenen
+Recovery-Verzeichnis festhalten. Ein Downgrade auf Schema-7-Code benötigt den
+koordinierten Daten-/State-Restore bei gestopptem Main; kein reiner Image-Rollback.
+Nachfolgende Updates desselben Schemas verwenden wieder `update`.
 
 ### Auftrag interaktiv übernehmen und zurückgeben (P51)
 

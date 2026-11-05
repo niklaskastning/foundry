@@ -85,6 +85,7 @@ export * from "./foundryArchive.ts";
 export * from "./automation/control.ts";
 export * from "./automation/application.ts";
 export * from "./automation/api.ts";
+export * from "./automation/machineCredential.ts";
 export * from "./automation/inbox.ts";
 
 export * from "./automation/trigger.ts";
