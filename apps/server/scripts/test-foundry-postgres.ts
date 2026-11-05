@@ -22,6 +22,7 @@ import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import * as AccessConfig from "../src/foundry/AccessConfig.ts";
 import * as AccessVerifier from "../src/foundry/AccessVerifier.ts";
 import * as FoundrySessions from "../src/foundry/FoundrySessions.ts";
+import * as MachineCredentials from "../src/foundry/MachineCredentials.ts";
 import * as AuthHttp from "../src/foundry/authHttp.ts";
 import * as InstanceOperator from "../src/foundry/InstanceOperator.ts";
 import { FoundrySession, FoundryDescriptor } from "@t3tools/contracts";
@@ -260,7 +261,7 @@ try {
     await query("UPDATE foundry_instance.schema_version SET version=99", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 503);
     await expectFailure(migrate());
-    await query("UPDATE foundry_instance.schema_version SET version=7", "foundry_migrate");
+    await query("UPDATE foundry_instance.schema_version SET version=8", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 200);
     await query("GRANT CREATE ON SCHEMA public TO foundry_runtime");
     NodeAssert.equal((await ready()).status, 503);
@@ -372,7 +373,7 @@ try {
     await expectFailure(bind("foreign-operator"));
     const operatorBefore = await query("SELECT * FROM foundry_instance.operator_binding");
     await query(
-      "DROP TABLE foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
+      "DROP TABLE foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
       "foundry_migrate",
     );
     await query("DROP TABLE foundry_instance.sessions", "foundry_migrate");
@@ -599,7 +600,7 @@ try {
     "SELECT * FROM foundry_instance.sessions ORDER BY token_hash",
   );
   await query(
-    "DROP TABLE foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
+    "DROP TABLE foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
     "foundry_migrate",
   );
   await query("UPDATE foundry_instance.schema_version SET version=2", "foundry_migrate");
@@ -705,7 +706,7 @@ try {
       "foundry_migrate",
     );
     await query(
-      "DROP TABLE foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants",
+      "DROP TABLE foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants",
       "foundry_migrate",
     );
     await query("UPDATE foundry_instance.schema_version SET version=3", "foundry_migrate");
@@ -940,6 +941,205 @@ try {
   } finally {
     await deviceHandler.dispose();
   }
+  const machineOwner = {
+    instanceId,
+    operatorId: String(
+      (await query("SELECT operator_id FROM foundry_instance.operator_binding"))[0]!.operator_id,
+    ),
+  };
+  const machineLayer = MachineCredentials.layer.pipe(
+    Layer.provide(identityLayer),
+    Layer.provide(db("foundry_runtime")),
+    Layer.provide(NodeServices.layer),
+  );
+  const machineCall = <A, E>(
+    operation: (service: MachineCredentials.MachineCredentials["Service"]) => Effect.Effect<A, E>,
+  ) =>
+    run(
+      MachineCredentials.MachineCredentials.pipe(
+        Effect.flatMap(operation),
+        Effect.provide(machineLayer),
+        Effect.provide(testContext),
+      ),
+    );
+  const machineInput = {
+    id: "58000000-0000-4000-8000-000000000001",
+    label: "Isolated machine reader",
+    factoryIds: ["machine-factory-a", "machine-factory-b"],
+    expiresAt: now + 60_000,
+  };
+  const issuedMachines = await Promise.all(
+    Array.from({ length: 4 }, () =>
+      machineCall((service) => service.issue(machineOwner, machineInput)),
+    ),
+  );
+  NodeAssert.equal(issuedMachines.filter((result) => result.token !== null).length, 1);
+  const machineToken = issuedMachines.find((result) => result.token !== null)!.token!;
+  NodeAssert.match(machineToken, /^fmc_[A-Za-z0-9_-]{43}$/);
+  const persistedMachines = await query(
+    "SELECT row_to_json(c)::text AS serialized,token_hash FROM foundry_instance.machine_credentials c",
+  );
+  NodeAssert.equal(persistedMachines.length, 1);
+  NodeAssert.equal(JSON.stringify(persistedMachines).includes(machineToken), false);
+  NodeAssert.match(String(persistedMachines[0]!.token_hash), /^[A-Za-z0-9_-]{43}$/);
+  NodeAssert.deepEqual(await machineCall((service) => service.authenticate(machineToken)), {
+    ...machineOwner,
+    factoryIds: machineInput.factoryIds,
+    credentialId: machineInput.id,
+  });
+  NodeAssert.deepEqual(await machineCall((service) => service.list(machineOwner)), [
+    { ...machineInput, scope: "automation:read", revoked: false },
+  ]);
+  for (const changed of [
+    { label: "Changed label" },
+    { factoryIds: ["other-factory"] },
+    { expiresAt: machineInput.expiresAt + 1 },
+  ])
+    NodeAssert.equal(
+      await machineCall((service) =>
+        service.issue(machineOwner, { ...machineInput, ...changed }).pipe(
+          Effect.match({
+            onFailure: (error) => error.code,
+            onSuccess: () => "unexpected_success",
+          }),
+        ),
+      ),
+      "conflict",
+    );
+  for (const owner of [
+    { ...machineOwner, operatorId: "58000000-0000-4000-8000-000000000099" },
+    { ...machineOwner, instanceId: FoundryInstanceId.make("58000000-0000-4000-8000-000000000099") },
+  ]) {
+    await NodeAssert.rejects(machineCall((service) => service.issue(owner, machineInput)));
+    await NodeAssert.rejects(machineCall((service) => service.list(owner)));
+    await NodeAssert.rejects(machineCall((service) => service.revoke(owner, machineInput.id)));
+  }
+  for (const invalidToken of ["", "fmc_invalid", machineToken.slice(4), `fmc_${"A".repeat(43)}`])
+    await NodeAssert.rejects(machineCall((service) => service.authenticate(invalidToken)));
+  await expectFailure(
+    MachineCredentials.MachineCredentials.pipe(
+      Effect.flatMap((service) => service.authenticate(machineToken)),
+      Effect.provide(
+        MachineCredentials.layer.pipe(
+          Layer.provide(
+            Layer.succeed(InstancePostgres.InstancePostgres, {
+              readIdentity: Effect.succeed(
+                FoundryInstanceId.make("58000000-0000-4000-8000-000000000099"),
+              ),
+            }),
+          ),
+          Layer.provide(db("foundry_runtime")),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+      Effect.provide(testContext),
+    ),
+  );
+  await stop();
+  await start();
+  NodeAssert.equal(
+    (await machineCall((service) => service.authenticate(machineToken))).credentialId,
+    machineInput.id,
+  );
+  const beforeMachineExpiry = now;
+  now = machineInput.expiresAt;
+  await NodeAssert.rejects(machineCall((service) => service.authenticate(machineToken)));
+  NodeAssert.equal(
+    (await machineCall((service) => service.issue(machineOwner, machineInput))).token,
+    null,
+  );
+  now = beforeMachineExpiry;
+  await machineCall((service) => service.revoke(machineOwner, machineInput.id));
+  await machineCall((service) => service.revoke(machineOwner, machineInput.id));
+  await NodeAssert.rejects(machineCall((service) => service.authenticate(machineToken)));
+  const revokedRetry = await machineCall((service) => service.issue(machineOwner, machineInput));
+  NodeAssert.equal(revokedRetry.token, null);
+  NodeAssert.equal(revokedRetry.credential.revoked, true);
+  for (const expiresAt of [now, now - 1, now + 30 * 24 * 60 * 60 * 1000 + 1])
+    NodeAssert.equal(
+      await machineCall((service) =>
+        service
+          .issue(machineOwner, {
+            ...machineInput,
+            id: "58000000-0000-4000-8000-000000000002",
+            expiresAt,
+          })
+          .pipe(
+            Effect.match({
+              onFailure: (error) => error.code,
+              onSuccess: () => "unexpected_success",
+            }),
+          ),
+      ),
+      "invalid_input",
+    );
+  for (const [table, id] of [
+    ["instance", "58000000-0000-4000-8000-000000000002"],
+    ["operator_binding", "58000000-0000-4000-8000-000000000003"],
+  ]) {
+    const input = { ...machineInput, id: id!, expiresAt: now + 30 * 24 * 60 * 60 * 1000 };
+    const credential = await machineCall((service) => service.issue(machineOwner, input));
+    NodeAssert.ok(credential.token);
+    await machineCall((service) => service.authenticate(credential.token!));
+    await query(
+      `UPDATE foundry_instance.${table} SET access_generation=access_generation+1`,
+      "foundry_runtime",
+    );
+    await NodeAssert.rejects(machineCall((service) => service.authenticate(credential.token!)));
+    const retry = await machineCall((service) => service.issue(machineOwner, input));
+    NodeAssert.equal(retry.token, null);
+    NodeAssert.equal(retry.credential.revoked, true);
+  }
+  await query(`INSERT INTO foundry_instance.machine_credentials
+    (id,token_hash,instance_id,operator_id,instance_generation,operator_generation,label,factory_ids,expires_at,revoked)
+    SELECT ('58000000-0000-4000-8001-' || lpad(n::text,12,'0'))::uuid,'history-fixture-' || n,
+      i.instance_id,o.operator_id,i.access_generation,o.access_generation,'Historical reader','["machine-factory-a"]'::jsonb,
+      CASE WHEN n%2=0 THEN ${now - 1} ELSE ${now + 172_800_000} END,n%2=1
+    FROM foundry_instance.instance i JOIN foundry_instance.operator_binding o USING(singleton),generate_series(1,100) n`);
+  const replacementInput = {
+    ...machineInput,
+    id: "58000000-0000-4000-8000-000000000004",
+  };
+  const replacement = await machineCall((service) => service.issue(machineOwner, replacementInput));
+  NodeAssert.ok(replacement.token);
+  const visibleMachines = await machineCall((service) => service.list(machineOwner));
+  NodeAssert.equal(visibleMachines.length, 100);
+  NodeAssert.equal(visibleMachines[0]!.id, replacementInput.id);
+  await query(`INSERT INTO foundry_instance.machine_credentials
+    (id,token_hash,instance_id,operator_id,instance_generation,operator_generation,label,factory_ids,expires_at)
+    SELECT ('58000000-0000-4000-8002-' || lpad(n::text,12,'0'))::uuid,'active-fixture-' || n,
+      i.instance_id,o.operator_id,i.access_generation,o.access_generation,'Active reader','["machine-factory-a"]'::jsonb,${now + 172_800_000}
+    FROM foundry_instance.instance i JOIN foundry_instance.operator_binding o USING(singleton),generate_series(1,99) n`);
+  NodeAssert.equal(
+    await machineCall((service) =>
+      service
+        .issue(machineOwner, { ...machineInput, id: "58000000-0000-4000-8000-000000000005" })
+        .pipe(
+          Effect.match({ onFailure: (error) => error.code, onSuccess: () => "unexpected_success" }),
+        ),
+    ),
+    "conflict",
+  );
+  NodeAssert.equal(
+    (await machineCall((service) => service.list(machineOwner))).some(
+      (credential) => credential.id === replacementInput.id,
+    ),
+    true,
+  );
+  await machineCall((service) => service.revoke(machineOwner, replacementInput.id));
+  NodeAssert.ok(
+    (
+      await machineCall((service) =>
+        service.issue(machineOwner, {
+          ...machineInput,
+          id: "58000000-0000-4000-8000-000000000005",
+        }),
+      )
+    ).token,
+  );
+  await report(
+    "PASS machine credentials: concurrent hash-only issuance, retry/conflict, metadata-only listing, owner/instance isolation, layer and PostgreSQL restart, deterministic expiry, durable revoke, 30-day bounds, current instance/operator generations and active-only quota/list priority after 100 historical credentials",
+  );
   await NodeFSP.writeFile(NodePath.join(home, "userdata", "environment-id"), mainEnvironmentId);
   for (const statement of [
     "CREATE ROLE automation_migrate LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
@@ -975,7 +1175,7 @@ try {
         "fork_automation",
       )
     )[0]?.version,
-    6,
+    8,
   );
 
   for (const [
@@ -1237,7 +1437,7 @@ try {
           0,
         );
         await report(
-          "PASS enabled production Automation runtime: separate schema-6 database and restricted roles; current Foundry/T3 sessions read empty bindings/factories; read scope cannot mutate, management scope reaches domain validation; invalid CSRF rejected; no GitHub App configuration, worker or provider execution.",
+          "PASS enabled production Automation runtime: separate schema-8 database and restricted roles; current Foundry/T3 sessions read empty bindings/factories; read scope cannot mutate, management scope reaches domain validation; invalid CSRF rejected; no GitHub App configuration, worker or provider execution.",
         );
       }
       const login = await runtimeHandler.handler(

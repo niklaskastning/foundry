@@ -64,7 +64,10 @@ const make = Effect.gen(function* () {
           const versions = yield* sql<{
             version: number;
           }>`SELECT version FROM foundry_instance.schema_version`;
-          if (versions.length !== 1 || ![1, 2, 3, 4, 5, 6, 7].includes(versions[0]?.version ?? 0)) {
+          if (
+            versions.length !== 1 ||
+            ![1, 2, 3, 4, 5, 6, 7, 8].includes(versions[0]?.version ?? 0)
+          ) {
             return yield* new InstanceDatabase.InstanceDatabaseError({
               reason: "schema_incompatible",
             });
@@ -168,6 +171,19 @@ const make = Effect.gen(function* () {
                 REFERENCES foundry_instance.archive_threads(instance_id,environment_id,thread_id))`;
             yield* sql`UPDATE foundry_instance.schema_version SET version=7`;
           }
+          if ((versions[0]?.version ?? 0) < 8) {
+            yield* sql`CREATE TABLE foundry_instance.machine_credentials (
+              id uuid PRIMARY KEY, token_hash text NOT NULL UNIQUE,
+              instance_id uuid NOT NULL REFERENCES foundry_instance.instance(instance_id),
+              operator_id uuid NOT NULL REFERENCES foundry_instance.operator_binding(operator_id),
+              instance_generation bigint NOT NULL CHECK(instance_generation >= 0),
+              operator_generation bigint NOT NULL CHECK(operator_generation >= 0),
+              label text NOT NULL CHECK(length(label) BETWEEN 1 AND 100),
+              factory_ids jsonb NOT NULL CHECK(jsonb_typeof(factory_ids)='array' AND jsonb_array_length(factory_ids) BETWEEN 1 AND 32),
+              expires_at bigint NOT NULL CHECK(expires_at > 0),
+              revoked boolean NOT NULL DEFAULT false)`;
+            yield* sql`UPDATE foundry_instance.schema_version SET version=8`;
+          }
           yield* InstanceDatabase.checkSchema();
           const identities = yield* sql<{
             instance_id: string;
@@ -185,6 +201,8 @@ const make = Effect.gen(function* () {
           yield* sql`GRANT USAGE ON SCHEMA foundry_instance TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT SELECT ON foundry_instance.schema_version, foundry_instance.instance, foundry_instance.operator_binding TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT UPDATE (access_generation) ON foundry_instance.instance TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT SELECT, INSERT ON foundry_instance.machine_credentials TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT UPDATE(revoked) ON foundry_instance.machine_credentials TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT SELECT, INSERT, DELETE ON foundry_instance.sessions TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT INSERT, UPDATE ON foundry_instance.operator_binding TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT SELECT, INSERT ON foundry_instance.devices, foundry_instance.device_enrollments TO ${sql(input.runtimeRole)}`;

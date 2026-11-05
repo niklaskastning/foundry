@@ -159,21 +159,21 @@ def active_status(expected_schema=None, expected_automation_schema=None):
         'runtimeLogin', (SELECT rolcanlogin FROM pg_roles WHERE rolname='foundry_instance_runtime'),
         'migratorLogin', (SELECT rolcanlogin FROM pg_roles WHERE rolname='foundry_instance_migrator'));
       COMMIT;"""))
-    if (database['version'] not in ([expected_schema] if expected_schema else [2, 5, 6, 7]) or database['instanceId'] != INSTANCE
+    if (database['version'] not in ([expected_schema] if expected_schema else [2, 5, 6, 7, 8]) or database['instanceId'] != INSTANCE
             or database['environmentId'] != ENVIRONMENT or database['operatorBound'] is not True
             or database['runtimeLogin'] is not True or database['migratorLogin'] is not False):
         raise RuntimeError('Unexpected instance schema, identity, operator binding or login state.')
     gateway_enabled = all(values.get(key) == 'true' for key in GATEWAY_FLAGS)
     advertised = GATEWAY_CAPABILITIES.intersection(descriptor.get('capabilities', []))
     if (advertised != (GATEWAY_CAPABILITIES if gateway_enabled else set())
-            or (gateway_enabled and database['version'] not in [5, 6, 7])):
+            or (gateway_enabled and database['version'] not in [5, 6, 7, 8])):
         raise RuntimeError('Gateway capabilities or schema differ from the configured profile.')
     artifacts_enabled = values.get(ARTIFACT_FLAG) == 'true'
     if (descriptor.get('artifactTransfer') != (ARTIFACT_TRANSFER if artifacts_enabled else None)
-            or (artifacts_enabled and (database['version'] not in [6, 7] or not gateway_enabled))):
+            or (artifacts_enabled and (database['version'] not in [6, 7, 8] or not gateway_enabled))):
         raise RuntimeError('Artifact transfer metadata or schema differs from the configured profile.')
     if descriptor.get('threadArchive') != ({'protocolVersion': '1', 'pageSize': 50}
-            if artifacts_enabled and database['version'] == 7 else None):
+            if artifacts_enabled and database['version'] in [7, 8] else None):
         raise RuntimeError('Thread archive metadata differs from the configured profile or schema.')
     automation_enabled = values.get('FOUNDRY_AUTOMATION_ENABLED') == 'true'
     if descriptor.get('automation') != ({'protocolVersion': '1'} if automation_enabled else None):
@@ -198,8 +198,8 @@ def start_main():
 def gateway(enabled, *, artifacts=False):
     previous = active_status()
     schema = previous['schemaVersion']
-    if schema not in [5, 6, 7] or (artifacts and (schema not in [6, 7] or not previous['gatewayEnabled'])):
-        raise RuntimeError('This profile requires the migrated gateway; artifacts require schema 6 or 7.')
+    if schema not in [5, 6, 7, 8] or (artifacts and (schema not in [6, 7, 8] or not previous['gatewayEnabled'])):
+        raise RuntimeError('This profile requires the migrated gateway; artifacts require schema 6, 7 or 8.')
     if not artifacts and not enabled and previous['artifactsEnabled']:
         raise RuntimeError('Disable artifact publication on workers and Main before disabling the gateway.')
     field = 'artifactsEnabled' if artifacts else 'gatewayEnabled'
@@ -245,17 +245,22 @@ def gateway(enabled, *, artifacts=False):
     print(json.dumps({**result, 'configurationChanged': True, 'configurationRecovery': str(recovery)}, indent=2))
 
 
-def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archive_schema=False, automation_schema=False):
+def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archive_schema=False, automation_schema=False, machine_schema=False):
     if not re.fullmatch(r'sha256:[a-f0-9]{64}', digest) or not re.fullmatch(r'[a-f0-9]{40}', revision):
         raise ValueError('Use an immutable image digest and its exact reviewed source SHA.')
-    if sum([same_schema, artifact_schema, archive_schema, automation_schema]) > 1:
+    if sum([same_schema, artifact_schema, archive_schema, automation_schema, machine_schema]) > 1:
         raise ValueError('A schema upgrade cannot be a same-schema update.')
-    previous = active_status(expected_schema=7, expected_automation_schema=7) if automation_schema else active_status(expected_schema=None if same_schema else 6 if archive_schema else 5 if artifact_schema else 2)
+    if machine_schema:
+        previous = active_status(expected_schema=7, expected_automation_schema=8)
+        if not previous.get('automationEnabled'):
+            raise RuntimeError('Machine credentials require the active Automation schema-8 profile.')
+    else:
+        previous = active_status(expected_schema=7, expected_automation_schema=7) if automation_schema else active_status(expected_schema=None if same_schema else 6 if archive_schema else 5 if artifact_schema else 2)
     if automation_schema and not previous.get('automationEnabled'):
         raise RuntimeError('Automation schema upgrade requires the active schema-7 profile.')
-    if same_schema and previous['schemaVersion'] not in [5, 6, 7]:
-        raise RuntimeError('Same-schema updates require gateway schema 5, 6 or 7.')
-    target_schema = previous['schemaVersion'] if same_schema or automation_schema else 7 if archive_schema else 6 if artifact_schema else 5
+    if same_schema and previous['schemaVersion'] not in [5, 6, 7, 8]:
+        raise RuntimeError('Same-schema updates require gateway schema 5, 6, 7 or 8.')
+    target_schema = previous['schemaVersion'] if same_schema or automation_schema else 8 if machine_schema else 7 if archive_schema else 6 if artifact_schema else 5
     image = REGISTRY + '@' + digest
     docker('pull', image)
     candidate = json.loads(docker('image', 'inspect', image))[0]
@@ -301,9 +306,13 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archi
                 print(f"Migrating schema {previous['schemaVersion']} to {target_schema} with Main stopped; operator and identities are preserved.", flush=True)
                 run_cli(image, migration_file, 'migrate', '--base-dir', '/var/lib/foundry',
                         '--runtime-role', 'foundry_instance_runtime')
+                if machine_schema and sql('SELECT version FROM foundry_instance.schema_version;') != '8':
+                    raise RuntimeError('Machine credential migration did not confirm instance schema 8.')
             finally:
-                sql('ALTER ROLE foundry_instance_migrator NOLOGIN PASSWORD NULL;')
-            migration_file.unlink()
+                try:
+                    sql('ALTER ROLE foundry_instance_migrator NOLOGIN PASSWORD NULL;')
+                finally:
+                    migration_file.unlink(missing_ok=True)
         if automation_schema:
             password = secrets.token_hex(32)
             write_private(migration_file,
@@ -325,7 +334,7 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archi
         docker('compose', '--project-name', 'foundry', '--env-file', '/dev/null',
                '--file', str(CONFIG / 'access-compose.json'), 'up', '--detach', '--no-deps',
                '--no-build', '--pull', 'never', '--wait', '--wait-timeout', '180', 'main')
-        result = active_status(expected_schema=target_schema, expected_automation_schema=8) if automation_schema else active_status(expected_schema=target_schema)
+        result = active_status(expected_schema=target_schema, expected_automation_schema=8) if automation_schema or machine_schema else active_status(expected_schema=target_schema)
         if result['image'] != image or result['revision'] != revision:
             raise RuntimeError('Candidate image verification failed.')
         write_private(backup / 'success', revision + '\n')
@@ -637,8 +646,8 @@ def enable_automation(device_id, environment_id):
         raise
 
 def main(args):
-    if not (len(args) == 4 and args[:2] == ['automation', 'enable']) and args not in [['preflight'], ['status'], ['gateway', 'enable'], ['gateway', 'disable'], ['artifacts', 'enable'], ['artifacts', 'disable']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'update']):
-        raise ValueError('Usage: foundry-activate-access status | preflight | gateway|artifacts enable|disable | activate|upgrade|upgrade-artifacts|upgrade-archive|upgrade-automation|update sha256:<digest> <source-sha>')
+    if not (len(args) == 4 and args[:2] == ['automation', 'enable']) and args not in [['preflight'], ['status'], ['gateway', 'enable'], ['gateway', 'disable'], ['artifacts', 'enable'], ['artifacts', 'disable']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'upgrade-machine-credentials', 'update']):
+        raise ValueError('Usage: foundry-activate-access status | preflight | gateway|artifacts enable|disable | activate|upgrade|upgrade-artifacts|upgrade-archive|upgrade-automation|upgrade-machine-credentials|update sha256:<digest> <source-sha>')
     if os.geteuid() != 0:
         raise RuntimeError('This operation requires the administrator; no sudo grant is installed.')
     os.umask(0o077)
@@ -653,8 +662,8 @@ def main(args):
         elif args == ['preflight']:
             preflight()
             print('PASS pinned Docker Main, private PostgreSQL, empty fork_connect, absent login roles, stable IDs.')
-        elif args[0] in ['upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'update']:
-            upgrade(*args[1:], same_schema=args[0] == 'update', artifact_schema=args[0] == 'upgrade-artifacts', archive_schema=args[0] == 'upgrade-archive', automation_schema=args[0] == 'upgrade-automation')
+        elif args[0] in ['upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'upgrade-machine-credentials', 'update']:
+            upgrade(*args[1:], same_schema=args[0] == 'update', artifact_schema=args[0] == 'upgrade-artifacts', archive_schema=args[0] == 'upgrade-archive', automation_schema=args[0] == 'upgrade-automation', machine_schema=args[0] == 'upgrade-machine-credentials')
         else:
             activate(*args[1:])
 

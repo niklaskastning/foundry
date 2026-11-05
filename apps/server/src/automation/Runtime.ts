@@ -1,3 +1,4 @@
+import * as MachineAccess from "./MachineAccess.ts";
 import * as Handoffs from "./Handoffs.ts";
 import * as DefinitionSources from "./DefinitionSources.ts";
 import * as DefinitionSync from "./DefinitionSync.ts";
@@ -169,6 +170,7 @@ export const layer = Layer.unwrap(
         Layer.provide(Unattended.layer),
         Layer.provide(DispatchStore.layer),
         Layer.provide(Workflows.layer),
+        Layer.provide(MachineAccess.layer),
         Layer.provide(Factories.layer),
         Layer.provide(Layer.succeed(Scheduler.SchedulerConfig, target)),
         Layer.provide(
@@ -186,8 +188,7 @@ export const layer = Layer.unwrap(
           }),
         ),
         Layer.provide(FetchHttpClient.layer),
-        Layer.provide(database),
       )
-      .pipe(Layer.provide(ready));
+      .pipe(Layer.provide(database), Layer.provide(ready));
   }),
 );
