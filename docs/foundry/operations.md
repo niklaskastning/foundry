@@ -1253,6 +1253,26 @@ Recovery auf Schema-10-Code benötigt den koordinierten Daten-/State-Stand;
 ein reiner Image-Downgrade reicht nicht. Updates innerhalb Schema 11 verwenden
 wieder `update`. Ein Update aktiviert keine neue Factorydefinition.
 
+Auf Hosts mit AppArmor-Usernamespace-Beschränkung kann das gebündelte Codex-`bwrap`
+trotz funktionierender CLI mit `EPERM` scheitern. Der gezielte
+[Profil-Installer](../../deploy/fork/worker/codex-apparmor.py) übernimmt die vorhandenen
+Distributionsregeln aus `/etc/apparmor.d/bwrap-userns-restrict` für genau das
+root-eigene, nicht fremd beschreibbare Binary unter
+`/opt/foundry-worker/providers/codex-<version>/node_modules/@openai/codex-linux-<arch>/vendor/<target>/codex-resources/bwrap`.
+`sudo -n python3 -I deploy/fork/worker/codex-apparmor.py install --binary <absoluter-bwrap-pfad>`
+prüft alle Pfadkomponenten, kompiliert offline und schreibt ausschließlich ein
+eigenes Profil mit eigenem Capability-entzogenen Kindprofil. Der Helfer hält den
+Deploylock intern; nicht zusätzlich einklammern. Er lädt keine Kernelpolicy.
+Anschließend den Deploylock erneut bis zum Ende der Prüfung halten, das ausgegebene
+Profil mit `sudo -n apparmor_parser -r <profilpfad>` laden und den kostenlosen
+nativen Sandbox-Command-Gate mit dem dedizierten Provider ausführen. Erst dessen
+Erfolg belegt die Sandboxfähigkeit; eine erfolgreiche Modellausgabe allein reicht
+nicht. Recovery unter demselben Lock: `sudo -n apparmor_parser -R <profilpfad>`
+entfernt nur die beiden eigenen Profile; danach löscht `remove --binary
+<absoluter-bwrap-pfad>` am Helfer die unveränderte eigene Profildatei mit internem
+Lock. Vor `remove` deshalb den äußeren Lock freigeben. Die Distributionsprofile,
+globale Usernamespace-Regeln und Provider-Anmeldedaten bleiben unverändert.
+
 MCP-Definitionen benötigen unter **Agents & skills → MCP runtime authorization**
 eine ausdrückliche Factory-Bindung an die konkrete Definition und deren Tools.
 Die Verbindung referenziert vorhandene Secret-Provider-Einträge; Secretwerte

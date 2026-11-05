@@ -333,6 +333,28 @@ export function isolateCodexMcpConfig(config: Record<string, Schema.Json>, inher
   return isolated;
 }
 
+export function codexSandboxPolicy(workspaceAccess: "read" | "write", cwd: string | null) {
+  if (!cwd) throw invalid();
+  return workspaceAccess === "read"
+    ? { type: "readOnly" as const }
+    : {
+        type: "workspaceWrite" as const,
+        writableRoots: [cwd],
+        networkAccess: false,
+        excludeTmpdirEnvVar: true,
+        excludeSlashTmp: true,
+      };
+}
+export function codexSandboxProbe(workspaceAccess: "read" | "write", cwd: string | null) {
+  return {
+    command: ["/bin/sh", "-c", "printf foundry-sandbox-ready"],
+    cwd,
+    sandboxPolicy: codexSandboxPolicy(workspaceAccess, cwd),
+    timeoutMs: 10000,
+    outputBytesCap: 4096,
+  };
+}
+
 export function codexResourceConfig(
   request: FoundryWorkerDefinitionV4,
   secrets: Readonly<Record<string, string>>,

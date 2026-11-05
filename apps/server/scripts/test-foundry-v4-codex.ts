@@ -17,6 +17,7 @@ import {
 } from "@t3tools/contracts";
 import {
   codexResourceConfig,
+  codexSandboxProbe,
   isolateCodexMcpConfig,
   verifyMcpInventory,
   prepareResources,
@@ -37,7 +38,9 @@ const decodeNotification = Schema.decodeUnknownOption(
 );
 const decodeThread = Schema.decodeUnknownSync(CodexSchema.V2ThreadStartResponse);
 const decodeInventory = Schema.decodeUnknownSync(CodexSchema.V2ListMcpServerStatusResponse);
+const decodeCommand = Schema.decodeUnknownSync(CodexSchema.V2CommandExecResponse);
 const decodeSkills = Schema.decodeUnknownSync(CodexSchema.V2SkillsListResponse);
+const codexBinary = process.env.FOUNDRY_TEST_CODEX_BINARY ?? "codex";
 const marker = "FOUNDRY_DETERMINISTIC_SECRET_SENTINEL_482031";
 const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "foundry-v4-codex-"));
 const fixture = NodeURL.fileURLToPath(
@@ -94,8 +97,16 @@ try {
     timeout: 30000,
     maxBuffer: 1024 * 1024,
   };
-  await execute("codex", ["plugin", "marketplace", "add", marketplace, "--json"], installOptions);
-  await execute("codex", ["plugin", "add", "inherited@foundry-fixture", "--json"], installOptions);
+  await execute(
+    codexBinary,
+    ["plugin", "marketplace", "add", marketplace, "--json"],
+    installOptions,
+  );
+  await execute(
+    codexBinary,
+    ["plugin", "add", "inherited@foundry-fixture", "--json"],
+    installOptions,
+  );
   const http = spawn(process.execPath, [fixture, "http"]);
   const lines = NodeReadline.createInterface({ input: http.stdout! });
   const url = await new Promise<string>((resolve, reject) => {
@@ -103,7 +114,7 @@ try {
     http.once("error", reject);
   });
   lines.close();
-  const codex = spawn("codex", [
+  const codex = spawn(codexBinary, [
     "-c",
     'model_provider="fixture"',
     "-c",
@@ -284,6 +295,42 @@ try {
       ),
       "Native skill catalog omitted pinned resource",
     );
+    const sandbox = decodeCommand(
+      await request("command/exec", codexSandboxProbe("write", workspace)),
+    );
+    NodeAssert.equal(sandbox.exitCode, 0, `Native sandbox failed: ${sandbox.stderr}`);
+    NodeAssert.equal(sandbox.stdout, "foundry-sandbox-ready");
+    const written = decodeCommand(
+      await request("command/exec", {
+        ...codexSandboxProbe("write", workspace),
+        command: ["/bin/sh", "-c", "printf sandbox-file > sandbox-proof.txt"],
+      }),
+    );
+    NodeAssert.equal(written.exitCode, 0, written.stderr);
+    NodeAssert.equal(
+      await NodeFSP.readFile(NodePath.join(workspace, "sandbox-proof.txt"), "utf8"),
+      "sandbox-file",
+    );
+    const read = decodeCommand(
+      await request("command/exec", {
+        ...codexSandboxProbe("read", workspace),
+        command: ["/bin/sh", "-c", "cat sandbox-proof.txt"],
+      }),
+    );
+    NodeAssert.equal(read.exitCode, 0, read.stderr);
+    NodeAssert.equal(read.stdout, "sandbox-file");
+    const denied = decodeCommand(
+      await request("command/exec", {
+        ...codexSandboxProbe("read", workspace),
+        command: ["/bin/sh", "-c", "printf forbidden > sandbox-denied.txt"],
+      }),
+    );
+    NodeAssert.notEqual(denied.exitCode, 0);
+    await NodeAssert.rejects(NodeFSP.stat(NodePath.join(workspace, "sandbox-denied.txt")), {
+      code: "ENOENT",
+    });
+    await NodeFSP.unlink(NodePath.join(workspace, "sandbox-proof.txt"));
+
     const inventory = decodeInventory(
       await request("mcpServerStatus/list", {
         threadId: thread.thread.id,

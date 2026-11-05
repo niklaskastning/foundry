@@ -820,16 +820,10 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
       ...(input.foundryResources
         ? {
             approvalPolicy: "never",
-            sandboxPolicy:
-              input.foundryResources.request.workspaceAccess === "read"
-                ? { type: "readOnly" }
-                : {
-                    type: "workspaceWrite",
-                    writableRoots: [input.runtimePolicy.cwd],
-                    networkAccess: false,
-                    excludeTmpdirEnvVar: true,
-                    excludeSlashTmp: true,
-                  },
+            sandboxPolicy: WorkerResources.codexSandboxPolicy(
+              input.foundryResources.request.workspaceAccess,
+              input.runtimePolicy.cwd,
+            ),
             ...(input.foundryResources.request.resultSchema
               ? { outputSchema: input.foundryResources.request.resultSchema }
               : {}),
@@ -6716,6 +6710,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 turnInput.threadId,
               );
               if (foundryResources) {
+                const sandbox = yield* client.request(
+                  "command/exec",
+                  WorkerResources.codexSandboxProbe(
+                    foundryResources.request.workspaceAccess,
+                    turnInput.runtimePolicy.cwd,
+                  ),
+                );
+                if (sandbox.exitCode !== 0 || sandbox.stdout !== "foundry-sandbox-ready")
+                  return yield* new WorkerResources.WorkerResourceError({
+                    reason: "permission_denied",
+                  });
                 const inventory = yield* client.request("mcpServerStatus/list", {
                   threadId,
                   detail: "full",
