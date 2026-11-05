@@ -45,7 +45,15 @@ function ChatRouteLayout() {
           factoryId={search.factoryId}
           runId={search.runId}
         >
-          <ThreadRouteView target={shownTarget} background={modalOpen} />
+          <ThreadRouteView
+            target={shownTarget}
+            background={modalOpen}
+            factoryContext={
+              search.factoryId && search.runId
+                ? { factoryId: search.factoryId, runId: search.runId }
+                : undefined
+            }
+          />
         </FactoryThreadAccess>
       ) : modalOpen ? (
         <SidebarInset className="h-dvh" />

@@ -41,6 +41,70 @@ export function FactoryThreadAccess({
   );
 }
 
+export function FactoryThreadPending({
+  environmentId,
+  factoryId,
+  runId,
+  missing,
+  error,
+}: {
+  environmentId: EnvironmentId;
+  factoryId: string;
+  runId: string;
+  missing: boolean;
+  error: string | null;
+}) {
+  const { environments } = useEnvironments();
+  const connection = environments.find(
+    (entry) => entry.environmentId === environmentId,
+  )?.connection;
+  const failure = error ?? connection?.lastFailure?.message;
+  const unavailable =
+    connection?.phase === "offline" ||
+    connection?.phase === "blocked" ||
+    connection?.phase === "backoff";
+  return (
+    <div
+      {...workspaceAreaProps("home", 1, "Factory thread connection")}
+      className="mx-auto w-full max-w-2xl space-y-5 p-6 pt-20"
+    >
+      <Link
+        to="/foundry"
+        search={{ view: "factories", factoryId, runId, tab: "runs" }}
+        className="text-sm underline"
+      >
+        ← Back to factory run
+      </Link>
+      <h1 className="text-xl font-semibold">
+        {missing
+          ? "Thread no longer available"
+          : failure || unavailable
+            ? "Worker thread unavailable"
+            : "Opening worker thread"}
+      </h1>
+      <p
+        role={failure || missing || unavailable ? "alert" : "status"}
+        className="text-sm text-muted-foreground"
+      >
+        {missing
+          ? "This thread was removed or archived. The factory run and its saved results remain available."
+          : (failure ??
+            (unavailable
+              ? "The worker is not connected. Check its access and connection in Resources, or return to the run to review saved results."
+              : "Waiting for the worker connection and thread history. Your factory context is preserved."))}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" onClick={() => window.location.reload()}>
+          Retry connection
+        </Button>
+        <Button variant="outline" render={<Link to="/foundry" search={{ view: "resources" }} />}>
+          Worker resources
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function WorkerAccessPanel({
   environmentId,
   factoryId,
