@@ -60,36 +60,48 @@ function WorkerAccessPanel({
     if (busy) return;
     setBusy(true);
     setMessage("");
-    try {
-      const loaded = await run({ type: "load" });
-      if (!AsyncResult.isSuccess(loaded)) throw squashAtomCommandFailure(loaded);
-      const device = loaded.value.catalog?.devices.find(
-        (entry) => entry.environmentId === environmentId,
+    const loaded = await run({ type: "load" });
+    if (!AsyncResult.isSuccess(loaded)) {
+      const error = squashAtomCommandFailure(loaded);
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not load worker access. Retry the connection.",
       );
-      if (!device)
-        throw new Error(
-          "This worker is not registered with the current instance. Return to the run to review its saved results.",
-        );
-      if (device.revoked || !device.clientAccess.enabled)
-        throw new Error(
-          "Interactive access to this worker is not authorized. Ask the instance operator to review its access in Resources.",
-        );
-      if (!device.online || !device.rpcReady)
-        throw new Error(
-          "This worker is offline or its interactive connection is unavailable. Return to the run to review its saved results, or retry when it reconnects.",
-        );
-      const selected = await run({ type: "select", deviceId: device.deviceId });
-      if (!AsyncResult.isSuccess(selected)) throw squashAtomCommandFailure(selected);
-      setMessage("Worker selected. Connecting to this thread…");
-    } catch (error) {
+      setBusy(false);
+      return;
+    }
+    const device = loaded.value.catalog?.devices.find(
+      (entry) => entry.environmentId === environmentId,
+    );
+    if (
+      !device ||
+      device.revoked ||
+      !device.clientAccess.enabled ||
+      !device.online ||
+      !device.rpcReady
+    ) {
+      setMessage(
+        !device
+          ? "This worker is not registered with the current instance. Return to the run to review its saved results."
+          : device.revoked || !device.clientAccess.enabled
+            ? "Interactive access to this worker is not authorized. Ask the instance operator to review its access in Resources."
+            : "This worker is offline or its interactive connection is unavailable. Return to the run to review its saved results, or retry when it reconnects.",
+      );
+      setBusy(false);
+      return;
+    }
+    const selected = await run({ type: "select", deviceId: device.deviceId });
+    if (AsyncResult.isSuccess(selected)) setMessage("Worker selected. Connecting to this thread…");
+    else {
+      const error = squashAtomCommandFailure(selected);
       setMessage(
         error instanceof Error
           ? error.message
           : "The worker connection could not be opened. Check your access and retry.",
       );
-    } finally {
-      setBusy(false);
     }
+    setBusy(false);
   }
 
   return (

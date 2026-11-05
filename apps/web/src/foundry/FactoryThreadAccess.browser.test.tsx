@@ -5,12 +5,16 @@ import { render } from "../../test/render";
 import { FactoryThreadAccess } from "./FactoryThreadAccess";
 
 const mocks = vi.hoisted(() => ({ environments: [] as { environmentId: string }[], run: vi.fn() }));
+vi.mock("@t3tools/client-runtime/state/runtime", () => ({
+  squashAtomCommandFailure: () => new Error("Connection failed"),
+}));
 vi.mock("../state/environments", () => ({
   useEnvironments: () => ({ environments: mocks.environments, isReady: true }),
 }));
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => mocks.run }));
 vi.mock("./devices", () => ({ deviceCommand: {} }));
 vi.mock("../lib/utils", () => ({
+  randomUUID: () => crypto.randomUUID(),
   cn: (...classes: string[]) => classes.filter(Boolean).join(" "),
 }));
 vi.mock("../components/ui/sidebar", () => ({ SidebarInset: "main" }));
