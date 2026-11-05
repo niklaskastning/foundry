@@ -3,6 +3,10 @@ import { isDefinitiveAutomationFailure } from "./failures";
 import { randomUUID } from "../../lib/utils";
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
+import { useWorkspaceNavigation } from "../../foundry/useWorkspaceNavigation";
+import { factoryTabs } from "../../foundry/workspaceSearch";
+import { AgentCatalog } from "./AgentCatalog";
+import { InboxPage } from "./InboxPage";
 import { useAtomValue } from "@effect/atom-react";
 import type { AutomationApplicationCommand, EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
@@ -31,57 +35,32 @@ export function FactoryPage({
   initialRunId?: string;
   initialWorkItemId?: string;
 }) {
-  const [selected, setSelected] = useState<string | null>(initialFactoryId ?? null);
-  const [run, setRun] = useState<{ factoryId: string; runId: string } | null>(
-    initialFactoryId && initialRunId ? { factoryId: initialFactoryId, runId: initialRunId } : null,
-  );
-  const [view, setView] = useState(initialView);
+  const { search, update } = useWorkspaceNavigation();
+  const selected = search.factoryId ?? initialFactoryId;
+  const runId = search.runId ?? initialRunId;
+  const view = search.view ?? initialView;
+  const run = selected && runId ? { factoryId: selected, runId } : null;
   function openRun(factoryId: string, runId: string) {
-    setRun({ factoryId, runId });
+    update({ view: "factories", factoryId, runId, attemptId: undefined, attemptsAfter: undefined });
   }
   return (
     <div className="mx-auto w-full max-w-5xl space-y-5 p-5">
-      <nav aria-label="Factory navigation" className="flex flex-wrap gap-2">
-        <Button
-          variant="ghost"
-          onClick={() => {
-            setView("factories");
-            setSelected(null);
-            setRun(null);
-          }}
-        >
-          Factories
-        </Button>
-        <Button
-          variant="ghost"
-          onClick={() => {
-            setView("runs");
-            setRun(null);
-          }}
-        >
-          All runs
-        </Button>
-        {selected ? (
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setView("factories");
-              setRun(null);
-            }}
-          >
-            {selected}
-          </Button>
-        ) : null}
-      </nav>
       {run ? (
         <RunDetail
           key={run.runId}
           environmentId={environmentId}
           factoryId={run.factoryId}
           runId={run.runId}
-          onBack={() => setRun(null)}
+          onBack={() =>
+            update({
+              runId: undefined,
+              attemptId: undefined,
+              attemptsAfter: undefined,
+              tab: search.workItemId ? "work" : "runs",
+            })
+          }
         />
-      ) : view === "runs" ? (
+      ) : view === "runs" && !selected ? (
         <RunList environmentId={environmentId} onOpen={openRun} />
       ) : selected ? (
         <FactoryDetail
@@ -92,7 +71,18 @@ export function FactoryPage({
           onOpenRun={openRun}
         />
       ) : (
-        <FactoryList environmentId={environmentId} onOpen={setSelected} />
+        <FactoryList
+          environmentId={environmentId}
+          onOpen={(factoryId) =>
+            update({
+              view: "factories",
+              factoryId,
+              tab: "overview",
+              after: undefined,
+              search: undefined,
+            })
+          }
+        />
       )}
     </div>
   );
@@ -104,9 +94,12 @@ function FactoryList({
   environmentId: EnvironmentId;
   onOpen: (id: string) => void;
 }) {
-  const [after, setAfter] = useState<string>();
-  const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("");
+  const navigation = useWorkspaceNavigation();
+  const after = navigation.search.after;
+  const filter = navigation.search.search ?? "";
+  const [search, setSearch] = useState<string>();
+  const searchValue = search ?? filter;
+  const setAfter = (after?: string) => navigation.update({ after });
   const [name, setName] = useState("");
   const [repository, setRepository] = useState("");
   const [pending, setPending] = useState<AutomationApplicationCommand | null>(null);
@@ -159,13 +152,13 @@ function FactoryList({
         className="flex gap-2"
         onSubmit={(event) => {
           event.preventDefault();
-          setAfter(undefined);
-          setFilter(search);
+          navigation.update({ search: searchValue, after: undefined });
+          setSearch(undefined);
         }}
       >
         <Input
           aria-label="Find factories"
-          value={search}
+          value={searchValue}
           onChange={(event) => setSearch(event.target.value)}
         />
         <Button variant="outline" type="submit">
@@ -254,16 +247,21 @@ function FactoryDetail({
     factoryId,
   });
   const source = useAutomationQuery(environmentId, { op: "definitionSource", factoryId });
-  const [tab, setTab] = useState<"definition" | "work" | "runs" | "triggers">(
-    initialWorkItemId ? "work" : "definition",
-  );
-  const [workItemId, setWorkItemId] = useState<string | null>(initialWorkItemId ?? null);
+  const navigation = useWorkspaceNavigation();
+  const workItemId = navigation.search.workItemId ?? initialWorkItemId;
+  const tab =
+    navigation.search.tab ??
+    (workItemId ? "work" : navigation.search.view === "runs" ? "runs" : "overview");
+  const setWorkItemId = (workItemId: string) =>
+    navigation.update({ workItemId, tab: "work", after: undefined });
   const [title, setTitle] = useState("");
-  const [repository, setRepository] = useState("");
-  const [after, setAfter] = useState<string>();
+  const [selectedRepository, setRepository] = useState<string>();
+  const after = navigation.search.after;
+  const setAfter = (after?: string) => navigation.update({ after });
   const works = useAutomationQuery(environmentId, {
     op: "workItems",
     factoryId,
+    ...(tab === "overview" ? { activeOnly: true } : {}),
     limit: 20,
     ...(after ? { after } : {}),
   });
@@ -273,6 +271,11 @@ function FactoryDetail({
   const command = useAtomCommand(automationCommands.command, { reportFailure: false });
   const allowed = useAtomValue(automationCommands.command.permissionAtom(environmentId));
   const detail = result?.kind === "factory" ? result : null;
+  const repository =
+    selectedRepository ??
+    (detail?.active?.definition.repositories.length === 1
+      ? detail.active.definition.repositories[0]
+      : "");
   async function createWork() {
     if (busy || !detail?.active || !repository) return;
     const input = pending ?? {
@@ -306,18 +309,39 @@ function FactoryDetail({
   return (
     <section className="space-y-4">
       {error ? <p role="alert">{error}</p> : null}
-      <h1 className="text-xl font-semibold">{detail?.factory.name ?? factoryId}</h1>
-      <nav aria-label="Selected factory" className="flex gap-2">
-        {(["definition", "work", "runs", "triggers"] as const).map((value) => (
+      <div>
+        <Link
+          to="/foundry"
+          search={{ view: "factories" }}
+          className="text-sm text-muted-foreground underline"
+        >
+          All factories
+        </Link>
+        <h1 className="text-xl font-semibold">{detail?.factory.name ?? "Loading factory…"}</h1>
+        <p className="text-sm text-muted-foreground">
+          Factory workspace ·{" "}
+          {detail?.active?.definition.repositories.join(", ") ?? "No active definition"}
+        </p>
+      </div>
+      <nav aria-label="Selected factory" className="flex flex-wrap gap-2">
+        {factoryTabs.map((value) => (
           <Button
             key={value}
             variant={tab === value ? "default" : "outline"}
             onClick={() => {
-              setTab(value);
-              setWorkItemId(null);
+              navigation.update({
+                tab: value,
+                workItemId: undefined,
+                after: undefined,
+                runState: undefined,
+              });
             }}
           >
-            {value === "work" ? "Work items" : value.charAt(0).toUpperCase() + value.slice(1)}
+            {value === "work"
+              ? "Work items"
+              : value === "agents"
+                ? "Agents & skills"
+                : value.charAt(0).toUpperCase() + value.slice(1)}
           </Button>
         ))}
         <Link
@@ -328,6 +352,48 @@ function FactoryDetail({
           Inbox
         </Link>
       </nav>
+      {tab === "overview" ? (
+        <div className="space-y-6">
+          <section className="space-y-3" aria-label="Open work">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-lg font-medium">Open work</h2>
+              <Button onClick={() => navigation.update({ tab: "work", workItemId: undefined })}>
+                New work item
+              </Button>
+            </div>
+            {works.error ? <p role="alert">{works.error}</p> : null}
+            {works.result?.kind === "workItems" ? (
+              <ul className="divide-y rounded-lg border">
+                {works.result.items
+                  .filter((item) => item.state !== "completed" && item.state !== "cancelled")
+                  .map((item) => (
+                    <li key={item.id} className="flex items-center justify-between gap-2 p-3">
+                      <span className="text-sm">
+                        {item.title} · {item.state.replaceAll("_", " ")}
+                      </span>
+                      <Button variant="ghost" onClick={() => setWorkItemId(item.id)}>
+                        Open work item
+                      </Button>
+                    </li>
+                  ))}
+              </ul>
+            ) : null}
+            <p className="text-xs text-muted-foreground">
+              Open items on the current page. All work and pagination are available under Work
+              items.
+            </p>
+          </section>
+          <InboxPage
+            environmentId={environmentId}
+            factoryId={factoryId}
+            compact
+            onNavigateRun={onOpenRun}
+            onNavigateWorkItem={(_, id) => setWorkItemId(id)}
+          />
+          <RunList environmentId={environmentId} factoryId={factoryId} onOpen={onOpenRun} compact />
+        </div>
+      ) : null}
+      {tab === "agents" ? <AgentCatalog active={detail?.active ?? null} /> : null}
       {tab === "definition" && detail ? (
         <div className="space-y-5">
           {source.error ? <p role="alert">{source.error}</p> : null}
@@ -397,6 +463,7 @@ function FactoryDetail({
           />
         ) : (
           <div className="space-y-3">
+            {works.error ? <p role="alert">{works.error}</p> : null}
             {works.result?.kind === "workItems" ? (
               <>
                 <ul className="divide-y rounded border">
@@ -434,8 +501,13 @@ function FactoryDetail({
             <fieldset disabled={busy || Boolean(pending)} className="space-y-3 rounded border p-3">
               <legend className="px-1">New work item</legend>
               <label className="block space-y-1">
-                <span className="text-sm">Title</span>
-                <Input value={title} onChange={(event) => setTitle(event.target.value)} />
+                <span className="text-sm">What should this factory do?</span>
+                <Input
+                  value={title}
+                  maxLength={500}
+                  placeholder="Describe the intended change and result"
+                  onChange={(event) => setTitle(event.target.value)}
+                />
               </label>
               <p className="text-sm">Choose repository</p>
               <div className="flex flex-wrap gap-2">

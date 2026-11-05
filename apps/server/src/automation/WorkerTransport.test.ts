@@ -44,7 +44,7 @@ it.effect("uses one serialized RPC per explicit delivery and preserves worker no
     };
     const worker = RpcGroup.make(
       Rpc.make("foundry.workerStatus", {
-        payload: Schema.Struct({}),
+        payload: Schema.Struct({ projectId: Schema.optional(ProjectId) }),
         success: FoundryWorkerStatus,
       }),
       Rpc.make("foundry.workerRead", {
@@ -72,10 +72,12 @@ it.effect("uses one serialized RPC per explicit delivery and preserves worker no
             worker.toLayer({
               "foundry.workerLaunch": () =>
                 Effect.fail(new FoundryWorkerLaunchError({ code: "handoff_changed" })),
-              "foundry.workerStatus": () =>
+              "foundry.workerStatus": ({ projectId }) =>
                 Effect.sync(() => {
                   calls++;
+                  expect(projectId).toBe("preflight-project");
                   return {
+                    projectReady: true,
                     online: true as const,
                     providerInstanceId: null,
                     providerReady: false,
@@ -132,7 +134,11 @@ it.effect("uses one serialized RPC per explicit delivery and preserves worker no
       ),
     );
     const transport = Context.get(context, WorkerTransport.WorkerTransport);
-    expect(yield* transport.status(identity)).toMatchObject({ online: true, providerReady: false });
+    expect(yield* transport.status(identity, ProjectId.make("preflight-project"))).toMatchObject({
+      online: true,
+      providerReady: false,
+      projectReady: true,
+    });
     expect(
       yield* transport.read(identity, { commandId: CommandId.make("persisted-command") }),
     ).toBeNull();

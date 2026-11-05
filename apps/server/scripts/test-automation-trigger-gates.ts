@@ -10,6 +10,7 @@ import {
   FoundryGatewayError,
   FoundryWorkerExecution,
   ProjectId,
+  ProviderInstanceId,
   type AutomationTriggerCommand,
   type AutomationTriggerBinding,
 } from "@t3tools/contracts";
@@ -100,9 +101,11 @@ export const triggerGates = Effect.fn("Triggers.postgresGates")(function <E>(
           ? Effect.fail(new WorkerTransport.WorkerTransportError({ reason: "forbidden" }))
           : Effect.succeed({
               online: true,
-              providerInstanceId: null,
-              providerReady: false,
-              providerState: "unbound",
+              projectReady: true,
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              providerReady: true,
+              providerState: "ready",
+              roleExecutionVersion: 1,
               version: null,
               checkedAt: "2026-01-01T00:00:00Z",
               capacityAvailable: true,

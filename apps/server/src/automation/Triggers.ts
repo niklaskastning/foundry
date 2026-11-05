@@ -1,3 +1,4 @@
+import { executionConfigurationIssue } from "./executionConfiguration.ts";
 import {
   AutomationTriggerBinding,
   AutomationTriggerCommand,
@@ -405,7 +406,17 @@ const make = Effect.gen(function* () {
     const identity = yield* decodeIdentity(grant[0].identity);
     yield* grants.validate(identity).pipe(Effect.mapError(forbidden));
     // Network authorization happens before the short admission transaction; dispatch checks it again.
-    yield* worker.status(identity).pipe(Effect.mapError(forbidden));
+    const status = yield* worker
+      .status(identity, saved.binding.target.projectId)
+      .pipe(Effect.mapError(forbidden));
+    if (status.projectReady !== true)
+      return yield* new AutomationTriggerError({ code: "invalid_execution" });
+    const workflow = yield* store.readWorkflow(
+      saved.binding.factoryId,
+      saved.binding.workflowVersionId,
+    );
+    const issue = executionConfigurationIssue(workflow, status, saved.binding.target.model);
+    if (issue) return yield* new AutomationTriggerError({ code: issue });
     const runId = `trigger:${yield* hash([saved.binding.id, saved.binding.generation, eventId])}`;
     return yield* sql.withTransaction(
       Effect.gen(function* () {

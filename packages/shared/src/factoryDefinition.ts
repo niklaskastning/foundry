@@ -1,5 +1,7 @@
 import {
   type CanonicalFactoryDefinition,
+  type AutomationWorkflowVersion,
+  FactoryResolvedAgent,
   type FactoryDefinitionIssue,
   FactoryDefinitionFiles,
   FactoryDefinitionManifest,
@@ -39,7 +41,10 @@ const schemaIssues = (
     path: (issue.path ?? []).map((part) =>
       typeof part === "object" ? String(part.key) : typeof part === "number" ? part : String(part),
     ),
-    message: issue.message,
+    message:
+      issue.path?.at(-1) === "provider"
+        ? "Only the Codex provider is supported by Factory workers."
+        : issue.message,
   }));
 const parse = <A>(
   file: string,
@@ -85,6 +90,19 @@ export function validateFactoryFiles(
     return Result.fail([{ file: "factory.yaml", path: [], message: "Missing entry file." }]);
   const manifest = parse("factory.yaml", entry, decodeManifest);
   if (Result.isFailure(manifest)) return Result.fail(manifest.failure);
+  if (
+    manifest.success.schemaVersion === 1 &&
+    (manifest.success.roles !== undefined ||
+      manifest.success.skills !== undefined ||
+      manifest.success.defaults !== undefined)
+  )
+    return Result.fail([
+      {
+        file: "factory.yaml",
+        path: ["schemaVersion"],
+        message: "Roles, skills and execution defaults require schemaVersion 2.",
+      },
+    ]);
   const workflows: Array<CanonicalFactoryDefinition["workflows"][number]> = [];
   const referenced = new Set(["factory.yaml"]);
   for (const [index, workflow] of manifest.success.workflows.entries()) {
@@ -101,6 +119,21 @@ export function validateFactoryFiles(
     const decoded = parse(workflow.file, content, decodeWorkflow);
     if (Result.isFailure(decoded)) return Result.fail(decoded.failure);
     const steps = decoded.success.steps;
+    if (
+      manifest.success.schemaVersion === 1 &&
+      steps.some(
+        (step) =>
+          step.kind === "agent" &&
+          (step.role !== undefined || step.skills !== undefined || step.execution !== undefined),
+      )
+    )
+      return Result.fail([
+        {
+          file: workflow.file,
+          path: ["steps"],
+          message: "Agent roles, skills and execution settings require schemaVersion 2.",
+        },
+      ]);
     const publishIndex = steps.findIndex((step) => step.kind === "publish");
     if (
       publishIndex >= 0 &&
@@ -129,11 +162,73 @@ export function validateFactoryFiles(
         { file, path: [], message: "Unreferenced or unsupported resource file." },
       ]);
   const definition = {
-    schemaVersion: 1,
+    schemaVersion: manifest.success.schemaVersion,
+    ...(manifest.success.roles === undefined
+      ? {}
+      : { roles: [...manifest.success.roles].sort(byId) }),
+    ...(manifest.success.skills === undefined
+      ? {}
+      : { skills: [...manifest.success.skills].sort(byId) }),
+    ...(manifest.success.defaults === undefined ? {} : { defaults: manifest.success.defaults }),
     factoryId: manifest.success.factoryId,
     repositories: [...manifest.success.repositories].sort(),
     workflows: workflows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
   } satisfies CanonicalFactoryDefinition;
+  const knownSkills = new Set(definition.skills?.map((skill) => skill.id));
+  for (const [index, role] of (manifest.success.roles ?? []).entries()) {
+    if (role.skills.some((id) => !knownSkills.has(id)))
+      return Result.fail([
+        {
+          file: "factory.yaml",
+          path: ["roles", index, "skills"],
+          message: "Referenced skill is missing from the versioned skill catalog.",
+        },
+      ]);
+  }
+  let resolvedSize = 0;
+  for (const workflow of definition.workflows) {
+    for (const [index, step] of workflow.steps.entries()) {
+      if (step.kind !== "agent") continue;
+      const file = manifest.success.workflows.find((entry) => entry.id === workflow.id)!.file;
+      if (step.role !== undefined && !definition.roles?.some((role) => role.id === step.role))
+        return Result.fail([
+          {
+            file,
+            path: ["steps", index, "role"],
+            message: "Referenced role is missing from the versioned role catalog.",
+          },
+        ]);
+      if (step.skills?.some((id) => !knownSkills.has(id)))
+        return Result.fail([
+          {
+            file,
+            path: ["steps", index, "skills"],
+            message: "Referenced skill is missing from the versioned skill catalog.",
+          },
+        ]);
+    }
+    try {
+      resolvedSize += new TextEncoder().encode(
+        JSON.stringify(resolveFactoryWorkflow(definition, workflow.id)),
+      ).byteLength;
+      if (resolvedSize > 2 * 1024 * 1024)
+        return Result.fail([
+          {
+            file: "factory.yaml",
+            path: ["workflows"],
+            message: "Resolved workflow snapshots exceed the definition size limit.",
+          },
+        ]);
+    } catch {
+      return Result.fail([
+        {
+          file: manifest.success.workflows.find((entry) => entry.id === workflow.id)!.file,
+          path: ["steps"],
+          message: "Resolved agent instructions or resource count exceed supported limits.",
+        },
+      ]);
+    }
+  }
   let exportedSize = 0;
   for (const file of exportFactoryFiles(definition)) {
     const bytes = new TextEncoder().encode(file.content).byteLength;
@@ -166,7 +261,10 @@ export function exportFactoryFiles(definition: CanonicalFactoryDefinition): Fact
     {
       path: "factory.yaml",
       content: stringify({
-        schemaVersion: 1,
+        schemaVersion: definition.schemaVersion,
+        ...(definition.roles === undefined ? {} : { roles: definition.roles }),
+        ...(definition.skills === undefined ? {} : { skills: definition.skills }),
+        ...(definition.defaults === undefined ? {} : { defaults: definition.defaults }),
         factoryId: definition.factoryId,
         repositories: definition.repositories,
         workflows,
@@ -177,4 +275,51 @@ export function exportFactoryFiles(definition: CanonicalFactoryDefinition): Fact
       content: stringify({ steps: workflow.steps }),
     })),
   ];
+}
+
+const byId = (a: { readonly id: string }, b: { readonly id: string }) =>
+  a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+const decodeResolved = Schema.decodeUnknownSync(FactoryResolvedAgent, {
+  onExcessProperty: "error",
+});
+
+export function resolveFactoryWorkflow(
+  definition: CanonicalFactoryDefinition,
+  workflowId: string,
+): AutomationWorkflowVersion["steps"] {
+  const workflow = definition.workflows.find((entry) => entry.id === workflowId);
+  if (!workflow) throw new Error("Workflow is missing from the definition.");
+  if (definition.schemaVersion === 1) return workflow.steps;
+  return workflow.steps.map((step) => {
+    if (step.kind !== "agent") return step;
+    const role = definition.roles?.find((entry) => entry.id === step.role);
+    if (step.role !== undefined && !role) throw new Error("Referenced role is missing.");
+    const skillIds = [...new Set([...(role?.skills ?? []), ...(step.skills ?? [])])];
+    const skills = skillIds.map((id) => {
+      const skill = definition.skills?.find((entry) => entry.id === id);
+      if (!skill) throw new Error("Referenced skill is missing.");
+      return skill;
+    });
+    const layers = [definition.defaults, role?.execution, step.execution];
+    const model = layers.findLast((layer) => layer?.model !== undefined)?.model;
+    const reasoningEffort = layers.findLast(
+      (layer) => layer?.options?.reasoningEffort !== undefined,
+    )?.options?.reasoningEffort;
+    const resolved = decodeResolved({
+      ...(role ? { role: { id: role.id, name: role.name, instructions: role.instructions } } : {}),
+      skills,
+      execution: {
+        provider: "codex",
+        ...(model === undefined ? {} : { model }),
+        ...(reasoningEffort === undefined ? {} : { options: { reasoningEffort } }),
+      },
+      instructions: [
+        role?.instructions,
+        ...skills.map((skill) => `Skill: ${skill.name} (${skill.id})\n${skill.instructions}`),
+      ]
+        .filter((text) => text !== undefined)
+        .join("\n\n"),
+    });
+    return { ...step, resolved };
+  });
 }

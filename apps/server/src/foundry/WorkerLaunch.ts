@@ -73,7 +73,7 @@ export function workerLaunchIds(input: FoundryWorkerLaunchInput, binding: string
   return {
     commandId: CommandId.make(`foundry-launch:${key}`),
     threadId: ThreadId.make(
-      `foundry-launch:${digest(JSON.stringify([1, key, binding, input.projectId, input.title, input.model, input.prompt, ...(input.workspaceMode === "worktree" ? ["worktree"] : []), ...(input.previousExecution ? [input.previousExecution.commandId, input.previousExecution.generation] : []), ...(input.previousHandoff ? [input.previousHandoff.handoffId, input.previousHandoff.commitSha] : []), ...(input.publishEvidence ? [input.publishEvidence] : []), ...(input.inputArtifacts?.length ? [input.inputArtifacts.map((item) => [item.reference.instanceId, item.reference.artifactId, item.reference.owner.environmentId, item.reference.owner.threadId, item.name, item.mimeType, item.sizeBytes, item.sha256])] : [])]))}`,
+      `foundry-launch:${digest(JSON.stringify([1, key, binding, input.projectId, input.title, input.model, input.prompt, ...(input.options ? [input.options] : []), ...(input.workspaceMode === "worktree" ? ["worktree"] : []), ...(input.previousExecution ? [input.previousExecution.commandId, input.previousExecution.generation] : []), ...(input.previousHandoff ? [input.previousHandoff.handoffId, input.previousHandoff.commitSha] : []), ...(input.publishEvidence ? [input.publishEvidence] : []), ...(input.inputArtifacts?.length ? [input.inputArtifacts.map((item) => [item.reference.instanceId, item.reference.artifactId, item.reference.owner.environmentId, item.reference.owner.threadId, item.name, item.mimeType, item.sizeBytes, item.sha256])] : [])]))}`,
     ),
   };
 }
@@ -838,6 +838,16 @@ export const layer = Layer.effect(
           const status = yield* readiness.read();
           if (!status.providerReady || status.providerInstanceId !== binding)
             return yield* failure("provider_not_ready");
+          const model = status.models?.find(
+            (model) => model.id === input.model || model.aliases.includes(input.model),
+          );
+          if (
+            status.models &&
+            (!model ||
+              (input.options?.reasoningEffort &&
+                !model.reasoningEfforts.includes(input.options.reasoningEffort)))
+          )
+            return yield* failure("provider_not_ready");
           if (input.previousExecution && input.workspaceMode === "worktree")
             return yield* failure("handoff_unavailable");
           yield* verifyHandoff(input, workspace);
@@ -874,7 +884,13 @@ export const layer = Layer.effect(
             ...ids,
             projectId: input.projectId,
             title: input.title,
-            modelSelection: { instanceId: ProviderInstanceId.make(binding), model: input.model },
+            modelSelection: {
+              instanceId: ProviderInstanceId.make(binding),
+              model: input.model,
+              ...(input.options?.reasoningEffort
+                ? { options: [{ id: "reasoningEffort", value: input.options.reasoningEffort }] }
+                : {}),
+            },
             runtimeMode: "approval-required",
             interactionMode: "default",
             workspaceStrategy:

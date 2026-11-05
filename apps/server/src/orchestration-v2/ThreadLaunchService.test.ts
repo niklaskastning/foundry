@@ -2668,12 +2668,23 @@ it.effect.each([
   "after-thread-commit",
   "after-message-commit",
   "lost-response",
+  "configured-options",
 ] as const)("worker receipt survives %s and recreation of its service", (failurePoint) => {
   const harness = makeHarness();
+  const input = {
+    ...workerInput,
+    ...(failurePoint === "configured-options"
+      ? { options: { reasoningEffort: "high" as const } }
+      : {}),
+  };
   return Effect.gen(function* () {
     const threads = yield* ThreadManagement.ThreadManagementService;
     const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
-    const ids = WorkerLaunch.workerLaunchIds(workerInput, "codex");
+    const ids = WorkerLaunch.workerLaunchIds(input, "codex");
+    const legacyIds = WorkerLaunch.workerLaunchIds(workerInput, "codex");
+    assert.equal(ids.commandId, legacyIds.commandId);
+    if (failurePoint === "configured-options") assert.notEqual(ids.threadId, legacyIds.threadId);
+    else assert.equal(ids.threadId, legacyIds.threadId);
     if (failurePoint === "before-commit") {
       const fault = Layer.mock(ThreadLaunch.ThreadLaunchService)({
         launch: () =>
@@ -2687,7 +2698,7 @@ it.effect.each([
           ),
       });
       const failed = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
-        worker.launch(workerInput),
+        worker.launch(input),
       ).pipe(Effect.provide(workerLayer().pipe(Layer.provide(fault))), Effect.flip);
       assert.deepInclude(failed, { code: "launch_failed" });
       assert.isTrue(Option.isNone(yield* receipts.getByCommandId(ids.commandId)));
@@ -2696,7 +2707,7 @@ it.effect.each([
         type: "thread.create",
         ...ids,
         projectId,
-        title: workerInput.title,
+        title: input.title,
         modelSelection,
         runtimeMode: "approval-required",
         interactionMode: "default",
@@ -2730,7 +2741,7 @@ it.effect.each([
         ),
       );
       const stopped = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
-        worker.launch(workerInput),
+        worker.launch(input),
       ).pipe(Effect.provide(workerLayer().pipe(Layer.provide(interruptedLaunch))), Effect.exit);
       assert.isTrue(Exit.isFailure(stopped));
       if (Exit.isFailure(stopped))
@@ -2742,14 +2753,14 @@ it.effect.each([
       );
     } else {
       // The durable launch completes but its response is lost before the caller sees it.
-      yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) => worker.launch(workerInput)).pipe(
+      yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) => worker.launch(input)).pipe(
         Effect.provide(workerLayer()),
         Effect.andThen(Effect.fail("lost response")),
         Effect.flip,
       );
     }
     const recoveredRead = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
-      worker.read({ commandId: workerInput.commandId }),
+      worker.read({ commandId: input.commandId }),
     ).pipe(Effect.provide(workerLayer()), Effect.result);
     if (failurePoint === "before-commit" || failurePoint === "after-thread-commit") {
       assert.isTrue(Result.isFailure(recoveredRead));
@@ -2762,12 +2773,12 @@ it.effect.each([
     }
     const first = yield* Effect.gen(function* () {
       const worker = yield* WorkerLaunch.WorkerLaunch;
-      const receipt = yield* worker.launch(workerInput);
+      const receipt = yield* worker.launch(input);
       if (failurePoint === "before-commit") {
         const store = yield* ExecutionStore.ExecutionStore;
-        const row = yield* store.read(workerInput.commandId);
+        const row = yield* store.read(input.commandId);
         assert.equal(row?.stopRequested, 1);
-        assert.isFalse(yield* store.renew(workerInput.commandId, row!.generation));
+        assert.isFalse(yield* store.renew(input.commandId, row!.generation));
         assert.isFalse(
           yield* store.starting({
             threadId: receipt.threadId,
@@ -2785,13 +2796,19 @@ it.effect.each([
       },
     });
     const second = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
-      worker.launch(workerInput),
+      worker.launch(input),
     ).pipe(Effect.provide(workerLayer()));
     assert.deepEqual(first, second);
     assert.equal(first.threadId, ids.threadId);
     const projection = yield* threads.getThreadProjection(first.threadId);
     assert.equal(projection.messages.length, 1);
     assert.equal(projection.runs.length, 1);
+    const expectedModelSelection = {
+      ...modelSelection,
+      ...(input.options ? { options: [{ id: "reasoningEffort", value: "high" }] } : {}),
+    };
+    assert.deepEqual(projection.thread.modelSelection, expectedModelSelection);
+    assert.deepEqual(projection.runs[0]!.modelSelection, expectedModelSelection);
     const execution = yield* Effect.gen(function* () {
       const worker = yield* WorkerLaunch.WorkerLaunch;
       if (failurePoint === "after-message-commit")
@@ -2802,7 +2819,7 @@ it.effect.each([
           ),
           Stream.runHead,
         );
-      return yield* worker.read({ commandId: workerInput.commandId });
+      return yield* worker.read({ commandId: input.commandId });
     }).pipe(Effect.provide(workerLayer(["/other"], false)));
     assert.deepEqual(execution.receipt, first);
     assert.deepInclude(execution.run, {
@@ -2815,9 +2832,19 @@ it.effect.each([
       1,
     );
     const conflict = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
-      worker.launch({ ...workerInput, prompt: "Different request" }),
+      worker.launch({ ...input, prompt: "Different request" }),
     ).pipe(Effect.provide(workerLayer()), Effect.flip);
     assert.deepInclude(conflict, { code: "command_conflict" });
+    const changedOptions = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+      worker.launch({ ...input, options: { reasoningEffort: "low" } }),
+    ).pipe(Effect.provide(workerLayer()), Effect.flip);
+    assert.deepInclude(changedOptions, { code: "command_conflict" });
+    if (input.options) {
+      const removedOptions = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+        worker.launch(workerInput),
+      ).pipe(Effect.provide(workerLayer()), Effect.flip);
+      assert.deepInclude(removedOptions, { code: "command_conflict" });
+    }
     assert.equal((yield* threads.getThreadProjection(first.threadId)).messages.length, 1);
   }).pipe(Effect.provide(harness.layer));
 });

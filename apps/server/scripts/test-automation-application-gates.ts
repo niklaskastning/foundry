@@ -6,6 +6,7 @@ import * as GitHubApp from "../src/automation/GitHubApp.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- Assertions run inside the isolated PostgreSQL harness.
 import * as NodeAssert from "node:assert/strict";
 import {
+  ProjectId,
   AutomationApplicationError,
   AutomationMachineCredentialError,
   FoundryGatewayError,
@@ -270,6 +271,7 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
       { op: "workItems" as const, factoryId: "p21-a", limit: 1 },
       { op: "runs" as const, factoryId: "p21-a", limit: 1 },
       { op: "workerBinding" as const },
+      { op: "executionDefaults" as const, factoryId: "p21-b", repository: "fixture-repo" },
       { op: "definitionSource" as const, factoryId: "p21-b" },
       { op: "handoffs" as const, factoryId: "p21-b", workItemId: "p21-work" },
     ])
@@ -365,6 +367,70 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     NodeAssert.equal(active.kind, "definition");
     if (active.kind !== "definition")
       return yield* new AutomationApplicationError({ code: "unavailable" });
+    const defaultsCommand = {
+      op: "configureExecutionDefaults" as const,
+      commandId: "p28-defaults",
+      factoryId: "p21-a",
+      repository: "fixture-repo",
+      expectedGeneration: null,
+      projectId: ProjectId.make("worker-project"),
+      model: "fallback-model",
+      checks: [],
+      requiredArtifacts: [],
+    };
+    NodeAssert.equal(
+      (yield* app.command(operate, defaultsCommand).pipe(Effect.flip)).code,
+      "forbidden",
+    );
+    NodeAssert.equal(
+      (yield* app.command(machineA, defaultsCommand).pipe(Effect.flip)).code,
+      "forbidden",
+    );
+    const defaults = yield* app.command(request, defaultsCommand);
+    NodeAssert.equal(defaults.kind, "executionDefaults");
+    NodeAssert.deepEqual(yield* app.command(request, defaultsCommand), defaults);
+    NodeAssert.deepEqual(
+      yield* app.query(operate, {
+        op: "executionDefaults",
+        factoryId: "p21-a",
+        repository: "fixture-repo",
+      }),
+      defaults,
+    );
+    NodeAssert.equal(
+      (yield* app.command(request, { ...defaultsCommand, model: "changed" }).pipe(Effect.flip))
+        .code,
+      "conflict",
+    );
+    NodeAssert.equal(
+      (yield* app
+        .command(request, { ...defaultsCommand, commandId: "p28-stale" })
+        .pipe(Effect.flip)).code,
+      "conflict",
+    );
+    const changedDefaults = yield* app.command(request, {
+      ...defaultsCommand,
+      commandId: "p28-update",
+      expectedGeneration: 1,
+      model: "updated-model",
+    });
+    if (changedDefaults.kind === "executionDefaults") {
+      NodeAssert.equal(changedDefaults.defaults?.generation, 2);
+      NodeAssert.equal(changedDefaults.defaults?.model, "updated-model");
+    }
+    NodeAssert.deepEqual(yield* app.command(request, defaultsCommand), defaults);
+    NodeAssert.deepEqual(
+      yield* app.query(operate, {
+        op: "executionDefaults",
+        factoryId: "p21-a",
+        repository: "fixture-repo",
+      }),
+      changedDefaults,
+    );
+    NodeAssert.equal(
+      (yield* sql`SELECT id FROM foundry_automation.runs WHERE factory_id='p21-a'`).length,
+      0,
+    );
     const largeFiles = exportFactoryFiles({
       schemaVersion: 1,
       factoryId: "p21-a",
@@ -473,5 +539,47 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     }
     const hiddenRuns = yield* app.query(operate, { op: "runs", factoryId: "p21-a", limit: 20 });
     if (hiddenRuns.kind === "runs") NodeAssert.equal(hiddenRuns.items.length, 0);
+    for (const [id, when] of [
+      ["z-older-run", "2026-01-01T00:00:00Z"],
+      ["a-newer-run", "2026-01-02T00:00:00Z"],
+    ]) {
+      yield* sql`INSERT INTO foundry_automation.runs(id,factory_id,work_item_id,workflow_version_id,factory_version_id,repository,revision,state) VALUES(${id},'p21-a','p21-work',${active.version.workflowVersions[0]!.versionId},${active.version.factoryVersionId},'fixture-repo','input-1','pending')`;
+      yield* sql`INSERT INTO foundry_automation.dispatch_runs(run_id,worker_id,binding,enrolled_at) VALUES(${id},'fixture-worker',${sql.json({ identity, projectId: "worker-project", model: "fixture", checks: [], requiredArtifacts: [] })},${when}::timestamptz)`;
+    }
+    const recent = yield* app.query(operate, {
+      op: "runs",
+      factoryId: "p21-a",
+      recent: true,
+      limit: 1,
+    });
+    if (recent.kind === "runs") {
+      NodeAssert.deepEqual(
+        recent.items.map((run) => [run.id, run.workItemTitle]),
+        [["a-newer-run", "Fixture work"]],
+      );
+      NodeAssert.equal(recent.next, "a-newer-run");
+      const nextRecent = yield* app.query(operate, {
+        op: "runs",
+        factoryId: "p21-a",
+        recent: true,
+        limit: 1,
+        after: recent.next!,
+      });
+      if (nextRecent.kind === "runs") {
+        NodeAssert.deepEqual(
+          nextRecent.items.map((run) => run.id),
+          ["z-older-run"],
+        );
+        NodeAssert.equal(nextRecent.next, null);
+      }
+    }
+    yield* sql`UPDATE foundry_automation.work_items SET state='completed' WHERE id='p21-work'`;
+    const openWork = yield* app.query(operate, {
+      op: "workItems",
+      factoryId: "p21-a",
+      activeOnly: true,
+      limit: 20,
+    });
+    if (openWork.kind === "workItems") NodeAssert.deepEqual(openWork.items, []);
   }).pipe(Effect.provide(Layer.merge(layer, database)), Effect.scoped);
 });

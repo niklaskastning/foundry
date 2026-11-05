@@ -10,6 +10,7 @@ import {
   FoundryGatewayError,
   AuthOrchestrationOperateScope,
   type CommandId,
+  type ProjectId,
   type ThreadId,
   type RuntimeRequestId,
   type ProviderUserInputAnswers,
@@ -83,6 +84,7 @@ export class WorkerTransport extends Context.Service<
     ) => Effect.Effect<WorkerIdentity, WorkerTransportError>;
     readonly status: (
       identity: WorkerIdentity,
+      projectId?: ProjectId,
     ) => Effect.Effect<FoundryWorkerStatus, WorkerTransportError>;
     readonly launch: (
       identity: WorkerIdentity,
@@ -237,8 +239,8 @@ const make = Effect.gen(function* () {
       Effect.mapError(transportError),
     ),
     authorize,
-    status: Effect.fn("WorkerTransport.status")((identity) =>
-      call(identity, (client) => client["foundry.workerStatus"]({})),
+    status: Effect.fn("WorkerTransport.status")((identity, projectId) =>
+      call(identity, (client) => client["foundry.workerStatus"](projectId ? { projectId } : {})),
     ),
     launch: Effect.fn("WorkerTransport.launch")((identity, input) =>
       call(identity, (client) => client["foundry.workerLaunch"](input), {

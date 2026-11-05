@@ -10,12 +10,20 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import { executionConfigurationIssue } from "./executionConfiguration.ts";
 import * as AutomationDatabase from "./AutomationDatabase.ts";
 import * as Factories from "./Factories.ts";
 import * as Workflows from "./Workflows.ts";
 
 export class DispatchError extends Schema.TaggedError<DispatchError>()("DispatchError", {
-  reason: Schema.Literals(["not_found", "conflict", "stale_claim", "invalid_step", "unavailable"]),
+  reason: Schema.Literals([
+    "not_found",
+    "conflict",
+    "stale_claim",
+    "invalid_step",
+    "invalid_execution",
+    "unavailable",
+  ]),
   cause: Schema.optional(Schema.Defect()),
 }) {
   override get message() {
@@ -71,6 +79,20 @@ export interface DispatchClaim extends DispatchRun {
 export class DispatchStore extends Context.Service<
   DispatchStore,
   {
+    readonly workItemTitle: (
+      factoryId: string,
+      workItemId: string,
+    ) => Effect.Effect<string, DispatchError>;
+    readonly readWorkflow: (
+      factoryId: string,
+      workflowVersionId: string,
+    ) => Effect.Effect<AutomationWorkflowVersion, DispatchError>;
+    readonly replayManual: (
+      input: typeof StartAutomationRun.Type,
+      workerId: string,
+      binding: unknown,
+      identity: unknown,
+    ) => Effect.Effect<DispatchRun | null, DispatchError>;
     readonly startManual: (
       input: typeof StartAutomationRun.Type,
       workerId: string,
@@ -165,6 +187,16 @@ const make = Effect.gen(function* () {
   const sql = yield* AutomationDatabase.AutomationDatabase;
   const workflows = yield* Workflows.Workflows;
   const factories = yield* Factories.Factories;
+  const workItemTitle = Effect.fn("DispatchStore.workItemTitle")(
+    (factoryId: string, workItemId: string) =>
+      factories.readWorkItem(factoryId, workItemId).pipe(Effect.map((work) => work.title)),
+    Effect.mapError(operationError),
+  );
+  const readWorkflow = Effect.fn("DispatchStore.readWorkflow")(
+    (factoryId: string, workflowVersionId: string) =>
+      workflows.readVersion(factoryId, workflowVersionId),
+    Effect.mapError(operationError),
+  );
   const attempts = Effect.fn("DispatchStore.attempts")(function* (runId: string) {
     return yield* sql<DispatchAttempt>`SELECT command_id AS "commandId",ordinal,attempt_number AS "attemptNumber",request,state,reason,receipt,result FROM foundry_automation.step_attempts WHERE run_id=${runId} ORDER BY ordinal,attempt_number`;
   });
@@ -193,6 +225,9 @@ const make = Effect.gen(function* () {
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         const run = yield* workflows.readRun(input.factoryId, input.runId);
+        const workflow = yield* readWorkflow(input.factoryId, run.workflowVersionId);
+        if (executionConfigurationIssue(workflow))
+          return yield* new DispatchError({ reason: "invalid_execution" });
         const previous = yield* sql<{
           same: boolean;
         }>`SELECT worker_id=${input.workerId} AND binding=${sql.json(input.binding)}::jsonb AS same FROM foundry_automation.dispatch_runs WHERE run_id=${input.runId}`;
@@ -551,6 +586,19 @@ const make = Effect.gen(function* () {
       }),
     );
   }, Effect.mapError(operationError));
+  const replayManual = Effect.fn("DispatchStore.replayManual")(function* (
+    input: typeof StartAutomationRun.Type,
+    workerId: string,
+    binding: unknown,
+    identity: unknown,
+  ) {
+    const rows = yield* sql<{
+      same: boolean;
+    }>`SELECT a.command_id=${input.commandId} AND c.kind='workflowRun' AND c.payload=${sql.json(input)}::jsonb AND d.worker_id=${workerId} AND (d.binding-'identity'-'manualInput')=(${sql.json(binding)}::jsonb-'identity'-'manualInput') AND a.identity->>'instanceId'=${sql.json(identity)}::jsonb->>'instanceId' AND a.identity->>'operatorId'=${sql.json(identity)}::jsonb->>'operatorId' AS same FROM foundry_automation.manual_admissions a JOIN foundry_automation.commands c ON c.id=a.command_id JOIN foundry_automation.dispatch_runs d ON d.run_id=a.run_id WHERE a.run_id=${input.id}`;
+    if (!rows[0]) return null;
+    if (!rows[0].same) return yield* new DispatchError({ reason: "conflict" });
+    return yield* read(input.factoryId, input.id);
+  }, Effect.mapError(operationError));
   const startManual = Effect.fn("DispatchStore.startManual")(function* (
     input: typeof StartAutomationRun.Type,
     workerId: string,
@@ -606,6 +654,9 @@ const make = Effect.gen(function* () {
     );
   }, Effect.mapError(operationError));
   return DispatchStore.of({
+    workItemTitle,
+    replayManual,
+    readWorkflow,
     startTriggered,
     completePublish,
     archiveCursor,

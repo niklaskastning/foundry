@@ -1,5 +1,16 @@
 import { assert, it } from "@effect/vitest";
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
+import {
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@t3tools/contracts";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as Option from "effect/Option";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -59,13 +70,44 @@ function fixture(input: {
   providers?: ReadonlyArray<ServerProvider>;
   runs?: number;
   countFails?: boolean;
+  workspace?: string;
+  projectEnabled?: boolean;
+  scratch?: boolean;
+  missing?: boolean;
 }) {
   return layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        FileSystem.layerNoop({ realPath: (path) => Effect.succeed(path) }),
+        Path.layer,
+        Layer.mock(ProjectService.ProjectService)({
+          getById: (id) =>
+            Effect.succeed(
+              input.missing
+                ? Option.none()
+                : Option.some({
+                    id,
+                    title: "Fixture",
+                    workspaceRoot: input.workspace ?? "/allowed/repo",
+                    defaultModelSelection: null,
+                    scripts: [],
+                    deletedAt: null,
+                    createdAt: "1970-01-01T00:00:00.000Z",
+                    updatedAt: "1970-01-01T00:00:00.000Z",
+                  }),
+            ),
+        }),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          namedProjectsRoot: "/allowed",
+          isScratchProject: () => Effect.succeed(input.scratch ?? false),
+        }),
+        Layer.mock(ThreadManagement.ThreadManagementService)({
+          isProviderInstanceEnabledForProject: () => Effect.succeed(input.projectEnabled ?? true),
+        }),
         ConfigProvider.layer(
           ConfigProvider.fromEnv({
             env: {
+              FOUNDRY_WORKER_WORKSPACE_ROOTS: JSON.stringify(["/allowed"]),
               FOUNDRY_WORKER_ENABLED: String(input.enabled ?? true),
               FOUNDRY_WORKER_PROVIDER_INSTANCE_ID: input.binding ?? instanceId,
             },
@@ -108,10 +150,15 @@ it.effect(
           { providerReady: false, providerState: "unbound", providerInstanceId: null },
         ],
         [{ countFails: true }, { providerReady: true, capacityAvailable: null, activeRuns: null }],
+        [{ workspace: "/allowed/repo" }, { projectReady: true }],
+        [{ workspace: "/allowed-other/repo" }, { projectReady: false }],
+        [{ missing: true }, { projectReady: false }],
+        [{ scratch: true }, { projectReady: false }],
+        [{ projectEnabled: false }, { projectReady: false }],
       ] as const) {
-        const result = yield* Effect.flatMap(WorkerReadiness, (service) => service.read()).pipe(
-          Effect.provide(fixture(input)),
-        );
+        const result = yield* Effect.flatMap(WorkerReadiness, (service) =>
+          service.read(ProjectId.make("fixture-project")),
+        ).pipe(Effect.provide(fixture(input)));
         assert.deepInclude(result, { online: true, ...expected });
       }
     }),

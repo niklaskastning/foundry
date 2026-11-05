@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 import {
   canonicalFactoryJson,
+  resolveFactoryWorkflow,
   exportFactoryFiles,
   validateFactoryFiles,
 } from "@t3tools/shared/factoryDefinition";
@@ -163,7 +164,7 @@ const make = Effect.gen(function* () {
             id: versionId,
             factoryId: input.factoryId,
             factoryVersionId,
-            steps: workflow.steps,
+            steps: resolveFactoryWorkflow(definition, workflow.id),
           });
           workflowVersions.push({ id: workflow.id, versionId });
         }

@@ -905,6 +905,91 @@ anschließend wieder gesperrt. Bei Fehlschlag umfasst Recovery auch diese Datenb
 kein Image-only-Downgrade. Der Aufruf aktiviert keine Trigger. Für spätere Updates
 innerhalb Schema 8 bleibt `update` der passende Pfad.
 
+### Wiederverwendbare Rollen und Startvorgaben
+
+Definitionsschema 2 ergänzt `roles`, `skills` und `defaults` in `factory.yaml`.
+Ein Agent-Step behält seinen konkreten `prompt` und kann eine `role`, zusätzliche
+`skills` und `execution`-Overrides referenzieren. Schema 1 bleibt für bisherige
+Prompt-Workflows verfügbar. Rollen und Skills werden mit der gesamten aktivierten
+Definition versioniert; Sync allein verändert keine laufende Arbeit.
+
+Beispiel für einen gemeinsamen Rollen-/Skillkatalog in `factory.yaml`:
+
+```yaml
+schemaVersion: 2
+factoryId: example
+repositories: [app]
+defaults:
+  provider: codex
+  model: <Modell-ID aus dem Worker-Katalog>
+roles:
+  - id: engineer
+    name: Engineer
+    description: Änderungen umsetzen und prüfen
+    instructions: Bewahre vorhandenes Verhalten und erläutere die Verifikation.
+    skills: [verification]
+    execution:
+      options:
+        reasoningEffort: low
+skills:
+  - id: verification
+    name: Verification
+    instructions: Führe passende Prüfungen aus und berichte ihre tatsächlichen Ergebnisse.
+workflows:
+  - id: implement
+    file: workflows/implement.yaml
+  - id: investigate
+    file: workflows/investigate.yaml
+```
+
+Beide Workflow-Dateien können dieselbe Rolle verwenden. Beispielsweise enthält
+`workflows/implement.yaml`:
+
+```yaml
+steps:
+  - id: implement
+    kind: agent
+    dependsOn: []
+    role: engineer
+    prompt: Setze den Auftrag um.
+```
+
+Der Untersuchungsworkflow ergänzt stattdessen seinen konkreten Analyseauftrag.
+Die verwendete Modell-ID und Reasoning-Stufe müssen vom Worker angeboten werden.
+
+Die Ausführung löst Einstellungen in der Reihenfolge Definitionsdefaults → Rolle →
+Step auf. Nicht gesetzte Modelle verwenden die ausdrücklich bestätigte
+Betriebsbindung. Unterstützt sind Codex, das Modell und `options.reasoningEffort`.
+Skill-Instruktionen werden aus dem aktivierten Snapshot in den Auftrag übernommen;
+es werden keine Repository-Dateien überschrieben. Dateibasierte Skill-Bundles,
+MCP-/Connector-Ressourcen, Secret-Ausgabe und weitere Provideradapter sind nicht
+Teil dieses Schnitts. Unbekannte Felder oder fehlende Referenzen verhindern die
+Aktivierung. Git-Dateien erteilen keine Betriebsrechte.
+
+Unter **Agents & skills** stehen Rollen, Skills, wirksame Step-Einstellungen und
+der Änderungsweg zum Definitionsrepository. **Overview** zeigt offene Arbeit,
+Entscheidungen und letzte Runs. Beim Auftrag lassen sich Worker-Projekt,
+Fallback-Modell, Prüfkommandos und Artefaktanforderungen einmal pro Factory und
+Repository speichern. Dafür ist Verwaltungsrecht erforderlich; Speichern startet
+keinen Run und ersetzt keine aktuelle Worker-/Sessionfreigabe. Jeder Start zeigt
+seine Einstellungen, bestehende Runs behalten ihre gespeicherten Requests.
+
+Main benötigt weiterhin Instanzschema 8, Automation jetzt Schema 9. Zuerst den
+getesteten Worker mit dem vorhandenen Worker-Updater installieren, dann Main mit
+dem intern sperrenden Migrationspfad aktualisieren:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-factory-agents sha256:<digest> <commit>
+```
+
+Der Worker meldet `roleExecutionVersion: 1`; ältere Worker erhalten keine
+Rollenaufträge. Der Main-Updater hält die Deploymentsperre, sichert den vorherigen
+Stand, migriert bei gestopptem Main und sperrt den Migrator anschließend wieder.
+`manifest.json` und `success` im ausgegebenen Recovery-Verzeichnis bleiben der
+Betriebsnachweis. Recovery auf Schema-8-Code verlangt den koordinierten vorherigen
+Daten-/State-Stand; kein reiner Image-Downgrade. Updates innerhalb Schema 9 nutzen
+wieder `update`. Windows-Bedienung und weitere Provider benötigen eigene Abnahmen.
+
 ### Versionierte Factory-HTTP-API (P58a)
 
 Bei aktivierter Automation stehen dieselben Benutzeroperationen unter

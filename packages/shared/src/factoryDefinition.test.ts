@@ -4,6 +4,7 @@ import {
   canonicalFactoryJson,
   exportFactoryFiles,
   validateFactoryFiles,
+  resolveFactoryWorkflow,
 } from "./factoryDefinition.ts";
 
 const files = () => [
@@ -92,6 +93,176 @@ describe("canonical factory definitions", () => {
         (issue) => issue.file === "factory.yaml" && issue.path.join(".") === "workflows.0.file",
       ),
     ).toBe(true);
+  });
+
+  it("resolves shared roles with ordered skills and layered defaults into independent snapshots", () => {
+    const input = [
+      {
+        path: "factory.yaml",
+        content: JSON.stringify({
+          schemaVersion: 2,
+          factoryId: "a",
+          repositories: ["repo-a"],
+          defaults: { provider: "codex", model: "base-model", options: { reasoningEffort: "low" } },
+          skills: [
+            { id: "tests", name: "Testing", instructions: "Run focused tests." },
+            { id: "review", name: "Review", instructions: "Inspect the final diff." },
+          ],
+          roles: [
+            {
+              id: "implementer",
+              name: "Implementer",
+              description: "Implement a bounded change",
+              instructions: "Preserve existing behavior.",
+              skills: ["tests"],
+              execution: { model: "role-model" },
+            },
+          ],
+          workflows: [
+            { id: "build", file: "build.yaml" },
+            { id: "repair", file: "repair.yaml" },
+          ],
+        }),
+      },
+      {
+        path: "build.yaml",
+        content: JSON.stringify({
+          steps: [
+            {
+              id: "work",
+              kind: "agent",
+              dependsOn: [],
+              prompt: "Build the feature",
+              role: "implementer",
+              skills: ["tests", "review"],
+              execution: { options: { reasoningEffort: "high" } },
+            },
+          ],
+        }),
+      },
+      {
+        path: "repair.yaml",
+        content: JSON.stringify({
+          steps: [
+            {
+              id: "work",
+              kind: "agent",
+              dependsOn: [],
+              prompt: "Fix the bug",
+              role: "implementer",
+            },
+          ],
+        }),
+      },
+    ];
+    const parsed = validateFactoryFiles(input);
+    if (Result.isFailure(parsed)) throw new Error(JSON.stringify(parsed.failure));
+    expect(validateFactoryFiles(exportFactoryFiles(parsed.success))).toEqual(parsed);
+    const before = resolveFactoryWorkflow(parsed.success, "build");
+    expect(before[0]).toMatchObject({
+      prompt: "Build the feature",
+      resolved: {
+        role: { id: "implementer", instructions: "Preserve existing behavior." },
+        skills: [{ id: "tests" }, { id: "review" }],
+        execution: { provider: "codex", model: "role-model", options: { reasoningEffort: "high" } },
+        instructions:
+          "Preserve existing behavior.\n\nSkill: Testing (tests)\nRun focused tests.\n\nSkill: Review (review)\nInspect the final diff.",
+      },
+    });
+    expect(resolveFactoryWorkflow(parsed.success, "repair")[0]).toMatchObject({
+      resolved: {
+        execution: { model: "role-model", options: { reasoningEffort: "low" } },
+        skills: [{ id: "tests" }],
+      },
+    });
+    const expanded = validateFactoryFiles(
+      exportFactoryFiles({
+        ...parsed.success,
+        skills: [{ id: "tests", name: "Testing", instructions: "x".repeat(20_000) }],
+        workflows: ["first", "second"].map((id) => ({
+          id,
+          steps: Array.from({ length: 100 }, (_, index) => ({
+            id: `work${index}`,
+            kind: "agent" as const,
+            dependsOn: [],
+            prompt: "Work",
+            role: "implementer",
+          })),
+        })),
+      }),
+    );
+    expect(Result.isFailure(expanded)).toBe(true);
+    if (Result.isSuccess(expanded)) throw new Error("Expected expanded snapshot size rejection");
+    expect(expanded.failure[0]?.message).toContain("size limit");
+    const changed = {
+      ...parsed.success,
+      roles: parsed.success.roles!.map((role) => ({
+        ...role,
+        instructions: "New behavior",
+        execution: { model: "new-model" },
+      })),
+    };
+    expect(resolveFactoryWorkflow(changed, "build")[0]).toMatchObject({
+      resolved: { role: { instructions: "New behavior" }, execution: { model: "new-model" } },
+    });
+    expect(before[0]).toMatchObject({
+      resolved: {
+        role: { instructions: "Preserve existing behavior." },
+        execution: { model: "role-model" },
+      },
+    });
+    for (const [field, value] of [
+      ["role", "missing"],
+      ["skills", ["missing"]],
+      ["execution", { provider: "claude" }],
+      ["execution", { options: { unsupportedOption: true } }],
+      ["resolved", { instructions: "Bypass validation" }],
+    ] as const) {
+      const invalid = input.map((file) =>
+        file.path === "build.yaml"
+          ? {
+              ...file,
+              content: JSON.stringify({
+                steps: [
+                  { id: "work", kind: "agent", dependsOn: [], prompt: "Work", [field]: value },
+                ],
+              }),
+            }
+          : file,
+      );
+      const rejected = validateFactoryFiles(invalid);
+      expect(Result.isFailure(rejected)).toBe(true);
+      if (Result.isSuccess(rejected))
+        throw new Error("Expected missing or unsupported resource rejection");
+      expect(rejected.failure[0]?.file).toBe("build.yaml");
+      if (field === "execution" && "provider" in value)
+        expect(rejected.failure[0]?.message).toContain("Codex");
+    }
+    for (const manifest of [
+      { ...JSON.parse(input[0]!.content), schemaVersion: 1 },
+      { ...JSON.parse(input[0]!.content), skills: [] },
+      {
+        ...JSON.parse(input[0]!.content),
+        roles: [
+          {
+            id: "unused",
+            name: "Unused",
+            description: "Invalid unused role",
+            instructions: "Work",
+            skills: ["missing"],
+          },
+        ],
+      },
+    ]) {
+      expect(
+        Result.isFailure(
+          validateFactoryFiles([
+            { path: "factory.yaml", content: JSON.stringify(manifest) },
+            ...input.slice(1),
+          ]),
+        ),
+      ).toBe(true);
+    }
   });
 
   it.each([

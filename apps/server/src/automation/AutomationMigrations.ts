@@ -58,7 +58,7 @@ const make = Effect.gen(function* () {
           }>`SELECT version FROM foundry_automation.schema_version`;
           if (
             versions.length !== 1 ||
-            ![1, 2, 3, 4, 5, 6, 7, 8].includes(versions[0]?.version ?? 0)
+            ![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(versions[0]?.version ?? 0)
           )
             return yield* new AutomationMigrationError({ reason: "schema_incompatible" });
           if (versions[0]?.version === 1) {
@@ -121,6 +121,13 @@ const make = Effect.gen(function* () {
             yield* sql`CREATE TABLE foundry_automation.handoff_commands (id text PRIMARY KEY, payload jsonb NOT NULL, handoff_id text NOT NULL REFERENCES foundry_automation.work_item_handoffs(id), receipt jsonb)`;
             yield* sql`UPDATE foundry_automation.schema_version SET version=8`;
           }
+          if ((versions[0]?.version ?? 0) < 9) {
+            yield* sql`CREATE TABLE IF NOT EXISTS foundry_automation.execution_defaults (factory_id text NOT NULL REFERENCES foundry_automation.factories(id), repository text NOT NULL, generation integer NOT NULL CHECK(generation>0), instance_id text NOT NULL, operator_id text NOT NULL, settings jsonb NOT NULL, PRIMARY KEY(factory_id,repository))`;
+            yield* sql`CREATE TABLE IF NOT EXISTS foundry_automation.execution_defaults_commands (id text PRIMARY KEY, payload jsonb NOT NULL, result jsonb NOT NULL, instance_id text NOT NULL, operator_id text NOT NULL)`;
+            yield* sql`UPDATE foundry_automation.schema_version SET version=9`;
+          }
+          yield* sql`GRANT INSERT, UPDATE ON foundry_automation.execution_defaults TO ${sql(runtimeRole)}`;
+          yield* sql`GRANT INSERT ON foundry_automation.execution_defaults_commands TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT, UPDATE ON foundry_automation.work_item_handoffs, foundry_automation.handoff_commands TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT, UPDATE ON foundry_automation.definition_sources TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT ON foundry_automation.definition_git_revisions, foundry_automation.definition_source_commands TO ${sql(runtimeRole)}`;
