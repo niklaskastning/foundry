@@ -62,9 +62,21 @@ export function WorkerPoolPicker({
         <p className="text-sm">Configured default worker</p>
       )}
       {query.error ? (
-        <p role="alert" className="text-sm">
-          Worker choices unavailable: {query.error}
-        </p>
+        <div className="space-y-2">
+          <p role="alert" className="text-sm">
+            Worker choices unavailable: {query.error}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={query.refresh}>
+              Retry worker
+            </Button>
+            {deviceId ? (
+              <Button size="sm" variant="outline" onClick={() => setDeviceId(undefined)}>
+                Choose default worker
+              </Button>
+            ) : null}
+          </div>
+        </div>
       ) : null}
       {query.loading ? (
         <p role="status" className="text-sm">

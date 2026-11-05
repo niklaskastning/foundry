@@ -58,11 +58,11 @@ export function FactoryThreadPending({
   const connection = environments.find(
     (entry) => entry.environmentId === environmentId,
   )?.connection;
-  const failure = error ?? connection?.lastFailure?.message;
+  const failure = error ?? connection?.error;
   const unavailable =
     connection?.phase === "offline" ||
-    connection?.phase === "blocked" ||
-    connection?.phase === "backoff";
+    connection?.phase === "error" ||
+    connection?.phase === "unsupported";
   return (
     <div
       {...workspaceAreaProps("home", 1, "Factory thread connection")}
