@@ -119,6 +119,41 @@ export function RunDetail({
               </div>
             ) : null}
           </dl>
+          <section
+            aria-label="Pinned definition origin"
+            className="space-y-1 rounded border p-3 text-sm"
+          >
+            <h3 className="font-medium">Pinned definition origin</h3>
+            {detail.definition ? (
+              <>
+                <p>Definition version: {detail.definition.id}</p>
+                <p className="break-all">Content hash: {detail.definition.contentHash}</p>
+                {detail.definition.source.kind === "github" ? (
+                  <>
+                    <p>
+                      {detail.definition.source.repository} · {detail.definition.source.branch} ·{" "}
+                      {detail.definition.source.path || "/"}
+                    </p>
+                    <a
+                      className="break-all underline"
+                      target="_blank"
+                      rel="noreferrer"
+                      href={`https://github.com/${detail.definition.source.repository}/commit/${detail.definition.source.commitSha}`}
+                    >
+                      {detail.definition.source.commitSha}
+                    </a>
+                  </>
+                ) : (
+                  <p>
+                    Local source: {detail.definition.source.kind} ·{" "}
+                    {detail.definition.source.reference}
+                  </p>
+                )}
+              </>
+            ) : (
+              <p>No definition provenance is available for this run.</p>
+            )}
+          </section>
           <div className="flex flex-wrap gap-2">
             {(["pause", "resume", "cancel", "retry"] as const).map((action) => (
               <Button

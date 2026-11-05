@@ -122,11 +122,16 @@ export function DefinitionEditor({
   return (
     <section className="space-y-4" aria-label="Factory definition">
       <div>
-        <h2 className="text-lg font-medium">Definition</h2>
+        <h2 className="text-lg font-medium">Manual import transition</h2>
         <p className="text-sm text-muted-foreground">
           {active ? `Active version: ${active.id}` : "No active definition"}
         </p>
       </div>
+      <p className="text-sm text-muted-foreground">
+        Local editing is an import transition until Git takes ownership. After binding, changes to
+        the active local version cause import drift. Git-owned definitions are edited in their
+        repository.
+      </p>
       <p className="text-sm">Repositories: {repositories.join(", ")}</p>
       {definition.workflows.map((workflow, wi) => (
         <fieldset key={workflow.id} className="space-y-3 rounded-lg border p-3">
