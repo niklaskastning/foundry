@@ -2416,6 +2416,8 @@ try {
       "PASS P48 PostgreSQL: explicit drift recovery, permanent Git ownership, immutable snapshots, exact revision activation, late sync fencing, revoked reads and pause, idempotent rollback; functional G11 import/change/invalid commit, two pinned manual admissions and Inbox decisions across restart.",
     ),
   );
+  await query("CREATE DATABASE handoff_archive_fixture OWNER fixture_admin");
+  await query("REVOKE ALL ON DATABASE handoff_archive_fixture FROM PUBLIC");
   await run(
     handoffGates(
       db("automation_runtime"),
@@ -2426,11 +2428,16 @@ try {
         },
         catch: () => new AutomationTriggerError({ code: "unavailable" }),
       }),
+      InstanceDatabase.layer({
+        path,
+        username: "fixture_admin",
+        database: "handoff_archive_fixture",
+      }),
     ),
   );
   await run(
     Console.log(
-      "PASS P51 isolated PostgreSQL: takeover/dispatch fencing, lost acknowledgement and restart, explicit reopen, revision and grant conflicts, confirmed return and paused continuation; Worker/archive transport fixtures, no native provider turn.",
+      "PASS P51 isolated PostgreSQL: takeover/dispatch fencing, lost acknowledgement and restart, explicit reopen, revision and grant conflicts, confirmed return and paused continuation; Worker transport fixture and real archive authorization, no native provider turn.",
     ),
   );
   await run(applicationGates(db("automation_runtime")));
