@@ -1286,3 +1286,9 @@ Beim Auftrag werden die gepinnte Git-Basis und optional strukturierte
 Workflow-Eingaben angegeben. Die Run-Ansicht zeigt gespeicherte Conditions,
 Swarm-Zweige und Iterationen; einzelne Eingaben und Resultate werden auf Wunsch
 geladen. Technische Retries und fachliche Schleifen verwenden getrennte Budgets.
+
+Eine T3-Rückgabe erstellt einen neuen, zunächst pausierten Run mit derselben
+Workflowrevision und denselben Eingaben auf dem bestätigten Rückgabe-Checkpoint.
+Der Quellrun bleibt als übergebene Historie gesperrt. Erst explizites Fortsetzen
+autorisiert die neue Ausführung mit eigenem Budget; abgeschlossene Veröffentlichungen
+und Freigaben des Quellruns werden dabei nicht automatisch ausgeführt.
