@@ -244,6 +244,8 @@ const make = Effect.gen(function* () {
     const replay = yield* store.replayManual(runInput, workerId, binding, identity);
     if (replay) return replay;
     const workflow = yield* store.readWorkflow(input.factoryId, input.workflowVersionId);
+    if (!workflow.execution && binding.workers?.length)
+      return yield* new SchedulerError({ reason: "invalid_binding" });
     const primary = binding.workers?.[0] ?? { identity, projectId: input.projectId };
     const status = yield* worker.status(primary.identity, primary.projectId);
     if (status.projectReady !== true)
