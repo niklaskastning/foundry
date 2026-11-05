@@ -73,7 +73,7 @@ export function workerLaunchIds(input: FoundryWorkerLaunchInput, binding: string
   return {
     commandId: CommandId.make(`foundry-launch:${key}`),
     threadId: ThreadId.make(
-      `foundry-launch:${digest(JSON.stringify([1, key, binding, input.projectId, input.title, input.model, input.prompt, ...(input.options ? [input.options] : []), ...(input.workspaceMode === "worktree" ? ["worktree"] : []), ...(input.previousExecution ? [input.previousExecution.commandId, input.previousExecution.generation] : []), ...(input.previousHandoff ? [input.previousHandoff.handoffId, input.previousHandoff.commitSha] : []), ...(input.publishEvidence ? [input.publishEvidence] : []), ...(input.inputArtifacts?.length ? [input.inputArtifacts.map((item) => [item.reference.instanceId, item.reference.artifactId, item.reference.owner.environmentId, item.reference.owner.threadId, item.name, item.mimeType, item.sizeBytes, item.sha256])] : [])]))}`,
+      `foundry-launch:${digest(JSON.stringify([1, key, binding, input.projectId, input.title, input.model, input.prompt, ...(input.options ? [input.options] : []), ...(input.workspaceMode === "worktree" ? ["worktree"] : []), ...(input.workspaceRevision ? [input.workspaceRevision] : []), ...(input.previousExecution ? [input.previousExecution.commandId, input.previousExecution.generation] : []), ...(input.previousHandoff ? [input.previousHandoff.handoffId, input.previousHandoff.commitSha] : []), ...(input.publishEvidence ? [input.publishEvidence] : []), ...(input.inputArtifacts?.length ? [input.inputArtifacts.map((item) => [item.reference.instanceId, item.reference.artifactId, item.reference.owner.environmentId, item.reference.owner.threadId, item.name, item.mimeType, item.sizeBytes, item.sha256])] : [])]))}`,
     ),
   };
 }
@@ -322,6 +322,7 @@ export const layer = Layer.effect(
                     runId: run.id,
                     checkpointId: ready ? checkpoint.id : null,
                     checkpointRef: ready ? checkpoint.ref : null,
+                    ...(ready ? { workspacePath: scope.cwd } : {}),
                     outcome: stopped ? "stopped" : "completed",
                     ...publishResult,
                   });
@@ -607,7 +608,6 @@ export const layer = Layer.effect(
         return false;
       const launchId = CommandId.make(`foundry-launch:${digest(commandId)}`);
       if (
-        Option.isSome(yield* receipts.getByCommandId(launchId)) ||
         Option.isSome(yield* receipts.getByCommandId(CommandId.make(`${launchId}:initial-message`)))
       )
         return false;
@@ -662,8 +662,30 @@ export const layer = Layer.effect(
       );
     const cancel = Effect.fn("WorkerLaunch.cancel")(
       function* (input: FoundryWorkerCancelInput) {
-        const execution = yield* read({ commandId: input.launchCommandId });
+        if (!enabled) return yield* new FoundryWorkerCancelError({ code: "not_enabled" });
         const commandId = CommandId.make(`foundry-cancel:${digest(input.commandId)}`);
+        const prior = yield* executions.cancellation(input.commandId);
+        if (prior && prior !== input.launchCommandId)
+          return yield* new FoundryWorkerCancelError({ code: "command_conflict" });
+        const execution = yield* read({ commandId: input.launchCommandId }).pipe(
+          Effect.catch((error) =>
+            error.code === "not_found" ? Effect.succeed(null) : Effect.fail(error),
+          ),
+        );
+        if (!execution) {
+          if (Option.isSome(yield* receipts.getByCommandId(commandId)))
+            return yield* new FoundryWorkerCancelError({ code: "command_conflict" });
+          if (!(yield* executions.cancelUnstarted(input.commandId, input.launchCommandId)))
+            return yield* new FoundryWorkerCancelError({ code: "cancel_failed" });
+          const row = yield* executions.read(input.launchCommandId);
+          if (row) yield* releaseUnstarted(row.commandId, row.threadId, row.generation);
+          return {
+            commandId: input.commandId,
+            launchCommandId: input.launchCommandId,
+            status: "not_started" as const,
+            noStartConfirmed: true as const,
+          };
+        }
         const acceptedCancellation = Effect.fn("WorkerLaunch.acceptedCancellation")(function* () {
           const stored = yield* receipts.getByCommandId(commandId);
           if (Option.isNone(stored)) return Option.none();
@@ -725,6 +747,7 @@ export const layer = Layer.effect(
                 : "cancel_failed",
         });
       }),
+      launchLane.withPermits(1),
     );
     if (enabled) {
       yield* Effect.gen(function* () {
@@ -770,6 +793,8 @@ export const layer = Layer.effect(
       launch: Effect.fn("WorkerLaunch.launch")(
         function* (input: FoundryWorkerLaunchInput) {
           if (!enabled || !binding) return yield* failure("not_enabled");
+          if (input.workspaceRevision && input.workspaceMode !== "worktree")
+            return yield* failure("project_denied");
           const project = yield* projects.getById(input.projectId);
           if (
             Option.isNone(project) ||
@@ -860,7 +885,15 @@ export const layer = Layer.effect(
               input.publishEvidence,
             );
           }
-          const execution = yield* executions.reserve(input.commandId, ids.threadId);
+          const execution = yield* executions
+            .reserve(input.commandId, ids.threadId, status.capacity ?? 1)
+            .pipe(
+              Effect.mapError((error) =>
+                failure(
+                  error.code === "capacity_unavailable" ? "capacity_unavailable" : "launch_failed",
+                ),
+              ),
+            );
           // Uncertain retries may recover receipts; ExecutionStore.starting still fences native entry.
           if (execution.stopRequested === 1 && execution.writerEnded === 1)
             return yield* failure("launch_failed");
@@ -870,6 +903,7 @@ export const layer = Layer.effect(
             generation: execution.generation,
             repositoryPath: workspace,
             mode: input.workspaceMode ?? "checkout",
+            ...(input.workspaceRevision ? { revision: input.workspaceRevision } : {}),
           });
           yield* verifyHandoff(input, workspace).pipe(
             Effect.catch((error) =>

@@ -8,6 +8,9 @@ import * as Crypto from "@effect/platform-node/NodeCrypto";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import {
   CommandId,
+  FoundryDeviceId,
+  EnvironmentId,
+  ProjectId,
   AutomationHandoffCommand,
   FoundryWorkerExecution,
   FoundryWorkerHandoffReceipt,
@@ -115,6 +118,8 @@ export const handoffGates = Effect.fn("Handoffs.postgresGates")(function <E, E2>
         },
       },
     });
+    let expectedIdentity = binding.identity;
+    let expectedProjectId = binding.projectId;
     let allowed = true;
     let generation = 1;
     let loseOpenAck = true;
@@ -130,17 +135,28 @@ export const handoffGates = Effect.fn("Handoffs.postgresGates")(function <E, E2>
         allowed
           ? Effect.succeed(binding.identity)
           : Effect.fail(new WorkerTransport.WorkerTransportError({ reason: "forbidden" })),
-      authorize: () =>
+      authorize: (_request, target) =>
         allowed
-          ? Effect.succeed({ ...binding.identity, accessGeneration: generation })
+          ? Effect.succeed({
+              ...(target.deviceId === expectedIdentity.deviceId
+                ? expectedIdentity
+                : binding.identity),
+              accessGeneration: generation,
+            })
           : Effect.fail(new WorkerTransport.WorkerTransportError({ reason: "forbidden" })),
       handoffOpen: Effect.fn("Handoffs.fixtureOpen")(function* (inputIdentity, input) {
-        NodeAssert.equal(inputIdentity.deviceId, binding.identity.deviceId);
+        NodeAssert.equal(inputIdentity.deviceId, expectedIdentity.deviceId);
+        NodeAssert.equal(input.projectId, expectedProjectId);
         deliveries++;
         acceptedOpens.add(input.commandId);
         if (loseOpenAck)
           return yield* new WorkerTransport.WorkerTransportError({ reason: "unavailable" });
-        return { ...receipt, handoffId: input.handoffId, mode: input.mode };
+        return {
+          ...receipt,
+          projectId: input.projectId,
+          handoffId: input.handoffId,
+          mode: input.mode,
+        };
       }),
       handoffFinish: () =>
         finishAvailable
@@ -578,5 +594,91 @@ export const handoffGates = Effect.fn("Handoffs.postgresGates")(function <E, E2>
       Effect.provide(services),
     );
     NodeAssert.equal(threadLink[0]?.workItemId, "p51-work");
+    expectedIdentity = {
+      ...binding.identity,
+      deviceId: FoundryDeviceId.make("44444444-4444-4444-8444-444444444451"),
+      environmentId: EnvironmentId.make("handoff-second-worker"),
+    };
+    expectedProjectId = ProjectId.make("second-worker-project");
+    yield* Effect.gen(function* () {
+      const workflows = yield* Workflows.Workflows;
+      const dispatch = yield* DispatchStore.DispatchStore;
+      yield* workflows.createVersion({
+        commandId: "p29-handoff-workflow",
+        id: "p29-handoff-workflow",
+        factoryId: "p51-factory",
+        factoryVersionId: "p51-version",
+        execution: {
+          mode: "parallel",
+          maxParallelism: 2,
+          maxRepairRounds: 1,
+          join: "all_succeeded",
+          failurePolicy: "repair_failed",
+          joinStepId: "join",
+        },
+        steps: [
+          { id: "left", kind: "agent", dependsOn: [], prompt: "Left" },
+          { id: "right", kind: "agent", dependsOn: [], prompt: "Right" },
+          { id: "join", kind: "agent", dependsOn: ["left", "right"], prompt: "Join" },
+        ],
+      });
+      yield* workflows.start({
+        commandId: "p29-handoff-start",
+        id: "p29-handoff-run",
+        factoryId: "p51-factory",
+        workItemId: "p51-other-work",
+        workflowVersionId: "p29-handoff-workflow",
+        revision: "a".repeat(40),
+      });
+      yield* dispatch.enroll({
+        factoryId: "p51-factory",
+        runId: "p29-handoff-run",
+        workerId: binding.identity.deviceId,
+        binding,
+      });
+    }).pipe(Effect.provide(services));
+    yield* query(
+      (sql) =>
+        sql`UPDATE foundry_automation.run_controls SET mode='paused' WHERE run_id='p29-handoff-run'`,
+    );
+    yield* query(
+      (sql) =>
+        sql`INSERT INTO foundry_automation.step_attempts(command_id,run_id,ordinal,request,state,result,worker_id,worker_binding) VALUES('p29-assigned-source','p29-handoff-run',0,'{}','succeeded',${sql.json({ execution: source, artifacts: [] })},${expectedIdentity.deviceId},${sql.json({ identity: expectedIdentity, projectId: expectedProjectId })})`,
+    );
+    yield* query(
+      (sql) =>
+        sql`INSERT INTO foundry_automation.dispatch_outbox(command_id,state) VALUES('p29-assigned-source','confirmed')`,
+    );
+    yield* query(
+      (sql) =>
+        sql`INSERT INTO foundry_automation.step_attempts(command_id,run_id,ordinal,request,state,worker_id) VALUES('p51-running-sibling','p29-handoff-run',1,'{}','running',${binding.identity.deviceId})`,
+    );
+    yield* query(
+      (sql) =>
+        sql`INSERT INTO foundry_automation.dispatch_outbox(command_id,state) VALUES('p51-running-sibling','delivered')`,
+    );
+    const assignedTake = yield* decodeCommand({
+      op: "takeOver",
+      commandId: "p29-assigned-take",
+      id: "p29-assigned-handoff",
+      factoryId: "p51-factory",
+      runId: "p29-handoff-run",
+      expectedRevision: 0,
+      sourceCommandId: "p29-assigned-source",
+      mode: "existing",
+    });
+    NodeAssert.equal(
+      (yield* failure(execute(assignedTake)))?.code,
+      "writer_not_ended",
+      "A stopped source cannot hide a live sibling on another worker",
+    );
+    yield* query(
+      (sql) =>
+        sql`UPDATE foundry_automation.step_attempts SET state='succeeded',result=${sql.json({ execution: source, artifacts: [] })} WHERE command_id='p51-running-sibling'`,
+    );
+    const assignedHandoff = yield* execute(assignedTake);
+    NodeAssert.equal(assignedHandoff.environmentId, expectedIdentity.environmentId);
+    NodeAssert.equal(assignedHandoff.receipt?.projectId, expectedProjectId);
+    NodeAssert.deepEqual(yield* execute(assignedTake), assignedHandoff);
   });
 });

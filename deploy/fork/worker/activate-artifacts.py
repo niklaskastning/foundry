@@ -162,6 +162,8 @@ def start(config):
             status = g3.rpc(config, "foundry.workerStatus", {})
             if not status["online"] or not status["providerReady"] or status["activeRuns"] != 0:
                 raise RuntimeError("Bound worker is not ready and idle; keep stopped")
+            if status.get("capacity", 1) != config.get("capacity", 1):
+                raise RuntimeError("Worker capacity differs from the installed profile; keep stopped")
             g3.run(["/usr/bin/systemctl", "start", "foundry-host.target"])
             wait_for(f'Foundry device {device["deviceId"]} connected; project-read adapter enabled.'.encode())
         verify_processes(config, inspection.inventory())
@@ -171,8 +173,12 @@ def start(config):
 
 
 def main(args):
+    capacity = None
+    if len(args) == 4 and args[0] == "install" and args[2] == "--capacity" and args[3] in [str(value) for value in range(1, 9)]:
+        capacity = int(args[3])
+        args = args[:2]
     if len(args) != 2 or args[0] not in ("install", "rollback"):
-        raise RuntimeError("Use activate-artifacts.py install STAGE | rollback RECOVERY")
+        raise RuntimeError("Use activate-artifacts.py install STAGE [--capacity 1..8] | rollback RECOVERY")
     if os.geteuid() != 0:
         raise RuntimeError("Administrator required")
     os.umask(0o077)
@@ -198,6 +204,8 @@ def main(args):
             stage = Path(args[1]).resolve(strict=True)
             manifest = release_tools.artifacts(stage)
             config = {**previous["config"], "revision": manifest["revision"]}
+            if capacity is not None:
+                config["capacity"] = capacity
             if not config.get("providerInstanceId"):
                 raise RuntimeError("Dedicated provider binding is missing")
             value = binding(installation, config)
@@ -236,7 +244,7 @@ def main(args):
         (recovery / ("success" if args[0] == "install" else "rollback-success")).write_text(config["revision"] + "\n")
         installed = installation.previous()["config"]
         print(json.dumps({"previousRevision": previous["config"]["revision"], "revision": config["revision"],
-                          "artifactPublication": installed.get("artifactPublication", False), "servicesReady": True,
+                          "artifactPublication": installed.get("artifactPublication", False), "capacity": installed.get("capacity", 1), "servicesReady": True,
                           "recovery": str(recovery), "mainChanged": False, "paidStarts": 0}))
 
 

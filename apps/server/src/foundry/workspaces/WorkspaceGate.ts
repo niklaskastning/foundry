@@ -22,6 +22,7 @@ interface WorkerInput {
   generation: number;
   repositoryPath: string;
   mode: "checkout" | "worktree";
+  revision?: string;
 }
 export class WorkspaceGate extends Context.Reference<{
   readonly handoffs: ReservationStore.ReservationStore["Service"] | null;
@@ -146,6 +147,7 @@ export const layer = (allowedRoots: ReadonlyArray<string>) =>
               requestId,
               repositoryPath: input.repositoryPath,
               mode: input.mode,
+              ...(input.revision ? { revision: input.revision } : {}),
               managedRoot: rootFor(input.repositoryPath) ?? "",
             },
             input.threadId,

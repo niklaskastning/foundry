@@ -63,10 +63,14 @@ const make = Effect.gen(function* () {
     return inserted.length > 0;
   });
   const readVersion = Effect.fn("Workflows.readVersion")(function* (factoryId: string, id: string) {
-    const rows =
-      yield* sql<AutomationWorkflowVersion>`SELECT id,factory_id AS "factoryId",factory_version_id AS "factoryVersionId",steps FROM foundry_automation.workflow_versions WHERE factory_id=${factoryId} AND id=${id}`;
+    const rows = yield* sql<
+      Omit<AutomationWorkflowVersion, "execution"> & {
+        execution: AutomationWorkflowVersion["execution"] | null;
+      }
+    >`SELECT id,factory_id AS "factoryId",factory_version_id AS "factoryVersionId",steps,execution FROM foundry_automation.workflow_versions WHERE factory_id=${factoryId} AND id=${id}`;
     if (!rows[0]) return yield* new Factories.AutomationError({ reason: "not_found" });
-    return rows[0];
+    const { execution, ...version } = rows[0];
+    return { ...version, ...(execution ? { execution } : {}) };
   }, Effect.mapError(operationError));
   const readRun = Effect.fn("Workflows.readRun")(function* (factoryId: string, id: string) {
     const rows =
@@ -84,7 +88,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         if (yield* claim(input.commandId, "workflowVersion", input)) {
           yield* factories.readVersion(input.factoryId, input.factoryVersionId);
-          yield* sql`INSERT INTO foundry_automation.workflow_versions(id,factory_id,factory_version_id,steps) VALUES(${input.id},${input.factoryId},${input.factoryVersionId},${sql.json(input.steps)})`;
+          yield* sql`INSERT INTO foundry_automation.workflow_versions(id,factory_id,factory_version_id,steps,execution) VALUES(${input.id},${input.factoryId},${input.factoryVersionId},${sql.json(input.steps)},${input.execution ? sql.json(input.execution) : null})`;
         }
         return yield* readVersion(input.factoryId, input.id);
       }),

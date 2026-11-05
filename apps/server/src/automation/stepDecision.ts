@@ -18,6 +18,7 @@ export const decideStep = (input: {
   readonly events: ReadonlyArray<FoundryArchiveEvent>;
   readonly command?: string;
   readonly cwd?: string;
+  readonly workspaceRelative?: boolean;
   readonly artifactsReady: boolean;
   readonly publishRequest?: typeof FoundryPublishRequest.Type;
 }): StepDecision => {
@@ -110,6 +111,12 @@ export const decideStep = (input: {
   )
     return { state: "finalizing", reason: "required_events_pending" };
   if (!input.artifactsReady) return { state: "finalizing", reason: "artifacts_pending" };
+  if (
+    input.workspaceRelative &&
+    input.command !== undefined &&
+    (input.cwd !== "." || !manifest.workspacePath)
+  )
+    return { state: "finalizing", reason: "test_workspace_pending" };
   if (input.publishRequest) {
     const requested = input.publishRequest;
     const evidence = manifest.publishEvidence;
@@ -117,6 +124,7 @@ export const decideStep = (input: {
       !evidence ||
       evidence.repository !== requested.repository ||
       evidence.baseBranch !== requested.baseBranch ||
+      (input.workspaceRelative && evidence.sourceCwd !== manifest.workspacePath) ||
       requested.checks.length === 0 ||
       !requested.checks.some(
         (check) => check.command === input.command && check.cwd === input.cwd,
@@ -154,7 +162,7 @@ export const decideStep = (input: {
       (item) =>
         item.type === "command_execution" &&
         item.input === input.command &&
-        item.cwd === input.cwd &&
+        item.cwd === (input.workspaceRelative ? manifest.workspacePath : input.cwd) &&
         item.threadId === execution.receipt.threadId,
     );
     if (

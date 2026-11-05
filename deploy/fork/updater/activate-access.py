@@ -102,10 +102,20 @@ def parse_runtime(text):
                 or not re.fullmatch(r'postgresql://foundry_automation_runtime:[a-f0-9]{64}@postgres:5432/fork_automation', values['FOUNDRY_AUTOMATION_DATABASE_URL'])):
             raise RuntimeError('Automation requires its complete separate database profile.')
         target = json.loads(values['FOUNDRY_AUTOMATION_TARGET'])
-        if (set(target) != {'deviceId', 'environmentId', 'allowedRunIds'}
+        if (not isinstance(target, dict) or set(target) - {'workers'} != {'deviceId', 'environmentId', 'allowedRunIds'}
                 or any(not isinstance(target[key], str) or not re.fullmatch(r'[a-f0-9-]{36}', target[key]) for key in ['deviceId', 'environmentId'])
                 or target['allowedRunIds'] != []):
-            raise RuntimeError('Product automation requires one explicit worker and no legacy fixture allowlist.')
+            raise RuntimeError('Product automation requires an explicit worker and no legacy fixture allowlist.')
+        if 'workers' in target:
+            workers = target['workers']
+            if (not isinstance(workers, list) or not 1 <= len(workers) <= 8
+                    or any(not isinstance(entry, dict) or set(entry) != {'deviceId', 'environmentId'}
+                           or any(not isinstance(entry[key], str) or not re.fullmatch(r'[a-f0-9-]{36}', entry[key]) for key in ['deviceId', 'environmentId']) for entry in workers)):
+                raise RuntimeError('Worker pool requires one to eight explicit device/environment targets.')
+            for key in ['deviceId', 'environmentId']:
+                values_for_key = [target[key], *[entry[key] for entry in workers]]
+                if len(set(values_for_key)) != len(values_for_key):
+                    raise RuntimeError('Worker pool targets must be distinct from each other and the default.')
     if extra and (extra != set(GATEWAY_FLAGS) or any(values[key] != 'true' for key in GATEWAY_FLAGS)):
         raise RuntimeError('Supply either no gateway flags or the complete enabled gateway profile.')
     if ARTIFACT_FLAG in values and (values[ARTIFACT_FLAG] != 'true' or extra != set(GATEWAY_FLAGS)):
@@ -181,7 +191,7 @@ def active_status(expected_schema=None, expected_automation_schema=None):
     automation_schema = None
     if automation_enabled:
         automation_schema = int(sql("BEGIN READ ONLY; SELECT version FROM foundry_automation.schema_version; COMMIT;", database='fork_automation'))
-        if automation_schema not in ([expected_automation_schema] if expected_automation_schema else [5, 6, 7, 8, 9]):
+        if automation_schema not in ([expected_automation_schema] if expected_automation_schema else [5, 6, 7, 8, 9, 10]):
             raise RuntimeError('Automation schema is incompatible.')
     return {'automationSchemaVersion': automation_schema, 'automationEnabled': automation_enabled, 'gatewayEnabled': gateway_enabled, 'artifactsEnabled': artifacts_enabled, 'revision': revision, 'image': configured_image, 'schemaVersion': database['version'],
             'instanceId': INSTANCE, 'environmentId': ENVIRONMENT, 'ready': True,
@@ -245,12 +255,16 @@ def gateway(enabled, *, artifacts=False):
     print(json.dumps({**result, 'configurationChanged': True, 'configurationRecovery': str(recovery)}, indent=2))
 
 
-def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archive_schema=False, automation_schema=False, machine_schema=False, agent_schema=False):
+def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archive_schema=False, automation_schema=False, machine_schema=False, agent_schema=False, parallel_schema=False):
     if not re.fullmatch(r'sha256:[a-f0-9]{64}', digest) or not re.fullmatch(r'[a-f0-9]{40}', revision):
         raise ValueError('Use an immutable image digest and its exact reviewed source SHA.')
-    if sum([same_schema, artifact_schema, archive_schema, automation_schema, machine_schema, agent_schema]) > 1:
+    if sum([same_schema, artifact_schema, archive_schema, automation_schema, machine_schema, agent_schema, parallel_schema]) > 1:
         raise ValueError('A schema upgrade cannot be a same-schema update.')
-    if agent_schema:
+    if parallel_schema:
+        previous = active_status(expected_schema=8, expected_automation_schema=9)
+        if not previous.get('automationEnabled'):
+            raise RuntimeError('Parallel factories require the active Automation schema-9 profile.')
+    elif agent_schema:
         previous = active_status(expected_schema=8, expected_automation_schema=8)
         if not previous.get('automationEnabled'):
             raise RuntimeError('Factory agents require the active Automation schema-8 profile.')
@@ -264,8 +278,8 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archi
         raise RuntimeError('Automation schema upgrade requires the active schema-7 profile.')
     if same_schema and previous['schemaVersion'] not in [5, 6, 7, 8]:
         raise RuntimeError('Same-schema updates require gateway schema 5, 6, 7 or 8.')
-    target_automation_schema = 9 if agent_schema else 8 if automation_schema else previous.get('automationSchemaVersion')
-    target_schema = previous['schemaVersion'] if same_schema or automation_schema or agent_schema else 8 if machine_schema else 7 if archive_schema else 6 if artifact_schema else 5
+    target_automation_schema = 10 if parallel_schema else 9 if agent_schema else 8 if automation_schema else previous.get('automationSchemaVersion')
+    target_schema = previous['schemaVersion'] if same_schema or automation_schema or agent_schema or parallel_schema else 8 if machine_schema else 7 if archive_schema else 6 if artifact_schema else 5
     image = REGISTRY + '@' + digest
     docker('pull', image)
     candidate = json.loads(docker('image', 'inspect', image))[0]
@@ -302,7 +316,7 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archi
         raise
     migration_file = backup / 'migration.env'
     try:
-        if not same_schema and not automation_schema and not agent_schema:
+        if not same_schema and not automation_schema and not agent_schema and not parallel_schema:
             password = secrets.token_hex(32)
             write_private(migration_file,
                           f'FOUNDRY_INSTANCE_MIGRATION_URL=postgresql://foundry_instance_migrator:{password}@postgres:5432/fork_connect\n')
@@ -318,7 +332,7 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archi
                     sql('ALTER ROLE foundry_instance_migrator NOLOGIN PASSWORD NULL;')
                 finally:
                     migration_file.unlink(missing_ok=True)
-        if automation_schema or agent_schema:
+        if automation_schema or agent_schema or parallel_schema:
             password = secrets.token_hex(32)
             write_private(migration_file,
                           f'FOUNDRY_AUTOMATION_MIGRATION_URL=postgresql://foundry_automation_migrator:{password}@postgres:5432/fork_automation\n')
@@ -339,7 +353,7 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archi
         docker('compose', '--project-name', 'foundry', '--env-file', '/dev/null',
                '--file', str(CONFIG / 'access-compose.json'), 'up', '--detach', '--no-deps',
                '--no-build', '--pull', 'never', '--wait', '--wait-timeout', '180', 'main')
-        result = active_status(expected_schema=target_schema, expected_automation_schema=target_automation_schema) if automation_schema or machine_schema or agent_schema else active_status(expected_schema=target_schema)
+        result = active_status(expected_schema=target_schema, expected_automation_schema=target_automation_schema) if target_automation_schema is not None else active_status(expected_schema=target_schema)
         if result['image'] != image or result['revision'] != revision:
             raise RuntimeError('Candidate image verification failed.')
         write_private(backup / 'success', revision + '\n')
@@ -651,8 +665,8 @@ def enable_automation(device_id, environment_id):
         raise
 
 def main(args):
-    if not (len(args) == 4 and args[:2] == ['automation', 'enable']) and args not in [['preflight'], ['status'], ['gateway', 'enable'], ['gateway', 'disable'], ['artifacts', 'enable'], ['artifacts', 'disable']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'upgrade-machine-credentials', 'upgrade-factory-agents', 'update']):
-        raise ValueError('Usage: foundry-activate-access status | preflight | gateway|artifacts enable|disable | activate|upgrade|upgrade-artifacts|upgrade-archive|upgrade-automation|upgrade-machine-credentials|upgrade-factory-agents|update sha256:<digest> <source-sha>')
+    if not (len(args) == 4 and args[:2] == ['automation', 'enable']) and args not in [['preflight'], ['status'], ['gateway', 'enable'], ['gateway', 'disable'], ['artifacts', 'enable'], ['artifacts', 'disable']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'upgrade-machine-credentials', 'upgrade-factory-agents', 'upgrade-factory-parallel', 'update']):
+        raise ValueError('Usage: foundry-activate-access status | preflight | gateway|artifacts enable|disable | activate|upgrade|upgrade-artifacts|upgrade-archive|upgrade-automation|upgrade-machine-credentials|upgrade-factory-agents|upgrade-factory-parallel|update sha256:<digest> <source-sha>')
     if os.geteuid() != 0:
         raise RuntimeError('This operation requires the administrator; no sudo grant is installed.')
     os.umask(0o077)
@@ -667,8 +681,8 @@ def main(args):
         elif args == ['preflight']:
             preflight()
             print('PASS pinned Docker Main, private PostgreSQL, empty fork_connect, absent login roles, stable IDs.')
-        elif args[0] in ['upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'upgrade-machine-credentials', 'upgrade-factory-agents', 'update']:
-            upgrade(*args[1:], same_schema=args[0] == 'update', artifact_schema=args[0] == 'upgrade-artifacts', archive_schema=args[0] == 'upgrade-archive', automation_schema=args[0] == 'upgrade-automation', machine_schema=args[0] == 'upgrade-machine-credentials', agent_schema=args[0] == 'upgrade-factory-agents')
+        elif args[0] in ['upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'upgrade-machine-credentials', 'upgrade-factory-agents', 'upgrade-factory-parallel', 'update']:
+            upgrade(*args[1:], same_schema=args[0] == 'update', artifact_schema=args[0] == 'upgrade-artifacts', archive_schema=args[0] == 'upgrade-archive', automation_schema=args[0] == 'upgrade-automation', machine_schema=args[0] == 'upgrade-machine-credentials', agent_schema=args[0] == 'upgrade-factory-agents', parallel_schema=args[0] == 'upgrade-factory-parallel')
         else:
             activate(*args[1:])
 

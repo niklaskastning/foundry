@@ -15,7 +15,7 @@ import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as AutomationDatabase from "./AutomationDatabase.ts";
 import * as DispatchStore from "./DispatchStore.ts";
 import * as WorkerTransport from "./WorkerTransport.ts";
-import { DispatchBinding, SchedulerConfig } from "./Scheduler.ts";
+import { DispatchBinding } from "./Scheduler.ts";
 
 const isControlError = Schema.is(AutomationControlError);
 const isWorkerError = Schema.is(WorkerTransport.WorkerTransportError);
@@ -57,7 +57,6 @@ const make = Effect.gen(function* () {
   const sql = yield* AutomationDatabase.AutomationDatabase;
   const store = yield* DispatchStore.DispatchStore;
   const worker = yield* WorkerTransport.WorkerTransport;
-  const target = yield* SchedulerConfig;
   const crypto = yield* Crypto.Crypto;
   const snapshot = Effect.fn("Control.snapshot")(function* (factoryId: string, runId: string) {
     const rows =
@@ -116,27 +115,62 @@ const make = Effect.gen(function* () {
       writer.operatorId !== binding.identity.operatorId
     )
       return yield* fail("forbidden");
+    let selected = binding.identity;
+    if (input.action === "answer" && binding.workers) {
+      const rows = yield* sql<{
+        workerId: string;
+      }>`SELECT a.worker_id AS "workerId" FROM foundry_automation.run_questions q JOIN foundry_automation.step_attempts a ON a.run_id=q.run_id AND a.receipt->'receipt'->>'threadId'=q.thread_id WHERE q.run_id=${input.runId} AND q.request_id=${input.requestId} AND NOT EXISTS (SELECT 1 FROM foundry_automation.step_attempts newer WHERE newer.run_id=a.run_id AND newer.ordinal=a.ordinal AND newer.attempt_number>a.attempt_number)`;
+      const assigned = binding.workers.find(
+        (entry) => entry.identity.deviceId === rows[0]?.workerId,
+      );
+      if (!assigned) return yield* fail("conflict");
+      selected = assigned.identity;
+    }
     const identity =
       input.action === "resume" || input.action === "retry" || input.action === "answer"
-        ? yield* worker.authorize(request, target)
+        ? yield* worker.authorize(request, selected)
         : input.action === "cancel"
-          ? yield* worker
-              .authorize(request, target)
-              .pipe(Effect.orElseSucceed(() => binding.identity))
-          : binding.identity;
-    if (
-      identity.instanceId !== binding.identity.instanceId ||
-      identity.operatorId !== binding.identity.operatorId ||
-      identity.deviceId !== binding.identity.deviceId ||
-      identity.environmentId !== binding.identity.environmentId
-    )
-      return yield* fail("forbidden");
+          ? yield* worker.authorize(request, selected).pipe(Effect.orElseSucceed(() => selected))
+          : selected;
+    const matches = (
+      previous: WorkerTransport.WorkerIdentity,
+      current: WorkerTransport.WorkerIdentity,
+    ) =>
+      current.instanceId === previous.instanceId &&
+      current.operatorId === previous.operatorId &&
+      current.deviceId === previous.deviceId &&
+      current.environmentId === previous.environmentId &&
+      current.deviceGeneration === previous.deviceGeneration &&
+      current.accessGeneration === previous.accessGeneration &&
+      current.automationGeneration === previous.automationGeneration;
+    if (!matches(selected, identity)) return yield* fail("forbidden");
+    const workers =
+      binding.workers && (input.action === "resume" || input.action === "cancel")
+        ? yield* Effect.forEach(binding.workers, (entry) =>
+            Effect.gen(function* () {
+              const refreshed = yield* worker
+                .authorize(request, entry.identity)
+                .pipe(
+                  Effect.catch((error) =>
+                    input.action === "cancel" ? Effect.succeed(entry.identity) : Effect.fail(error),
+                  ),
+                );
+              if (!matches(entry.identity, refreshed)) return yield* fail("forbidden");
+              return { ...entry, identity: refreshed };
+            }),
+          )
+        : binding.workers;
+    const refreshedBinding = {
+      ...binding,
+      identity: input.action === "answer" ? binding.identity : identity,
+      ...(workers ? { workers } : {}),
+    };
     const digest = Hex.encode(
       yield* crypto.digest("SHA-256", new TextEncoder().encode(input.commandId)),
     );
     return yield* sql.withTransaction(
       Effect.gen(function* () {
-        yield* sql`SELECT worker_id FROM foundry_automation.dispatch_workers WHERE worker_id=${identity.deviceId} FOR UPDATE`;
+        yield* sql`SELECT worker_id FROM foundry_automation.dispatch_workers WHERE worker_id=${binding.identity.deviceId} FOR UPDATE`;
         yield* sql`SELECT run_id FROM foundry_automation.run_controls WHERE run_id=${input.runId} FOR UPDATE`;
         const previous = yield* sql<{
           same: boolean;
@@ -171,7 +205,7 @@ const make = Effect.gen(function* () {
             identity.automationGeneration !== binding.identity.automationGeneration
           )
             return yield* fail("forbidden");
-          yield* sql`UPDATE foundry_automation.dispatch_runs SET binding=${sql.json({ ...binding, identity })},state='running',reason=NULL WHERE run_id=${input.runId}`;
+          yield* sql`UPDATE foundry_automation.dispatch_runs SET binding=${sql.json(refreshedBinding)},state='running',reason=NULL WHERE run_id=${input.runId}`;
           yield* sql`UPDATE foundry_automation.run_controls SET mode='active' WHERE run_id=${input.runId}`;
         } else if (input.action === "cancel") {
           if (terminal) return yield* fail("invalid_transition");
@@ -182,9 +216,14 @@ const make = Effect.gen(function* () {
           )
             return yield* fail("forbidden");
           yield* sql`UPDATE foundry_automation.run_controls SET mode='cancel_requested' WHERE run_id=${input.runId}`;
-          yield* sql`UPDATE foundry_automation.dispatch_runs SET binding=${sql.json({ ...binding, identity })},state='waiting',reason='cancel_requested' WHERE run_id=${input.runId}`;
+          yield* sql`UPDATE foundry_automation.dispatch_runs SET binding=${sql.json(refreshedBinding)},state='waiting',reason='cancel_requested' WHERE run_id=${input.runId}`;
         } else if (input.action === "retry") {
-          if (current.state !== "failed" || !active || active.state !== "failed")
+          if (
+            run.workflow.execution ||
+            current.state !== "failed" ||
+            !active ||
+            active.state !== "failed"
+          )
             return yield* fail("invalid_transition");
           if (!DispatchStore.writerEnded(active.result)) return yield* fail("writer_not_ended");
           if (
@@ -198,7 +237,7 @@ const make = Effect.gen(function* () {
           const { previousExecution: _previousExecution, ...retry } = launch;
           yield* sql`INSERT INTO foundry_automation.step_attempts(command_id,run_id,ordinal,attempt_number,request) VALUES(${commandId},${input.runId},${active.ordinal},${(active.attemptNumber ?? 0) + 1},${sql.json({ ...retry, commandId })})`;
           yield* sql`INSERT INTO foundry_automation.dispatch_outbox(command_id) VALUES(${commandId})`;
-          yield* sql`UPDATE foundry_automation.dispatch_runs SET binding=${sql.json({ ...binding, identity })},state='running',reason=NULL WHERE run_id=${input.runId}`;
+          yield* sql`UPDATE foundry_automation.dispatch_runs SET binding=${sql.json(refreshedBinding)},state='running',reason=NULL WHERE run_id=${input.runId}`;
           yield* sql`UPDATE foundry_automation.run_controls SET mode='active',result_revision=result_revision+1 WHERE run_id=${input.runId}`;
         } else if (input.action === "answer") {
           if (
@@ -209,7 +248,7 @@ const make = Effect.gen(function* () {
             return yield* fail("conflict");
           const questions = yield* sql<{
             payload: unknown;
-          }>`SELECT q.payload FROM foundry_automation.run_questions q JOIN LATERAL (SELECT state,receipt,result FROM foundry_automation.step_attempts WHERE run_id=q.run_id ORDER BY ordinal DESC,attempt_number DESC LIMIT 1) a ON true WHERE q.run_id=${input.runId} AND q.request_id=${input.requestId} AND q.status='pending' AND q.payload->'request'->>'kind'='user_input' AND q.payload->'request'->>'status'='pending' AND q.payload->'request'->'responseCapability'->>'type' IN ('live','message') AND a.state NOT IN ('failed','succeeded') AND a.receipt->'receipt'->>'threadId'=q.thread_id AND a.result->'execution'->'lifecycle'->>'writerEnded' IS DISTINCT FROM 'true'`;
+          }>`SELECT q.payload FROM foundry_automation.run_questions q JOIN LATERAL (SELECT a.state,a.receipt,a.result FROM foundry_automation.step_attempts a WHERE a.run_id=q.run_id AND a.receipt->'receipt'->>'threadId'=q.thread_id AND NOT EXISTS (SELECT 1 FROM foundry_automation.step_attempts newer WHERE newer.run_id=a.run_id AND newer.ordinal=a.ordinal AND newer.attempt_number>a.attempt_number) ORDER BY a.ordinal DESC,a.attempt_number DESC LIMIT 1) a ON true WHERE q.run_id=${input.runId} AND q.request_id=${input.requestId} AND q.status='pending' AND q.payload->'request'->>'kind'='user_input' AND q.payload->'request'->>'status'='pending' AND q.payload->'request'->'responseCapability'->>'type' IN ('live','message') AND a.state NOT IN ('failed','succeeded') AND a.receipt->'receipt'->>'threadId'=q.thread_id AND a.result->'execution'->'lifecycle'->>'writerEnded' IS DISTINCT FROM 'true'`;
           if (!questions[0]) return yield* fail("conflict");
           const questionPayload = yield* decodeQuestions(questions[0].payload);
           if (
@@ -249,8 +288,17 @@ const make = Effect.gen(function* () {
           if (
             !step ||
             (step.kind !== "approval" && step.kind !== "publish") ||
-            latest.some((a) => a.ordinal < ordinal && a.state !== "succeeded") ||
-            latest.filter((a) => a.ordinal < ordinal).length !== ordinal
+            (run.workflow.execution
+              ? !step.dependsOn.every((id) => {
+                  const dependency = run.workflow.steps.findIndex(
+                    (candidate) => candidate.id === id,
+                  );
+                  return latest.some(
+                    (attempt) => attempt.ordinal === dependency && attempt.state === "succeeded",
+                  );
+                })
+              : latest.some((a) => a.ordinal < ordinal && a.state !== "succeeded") ||
+                latest.filter((a) => a.ordinal < ordinal).length !== ordinal)
           )
             return yield* fail("invalid_transition");
           yield* sql`INSERT INTO foundry_automation.run_decisions(command_id,run_id,step_id,revision,result_revision,approved) VALUES(${input.commandId},${input.runId},${input.stepId},${current.revision + 1},${current.resultRevision},${input.action === "approve"})`;

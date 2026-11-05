@@ -139,7 +139,7 @@ class WorkerInstallationTest(unittest.TestCase):
             for failure in [None, "key", "origin", "permissions", "binding", "write"]:
                 with self.subTest(access=access, failure=failure), tempfile.TemporaryDirectory() as directory:
                     installation = worker.Installation(directory)
-                    settings = {**config(), "accessFile": access}
+                    settings = {**config(), "accessFile": access, "capacity": 2}
                     release(installation, settings)
                     installation.install(settings)
                     secrets = {
@@ -232,7 +232,7 @@ class WorkerInstallationTest(unittest.TestCase):
             self.assertEqual(identity.read_text(), "isolated-worker-identity\n")
 
     def test_refuses_path_injection_unowned_units_changed_bindings_and_dirty_releases(self):
-        for field, value in [("artifactPublication", "true"), ("providerInstanceId", "codex\nExecStart=/bin/sh"), ("providerInstanceId", "1invalid"), ("node", "/home/person/node"), ("node", "/usr/bin/node\nExecStart=/bin/sh"), ("origin", "https://main.example/path"), ("origin", "https://user:secret@main.example"), ("origin", "https://main.example%20"), ("revision", "../personal"), ("workspaceRoots", ["/home/person"]), ("workspaceRoots", [worker.WORKSPACES + "/../private"]), ("memoryMaxMiB", 0), ("tasksMax", True), ("accessFile", "yes")]:
+        for field, value in [("capacity", 0), ("capacity", 9), ("capacity", True), ("capacity", "2"), ("artifactPublication", "true"), ("providerInstanceId", "codex\nExecStart=/bin/sh"), ("providerInstanceId", "1invalid"), ("node", "/home/person/node"), ("node", "/usr/bin/node\nExecStart=/bin/sh"), ("origin", "https://main.example/path"), ("origin", "https://user:secret@main.example"), ("origin", "https://main.example%20"), ("revision", "../personal"), ("workspaceRoots", ["/home/person"]), ("workspaceRoots", [worker.WORKSPACES + "/../private"]), ("memoryMaxMiB", 0), ("tasksMax", True), ("accessFile", "yes")]:
             with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as directory:
                 installation = worker.Installation(directory)
                 invalid = {**config(), field: value}
@@ -369,6 +369,18 @@ class WorkerInstallationTest(unittest.TestCase):
                 with closing(sqlite3.connect(journal)) as connection, connection:
                     connection.execute("ALTER TABLE reservations ADD COLUMN next_generation INTEGER")
                 self.assertNotEqual(artifact_activation.schema(), before)
+                with closing(sqlite3.connect(database)) as connection, connection:
+                    connection.executescript("ALTER TABLE foundry_executions ADD COLUMN state TEXT; ALTER TABLE foundry_executions ADD COLUMN command_id TEXT; ALTER TABLE foundry_executions ADD COLUMN provider_thread_id TEXT; CREATE TABLE foundry_execution_cancellations(command_id TEXT,launch_command_id TEXT);")
+                    connection.execute("INSERT INTO foundry_executions(manifest,writer_ended,state,command_id) VALUES(NULL,1,'stopped','cancelled-before-start')")
+                with self.assertRaises(RuntimeError):
+                    artifact_activation.quiescent()
+                with closing(sqlite3.connect(database)) as connection, connection:
+                    connection.execute("INSERT INTO foundry_execution_cancellations VALUES('cancel','cancelled-before-start')")
+                artifact_activation.quiescent()
+                with closing(sqlite3.connect(database)) as connection, connection:
+                    connection.execute("UPDATE foundry_executions SET provider_thread_id='native' WHERE command_id='cancelled-before-start'")
+                with self.assertRaises(RuntimeError):
+                    artifact_activation.quiescent()
 
     def test_persisted_acceptance_requires_exact_attempt_and_checkpoint_binding(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -444,6 +456,7 @@ class WorkerInstallationTest(unittest.TestCase):
             installation = worker.Installation(directory)
             settings = config()
             settings["accessFile"] = True
+            settings["capacity"] = 2
             release(installation, settings)
             installation.install(settings)
             units = [str(installation.path(worker.UNITS + "/" + name)) for name in worker.NAMES]
@@ -462,6 +475,7 @@ class WorkerInstallationTest(unittest.TestCase):
                 self.assertIn("ProtectHome=true\n", text)
                 self.assertIn("KillMode=control-group\n", text)
                 self.assertIn("Environment=T3CODE_HOME=" + worker.T3, text)
+                self.assertIn("Environment=FOUNDRY_WORKER_CAPACITY=2\n", text)
                 self.assertNotIn("--no-auth", text)
             self.assertIn("--access-file " + worker.STATE + "/access.json", Path(units[-1]).read_text())
 

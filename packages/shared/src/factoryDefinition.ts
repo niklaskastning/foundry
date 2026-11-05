@@ -119,6 +119,14 @@ export function validateFactoryFiles(
     const decoded = parse(workflow.file, content, decodeWorkflow);
     if (Result.isFailure(decoded)) return Result.fail(decoded.failure);
     const steps = decoded.success.steps;
+    if (decoded.success.execution !== undefined && manifest.success.schemaVersion !== 3)
+      return Result.fail([
+        {
+          file: workflow.file,
+          path: ["execution"],
+          message: "Parallel execution requires schemaVersion 3.",
+        },
+      ]);
     if (
       manifest.success.schemaVersion === 1 &&
       steps.some(
@@ -150,6 +158,7 @@ export function validateFactoryFiles(
       ]);
     workflows.push({
       id: workflow.id,
+      ...(decoded.success.execution ? { execution: decoded.success.execution } : {}),
       steps: steps.map((step) => ({
         ...step,
         dependsOn: [...step.dependsOn].sort(),
@@ -272,7 +281,10 @@ export function exportFactoryFiles(definition: CanonicalFactoryDefinition): Fact
     },
     ...definition.workflows.map((workflow) => ({
       path: `workflows/${workflow.id}.yaml`,
-      content: stringify({ steps: workflow.steps }),
+      content: stringify({
+        steps: workflow.steps,
+        ...(workflow.execution ? { execution: workflow.execution } : {}),
+      }),
     })),
   ];
 }
