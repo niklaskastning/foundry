@@ -534,6 +534,12 @@ und vollständiges G12 einschließlich P58 bleiben offen.
 
 **Gate P58a/P58b – Nachweis:** UI/API/MCP mit gleichem Grant haben gleiche erlaubte Wirkung. Lesen, Steuern, Konfiguration und Freigabe bleiben getrennt; unbekannte Versionen, fremde Factory und widerrufene Credentials scheitern. Command-Retry bleibt idempotent. MCP-Texte erhalten Evals.
 
+**Erster Schnitt P58a:** Versionierter HTTP-Vertrag auf den bestehenden
+Benutzersitzungen, ohne neue Credentials oder Rechte. Seine Transport- und
+Persistenznachweise schließen weder Maschinenzugang noch P58b/G12 ab.
+Maschinen-Credentials benötigen einen eigenen begrenzten Identitätspfad; weder
+Provider-MCP-Tokens noch T3-MCP-OAuth-Tokens ersetzen die Foundry-Anmeldung.
+
 ### P28 · Versionierter Agent- und Skill-Katalog
 
 **Voraussetzungen:** G5, P47.

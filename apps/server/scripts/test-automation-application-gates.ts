@@ -15,9 +15,14 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpRouter from "effect/http/HttpRouter";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { exportFactoryFiles } from "@t3tools/shared/factoryDefinition";
 import * as Application from "../src/automation/Application.ts";
+import * as ApiHttp from "../src/automation/ApiHttp.ts";
+import * as Http from "../src/automation/Http.ts";
+import * as Inbox from "../src/automation/Inbox.ts";
+import * as Triggers from "../src/automation/Triggers.ts";
 import * as Database from "../src/automation/AutomationDatabase.ts";
 import * as Factories from "../src/automation/Factories.ts";
 import * as Definitions from "../src/automation/Definitions.ts";
@@ -141,6 +146,50 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     };
     const first = yield* app.command(request, create);
     NodeAssert.equal(first.kind, "factory");
+    const httpLayers = Layer.mergeAll(Http.layer, ApiHttp.layer).pipe(
+      Layer.provide(Layer.succeed(Application.Application, app)),
+      Layer.provide(Layer.mock(Control.Control)({ execute: unused })),
+      Layer.provide(Layer.mock(Inbox.Inbox)({ query: unused, mark: unused })),
+      Layer.provide(Layer.mock(Triggers.Triggers)({ query: unused, command: unused })),
+      Layer.provide(gateway),
+    );
+    const http = HttpRouter.toWebHandler(httpLayers, { disableLogger: true });
+    yield* Effect.addFinalizer(() => Effect.promise(() => http.dispose()));
+    const send = (path: string, input: unknown, scope = "access:write") =>
+      Effect.promise(() =>
+        http.handler(
+          new Request(`http://fixture.invalid${path}`, {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-fixture-scope": scope },
+            body: encodeJson(input),
+          }),
+        ),
+      );
+    const retried = yield* send("/api/foundry/v1/automation/command", create);
+    NodeAssert.equal(retried.status, 200);
+    NodeAssert.deepEqual(yield* Effect.promise(() => retried.json()), first);
+    const conflict = yield* send("/api/foundry/v1/automation/command", {
+      ...create,
+      repositories: ["changed"],
+    });
+    NodeAssert.equal(conflict.status, 409);
+    const denied = yield* send(
+      "/api/foundry/v1/automation/command",
+      { ...create, commandId: "p58-denied", id: "p58-denied" },
+      "orchestration:read",
+    );
+    NodeAssert.equal(denied.status, 403);
+    NodeAssert.equal(
+      (yield* sql`SELECT id FROM foundry_automation.factories WHERE id='p58-denied'`).length,
+      0,
+    );
+    const queryInput = { op: "factory", factoryId: create.id };
+    const uiResponse = yield* send("/api/foundry/automation/query", queryInput);
+    const apiResponse = yield* send("/api/foundry/v1/automation/query", queryInput);
+    NodeAssert.deepEqual(
+      yield* Effect.promise(() => apiResponse.json()),
+      yield* Effect.promise(() => uiResponse.json()),
+    );
     yield* app.command(request, create);
     NodeAssert.equal(
       (yield* app
@@ -291,5 +340,5 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
       NodeAssert.equal((yield* app.query(operate, query).pipe(Effect.flip)).code, "forbidden");
     const hiddenRuns = yield* app.query(operate, { op: "runs", factoryId: "p21-a", limit: 20 });
     if (hiddenRuns.kind === "runs") NodeAssert.equal(hiddenRuns.items.length, 0);
-  }).pipe(Effect.provide(Layer.merge(layer, database)));
+  }).pipe(Effect.provide(Layer.merge(layer, database)), Effect.scoped);
 });

@@ -905,6 +905,46 @@ anschließend wieder gesperrt. Bei Fehlschlag umfasst Recovery auch diese Datenb
 kein Image-only-Downgrade. Der Aufruf aktiviert keine Trigger. Für spätere Updates
 innerhalb Schema 8 bleibt `update` der passende Pfad.
 
+### Versionierte Factory-HTTP-API (P58a)
+
+Bei aktivierter Automation stehen dieselben Benutzeroperationen unter
+`/api/foundry/v1/automation/` zur Verfügung. Alle Aufrufe verwenden `POST` mit
+JSON. `contract` liefert den maschinenlesbaren Vertrag mit Eingabe- und
+Ausgabe-JSON-Schemas; `query`, `command`, `control`, `inbox/query`, `inbox/mark`,
+`triggers/query` und `triggers/command` rufen dieselben Services wie die UI auf.
+Die bisherigen UI-Endpunkte bleiben erhalten.
+
+Dieser Schnitt benötigt weiterhin die bestehende Foundry-Benutzersitzung samt
+Origin/CSRF-Nachweis und eine gültige Main-T3-Sitzung mit den jeweiligen Scopes.
+Der bestehende authentifizierte Clienttransport muss diese Nachweise liefern;
+ein gewöhnlicher unauthentifizierter `fetch` genügt nicht. DPoP wird für die
+tatsächlich aufgerufene URL erstellt. Es gibt keinen neuen API-Key, keinen
+CI-Zugang und keinen Factory-MCP-Endpunkt. Interaktive Cookies nicht in CI
+übernehmen; T3-MCP- und Worker-Credentials werden nicht in Benutzerrechte übersetzt.
+
+Beispielkörper für `query`:
+
+```json
+{ "op": "factories", "search": "example", "limit": 20 }
+```
+
+Der nächste Seitenaufruf verwendet `after` aus dem zurückgegebenen `next`.
+Für typisierte TypeScript-Nutzung stehen Eingabe-/Ausgabe-Schemas in
+`AutomationApiOperations` aus `@t3tools/contracts` bereit; derselbe Vertrag
+liegt der HTTP-Dekodierung zugrunde. Keine zusätzliche SDK-Laufzeit ist nötig.
+
+Mutation und Command-ID vor dem Senden speichern. Nach verlorener Antwort exakt
+dieselbe Anfrage wiederholen; eine neue Command-ID wäre eine neue Entscheidung.
+Revisionskonflikte verlangen erneutes Lesen. Ein Start bestätigt Annahme, keinen
+erfolgreichen Run; eine Rückgabe erzeugt weiterhin einen pausierten Folgelauf.
+Inbox-Markierungen sind keine Freigaben und Definitionsaktivierung startet keinen Run.
+
+Antworten werden nicht gecacht. Fehler enthalten nur `code`: HTTP 400 bei
+ungültiger Eingabe, 403 bei fehlendem Recht, 404 bei fehlendem Objekt, 503 bei
+nicht verfügbarem Service und 409 bei fachlichen Konflikten oder Sperren.
+Unbekannte API-Versionen führen keine Operation aus. Die API begrenzt JSON-Körper
+auf 3 MiB; die engeren fachlichen Größenlimits bleiben zusätzlich wirksam.
+
 ### Auftrag interaktiv übernehmen und zurückgeben (P51)
 
 Im Run zunächst pausieren und das bestätigte Writer-Ende abwarten. Unter „Take over
