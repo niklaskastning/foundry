@@ -576,7 +576,7 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly confirmWriterEnded?: (input: {
     readonly runId: RunId;
     readonly providerThread: OrchestrationV2ProviderThread;
-    readonly nativeTurnId: string;
+    readonly nativeTurnId?: string;
   }) => Effect.Effect<boolean>;
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
   /** Root-subscription probe; replacement checks opt in to subagents owned by the live process. */

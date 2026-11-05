@@ -152,6 +152,7 @@ const claudeAdapter = {
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 
 interface HarnessOptions {
+  readonly workspaceRoot?: string;
   readonly closeTerminal?: TerminalManager.TerminalManager["Service"]["close"];
   readonly adapters?: ReadonlyArray<ProviderAdapter.ProviderAdapterV2["Service"]>;
   readonly managedFolders?: Layer.Layer<ManagedProjectFolders.ManagedProjectFolders>;
@@ -169,6 +170,10 @@ interface HarnessOptions {
 }
 
 function makeHarness(options: HarnessOptions = {}) {
+  const fixtureProject = {
+    ...project,
+    workspaceRoot: options.workspaceRoot ?? project.workspaceRoot,
+  };
   const layerDatabase = SqlitePersistence.layerMemory;
   const layerRegistry = ProviderAdapterRegistry.layerFromAdapters(options.adapters ?? [adapter]);
   const layerOrchestrator = ProviderReplayHarness.layerWithRegistry(
@@ -221,12 +226,12 @@ function makeHarness(options: HarnessOptions = {}) {
       getById: (id) =>
         Effect.succeed(
           id === projectId
-            ? Option.some(project)
+            ? Option.some(fixtureProject)
             : id === otherProjectId
               ? Option.some(otherProject)
               : Option.none(),
         ),
-      getByWorkspaceRoot: () => Effect.succeedSome(project),
+      getByWorkspaceRoot: () => Effect.succeedSome(fixtureProject),
       snapshot: Effect.die("unused"),
       getShell: () => Effect.die("unused"),
       listShells: () => Effect.die("unused"),
@@ -277,7 +282,7 @@ function makeHarness(options: HarnessOptions = {}) {
           ? Option.some({
               projectId,
               title: project.title,
-              workspaceRoot: project.workspaceRoot,
+              workspaceRoot: fixtureProject.workspaceRoot,
               defaultModelSelection: project.defaultModelSelection,
               defaultThreadEnvMode: null,
               autoPull: false,
@@ -2500,7 +2505,14 @@ const workerInput = {
   prompt: "An isolated launch without a parent agent",
 };
 
-it.effect.each(["stopped", "unproven", "unavailable", "other-instance"] as const)(
+it.effect.each([
+  "stopped",
+  "unproven",
+  "unavailable",
+  "other-instance",
+  "not-started",
+  "not-started-unproven",
+] as const)(
   "worker recovers native writer evidence after losing its local session: %s",
   (history) => {
     const open = vi.fn<ProviderAdapter.ProviderAdapterV2["Service"]["openSession"]>((input) =>
@@ -2529,9 +2541,12 @@ it.effect.each(["stopped", "unproven", "unavailable", "other-instance"] as const
           },
           events: Stream.never,
           confirmWriterEnded: (probe) => {
-            assert.equal(probe.nativeTurnId, "interrupted-native-turn");
+            assert.equal(
+              probe.nativeTurnId,
+              history.startsWith("not-started") ? undefined : "interrupted-native-turn",
+            );
             assert.equal(probe.providerThread.nativeThreadRef?.nativeId, "original-native-thread");
-            return Effect.succeed(history === "stopped");
+            return Effect.succeed(history === "stopped" || history === "not-started");
           },
           ensureThread: () => Effect.die("Recovery must not create a native thread"),
           resumeThread: () => Effect.die("Recovery must not resume a native thread"),
@@ -2609,11 +2624,13 @@ it.effect.each(["stopped", "unproven", "unavailable", "other-instance"] as const
               providerThreadId,
               nodeId: NodeId.make("crashed-worker-node"),
               runAttemptId: attemptId,
-              nativeTurnRef: {
-                driver: adapter.driver,
-                nativeId: "interrupted-native-turn",
-                strength: "strong",
-              },
+              nativeTurnRef: history.startsWith("not-started")
+                ? null
+                : {
+                    driver: adapter.driver,
+                    nativeId: "interrupted-native-turn",
+                    strength: "strong",
+                  },
               ordinal: 1,
               status: "interrupted",
               startedAt: now,
@@ -2637,7 +2654,7 @@ it.effect.each(["stopped", "unproven", "unavailable", "other-instance"] as const
       });
       assert.isTrue(Option.isNone(yield* sessions.get(providerSessionId)));
       const result = yield* worker.read({ commandId: workerInput.commandId });
-      if (history === "stopped") {
+      if (history === "stopped" || history === "not-started") {
         assert.isTrue(result.lifecycle?.writerEnded);
         assert.equal(result.lifecycle?.state, "stopped");
         assert.deepInclude(result.lifecycle?.manifest, {
@@ -3285,274 +3302,313 @@ it.effect.each([
   "branch-workspace",
 ] as const)(
   "worker completion waits for writer evidence and a ready checkpoint with Git object: %s",
-  (checkpointState) => {
-    const harness = makeHarness();
-    let handoffDiff = "";
-    let captureFails = false;
-    let checkpointAvailable = checkpointState !== "missing-object";
-    const temporaryRefs = new Set<string>();
-    let lastTemporaryRef: string | undefined;
-    let diffCalls = 0;
-    let changeAfterReservation = false;
-    const bindings: WriterBinding[] = [];
-    const released: string[] = [];
-    const gate = Layer.succeed(WorkspaceGate, {
-      handoffs: null,
-      reconcile: Effect.void,
-      installReconciler: () => Effect.void,
-      prepare: () => Effect.succeed(true),
-      starting: () => Effect.succeed(true),
-      bindings: Effect.succeed(bindings),
-      reserve: (input) =>
-        Effect.sync(() => {
-          bindings.push({
-            requestId: input.commandId,
-            commandId: input.commandId,
-            threadId: input.threadId,
-            generation: input.generation,
-            runId: null,
-            attemptId: null,
-            closed: 0,
-            verified: 0,
-          });
-          return checkpointState === "branch-workspace"
-            ? {
-                requestId: input.commandId,
-                repositoryPath: input.repositoryPath,
-                mode: input.mode,
-                managedRoot: "/repo",
-                workspacePath: input.repositoryPath,
-                baseCommit: "base",
-                branch: null,
-                state: "ready" as const,
-              }
-            : null;
-        }),
-      confirm: (requestId) =>
-        Effect.sync(() => {
-          released.push(requestId);
-        }),
-    });
-    return Effect.gen(function* () {
-      const worker = yield* WorkerLaunch.WorkerLaunch;
-      const threads = yield* ThreadManagement.ThreadManagementService;
-      const sink = yield* EventSink.EventSinkV2;
-      const store = yield* ExecutionStore.ExecutionStore;
-      const receipt = yield* worker.launch(workerInput);
-      const { runs } = yield* threads.getThreadRecords(receipt.threadId, ["runs"]);
-      const run = runs[0]!;
-      const now = yield* DateTime.now;
-      const scopeId = CheckpointScopeId.make("worker-result-scope");
-      const checkpointId = CheckpointId.make("worker-result-checkpoint");
-      const nodeId = NodeId.make("worker-result-root");
-      yield* sink.write({
-        events: [
-          {
-            id: EventId.make("worker-done"),
-            type: "run.updated",
-            threadId: receipt.threadId,
-            occurredAt: now,
-            payload: {
-              ...run,
-              status: "completed",
-              completedAt: now,
-              checkpointId: checkpointState === "absent" ? null : checkpointId,
-            },
-          },
-        ],
+  (checkpointState) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const git = yield* GitVcsDriver.GitVcsDriver;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "worker-checkpoint-" });
+      const repository = `${directory}/repo`;
+      const otherRepository = `${directory}/other-repo`;
+      const branchWorkspace = `${repository}/branch`;
+      const command = (cwd: string, args: string[]) =>
+        git.execute({ operation: "worker-checkpoint-fixture", cwd, args });
+      for (const cwd of [repository, otherRepository]) {
+        yield* fs.makeDirectory(cwd);
+        yield* command(cwd, ["init", "-q"]);
+        yield* command(cwd, [
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.test",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "checkpoint",
+        ]);
+        yield* command(cwd, ["update-ref", "refs/checkpoints/worker-result", "HEAD"]);
+      }
+      yield* command(repository, ["worktree", "add", "--detach", branchWorkspace, "HEAD"]);
+      const expectedCommit = (yield* command(
+        checkpointState === "other-workspace" ? otherRepository : repository,
+        ["rev-parse", "HEAD"],
+      )).stdout.trim();
+      const harness = makeHarness({ workspaceRoot: repository });
+      let handoffDiff = "";
+      let captureFails = false;
+      let checkpointAvailable = checkpointState !== "missing-object";
+      const temporaryRefs = new Set<string>();
+      let lastTemporaryRef: string | undefined;
+      let diffCalls = 0;
+      let changeAfterReservation = false;
+      const bindings: WriterBinding[] = [];
+      const released: string[] = [];
+      const gate = Layer.succeed(WorkspaceGate, {
+        handoffs: null,
+        reconcile: Effect.void,
+        installReconciler: () => Effect.void,
+        prepare: () => Effect.succeed(true),
+        starting: () => Effect.succeed(true),
+        bindings: Effect.succeed(bindings),
+        reserve: (input) =>
+          Effect.sync(() => {
+            bindings.push({
+              requestId: input.commandId,
+              commandId: input.commandId,
+              threadId: input.threadId,
+              generation: input.generation,
+              runId: null,
+              attemptId: null,
+              closed: 0,
+              verified: 0,
+            });
+            return checkpointState === "branch-workspace"
+              ? {
+                  requestId: input.commandId,
+                  repositoryPath: input.repositoryPath,
+                  mode: input.mode,
+                  managedRoot: repository,
+                  workspacePath: input.repositoryPath,
+                  baseCommit: "base",
+                  branch: null,
+                  state: "ready" as const,
+                }
+              : null;
+          }),
+        confirm: (requestId) =>
+          Effect.sync(() => {
+            released.push(requestId);
+          }),
       });
-      let result = yield* worker.read({ commandId: workerInput.commandId });
-      assert.isFalse(result.lifecycle?.writerEnded);
-      assert.isNull(result.lifecycle?.manifest);
-      const row = yield* store.read(workerInput.commandId);
-      yield* store.confirm(workerInput.commandId, row!.generation);
-      result = yield* worker.read({ commandId: workerInput.commandId });
-      assert.equal(result.lifecycle?.state, "finalizing");
-      assert.isNull(result.lifecycle?.manifest);
-      if (checkpointState !== "absent") {
+      return yield* Effect.gen(function* () {
+        const worker = yield* WorkerLaunch.WorkerLaunch;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const sink = yield* EventSink.EventSinkV2;
+        const store = yield* ExecutionStore.ExecutionStore;
+        const receipt = yield* worker.launch(workerInput);
+        const { runs } = yield* threads.getThreadRecords(receipt.threadId, ["runs"]);
+        const run = runs[0]!;
+        const now = yield* DateTime.now;
+        const scopeId = CheckpointScopeId.make("worker-result-scope");
+        const checkpointId = CheckpointId.make("worker-result-checkpoint");
+        const nodeId = NodeId.make("worker-result-root");
         yield* sink.write({
           events: [
             {
-              id: EventId.make("worker-result-scope"),
-              type: "checkpoint-scope.created",
+              id: EventId.make("worker-done"),
+              type: "run.updated",
               threadId: receipt.threadId,
               occurredAt: now,
               payload: {
-                id: scopeId,
-                threadId: receipt.threadId,
-                runId: run.id,
-                nodeId,
-                parentScopeId: null,
-                providerThreadId: null,
-                kind: "root_run",
-                ordinalWithinParent: 0,
-                advancesAppRunCount: true,
-                cwd:
-                  checkpointState === "other-workspace"
-                    ? "/other-repo"
-                    : checkpointState === "branch-workspace"
-                      ? "/repo/branch"
-                      : "/repo",
-                createdAt: now,
-              },
-            },
-            {
-              id: EventId.make("worker-result-captured"),
-              type: "checkpoint.captured",
-              threadId: receipt.threadId,
-              occurredAt: now,
-              payload: {
-                id: checkpointId,
-                threadId: receipt.threadId,
-                scopeId,
-                runId: run.id,
-                nodeId,
-                parentCheckpointId: null,
-                ordinalWithinScope: 1,
-                appRunOrdinal: 1,
-                ref: CheckpointRef.make("refs/checkpoints/worker-result"),
-                status:
-                  checkpointState === "missing-object" ||
-                  checkpointState === "other-workspace" ||
-                  checkpointState === "branch-workspace"
-                    ? "ready"
-                    : checkpointState,
-                files: [],
-                capturedAt: now,
+                ...run,
+                status: "completed",
+                completedAt: now,
+                checkpointId: checkpointState === "absent" ? null : checkpointId,
               },
             },
           ],
         });
-      }
-      result = yield* worker.read({ commandId: workerInput.commandId });
-      if (
-        checkpointState === "ready" ||
-        checkpointState === "other-workspace" ||
-        checkpointState === "branch-workspace"
-      ) {
-        assert.equal(result.lifecycle?.state, "completed");
-        assert.deepInclude(result.lifecycle?.manifest, {
-          checkpointId,
-          runId: run.id,
-          outcome: "completed",
-        });
-        assert.deepEqual(yield* worker.read({ commandId: workerInput.commandId }), result);
-        const next = {
-          ...workerInput,
-          commandId: CommandId.make("worker-handoff"),
-          previousExecution: { commandId: workerInput.commandId, generation: row!.generation },
-        };
-        if (checkpointState === "other-workspace") {
-          assert.equal((yield* worker.launch(next).pipe(Effect.flip)).code, "project_denied");
-          assert.equal(temporaryRefs.size, 0);
-          return;
+        let result = yield* worker.read({ commandId: workerInput.commandId });
+        assert.isFalse(result.lifecycle?.writerEnded);
+        assert.isNull(result.lifecycle?.manifest);
+        const row = yield* store.read(workerInput.commandId);
+        yield* store.confirm(workerInput.commandId, row!.generation);
+        result = yield* worker.read({ commandId: workerInput.commandId });
+        assert.equal(result.lifecycle?.state, "finalizing");
+        assert.isNull(result.lifecycle?.manifest);
+        if (checkpointState !== "absent") {
+          yield* sink.write({
+            events: [
+              {
+                id: EventId.make("worker-result-scope"),
+                type: "checkpoint-scope.created",
+                threadId: receipt.threadId,
+                occurredAt: now,
+                payload: {
+                  id: scopeId,
+                  threadId: receipt.threadId,
+                  runId: run.id,
+                  nodeId,
+                  parentScopeId: null,
+                  providerThreadId: null,
+                  kind: "root_run",
+                  ordinalWithinParent: 0,
+                  advancesAppRunCount: true,
+                  cwd:
+                    checkpointState === "other-workspace"
+                      ? otherRepository
+                      : checkpointState === "branch-workspace"
+                        ? branchWorkspace
+                        : repository,
+                  createdAt: now,
+                },
+              },
+              {
+                id: EventId.make("worker-result-captured"),
+                type: "checkpoint.captured",
+                threadId: receipt.threadId,
+                occurredAt: now,
+                payload: {
+                  id: checkpointId,
+                  threadId: receipt.threadId,
+                  scopeId,
+                  runId: run.id,
+                  nodeId,
+                  parentCheckpointId: null,
+                  ordinalWithinScope: 1,
+                  appRunOrdinal: 1,
+                  ref: CheckpointRef.make("refs/checkpoints/worker-result"),
+                  status:
+                    checkpointState === "missing-object" ||
+                    checkpointState === "other-workspace" ||
+                    checkpointState === "branch-workspace"
+                      ? "ready"
+                      : checkpointState,
+                  files: [],
+                  capturedAt: now,
+                },
+              },
+            ],
+          });
         }
-        for (const invalid of [
-          {
-            ...next,
-            previousExecution: { ...next.previousExecution, generation: row!.generation + 1 },
-          },
-          { ...next, workspaceMode: "worktree" as const },
-        ]) {
+        result = yield* worker.read({ commandId: workerInput.commandId });
+        if (
+          checkpointState === "ready" ||
+          checkpointState === "other-workspace" ||
+          checkpointState === "branch-workspace"
+        ) {
+          assert.equal(result.lifecycle?.state, "completed");
+          assert.deepInclude(result.lifecycle?.manifest, {
+            checkpointId,
+            runId: run.id,
+            outcome: "completed",
+            checkpointCommitSha: expectedCommit,
+          });
+          assert.deepEqual(yield* worker.read({ commandId: workerInput.commandId }), result);
+          const next = {
+            ...workerInput,
+            commandId: CommandId.make("worker-handoff"),
+            previousExecution: { commandId: workerInput.commandId, generation: row!.generation },
+          };
+          if (checkpointState === "other-workspace") {
+            assert.equal((yield* worker.launch(next).pipe(Effect.flip)).code, "project_denied");
+            assert.equal(temporaryRefs.size, 0);
+            return;
+          }
+          for (const invalid of [
+            {
+              ...next,
+              previousExecution: { ...next.previousExecution, generation: row!.generation + 1 },
+            },
+            { ...next, workspaceMode: "worktree" as const },
+          ]) {
+            assert.equal(
+              (yield* worker
+                .launch({
+                  ...invalid,
+                  commandId: CommandId.make(
+                    `invalid-handoff-${invalid.previousExecution.generation}-${"workspaceMode" in invalid ? invalid.workspaceMode : "checkout"}`,
+                  ),
+                })
+                .pipe(Effect.flip)).code,
+              "handoff_unavailable",
+            );
+          }
+          checkpointAvailable = false;
+          assert.equal((yield* worker.launch(next).pipe(Effect.flip)).code, "handoff_unavailable");
+          checkpointAvailable = true;
+          captureFails = true;
+          assert.equal((yield* worker.launch(next).pipe(Effect.flip)).code, "handoff_unavailable");
+          assert.equal(temporaryRefs.size, 0);
+          captureFails = false;
+          // Model a crash after capture: the retry must remove the pre-existing snapshot too.
+          temporaryRefs.add(lastTemporaryRef!);
+          handoffDiff = "modified working tree";
+          assert.equal((yield* worker.launch(next).pipe(Effect.flip)).code, "handoff_changed");
+          assert.equal(temporaryRefs.size, 0);
+          handoffDiff = "";
+          diffCalls = 0;
+          changeAfterReservation = true;
+          const raced = { ...next, commandId: CommandId.make("handoff-raced") };
+          assert.equal((yield* worker.launch(raced).pipe(Effect.flip)).code, "handoff_changed");
+          assert.deepEqual(released, [raced.commandId]);
+          const fenced = yield* store.read(raced.commandId);
+          assert.deepInclude(fenced, { stopRequested: 1, writerEnded: 1, manifest: null });
+          changeAfterReservation = false;
+          assert.equal((yield* worker.launch(raced).pipe(Effect.flip)).code, "launch_failed");
+          assert.isFalse(
+            yield* store.starting({
+              threadId: fenced!.threadId,
+              providerThreadId: ProviderThreadId.make("must-not-start"),
+              runOrdinal: 1,
+            }),
+          );
+          assert.equal(
+            (yield* worker.read({ commandId: raced.commandId }).pipe(Effect.flip)).code,
+            "not_found",
+          );
+          const nextReceipt = yield* worker.launch(next);
+          assert.notEqual(nextReceipt.threadId, receipt.threadId);
+          if (checkpointState === "branch-workspace")
+            assert.equal(
+              (yield* threads.getThreadRecords(nextReceipt.threadId, [])).thread.worktreePath,
+              branchWorkspace,
+            );
+          assert.equal(temporaryRefs.size, 0);
+          assert.deepEqual(yield* worker.launch(next), nextReceipt);
           assert.equal(
             (yield* worker
               .launch({
-                ...invalid,
-                commandId: CommandId.make(
-                  `invalid-handoff-${invalid.previousExecution.generation}-${"workspaceMode" in invalid ? invalid.workspaceMode : "checkout"}`,
-                ),
+                ...next,
+                previousExecution: { ...next.previousExecution, generation: row!.generation + 1 },
               })
               .pipe(Effect.flip)).code,
-            "handoff_unavailable",
+            "command_conflict",
           );
+        } else {
+          assert.equal(result.lifecycle?.state, "finalizing");
+          assert.isNull(result.lifecycle?.manifest);
         }
-        checkpointAvailable = false;
-        assert.equal((yield* worker.launch(next).pipe(Effect.flip)).code, "handoff_unavailable");
-        checkpointAvailable = true;
-        captureFails = true;
-        assert.equal((yield* worker.launch(next).pipe(Effect.flip)).code, "handoff_unavailable");
-        assert.equal(temporaryRefs.size, 0);
-        captureFails = false;
-        // Model a crash after capture: the retry must remove the pre-existing snapshot too.
-        temporaryRefs.add(lastTemporaryRef!);
-        handoffDiff = "modified working tree";
-        assert.equal((yield* worker.launch(next).pipe(Effect.flip)).code, "handoff_changed");
-        assert.equal(temporaryRefs.size, 0);
-        handoffDiff = "";
-        diffCalls = 0;
-        changeAfterReservation = true;
-        const raced = { ...next, commandId: CommandId.make("handoff-raced") };
-        assert.equal((yield* worker.launch(raced).pipe(Effect.flip)).code, "handoff_changed");
-        assert.deepEqual(released, [raced.commandId]);
-        const fenced = yield* store.read(raced.commandId);
-        assert.deepInclude(fenced, { stopRequested: 1, writerEnded: 1, manifest: null });
-        changeAfterReservation = false;
-        assert.equal((yield* worker.launch(raced).pipe(Effect.flip)).code, "launch_failed");
-        assert.isFalse(
-          yield* store.starting({
-            threadId: fenced!.threadId,
-            providerThreadId: ProviderThreadId.make("must-not-start"),
-            runOrdinal: 1,
-          }),
-        );
-        assert.equal(
-          (yield* worker.read({ commandId: raced.commandId }).pipe(Effect.flip)).code,
-          "not_found",
-        );
-        const nextReceipt = yield* worker.launch(next);
-        assert.notEqual(nextReceipt.threadId, receipt.threadId);
-        if (checkpointState === "branch-workspace")
-          assert.equal(
-            (yield* threads.getThreadRecords(nextReceipt.threadId, [])).thread.worktreePath,
-            "/repo/branch",
-          );
-        assert.equal(temporaryRefs.size, 0);
-        assert.deepEqual(yield* worker.launch(next), nextReceipt);
-        assert.equal(
-          (yield* worker
-            .launch({
-              ...next,
-              previousExecution: { ...next.previousExecution, generation: row!.generation + 1 },
-            })
-            .pipe(Effect.flip)).code,
-          "command_conflict",
-        );
-      } else {
-        assert.equal(result.lifecycle?.state, "finalizing");
-        assert.isNull(result.lifecycle?.manifest);
-      }
+      }).pipe(
+        Effect.provide(
+          workerLayer([repository], true, true, checkpointState !== "missing-object", {
+            hasCheckpointRef: () => Effect.succeed(checkpointAvailable),
+            captureCheckpoint: ({ checkpointRef }) =>
+              Effect.gen(function* () {
+                temporaryRefs.add(checkpointRef);
+                lastTemporaryRef = checkpointRef;
+                if (captureFails)
+                  return yield* new VcsProcessExitError({
+                    operation: "capture",
+                    command: "git",
+                    cwd: repository,
+                    exitCode: 1,
+                    detail: "fixture failure",
+                  });
+              }),
+            diffCheckpoints: () =>
+              Effect.sync(() => {
+                diffCalls++;
+                return changeAfterReservation && diffCalls === 2
+                  ? "changed after reservation"
+                  : handoffDiff;
+              }),
+            deleteCheckpointRefs: ({ checkpointRefs }) =>
+              Effect.sync(() => {
+                for (const ref of checkpointRefs) temporaryRefs.delete(ref);
+              }),
+          }).pipe(Layer.provide(gate), Layer.provideMerge(harness.layer)),
+        ),
+      );
     }).pipe(
       Effect.provide(
-        workerLayer(["/repo"], true, true, checkpointState !== "missing-object", {
-          hasCheckpointRef: () => Effect.succeed(checkpointAvailable),
-          captureCheckpoint: ({ checkpointRef }) =>
-            Effect.gen(function* () {
-              temporaryRefs.add(checkpointRef);
-              lastTemporaryRef = checkpointRef;
-              if (captureFails)
-                return yield* new VcsProcessExitError({
-                  operation: "capture",
-                  command: "git",
-                  cwd: "/repo",
-                  exitCode: 1,
-                  detail: "fixture failure",
-                });
-            }),
-          diffCheckpoints: () =>
-            Effect.sync(() => {
-              diffCalls++;
-              return changeAfterReservation && diffCalls === 2
-                ? "changed after reservation"
-                : handoffDiff;
-            }),
-          deleteCheckpointRefs: ({ checkpointRefs }) =>
-            Effect.sync(() => {
-              for (const ref of checkpointRefs) temporaryRefs.delete(ref);
-            }),
-        }).pipe(Layer.provide(gate), Layer.provideMerge(harness.layer)),
+        GitVcsDriver.layer.pipe(
+          Layer.provide(
+            ServerConfig.layerTest(process.cwd(), { prefix: "worker-checkpoint-git-" }),
+          ),
+          Layer.provideMerge(NodeServices.layer),
+        ),
       ),
-    );
-  },
+    ),
 );
 
 it.effect(

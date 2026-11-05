@@ -205,11 +205,7 @@ export const layer = Layer.effect(
               candidate.providerThreadId === providerThread?.id,
           );
           const turn = turns.at(-1);
-          if (
-            run.activeAttemptId &&
-            providerThread?.providerSessionId &&
-            turn?.nativeTurnRef?.nativeId
-          ) {
+          if (run.activeAttemptId && providerThread?.providerSessionId) {
             let runtime = yield* sessions.get(providerThread.providerSessionId);
             const providerSessionId = providerThread.providerSessionId;
             const nativeThreadId = providerThread.nativeThreadRef?.nativeId;
@@ -249,7 +245,9 @@ export const layer = Layer.effect(
                 .confirmWriterEnded({
                   runId: run.id,
                   providerThread,
-                  nativeTurnId: turn.nativeTurnRef.nativeId,
+                  ...(turn?.nativeTurnRef?.nativeId
+                    ? { nativeTurnId: turn.nativeTurnRef.nativeId }
+                    : {}),
                 })
                 .pipe(
                   Effect.timeoutOption("2 seconds"),

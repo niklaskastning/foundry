@@ -420,6 +420,7 @@ export const reconcileV4 = (
     }
     if (JSON.stringify(state) === before) break;
   }
+  if (state.reason === "approval_required") state.reason = undefined;
   const roots = state.nodes.filter((node) => node.scope === "");
   if (roots.every((node) => terminal(node.status))) {
     const budgetExhausted = state.nodes.some((node) => node.reason === "budget_exhausted");
@@ -442,7 +443,7 @@ export const reconcileV4 = (
         (node.definition.kind === "approval" || node.definition.kind === "publish"),
     );
     state.status = approval ? "waiting" : "running";
-    if (approval) state.reason = "approval_required";
+    if (approval && state.reason !== "budget_exhausted") state.reason = "approval_required";
   }
   return state;
 };

@@ -1,6 +1,8 @@
+import * as ExecutionObserver from "../../foundry/ExecutionObserver.ts";
+import * as Exit from "effect/Exit";
 import { pipe } from "effect/Function";
 import * as WorkerResources from "../../foundry/WorkerResources.ts";
-import type { FoundryWorkerDefinitionV4 } from "@t3tools/contracts";
+import type { FoundryWorkerDefinitionV4, RunId } from "@t3tools/contracts";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
@@ -1666,6 +1668,7 @@ export interface CodexAdapterV2Options {
 export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   adapterOptions: CodexAdapterV2Options,
 ) {
+  const executionObserver = yield* ExecutionObserver.ExecutionObserver;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const readMcpSession = (threadId: ThreadId | null) =>
     // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
@@ -6695,55 +6698,76 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           );
         });
 
+        const startsInFlight = new Set<RunId>();
+        const rejectedBeforeStart = new Set<RunId>();
+        const requestedNativeRuns = new Set<RunId>();
         const startNativeTurn = Effect.fn("CodexAdapterV2.startNativeTurn")(
           function* (
             turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
             codexInput: ReadonlyArray<CodexSchema.V2TurnStartParams__UserInput>,
           ) {
+            startsInFlight.add(turnInput.runId);
+            rejectedBeforeStart.delete(turnInput.runId);
             const threadId = yield* getNativeThreadId(turnInput.providerThread);
             const mcpSession = yield* mcpSessions.read(turnInput.threadId);
-            const foundryResources = yield* WorkerResources.readResources(
-              serverConfig.stateDir,
-              turnInput.threadId,
-            );
-            if (foundryResources) {
-              const inventory = yield* client.request("mcpServerStatus/list", {
-                threadId,
-                detail: "full",
-                limit: 100,
-              });
-              WorkerResources.verifyMcpInventory(
-                foundryResources.request,
-                inventory.data,
-                inventory.nextCursor,
+            const foundryResources = yield* Effect.gen(function* () {
+              const foundryResources = yield* WorkerResources.readResources(
+                serverConfig.stateDir,
+                turnInput.threadId,
               );
-              if (foundryResources.request.resources.skills.length) {
-                if (!foundryResources.nativeDirectory || !turnInput.runtimePolicy.cwd)
-                  return yield* new WorkerResources.WorkerResourceError({
-                    reason: "invalid_resource",
-                  });
-                const catalog = yield* client.request("skills/list", {
-                  cwds: [turnInput.runtimePolicy.cwd],
-                  forceReload: true,
+              if (foundryResources) {
+                const inventory = yield* client.request("mcpServerStatus/list", {
+                  threadId,
+                  detail: "full",
+                  limit: 100,
                 });
-                for (const skill of foundryResources.request.resources.skills) {
-                  const expected = `${foundryResources.nativeDirectory}/${skill.directory}/SKILL.md`;
-                  if (
-                    !catalog.data.some((entry) =>
-                      entry.skills.some(
-                        (candidate) =>
-                          candidate.name === skill.id &&
-                          candidate.path === expected &&
-                          candidate.enabled,
-                      ),
-                    )
-                  )
+                WorkerResources.verifyMcpInventory(
+                  foundryResources.request,
+                  inventory.data,
+                  inventory.nextCursor,
+                );
+                if (foundryResources.request.resources.skills.length) {
+                  if (!foundryResources.nativeDirectory || !turnInput.runtimePolicy.cwd)
                     return yield* new WorkerResources.WorkerResourceError({
                       reason: "invalid_resource",
                     });
+                  const catalog = yield* client.request("skills/list", {
+                    cwds: [turnInput.runtimePolicy.cwd],
+                    forceReload: true,
+                  });
+                  for (const skill of foundryResources.request.resources.skills) {
+                    const expected = `${foundryResources.nativeDirectory}/${skill.directory}/SKILL.md`;
+                    if (
+                      !catalog.data.some((entry) =>
+                        entry.skills.some(
+                          (candidate) =>
+                            candidate.name === skill.id &&
+                            candidate.path === expected &&
+                            candidate.enabled,
+                        ),
+                      )
+                    )
+                      return yield* new WorkerResources.WorkerResourceError({
+                        reason: "invalid_resource",
+                      });
+                  }
                 }
               }
-            }
+              return foundryResources;
+            }).pipe(
+              Effect.onExit((exit) => {
+                if (!Exit.isFailure(exit) || requestedNativeRuns.has(turnInput.runId))
+                  return Effect.void;
+                rejectedBeforeStart.add(turnInput.runId);
+                return (
+                  executionObserver.rejectedBeforeStart?.({
+                    threadId: turnInput.threadId,
+                    providerThreadId: turnInput.providerThread.id,
+                    runOrdinal: turnInput.runOrdinal,
+                  }) ?? Effect.void
+                );
+              }),
+            );
             const turnStartParams = yield* buildCodexTurnStartParams({
               nativeThreadId: threadId,
               codexInput,
@@ -6778,6 +6802,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               ...(yield* Ref.get(settledTurns)),
               ...(yield* Ref.get(activeTurns)),
             ]);
+            requestedNativeRuns.add(turnInput.runId);
             const started = yield* client.request("turn/start", turnStartParams);
             const previousTurn =
               previousTurns.get(started.turn.id) ??
@@ -6803,6 +6828,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           },
           (effect, turnInput) =>
             effect.pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  startsInFlight.delete(turnInput.runId);
+                }),
+              ),
               Effect.ensuring(
                 Effect.flatMap(getNativeThreadId(turnInput.providerThread), (threadId) =>
                   Ref.update(pendingRootTurns, (current) => {
@@ -7014,6 +7044,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             function* (probe) {
               yield* ensureInitialized;
               const nativeThreadId = yield* getNativeThreadId(probe.providerThread);
+              if (startsInFlight.size !== 0) return false;
+              if (
+                !probe.nativeTurnId &&
+                !rejectedBeforeStart.has(probe.runId) &&
+                input.initialNativeThreadId !== nativeThreadId
+              )
+                return false;
               if (yield* runtime.hasPendingBackgroundWorkForThread!(probe.providerThread))
                 return false;
               // Native history survives synthetic interrupt terminalization in the app projection.
@@ -7040,9 +7077,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   return false;
                 if (
                   threadId === nativeThreadId &&
-                  !thread.turns.some(
-                    (turn) => turn.id === probe.nativeTurnId && turn.status !== "inProgress",
-                  )
+                  (probe.nativeTurnId
+                    ? !thread.turns.some(
+                        (turn) => turn.id === probe.nativeTurnId && turn.status !== "inProgress",
+                      )
+                    : thread.turns.length !== 0)
                 )
                   return false;
                 for (const turn of thread.turns) {

@@ -1259,6 +1259,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       const runtime = yield* adapter.openSession({
         threadId,
         providerSessionId: ProviderSessionId.make(`provider-session-${transcript.scenario}`),
+        ...(existingNativeThreadId ? { initialNativeThreadId: existingNativeThreadId } : {}),
         modelSelection: CODEX_TEST_MODEL_SELECTION,
         runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
       });
@@ -1346,6 +1347,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
 
   it.effect.each([
     "recovered",
+    "recovered-empty",
+    "empty-unproven",
+    "preflight-rejected",
+    "recovered-unidentified",
     "completed",
     "inProgress",
     "missing",
@@ -1364,7 +1369,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           nativeThreadId,
           nativeTurnId,
           prompt: "fixture",
-        }).slice(0, state === "recovered" ? 3 : 5);
+        }).slice(0, state.startsWith("recovered") ? 3 : 5);
         const thread = {
           id: nativeThreadId,
           sessionId: nativeThreadId,
@@ -1386,7 +1391,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           gitInfo: null,
           name: null,
           turns:
-            state === "missing"
+            state === "missing" ||
+            state === "recovered-empty" ||
+            state === "empty-unproven" ||
+            state === "preflight-rejected"
               ? []
               : [
                   {
@@ -1435,7 +1443,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               type: "expect_outbound",
               label: "proof",
               frame: {
-                id: state === "recovered" ? 2 : 3,
+                id: state.startsWith("recovered") ? 2 : 3,
                 method: "thread/read",
                 params: { threadId: nativeThreadId, includeTurns: true },
               },
@@ -1446,7 +1454,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               frame:
                 state === "disconnected"
                   ? { id: 3, error: { code: -32603, message: "offline fixture" } }
-                  : { id: state === "recovered" ? 2 : 3, result: { thread } },
+                  : { id: state.startsWith("recovered") ? 2 : 3, result: { thread } },
             },
             ...(state.startsWith("child-")
               ? [
@@ -1491,16 +1499,63 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           undefined,
           undefined,
           undefined,
-          state === "recovered" ? nativeThreadId : undefined,
+          state.startsWith("recovered") ? nativeThreadId : undefined,
         );
+        if (state === "preflight-rejected") {
+          const prepared = yield* WorkerResources.prepareResources(
+            harness.serverConfig.stateDir,
+            harness.threadId,
+            {
+              factoryId: "fixture",
+              workspaceAccess: "read",
+              mcpBindings: [],
+              resources: {
+                agent: { id: "review", name: "Review" },
+                instructions: "Review",
+                skills: [],
+                mcp: [],
+                execution: { provider: "codex" },
+                provenance: {
+                  instructions: [],
+                  skills: [],
+                  mcp: [],
+                  execution: { provider: "factory" },
+                },
+              },
+            },
+          );
+          yield* (yield* FileSystem.FileSystem).remove(`${prepared.directory}/request.json`);
+          const rejected = yield* harness.runtime
+            .startTurn({
+              ...makeCodexTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make("rejected-preflight"),
+                text: "fixture",
+              }),
+              runId: RunId.make("writer-evidence-run"),
+            })
+            .pipe(Effect.exit);
+          assert.equal(rejected._tag, "Failure");
+        }
         assert.isDefined(harness.runtime.confirmWriterEnded);
         assert.equal(
           yield* harness.runtime.confirmWriterEnded!({
             providerThread: harness.providerThread,
-            nativeTurnId,
+            ...(state === "recovered-empty" ||
+            state === "empty-unproven" ||
+            state === "preflight-rejected" ||
+            state === "recovered-unidentified"
+              ? {}
+              : { nativeTurnId }),
             runId: RunId.make("writer-evidence-run"),
           }),
-          state === "recovered" || state === "completed" || state === "child-completed",
+          state === "recovered" ||
+            state === "recovered-empty" ||
+            state === "preflight-rejected" ||
+            state === "completed" ||
+            state === "child-completed",
         );
       }).pipe(
         Effect.scoped,

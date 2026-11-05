@@ -54,6 +54,48 @@ const spawn = (command: string, args: string[]) => {
   return child;
 };
 try {
+  const marketplace = NodePath.join(root, "fixture-marketplace");
+  const plugin = NodePath.join(marketplace, "plugins", "inherited");
+  await NodeFSP.mkdir(NodePath.join(marketplace, ".agents", "plugins"), { recursive: true });
+  await NodeFSP.mkdir(NodePath.join(plugin, ".codex-plugin"), { recursive: true });
+  await NodeFSP.writeFile(
+    NodePath.join(marketplace, ".agents", "plugins", "marketplace.json"),
+    encodeJson({
+      name: "foundry-fixture",
+      plugins: [{ name: "inherited", source: { source: "local", path: "./plugins/inherited" } }],
+    }),
+  );
+  await NodeFSP.writeFile(
+    NodePath.join(plugin, ".codex-plugin", "plugin.json"),
+    encodeJson({
+      name: "inherited",
+      version: "1.0.0",
+      description: "Local isolation regression",
+      mcpServers: "./.mcp.json",
+    }),
+  );
+  await NodeFSP.writeFile(
+    NodePath.join(plugin, ".mcp.json"),
+    encodeJson({
+      mcpServers: {
+        "inherited-plugin": {
+          command: process.execPath,
+          args: [
+            "-e",
+            `require('node:fs').writeFileSync(${JSON.stringify(NodePath.join(root, "plugin-mcp-started"))}, 'started'); import(${JSON.stringify(NodeURL.pathToFileURL(fixture).href)})`,
+          ],
+        },
+      },
+    }),
+  );
+  const execute = NodeUtil.promisify(NodeChildProcess.execFile);
+  const installOptions = {
+    env: { ...process.env, CODEX_HOME: root },
+    timeout: 30000,
+    maxBuffer: 1024 * 1024,
+  };
+  await execute("codex", ["plugin", "marketplace", "add", marketplace, "--json"], installOptions);
+  await execute("codex", ["plugin", "add", "inherited@foundry-fixture", "--json"], installOptions);
   const http = spawn(process.execPath, [fixture, "http"]);
   const lines = NodeReadline.createInterface({ input: http.stdout! });
   const url = await new Promise<string>((resolve, reject) => {
@@ -249,6 +291,9 @@ try {
         limit: 100,
       }),
     );
+    await NodeAssert.rejects(NodeFSP.stat(NodePath.join(root, "plugin-mcp-started")), {
+      code: "ENOENT",
+    });
     verifyMcpInventory(pinned, inventory.data, inventory.nextCursor);
     for (const resource of resources) {
       const server = `foundry-${resource.id}`;
@@ -301,6 +346,9 @@ try {
       "PINNED_REFERENCE_BYTES",
     );
     await NodeAssert.rejects(NodeFSP.access(NodePath.join(workspace, "imported-script-ran")));
+    await NodeAssert.rejects(NodeFSP.stat(NodePath.join(root, "plugin-mcp-started")), {
+      code: "ENOENT",
+    });
     await NodeAssert.rejects(NodeFSP.stat(NodePath.join(root, "host-mcp-started")), {
       code: "ENOENT",
     });
@@ -322,7 +370,7 @@ try {
     }
     NodeAssert.deepEqual(await scan(root), [], "Native Codex persisted secret config values");
     process.stdout.write(
-      "PASS native Codex: stdio + Streamable HTTP, exact allowed tool, forbidden calls rejected, empty allowlist disabled, private native skill injection, no inherited MCP startup, no persisted secret marker; loopback model only.\n",
+      "PASS native Codex: stdio + Streamable HTTP, exact allowed tool, forbidden calls rejected, empty allowlist disabled, private native skill injection, no inherited host/plugin MCP startup, no persisted secret marker; loopback model only.\n",
     );
   } finally {
     clearTimeout(deadline);

@@ -72,6 +72,33 @@ const attempt = (
 });
 
 describe("v4 control flow", () => {
+  it("clears the approval wait reason when the approved dependency starts", () => {
+    const flow = snapshot([
+      { id: "preflight", kind: "approval", dependsOn: [], instructions: "Approve execution" },
+      agent("work", { dependsOn: ["preflight"] }),
+    ]);
+    let state = reconcileV4(flow, initializeV4(flow, "a".repeat(40)), [], "active");
+    expect(state).toMatchObject({ status: "waiting", reason: "approval_required" });
+    const rejected = reconcileV4(
+      flow,
+      structuredClone(state),
+      [attempt(0, "failed", undefined, { reason: "approval_rejected" })],
+      "active",
+    );
+    expect(rejected.status).toBe("failed");
+    expect(rejected.reason).toBe("approval_rejected");
+    state = reconcileV4(flow, state, [attempt(0, "succeeded")], "active");
+    expect(state.status).toBe("running");
+    expect(state.reason).toBeUndefined();
+    state = reconcileV4(
+      flow,
+      structuredClone(state),
+      [attempt(0, "succeeded"), attempt(1, "running")],
+      "active",
+    );
+    expect(state.status).toBe("running");
+    expect(state.reason).toBeUndefined();
+  });
   it("carries the verified checkpoint through business iterations and cannot reuse an older review", () => {
     const flow = snapshot([
       {
@@ -242,7 +269,7 @@ it("ends with budget_exhausted even when a partial quorum otherwise succeeds", (
     [attempt(0, "running")],
     "active",
   );
-  expect(state.status).toBe("running");
+  expect(state).toMatchObject({ status: "running", reason: "budget_exhausted" });
   state = reconcileV4(limited, state, [attempt(0, "succeeded")], "active");
   expect(state).toMatchObject({ status: "failed", reason: "budget_exhausted" });
 });

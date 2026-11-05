@@ -341,6 +341,10 @@ export function codexResourceConfig(
   const config: Record<string, Schema.Json> = {
     "features.multi_agent": false,
     "features.apps": false,
+    "features.plugins": false,
+    "features.remote_plugin": false,
+    "features.plugin_discovery_prefetch": false,
+    "features.recommended_plugins": false,
     "skills.bundled.enabled": false,
     "skills.include_instructions": false,
     "mcp_servers.t3-code": { enabled: false, url: "http://127.0.0.1:1" },
