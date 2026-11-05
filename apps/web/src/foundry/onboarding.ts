@@ -24,14 +24,23 @@ export async function executeInstanceOperation(input: {
 }) {
   if (!navigator.locks) throw new FoundryOnboarding.OnboardingError("coordination");
   // Foundry cookies are shared across tabs, so a per-tab command queue cannot serialize renewal.
-  return navigator.locks.request("foundry:instance-session:v1", () =>
-    FoundryOnboarding.createInstanceClient({
-      origin: window.location.origin,
-      storage: localStorage,
-      now: Date.now,
-      request,
-    }).execute(input.operation, input.candidate),
-  );
+  const signal = AbortSignal.timeout(15000);
+  let acquired = false;
+  try {
+    return await navigator.locks.request("foundry:instance-session:v1", { signal }, () => {
+      acquired = true;
+      return FoundryOnboarding.createInstanceClient({
+        origin: window.location.origin,
+        storage: localStorage,
+        now: Date.now,
+        request,
+      }).execute(input.operation, input.candidate);
+    });
+  } catch (error) {
+    if (!acquired && signal.aborted)
+      throw new FoundryOnboarding.OnboardingError("coordination_busy");
+    throw error;
+  }
 }
 
 export const instanceCommand = createRuntimeCommand(appAtomRuntime, {
