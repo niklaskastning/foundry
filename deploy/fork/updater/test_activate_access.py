@@ -332,7 +332,7 @@ class ActivationTest(unittest.TestCase):
             [(False, artifact, False, False, False, 5 if artifact else 2, f) for artifact in [False, True] for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
             + [(True, False, False, False, False, schema, f) for schema in [5, 6, 7, 8] for f in [None, 'source', 'backup', 'connections', 'start', 'verify']]
             + [(False, False, True, False, False, 6, f) for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
-            + [(False, False, False, True, False, 7, f) for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
+            + [(False, False, False, version, False, 7 if version == 8 else 8, f) for version in [8, 9] for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
             + [(False, False, False, False, True, 7, f) for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'schema', 'start', 'verify']]
         ):
             with self.subTest(same_schema=same_schema, artifact_schema=artifact_schema, machine_schema=machine_schema, failure=failure), tempfile.TemporaryDirectory() as directory:
@@ -350,10 +350,12 @@ class ActivationTest(unittest.TestCase):
                     actions.append(('status', expected_schema))
                     if machine_schema:
                         self.assertEqual(expected_automation_schema, 8)
+                    if automation_schema:
+                        self.assertEqual(expected_automation_schema, automation_schema if len([a for a in actions if a[0] == 'status']) == 2 else automation_schema - 1)
                     if len([a for a in actions if a[0] == 'status']) == 2 and failure == 'verify':
                         raise RuntimeError('verification failed')
                     candidate = len([a for a in actions if a[0] == 'status']) == 2
-                    return {'schemaVersion': target_schema if candidate else current_schema, 'automationEnabled': automation_schema or machine_schema, 'automationSchemaVersion': 8 if machine_schema or candidate and automation_schema else 7 if automation_schema else None,
+                    return {'schemaVersion': target_schema if candidate else current_schema, 'automationEnabled': automation_schema or machine_schema, 'automationSchemaVersion': 8 if machine_schema else automation_schema if candidate and automation_schema else automation_schema - 1 if automation_schema else None,
                             'image': activate.REGISTRY + '@' + (DIGEST if candidate else 'sha256:' + 'c' * 64),
                             'revision': REVISION if candidate else 'd' * 40}
 
@@ -397,7 +399,7 @@ class ActivationTest(unittest.TestCase):
                         return '1' if failure == 'connections' else '0'
                     if failure == 'disable' and 'NOLOGIN' in statement:
                         raise RuntimeError('disable failed')
-                    if 'SELECT version FROM foundry_automation.schema_version' in statement: return '8'
+                    if 'SELECT version FROM foundry_automation.schema_version' in statement: return str(automation_schema or 8)
                     if 'SELECT version FROM foundry_instance.schema_version' in statement: return '7' if failure == 'schema' else str(target_schema)
                     return ''
 
@@ -407,10 +409,10 @@ class ActivationTest(unittest.TestCase):
                      patch('sys.stderr', new=io.StringIO()):
                     if failure:
                         with self.assertRaises(RuntimeError):
-                            activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema, machine_schema=machine_schema)
+                            activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, machine_schema=machine_schema)
                     else:
-                        activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema, machine_schema=machine_schema)
-                self.assertEqual(actions[0], ('status', 7 if automation_schema or machine_schema else None if same_schema else 6 if archive_schema else 5 if artifact_schema else 2))
+                        activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, machine_schema=machine_schema)
+                self.assertEqual(actions[0], ('status', current_schema if automation_schema else 7 if machine_schema else None if same_schema else 6 if archive_schema else 5 if artifact_schema else 2))
                 self.assertEqual(running, failure in [None, 'source', 'backup', 'connections'])
                 altered = any(a[0] == 'sql' and 'LOGIN PASSWORD' in a[1] for a in actions)
                 if failure in ['source', 'backup', 'connections']:

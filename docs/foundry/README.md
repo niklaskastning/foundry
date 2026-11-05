@@ -40,14 +40,16 @@ Bei aktivierter Automation öffnen **Factories**, **Runs** und **Inbox** in der
 Navigation, der Befehlspalette oder den Verbindungseinstellungen dieselben Ansichten.
 Foundry-Anmeldung und die T3-Verbindung zu Main sind beide erforderlich.
 
-Eine Factory legt Repository-Bindungsschlüssel fest. Im Auftragsdetail lässt sich die
-Definition als Formular bearbeiten oder als kanonischer Dateisatz importieren und
-exportieren. **Validate** prüft sie; Aktivieren veröffentlicht eine unveränderliche
+Eine Factory legt Repository-Bindungsschlüssel fest. Im Factory-Bereich **Definition** lässt sich eine noch lokal verwaltete
+Definition bearbeiten oder als kanonischer Dateisatz importieren und exportieren.
+Git-gebundene Factories werden im Definitionsrepository geändert. **Agents & skills**
+zeigt den aktiven Rollen-/Skillstand und die Einstellungen der Workflow-Schritte. **Validate** prüft sie; Aktivieren veröffentlicht eine unveränderliche
 Definitionsversion für neue Starts. Es veröffentlicht keinen GitHub-PR. Bereits
 laufende Runs behalten ihre gepinnte Version.
 
-Für einen manuellen Start einen Auftrag, die aktive Workflow-Version und ausdrücklich
-das passende Projekt des konfigurierten Workers wählen. Projekt- und Providerbindung
+Für einen manuellen Start einen Auftrag und den passenden Workflow wählen.
+Worker-Projekt und weitere Betriebsbindungen können pro Factory/Repository als
+Startvorgaben gespeichert und bei späteren Aufträgen wiederverwendet werden. Projekt- und Providerbindung
 werden vor dem Start geprüft. Der Run bleibt nach Schließen des Browsers bestehen;
 Versuche und Ergebnisse lassen sich später in **Runs** öffnen. Größere Ausgaben werden
 erst auf Anforderung geladen. Bestätigte Thread-Archive und Anhänge bleiben über Main
