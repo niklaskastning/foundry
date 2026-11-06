@@ -9,7 +9,8 @@ import {
   type FactoryV4Mcp,
 } from "@t3tools/contracts";
 import { Button } from "../../components/ui/button";
-import { Textarea } from "../../components/ui/textarea";
+import { Input } from "../../components/ui/input";
+import { Badge } from "../../components/ui/badge";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { randomUUID } from "../../lib/utils";
 import { automationCommands } from "./commands";
@@ -29,11 +30,19 @@ export function McpBindingsPanel({
   const query = useAutomationQuery(environmentId, { op: "mcpBindings", factoryId });
   return (
     <section className="space-y-3" aria-label="MCP runtime authorization">
-      <h3 className="font-medium">MCP runtime authorization</h3>
-      <p className="text-sm">
+      <h3 className="text-lg font-semibold">Tool access</h3>
+      <p className="text-sm text-muted-foreground">
         Authorize the exact definition and its tools for this factory. A changed endpoint or command
         requires a new binding. Revocation prevents subsequent starts.
       </p>
+      {query.loading ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading tool authorizations…
+        </p>
+      ) : null}
+      {resources.length === 0 ? (
+        <p className="text-sm text-muted-foreground">This definition does not request MCP tools.</p>
+      ) : null}
       {query.error ? <p role="alert">{query.error}</p> : null}
       {query.result?.kind === "mcpBindings"
         ? resources.map((resource) => (
@@ -68,7 +77,20 @@ function McpBindingEditor({
   binding?: FactoryMcpBinding | undefined;
   refresh: () => void;
 }) {
-  const [refs, setRefs] = useState(JSON.stringify(binding?.secrets ?? {}, null, 2));
+  const connections = [
+    ...new Set(
+      resource.transport === "streamable-http"
+        ? resource.auth
+          ? [resource.auth.connection]
+          : []
+        : Object.values(resource.secretEnv ?? {}),
+    ),
+  ];
+  const [refs, setRefs] = useState<Record<string, { provider: string; reference: string }>>(() =>
+    Object.fromEntries(
+      connections.map((name) => [name, binding?.secrets[name] ?? { provider: "", reference: "" }]),
+    ),
+  );
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState<SetFactoryMcpBinding | null>(null);
@@ -91,11 +113,11 @@ function McpBindingEditor({
           enabled,
           definition: resource,
           allowedTools: resource.allowedTools,
-          secrets: JSON.parse(refs),
+          secrets: refs,
         });
     } catch {
       setMessage(
-        "Enter a JSON mapping from connection names to {provider, reference}. Never enter secret values.",
+        "Enter a secret provider and reference for each connection. Use references to stored secrets, never secret values.",
       );
       return;
     }
@@ -113,22 +135,80 @@ function McpBindingEditor({
       );
   }
   return (
-    <details className="rounded-lg border p-3 text-sm">
+    <details className="border-b py-3 text-sm">
       <summary className="cursor-pointer">
-        {resource.name} ·{" "}
-        {binding?.enabled ? `Authorized binding ${binding.generation}` : "Not authorized"}
+        <span className="mr-2 font-medium">{resource.name}</span>
+        <Badge variant={binding?.enabled ? "info" : "warning"}>
+          {binding?.enabled ? "Binding enabled" : "Needs authorization"}
+        </Badge>
       </summary>
       <div className="space-y-3 pt-3">
         <p>Tools to authorize: {resource.allowedTools.join(", ") || "None"}</p>
-        <pre className="max-h-64 overflow-auto">{JSON.stringify(resource, null, 2)}</pre>
-        <label className="block space-y-1">
-          <span>Secret-provider references only (JSON; no secret values)</span>
-          <Textarea
-            value={refs}
-            disabled={busy || pending !== null || !allowed}
-            onChange={(event) => setRefs(event.target.value)}
-          />
-        </label>
+        <p className="break-all text-xs text-muted-foreground">
+          {resource.transport === "stdio"
+            ? `Local command · ${resource.command}`
+            : `HTTP · ${resource.url}`}
+        </p>
+        {!allowed ? (
+          <p role="status" className="text-sm text-muted-foreground">
+            Read-only access. Tool authorization requires additional permission.
+          </p>
+        ) : null}
+        {connections.length ? (
+          <fieldset disabled={busy || pending !== null || !allowed} className="space-y-3">
+            <legend className="mb-2 font-medium">Stored secret references</legend>
+            <p className="text-xs text-muted-foreground">
+              Select the configured secret provider by name and enter its reference path. Do not
+              enter tokens or secret values.
+            </p>
+            {connections.map((name) => (
+              <div key={name} className="grid gap-2 sm:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">{name} · Secret provider</span>
+                  <Input
+                    value={refs[name]?.provider ?? ""}
+                    onChange={(event) =>
+                      setRefs({
+                        ...refs,
+                        [name]: {
+                          provider: event.target.value,
+                          reference: refs[name]?.reference ?? "",
+                        },
+                      })
+                    }
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">{name} · Reference path</span>
+                  <Input
+                    value={refs[name]?.reference ?? ""}
+                    onChange={(event) =>
+                      setRefs({
+                        ...refs,
+                        [name]: {
+                          provider: refs[name]?.provider ?? "",
+                          reference: event.target.value,
+                        },
+                      })
+                    }
+                  />
+                </label>
+              </div>
+            ))}
+          </fieldset>
+        ) : (
+          <p className="text-xs text-muted-foreground">No secret references required.</p>
+        )}
+        <details>
+          <summary className="cursor-pointer text-muted-foreground">
+            Exact definition and binding details
+          </summary>
+          <p className="py-2 text-xs text-muted-foreground">
+            Generation {binding?.generation ?? 0}. An enabled binding must match this exact
+            definition and tool list before execution.
+          </p>
+          <pre className="max-h-64 overflow-auto text-xs">{JSON.stringify(resource, null, 2)}</pre>
+        </details>
         <div className="flex flex-wrap gap-2">
           <Button disabled={busy || !allowed} onClick={() => void save(true)}>
             {pending ? "Retry pending authorization" : "Authorize this exact definition"}

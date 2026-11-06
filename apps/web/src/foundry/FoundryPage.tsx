@@ -104,10 +104,10 @@ export function FoundryPage() {
         tabIndex={-1}
         className="h-dvh min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both bg-background text-foreground pt-12"
       >
-        <div className="mx-auto max-w-6xl">
+        <div className="mx-auto max-w-7xl">
           <Suspense fallback={<p>Loading…</p>}>
             {search.view === "resources" ? (
-              <div className="space-y-6 p-4 sm:p-8">
+              <div className="space-y-6 p-4 sm:p-6 lg:p-8">
                 <div>
                   <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     Instance
@@ -118,21 +118,23 @@ export function FoundryPage() {
                   </p>
                 </div>
                 <WorkerCapacity environmentId={state.binding.mainEnvironmentId} />
-                <DeviceCatalog />
+                <DeviceCatalog readinessInDetails />
               </div>
             ) : search.view === "inbox" ? (
-              <InboxPage
-                environmentId={state.binding.mainEnvironmentId}
-                {...(search.factoryId ? { factoryId: search.factoryId } : {})}
-                onNavigateRun={(factoryId, runId) =>
-                  void navigate({ search: { view: "factories", factoryId, runId, tab: "runs" } })
-                }
-                onNavigateWorkItem={(factoryId, workItemId) =>
-                  void navigate({
-                    search: { view: "factories", factoryId, workItemId, tab: "work" },
-                  })
-                }
-              />
+              <div className="p-4 sm:p-6 lg:p-8">
+                <InboxPage
+                  environmentId={state.binding.mainEnvironmentId}
+                  {...(search.factoryId ? { factoryId: search.factoryId } : {})}
+                  onNavigateRun={(factoryId, runId) =>
+                    void navigate({ search: { view: "factories", factoryId, runId, tab: "runs" } })
+                  }
+                  onNavigateWorkItem={(factoryId, workItemId) =>
+                    void navigate({
+                      search: { view: "factories", factoryId, workItemId, tab: "work" },
+                    })
+                  }
+                />
+              </div>
             ) : (
               <FactoryPage
                 key={`${search.view}:${search.factoryId}`}
@@ -154,10 +156,14 @@ export function FoundryPage() {
       <div className="space-y-5">
         <FactoryNavigation />
         <div>
-          <h1 className="text-xl font-semibold">Foundry instance</h1>
+          <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Instance access
+          </p>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {state.session ? "Connected to Foundry" : "Connect to your factory workspace"}
+          </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Sign in to your Main instance. Device access is available in connection settings when
-            this Main supports the device catalog.
+            Verify your instance, then sign in to open its factories and connected workers.
           </p>
         </div>
         <div className="space-y-2">
@@ -189,11 +195,18 @@ export function FoundryPage() {
           </p>
         </div>
         {state?.binding ? (
-          <div className="space-y-1 break-all text-sm">
-            <p>Origin: {state.binding.origin}</p>
-            <p>Instance ID: {state.binding.instanceId}</p>
-            <p>Issuer: {state.binding.issuer}</p>
-            <p>Main environment: {state.binding.mainEnvironmentId}</p>
+          <div className="space-y-3 text-sm">
+            <p className="break-all font-medium">{state.binding.origin}</p>
+            <details className="rounded-lg border p-3">
+              <summary className="cursor-pointer text-muted-foreground">
+                Verified instance identity
+              </summary>
+              <div className="space-y-1 break-all pt-3 text-xs text-muted-foreground">
+                <p>Instance ID: {state.binding.instanceId}</p>
+                <p>Issuer: {state.binding.issuer}</p>
+                <p>Main environment: {state.binding.mainEnvironmentId}</p>
+              </div>
+            </details>
             {!state.confirmed ? (
               <div className="pt-2">
                 <Button disabled={busy} onClick={() => void operate("confirm")}>
@@ -205,20 +218,33 @@ export function FoundryPage() {
         ) : null}
         {state?.confirmed ? (
           <div className="flex flex-wrap gap-2">
-            <Button disabled={busy} onClick={() => void operate("login")}>
-              Sign in to Foundry
-            </Button>
-            <Button variant="outline" disabled={busy} onClick={() => void operate("session")}>
-              Check session
-            </Button>
-            <Button variant="outline" disabled={busy} onClick={() => void operate("refresh")}>
-              Refresh session
-            </Button>
-            {!nativeTransport ? (
-              <Button variant="outline" disabled={busy} onClick={() => void operate("remove")}>
-                Sign out and remove
+            {!state.session ? (
+              <Button disabled={busy} onClick={() => void operate("login")}>
+                Sign in to Foundry
               </Button>
-            ) : null}
+            ) : (
+              <Button onClick={() => window.location.assign("/foundry?view=factories")}>
+                Open factories
+              </Button>
+            )}
+            <details className="w-full rounded-lg border p-3">
+              <summary className="cursor-pointer text-sm text-muted-foreground">
+                Session controls
+              </summary>
+              <div className="flex flex-wrap gap-2 pt-3">
+                <Button variant="outline" disabled={busy} onClick={() => void operate("session")}>
+                  Check session
+                </Button>
+                <Button variant="outline" disabled={busy} onClick={() => void operate("refresh")}>
+                  Refresh session
+                </Button>
+                {!nativeTransport ? (
+                  <Button variant="outline" disabled={busy} onClick={() => void operate("remove")}>
+                    Sign out and remove
+                  </Button>
+                ) : null}
+              </div>
+            </details>
           </div>
         ) : null}
         {nativeTransport ? (
@@ -227,20 +253,25 @@ export function FoundryPage() {
             the desktop controls.
           </p>
         ) : (
-          <Button
-            variant="ghost"
-            disabled={busy}
-            onClick={() => {
-              if (
-                window.confirm(
-                  "Forget only the local identity? This does not revoke a remote session. Use this recovery action only after verifying the instance with its operator.",
-                )
-              )
-                void operate("forget");
-            }}
-          >
-            Forget local identity without revocation…
-          </Button>
+          <details className="text-sm">
+            <summary className="cursor-pointer text-muted-foreground">Connection recovery</summary>
+            <div className="pt-2">
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Forget only the local identity? This does not revoke a remote session. Use this recovery action only after verifying the instance with its operator.",
+                    )
+                  )
+                    void operate("forget");
+                }}
+              >
+                Forget local identity without revocation…
+              </Button>
+            </div>
+          </details>
         )}
         <p role="status" className="text-sm">
           {busy ? "Checking instance…" : message}

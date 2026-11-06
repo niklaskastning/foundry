@@ -126,6 +126,9 @@ it.each([false, true])(
     );
     if (parallel) {
       await expect
+        .element(screen.getByRole("textbox", { name: "Repository commit SHA", exact: true }))
+        .toHaveValue("");
+      await expect
         .element(screen.getByRole("button", { name: "Authorize and start workflow" }))
         .toBeDisabled();
       await screen

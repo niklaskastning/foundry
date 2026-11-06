@@ -12,7 +12,7 @@ export function AgentCatalog({ active }: { active: FactoryDefinitionVersion | nu
   return (
     <section className="space-y-6" aria-label="Factory agents and skills">
       <div>
-        <h2 className="text-lg font-medium">Agents & skills</h2>
+        <h2 className="text-lg font-semibold">Agents & skills</h2>
         <p className="text-sm text-muted-foreground">
           Reusable agents for new runs. Each workflow adds its task and execution settings.
         </p>
@@ -24,9 +24,9 @@ export function AgentCatalog({ active }: { active: FactoryDefinitionVersion | nu
           available.
         </p>
       ) : null}
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="divide-y border-y">
         {roles.map((role) => (
-          <article key={role.id} className="min-w-0 space-y-4 rounded-lg border bg-card p-5">
+          <article key={role.id} className="min-w-0 space-y-3 py-4">
             <h3 className="text-base font-semibold">{role.name}</h3>
             <p className="text-sm">{role.description}</p>
             <dl className="grid gap-3 text-sm sm:grid-cols-2">
@@ -142,15 +142,44 @@ export function AgentCatalog({ active }: { active: FactoryDefinitionVersion | nu
           </div>
         </details>
       </section>
-      <section className="space-y-3" aria-label="Workflow configuration for new runs">
-        <h3 className="font-medium">Workflow configuration for new runs</h3>
-        {definition.workflows.map((workflow) => (
-          <details key={workflow.id} className="rounded-lg border p-3">
-            <summary className="cursor-pointer text-sm">{workflow.id}</summary>
-            <WorkflowConfiguration active={active} workflowId={workflow.id} />
-          </details>
-        ))}
-      </section>
+    </section>
+  );
+}
+
+export function WorkflowCatalog({ active }: { active: FactoryDefinitionVersion | null }) {
+  return (
+    <section className="space-y-5" aria-label="Factory workflows">
+      <div>
+        <h2 className="text-lg font-semibold">Workflows</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Follow the work from its first step to review and delivery. This is the active definition
+          for new runs.
+        </p>
+      </div>
+      {active ? (
+        <div className="divide-y border-y">
+          {active.definition.workflows.map((workflow) => (
+            <details
+              key={workflow.id}
+              open={active.definition.workflows.length === 1}
+              className="py-4"
+            >
+              <summary className="cursor-pointer font-medium">
+                {workflow.id}{" "}
+                <span className="text-xs font-normal text-muted-foreground">
+                  {" "}
+                  · {workflow.steps.length} top-level steps
+                </span>
+              </summary>
+              <WorkflowConfiguration active={active} workflowId={workflow.id} />
+            </details>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Activate a definition to see the workflow and its agents.
+        </p>
+      )}
     </section>
   );
 }
@@ -179,7 +208,12 @@ export function WorkflowConfiguration({
           </p>
           {step.kind === "agent" ? (
             <>
-              <p className="whitespace-pre-wrap break-words">{step.prompt}</p>
+              <details>
+                <summary className="cursor-pointer text-muted-foreground">
+                  Task instructions
+                </summary>
+                <p className="whitespace-pre-wrap break-words pt-2">{step.prompt}</p>
+              </details>
               <p>
                 Codex · {step.resolved?.execution.model ?? "Worker binding default"} ·{" "}
                 {step.resolved?.execution.options?.reasoningEffort ?? "Provider reasoning default"}

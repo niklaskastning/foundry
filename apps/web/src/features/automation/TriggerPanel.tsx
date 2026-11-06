@@ -12,6 +12,7 @@ import {
 } from "@t3tools/contracts";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import { Textarea } from "../../components/ui/textarea";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -77,7 +78,7 @@ export function TriggerPanel({
     <section className="space-y-4" aria-label="Workflow triggers">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-medium">Triggers</h2>
+          <h2 className="text-lg font-semibold">Triggers</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             Start work from a schedule or labeled GitHub issues.
           </p>
@@ -97,9 +98,9 @@ export function TriggerPanel({
         </p>
       ) : null}
       {query.error ? <p role="alert">{query.error}</p> : null}
-      <ul className="space-y-3">
+      <ul className="divide-y border-y">
         {items.map((binding) => (
-          <li key={binding.id} className="space-y-3 rounded-lg border bg-card p-4">
+          <li key={binding.id} className="space-y-3 py-4">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div className="min-w-0">
                 <p className="text-xs text-muted-foreground">
@@ -152,78 +153,92 @@ export function TriggerPanel({
               <Button variant="outline" onClick={() => setSelected(binding)}>
                 View inputs
               </Button>
-              <Button
-                disabled={
-                  !allowed ||
-                  busy ||
-                  Boolean(pending) ||
-                  !["inactive", "paused"].includes(binding.state)
-                }
-                onClick={() =>
-                  void execute({
-                    op: "activate",
-                    commandId: randomUUID(),
-                    bindingId: binding.id,
-                    generation: binding.generation,
-                  })
-                }
-              >
-                Authorize and activate
-              </Button>
-              <Button
-                variant="outline"
-                disabled={
-                  !allowed ||
-                  busy ||
-                  Boolean(pending) ||
-                  !["active", "baselining"].includes(binding.state)
-                }
-                onClick={() =>
-                  void execute({
-                    op: "deactivate",
-                    commandId: randomUUID(),
-                    bindingId: binding.id,
-                    generation: binding.generation,
-                    pending: "retain",
-                  })
-                }
-              >
-                Pause, retain inputs
-              </Button>
-              <Button
-                variant="outline"
-                disabled={
-                  !allowed ||
-                  busy ||
-                  Boolean(pending) ||
-                  !["active", "baselining"].includes(binding.state)
-                }
-                onClick={() =>
-                  void execute({
-                    op: "deactivate",
-                    commandId: randomUUID(),
-                    bindingId: binding.id,
-                    generation: binding.generation,
-                    pending: "discard",
-                  })
-                }
-              >
-                Pause, discard pending
-              </Button>
-              <Button
-                variant="destructive"
-                disabled={!allowed || busy || Boolean(pending) || binding.state === "revoked"}
-                onClick={() =>
-                  void execute({
-                    op: "revoke",
-                    commandId: randomUUID(),
-                    bindingId: binding.id,
-                    generation: binding.generation,
-                  })
-                }
-              >
-                Revoke authorization
-              </Button>
+              {["inactive", "paused"].includes(binding.state) ? (
+                <Button
+                  disabled={
+                    !allowed ||
+                    busy ||
+                    Boolean(pending) ||
+                    !["inactive", "paused"].includes(binding.state)
+                  }
+                  onClick={() =>
+                    void execute({
+                      op: "activate",
+                      commandId: randomUUID(),
+                      bindingId: binding.id,
+                      generation: binding.generation,
+                    })
+                  }
+                >
+                  Authorize and activate
+                </Button>
+              ) : null}
+              {["active", "baselining"].includes(binding.state) ? (
+                <Button
+                  variant="outline"
+                  disabled={
+                    !allowed ||
+                    busy ||
+                    Boolean(pending) ||
+                    !["active", "baselining"].includes(binding.state)
+                  }
+                  onClick={() =>
+                    void execute({
+                      op: "deactivate",
+                      commandId: randomUUID(),
+                      bindingId: binding.id,
+                      generation: binding.generation,
+                      pending: "retain",
+                    })
+                  }
+                >
+                  Pause, retain inputs
+                </Button>
+              ) : null}
+              <details className="text-sm">
+                <summary className="cursor-pointer py-2 text-muted-foreground">
+                  Stop or revoke…
+                </summary>
+                <p className="py-2 text-xs text-muted-foreground">
+                  Discard removes pending inputs. Revocation withdraws this trigger's authorization.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    disabled={
+                      !allowed ||
+                      busy ||
+                      Boolean(pending) ||
+                      !["active", "baselining"].includes(binding.state)
+                    }
+                    onClick={() =>
+                      void execute({
+                        op: "deactivate",
+                        commandId: randomUUID(),
+                        bindingId: binding.id,
+                        generation: binding.generation,
+                        pending: "discard",
+                      })
+                    }
+                  >
+                    Pause, discard pending
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    disabled={!allowed || busy || Boolean(pending) || binding.state === "revoked"}
+                    onClick={() =>
+                      void execute({
+                        op: "revoke",
+                        commandId: randomUUID(),
+                        bindingId: binding.id,
+                        generation: binding.generation,
+                      })
+                    }
+                  >
+                    Revoke authorization
+                  </Button>
+                </div>
+              </details>
             </div>
           </li>
         ))}
@@ -421,7 +436,7 @@ function CreateTrigger({
                 config: {
                   timeZone: zone,
                   timeOfDay: time,
-                  weekdays: weekdays.split(",").map(Number),
+                  weekdays: weekdays.split(",").filter(Boolean).map(Number),
                   catchUp,
                   maxCatchUp: Number(maximum),
                   overlap,
@@ -474,7 +489,15 @@ function CreateTrigger({
             </Button>
           ))}
         </div>
-        <p className="text-sm">Worker: {target?.environmentId ?? "Unavailable"}</p>
+        <p className="text-sm font-medium">Worker project</p>
+        {!target ? (
+          <p role="status" className="text-sm text-muted-foreground">
+            {worker.loading
+              ? "Loading available projects…"
+              : (worker.error ??
+                "No worker is available. Configure a worker before creating a trigger.")}
+          </p>
+        ) : null}
         <div className="flex flex-wrap gap-2">
           {target?.projects.map((item) => (
             <Button
@@ -546,16 +569,35 @@ function CreateTrigger({
           <>
             <label className="block space-y-1">
               <span>Local time (HH:mm)</span>
-              <Input value={time} onChange={(e) => setTime(e.target.value)} />
+              <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
             </label>
             <label className="block space-y-1">
               <span>IANA time zone</span>
               <Input value={zone} onChange={(e) => setZone(e.target.value)} />
             </label>
-            <label className="block space-y-1">
-              <span>Weekdays (0 Sunday through 6 Saturday)</span>
-              <Input value={weekdays} onChange={(e) => setWeekdays(e.target.value)} />
-            </label>
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">Run on</legend>
+              <div className="flex flex-wrap gap-3">
+                {["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map(
+                  (day, index) => (
+                    <label key={day} className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={weekdays.split(",").includes(String(index))}
+                        onCheckedChange={(checked) =>
+                          setWeekdays(
+                            (checked
+                              ? [...weekdays.split(",").filter(Boolean), String(index)]
+                              : weekdays.split(",").filter((value) => value !== String(index))
+                            ).join(","),
+                          )
+                        }
+                      />
+                      {day}
+                    </label>
+                  ),
+                )}
+              </div>
+            </fieldset>
             <div className="flex flex-wrap gap-2">
               {(["skip", "latest", "bounded"] as const).map((value) => (
                 <Button
@@ -564,7 +606,11 @@ function CreateTrigger({
                   variant={catchUp === value ? "default" : "outline"}
                   onClick={() => setCatchUp(value)}
                 >
-                  Missed: {value}
+                  {value === "skip"
+                    ? "Skip missed runs"
+                    : value === "latest"
+                      ? "Run latest missed"
+                      : "Catch up within limit"}
                 </Button>
               ))}
             </div>
@@ -582,7 +628,7 @@ function CreateTrigger({
                   variant={overlap === value ? "default" : "outline"}
                   onClick={() => setOverlap(value)}
                 >
-                  Overlap: {value}
+                  {value === "wait" ? "Wait for previous run" : "Skip while busy"}
                 </Button>
               ))}
             </div>

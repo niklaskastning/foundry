@@ -1,3 +1,4 @@
+import { Badge } from "../../components/ui/badge";
 import type {
   CanonicalFactoryDefinitionV4,
   FactoryV4Node,
@@ -13,14 +14,14 @@ export function V4AgentConfiguration({
   agent: Pick<FactoryV4ResolvedAgent, "agent" | "instructions" | "execution" | "provenance">;
 }) {
   return (
-    <div className="space-y-3 text-sm">
+    <div className="min-w-0 space-y-3 break-words text-sm">
       <p>
         {agent.agent.name} · Codex · {agent.execution.model ?? "Worker binding default"} ·{" "}
         {agent.execution.options?.reasoningEffort ?? "Provider reasoning default"}
       </p>
-      <dl className="space-y-2">
+      <dl className="grid gap-3 sm:grid-cols-2">
         <div>
-          <dt>Skills</dt>
+          <dt className="text-xs text-muted-foreground">Skills and origin</dt>
           <dd>
             {agent.provenance.skills
               .map((resource) => `${resource.id} (${resource.sources.join(" → ")})`)
@@ -28,7 +29,7 @@ export function V4AgentConfiguration({
           </dd>
         </div>
         <div>
-          <dt>MCP</dt>
+          <dt className="text-xs text-muted-foreground">MCP and origin</dt>
           <dd>
             {agent.provenance.mcp
               .map((resource) => `${resource.id} (${resource.sources.join(" → ")})`)
@@ -36,7 +37,7 @@ export function V4AgentConfiguration({
           </dd>
         </div>
         <div>
-          <dt>Execution sources</dt>
+          <dt className="text-xs text-muted-foreground">Execution sources</dt>
           <dd>
             Provider: {agent.provenance.execution.provider} · Model:{" "}
             {agent.provenance.execution.model ?? "Worker binding"} · Reasoning:{" "}
@@ -72,15 +73,42 @@ function WorkflowNodes({
   snapshot: FactoryV4Snapshot;
 }) {
   return (
-    <ol className="space-y-3">
+    <ol className="divide-y border-l border-border">
       {nodes.map((node) => (
-        <li key={node.id} className="space-y-2 border-l-2 pl-3">
-          <p className="font-medium">
-            {node.id} · {node.kind}
-          </p>
+        <li key={node.id} className="min-w-0 space-y-2 py-3 pl-3 sm:pl-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="break-all font-medium">{node.id}</span>
+            <Badge
+              variant={
+                node.kind === "approval"
+                  ? "warning"
+                  : node.kind === "swarm" || node.kind === "loop"
+                    ? "info"
+                    : "secondary"
+              }
+            >
+              {node.kind === "swarm"
+                ? "Parallel branches"
+                : node.kind === "loop"
+                  ? "Review / fix rounds"
+                  : node.kind === "approval"
+                    ? "Human decision"
+                    : node.kind === "publish"
+                      ? "Publish PR"
+                      : node.kind === "test"
+                        ? "Check"
+                        : "Agent"}
+            </Badge>
+          </div>
           <p className="text-xs text-muted-foreground">
-            Dependencies: {node.dependsOn.join(", ") || "None"} ·{" "}
-            {node.dependencyPolicy ?? "Successful predecessors"}
+            {node.dependsOn.length
+              ? `After ${node.dependsOn.join(", ")}`
+              : "Starts when this group begins"}
+            {node.dependsOn.length
+              ? node.dependencyPolicy === "terminal"
+                ? " · waits for completion, including failures"
+                : " · requires success"
+              : ""}
           </p>
           {node.when ? (
             <details>
@@ -89,19 +117,58 @@ function WorkflowNodes({
             </details>
           ) : null}
           {node.kind === "agent" ? (
-            <V4AgentConfiguration agent={resolveFactoryV4Agent(snapshot, node)} />
+            <>
+              <p className="text-sm text-muted-foreground">
+                {snapshot.agents.find((agent) => agent.id === node.agent)?.name ?? node.agent}
+                {node.workspace
+                  ? ` · ${node.workspace.access === "write" ? "Can change files" : "Read-only workspace"}`
+                  : ""}
+                {node.retry ? ` · up to ${node.retry.maxAttempts} technical attempts` : ""}
+              </p>
+              {node.extend?.skills?.length ||
+              node.extend?.mcp?.length ||
+              node.extend?.instructions ? (
+                <p className="text-xs text-muted-foreground">
+                  Step additions:{" "}
+                  {[
+                    ...(node.extend.skills ?? []).map(
+                      (id) => snapshot.skills.find((item) => item.id === id)?.name ?? id,
+                    ),
+                    ...(node.extend.mcp ?? []).map(
+                      (id) => snapshot.mcp.find((item) => item.id === id)?.name ?? id,
+                    ),
+                    ...(node.extend.instructions ? ["extra instructions"] : []),
+                  ].join(", ")}
+                </p>
+              ) : null}
+              <details className="text-sm">
+                <summary className="cursor-pointer">Task, resources and effective settings</summary>
+                <div className="pt-3">
+                  <V4AgentConfiguration agent={resolveFactoryV4Agent(snapshot, node)} />
+                </div>
+              </details>
+            </>
           ) : null}
           {node.kind === "swarm" ? (
             <p className="text-sm">
-              Up to {node.maxParallel} concurrent agents in this subtree · Join: {node.join.policy}
-              {node.join.policy === "quorum" ? ` (${node.join.minSuccesses} successes)` : ""} ·{" "}
-              {node.join.onFailure.replaceAll("_", " ")}
+              Up to {node.maxParallel} agents at once. Continue after{" "}
+              {node.join.policy === "quorum"
+                ? `${node.join.minSuccesses} successful branches`
+                : "all branches succeed"}
+              .{" "}
+              {node.join.onFailure === "cancel_remaining"
+                ? "Cancel remaining branches on failure."
+                : "Collect remaining results on failure."}
             </p>
           ) : null}
           {node.kind === "loop" ? (
             <>
               <p className="text-sm">
-                At most {node.maxIterations} iterations · On exhaustion: {node.onExhausted}
+                Up to {node.maxIterations} rounds.{" "}
+                {node.onExhausted === "approval"
+                  ? "Ask for a decision if the goal is still unmet."
+                  : "Fail if the goal is still unmet."}{" "}
+                Technical retries are counted separately.
               </p>
               <details>
                 <summary className="cursor-pointer text-sm">
@@ -147,10 +214,25 @@ export function V4WorkflowConfiguration({
 }) {
   return (
     <div className="space-y-3 pt-3">
-      <p className="text-sm">
-        Run limit: {workflow.limits.maxConcurrentAgents} concurrent agents ·{" "}
+      <p className="text-xs text-muted-foreground">
+        Execution budget: {workflow.limits.maxConcurrentAgents} concurrent agents ·{" "}
         {workflow.limits.maxAgentExecutions} total starts including technical retries
       </p>
+      {workflow.agentDefaults?.extend ? (
+        <p className="text-xs text-muted-foreground">
+          Added to agents in this workflow:{" "}
+          {[
+            ...(workflow.agentDefaults.extend.skills ?? []).map(
+              (id) => definition.skills.find((item) => item.id === id)?.name ?? id,
+            ),
+            ...(workflow.agentDefaults.extend.mcp ?? []).map(
+              (id) => definition.mcp.find((item) => item.id === id)?.name ?? id,
+            ),
+            ...(workflow.agentDefaults.extend.instructions ? ["workflow instructions"] : []),
+          ].join(", ") || "No additional resources"}
+          .
+        </p>
+      ) : null}
       <WorkflowNodes nodes={workflow.steps} snapshot={{ ...definition, workflow }} />
     </div>
   );
@@ -162,16 +244,32 @@ export function V4Catalog({ definition }: { definition: CanonicalFactoryDefiniti
       <section className="space-y-3" aria-label="Versioned agents">
         <h3 className="font-medium">Agents</h3>
         {definition.agents.map((agent) => (
-          <article key={agent.id} className="space-y-2 rounded-lg border p-4">
+          <article key={agent.id} className="space-y-2 border-b py-4 first:border-t">
             <h4 className="font-medium">{agent.name}</h4>
             <p className="text-sm">{agent.description}</p>
+            <p className="text-xs text-muted-foreground">
+              Codex ·{" "}
+              {agent.execution?.model ??
+                definition.defaults?.execution.model ??
+                "Worker binding default"}
+              {" · "}
+              {agent.execution?.options?.reasoningEffort ??
+                definition.defaults?.execution.options?.reasoningEffort ??
+                "Provider reasoning default"}
+            </p>
             <p className="text-sm">
-              Skills: {agent.skills.join(", ") || "None"} · MCP: {agent.mcp.join(", ") || "None"}
+              Skills:{" "}
+              {agent.skills
+                .map((id) => definition.skills.find((item) => item.id === id)?.name ?? id)
+                .join(", ") || "None"}
+              {" · "}MCP:{" "}
+              {agent.mcp
+                .map((id) => definition.mcp.find((item) => item.id === id)?.name ?? id)
+                .join(", ") || "None"}
             </p>
             <details>
-              <summary className="cursor-pointer text-sm">
-                Base instructions · agents/{agent.id}.yaml
-              </summary>
+              <summary className="cursor-pointer text-sm">Instructions and source</summary>
+              <p className="pt-2 text-xs text-muted-foreground">agents/{agent.id}.yaml</p>
               <p className="whitespace-pre-wrap pt-2 text-sm">{agent.instructions}</p>
             </details>
           </article>
@@ -180,7 +278,7 @@ export function V4Catalog({ definition }: { definition: CanonicalFactoryDefiniti
       <section className="space-y-3" aria-label="Versioned skill bundles">
         <h3 className="font-medium">Skill bundles</h3>
         {definition.skills.map((skill) => (
-          <details key={skill.id} className="rounded-lg border p-3">
+          <details key={skill.id} className="border-b py-3">
             <summary className="cursor-pointer text-sm">
               {skill.name} · {skill.files.length} files
             </summary>
@@ -204,11 +302,11 @@ export function V4Catalog({ definition }: { definition: CanonicalFactoryDefiniti
           Definitions request tools. Runtime bindings must authorize them before an agent can start.
         </p>
         {definition.mcp.map((mcp) => (
-          <article key={mcp.id} className="space-y-2 rounded-lg border p-3 text-sm">
+          <article key={mcp.id} className="space-y-2 border-b py-3 text-sm">
             <h4 className="font-medium">
               {mcp.name} · {mcp.transport}
             </h4>
-            <p>mcp/{mcp.id}.yaml</p>
+            <p className="text-xs text-muted-foreground">mcp/{mcp.id}.yaml</p>
             <p>Requested tools: {mcp.allowedTools.join(", ") || "None"}</p>
             <p>
               Connection references:{" "}

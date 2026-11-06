@@ -64,11 +64,11 @@ export function WorkItemDetail({
           Refresh work item
         </Button>
       </div>
-      {work.loading ? <p role="status">Loading work item…</p> : null}
+      {work.loading && !work.result ? <p role="status">Loading work item…</p> : null}
       {work.error ? <p role="alert">{work.error}</p> : null}
       {work.result?.kind === "workItem" ? (
         <>
-          <div className="space-y-3 rounded-xl border bg-card p-5">
+          <div className="space-y-3 border-b pb-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <h2 className="min-w-0 flex-1 break-words text-xl font-semibold">
                 {work.result.item.title}
@@ -92,7 +92,7 @@ export function WorkItemDetail({
             </p>
             <p className="text-sm">
               {work.result.item.state === "open"
-                ? "This work item is open. Review its runs or start a workflow; a successful run does not close the work item."
+                ? "Choose a workflow to begin, or review an earlier run. Completing a run does not close this work item."
                 : work.result.item.state === "in_progress"
                   ? "Work is in progress. Open its run to follow execution or take action."
                   : work.result.item.state === "review"
@@ -127,7 +127,7 @@ export function WorkItemDetail({
           />
           <details
             open={work.result.item.state === "open" ? true : undefined}
-            className="rounded-xl border p-4"
+            className="rounded-lg border p-4"
           >
             <summary className="cursor-pointer font-medium">
               {work.result.item.state === "open" ? "Start work" : "Start another workflow"}
@@ -192,7 +192,8 @@ function StartWorkflow({
     : undefined;
   const [projectOverride, setProjectId] = useState<string>();
   const [modelOverride, setModel] = useState<string>();
-  const [revision, setRevision] = useState(`work-item:${item.id}`);
+  const [revisionOverride, setRevision] = useState<string>();
+  const revision = revisionOverride ?? (parallel ? "" : `work-item:${item.id}`);
   const [workflowInputs, setWorkflowInputs] = useState("{}");
   const [checksOverride, setChecks] = useState<string>();
   const [artifactsOverride, setArtifacts] = useState<string>();
@@ -297,18 +298,24 @@ function StartWorkflow({
   return (
     <section className="space-y-3" aria-label="Start workflow">
       <fieldset disabled={busy || Boolean(pending)} className="space-y-3">
-        <legend className="px-1 font-medium">Choose a workflow</legend>
-        <div className="flex flex-wrap gap-2">
-          {active?.workflowVersions.map((workflow) => (
-            <Button
-              key={workflow.versionId}
-              variant={workflowVersionId === workflow.versionId ? "default" : "outline"}
-              onClick={() => setWorkflowVersionId(workflow.versionId)}
-            >
-              {workflow.id}
-            </Button>
-          ))}
-        </div>
+        <legend className="font-medium">Workflow</legend>
+        <Select
+          value={workflowVersionId}
+          onValueChange={(value) => {
+            if (value !== null) setWorkflowVersionId(value);
+          }}
+        >
+          <SelectTrigger aria-label="Workflow to start">
+            <SelectValue>{workflow?.id ?? "Choose a workflow"}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {active?.workflowVersions.map((entry) => (
+              <SelectItem key={entry.versionId} value={entry.versionId}>
+                {entry.id}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {!active ? <p>Activate a definition before starting work.</p> : null}
         {active && workflow ? (
           <details>
@@ -323,7 +330,7 @@ function StartWorkflow({
           <p role="alert">Execution defaults unavailable: {defaultsQuery.error}</p>
         ) : null}
         {parallel ? (
-          <div className="space-y-2 rounded-lg border p-3 text-sm">
+          <div className="space-y-2 border-l-2 pl-3 text-sm">
             <p>
               {v4
                 ? "Modular workflow · Limits and technical retries follow the pinned definition"
@@ -344,16 +351,20 @@ function StartWorkflow({
           </div>
         ) : null}
         {v4 ? (
-          <label className="block space-y-1">
-            <span className="text-sm">Workflow inputs (JSON object)</span>
-            <Textarea
-              value={workflowInputs}
-              onChange={(event) => setWorkflowInputs(event.target.value)}
-            />
-            <span className="text-xs text-muted-foreground">
-              Pinned for this run. Use connection references for secrets.
-            </span>
-          </label>
+          <details>
+            <summary className="cursor-pointer text-sm">Custom workflow inputs</summary>
+            <label className="mt-3 block space-y-1">
+              <span className="text-sm">Workflow inputs (JSON object)</span>
+              <Textarea
+                value={workflowInputs}
+                onChange={(event) => setWorkflowInputs(event.target.value)}
+              />
+              <span className="text-xs text-muted-foreground">
+                Leave the default empty object unless this workflow requires inputs. Inputs are
+                pinned for this run; use connection references for secrets.
+              </span>
+            </label>
+          </details>
         ) : null}
         {target ? (
           <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -385,9 +396,7 @@ function StartWorkflow({
           </p>
         )}
         <details open={!configured || undefined}>
-          <summary className="cursor-pointer text-sm">
-            Execution binding and advanced settings
-          </summary>
+          <summary className="cursor-pointer text-sm">Worker and run settings</summary>
           <div className="space-y-3 pt-3">
             {parallel && (
               <WorkerPoolPicker
@@ -406,8 +415,11 @@ function StartWorkflow({
                     checked={projectId === project.id}
                     onChange={() => setProjectId(project.id)}
                   />
-                  <span>
-                    {project.title} · {project.workspaceRoot}
+                  <span className="min-w-0 break-words">
+                    {project.title}
+                    <span className="block break-all text-xs text-muted-foreground">
+                      {project.workspaceRoot}
+                    </span>
                   </span>
                 </label>
               ))}
@@ -444,25 +456,38 @@ function StartWorkflow({
               Role and step models take precedence. These operational defaults grant no accounts or
               permissions.
             </p>
-            <label className="block space-y-1">
-              <span className="text-sm">
-                {parallel ? "Pinned repository commit SHA" : "Input revision"}
-              </span>
-              <Input value={revision} onChange={(event) => setRevision(event.target.value)} />
-            </label>
-            <label className="block space-y-1">
-              <span className="text-sm">Checks: id, prompt, command, cwd</span>
-              <Textarea value={checks} onChange={(event) => setChecks(event.target.value)} />
-            </label>
-            <label className="block space-y-1">
-              <span className="text-sm">Required artifacts: stepId, names</span>
-              <Textarea value={artifacts} onChange={(event) => setArtifacts(event.target.value)} />
-            </label>
+            {!parallel ? (
+              <label className="block space-y-1">
+                <span className="text-sm">Input revision</span>
+                <Input value={revision} onChange={(event) => setRevision(event.target.value)} />
+              </label>
+            ) : null}
+            <details>
+              <summary className="cursor-pointer text-sm">Checks and required artifacts</summary>
+              <div className="space-y-3 pt-3">
+                <p className="text-xs text-muted-foreground">
+                  These bindings connect workflow check and artifact names to this repository.
+                  Existing saved defaults are reused.
+                </p>
+                <label className="block space-y-1">
+                  <span className="text-sm">Checks: id, prompt, command, cwd</span>
+                  <Textarea value={checks} onChange={(event) => setChecks(event.target.value)} />
+                </label>
+                <label className="block space-y-1">
+                  <span className="text-sm">Required artifacts: stepId, names</span>
+                  <Textarea
+                    value={artifacts}
+                    onChange={(event) => setArtifacts(event.target.value)}
+                  />
+                </label>
+              </div>
+            </details>
           </div>
         </details>
       </fieldset>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2 border-t pt-4">
         <Button
+          size="multiline"
           disabled={
             busy ||
             !canStart ||
@@ -486,6 +511,7 @@ function StartWorkflow({
         </Button>
         <Button
           variant="outline"
+          size="multiline"
           disabled={
             busy ||
             !canConfigure ||

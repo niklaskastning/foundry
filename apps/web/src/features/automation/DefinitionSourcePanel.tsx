@@ -16,6 +16,7 @@ import type {
 } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { Button } from "../../components/ui/button";
+import { Badge } from "../../components/ui/badge";
 import { Input } from "../../components/ui/input";
 import { randomUUID } from "../../lib/utils";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -121,7 +122,7 @@ export function DefinitionSourcePanel({
   return (
     <section aria-label="Git definition source" className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-medium">Definition source</h2>
+        <h2 className="text-lg font-semibold">Definition source</h2>
         <Button variant="outline" onClick={refresh}>
           Refresh
         </Button>
@@ -132,9 +133,9 @@ export function DefinitionSourcePanel({
       </p>
       {binding ? (
         <>
-          <dl className="grid gap-4 rounded-lg border bg-card p-4 text-sm sm:grid-cols-2">
+          <dl className="grid gap-4 border-y py-4 text-sm sm:grid-cols-2">
             <div>
-              <dt className="font-medium">Repository</dt>
+              <dt className="text-xs text-muted-foreground">Repository</dt>
               <dd>
                 <a
                   className="underline"
@@ -142,25 +143,25 @@ export function DefinitionSourcePanel({
                   target="_blank"
                   rel="noreferrer"
                 >
-                  {binding.repository}
+                  Edit in Git · {binding.repository}
                 </a>
               </dd>
             </div>
             <div>
-              <dt className="font-medium">Branch / directory</dt>
+              <dt className="text-xs text-muted-foreground">Branch / directory</dt>
               <dd>
                 {binding.branch} · {binding.path || "/"}
               </dd>
             </div>
             <div>
-              <dt className="font-medium">Source status</dt>
+              <dt className="text-xs text-muted-foreground">Source status</dt>
               <dd>
                 {binding.status} ·{" "}
                 {binding.enabled ? "Background reads authorized" : "Background reads paused"}
               </dd>
             </div>
             <div>
-              <dt className="font-medium">Active commit</dt>
+              <dt className="text-xs text-muted-foreground">Active commit</dt>
               <dd>
                 {active?.source.kind === "github" ? (
                   <CommitLink repository={active.source.repository} sha={active.source.commitSha} />
@@ -244,7 +245,6 @@ export function DefinitionSourcePanel({
           )}
           <div className="flex flex-wrap gap-2">
             <Button
-              variant="outline"
               disabled={locked || !canSync || !binding.enabled}
               onClick={() =>
                 void submit({
@@ -257,36 +257,43 @@ export function DefinitionSourcePanel({
             >
               Sync now
             </Button>
-            <Button
-              variant="outline"
-              disabled={locked || !canEnable}
-              onClick={() =>
-                void submit({
-                  op: "setDefinitionSourceEnabled",
-                  commandId: randomUUID(),
-                  factoryId,
-                  expectedGeneration: binding.generation,
-                  enabled: true,
-                })
-              }
-            >
-              {binding.enabled ? "Reauthorize source" : "Authorize background reads"}
-            </Button>
-            <Button
-              variant="outline"
-              disabled={locked || !canEnable || !binding.enabled}
-              onClick={() =>
-                void submit({
-                  op: "setDefinitionSourceEnabled",
-                  commandId: randomUUID(),
-                  factoryId,
-                  expectedGeneration: binding.generation,
-                  enabled: false,
-                })
-              }
-            >
-              Pause background reads
-            </Button>
+            <details className="text-sm">
+              <summary className="cursor-pointer py-2 text-muted-foreground">
+                Background access
+              </summary>
+              <div className="flex flex-wrap gap-2 pt-2">
+                <Button
+                  variant="outline"
+                  disabled={locked || !canEnable}
+                  onClick={() =>
+                    void submit({
+                      op: "setDefinitionSourceEnabled",
+                      commandId: randomUUID(),
+                      factoryId,
+                      expectedGeneration: binding.generation,
+                      enabled: true,
+                    })
+                  }
+                >
+                  {binding.enabled ? "Reauthorize source" : "Authorize background reads"}
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={locked || !canEnable || !binding.enabled}
+                  onClick={() =>
+                    void submit({
+                      op: "setDefinitionSourceEnabled",
+                      commandId: randomUUID(),
+                      factoryId,
+                      expectedGeneration: binding.generation,
+                      enabled: false,
+                    })
+                  }
+                >
+                  Pause background reads
+                </Button>
+              </div>
+            </details>
           </div>
         </>
       ) : (
@@ -375,7 +382,7 @@ export function DefinitionSourcePanel({
       ) : null}
       {binding ? (
         <>
-          <h3 className="font-medium">Revisions available for review</h3>
+          <h3 className="font-semibold">Available revisions</h3>
           <p className="text-sm text-muted-foreground">
             A synced revision is a candidate until you activate it.
           </p>
@@ -389,10 +396,14 @@ export function DefinitionSourcePanel({
               >
                 <span>
                   <CommitLink repository={binding.repository} sha={revision.commitSha} /> ·{" "}
-                  {revision.valid ? "Valid" : "Invalid"}
-                  {active?.source.kind === "github" && active.source.reference === revision.id
-                    ? " · Active"
-                    : ""}{" "}
+                  <Badge variant={revision.valid ? "success" : "error"}>
+                    {revision.valid ? "Valid" : "Invalid"}
+                  </Badge>
+                  {active?.source.kind === "github" && active.source.reference === revision.id ? (
+                    <span className="ml-2">
+                      <Badge variant="info">Active for new runs</Badge>
+                    </span>
+                  ) : null}{" "}
                   · {new Date(revision.createdAt).toLocaleString()}
                 </span>
                 <Button variant="outline" onClick={() => setSelected(revision.id)}>
@@ -522,7 +533,7 @@ function RevisionDetail({
       (binding.importContentHash !== null &&
         detail?.revision.contentHash !== binding.importContentHash));
   return (
-    <section aria-label="Definition revision details" className="space-y-3 rounded border p-3">
+    <section aria-label="Definition revision details" className="space-y-3 border-t pt-4">
       <h3 className="font-medium">Review revision</h3>
       {error ? <p role="alert">{error}</p> : null}
       {loading ? <p role="status">Loading revision…</p> : null}
@@ -578,7 +589,7 @@ function RevisionDetail({
               ? "Already active"
               : binding.ownership === "pending"
                 ? "Import revision and transfer ownership to Git"
-                : "Activate this revision / roll back"}
+                : "Use this revision for new runs"}
           </Button>
         </>
       ) : null}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { validateFoundrySearch } from "./workspaceSearch";
+import { mergeWorkspaceSearch, validateFoundrySearch } from "./workspaceSearch";
 
 describe("factory workspace links", () => {
   it("preserves existing run and handoff links together with workspace and evidence state", () => {
@@ -8,7 +8,9 @@ describe("factory workspace links", () => {
       factoryId: "factory",
       workItemId: "work",
       runId: "run",
-      tab: "agents",
+      tab: "workflows",
+      createWork: "1",
+      workStatus: "active",
       runState: "waiting",
       after: "cursor",
       attemptsAfter: "attempt-cursor",
@@ -51,5 +53,30 @@ describe("factory workspace links", () => {
         after: "x".repeat(1001),
       }),
     ).toEqual({});
+  });
+});
+
+it("clears execution selection when leaving or changing runs but preserves same-run paging", () => {
+  const previous = {
+    runId: "first",
+    nodeOffset: "100",
+    nodePath: "old",
+    attemptId: "a",
+    attemptsAfter: "cursor",
+    factoryId: "f",
+  };
+  for (const runId of ["second", undefined]) {
+    expect(mergeWorkspaceSearch(previous, { runId })).toEqual({
+      factoryId: "f",
+      runId,
+      nodeOffset: undefined,
+      nodePath: undefined,
+      attemptId: undefined,
+      attemptsAfter: undefined,
+    });
+  }
+  expect(mergeWorkspaceSearch(previous, { nodeOffset: "200" })).toEqual({
+    ...previous,
+    nodeOffset: "200",
   });
 });

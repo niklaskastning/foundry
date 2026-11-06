@@ -11,7 +11,8 @@ import { Input } from "../components/ui/input";
 import { deviceCommand } from "./devices";
 import { readDeviceSelection } from "./selection";
 
-export function DeviceCatalog() {
+export function DeviceCatalog({ readinessInDetails = false }: { readinessInDetails?: boolean }) {
+  const [readinessOpen, setReadinessOpen] = useState(false);
   const [catalog, setCatalog] = useState<FoundryDeviceCatalog>();
   const [enrollment, setEnrollment] = useState<FoundryEnrollment>();
   const [environmentId, setEnvironmentId] = useState("");
@@ -70,39 +71,39 @@ export function DeviceCatalog() {
   }
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        Machines available to this instance. Open a device to work in its projects and chats, or
-        manage which machines may execute factory work.
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <Button
-          variant="outline"
-          disabled={busy}
-          onClick={() => {
-            void operate({ type: "disconnect" }).then((success) => {
-              if (success) window.location.assign("/foundry?view=instance");
-            });
-          }}
-        >
-          Manage instance sign-in
-        </Button>
-        <Button disabled={busy} onClick={() => void operate({ type: "load" })}>
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Machine access</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Open a machine for interactive work or manage its factory authorization.
+          </p>
+        </div>
+        <Button variant="outline" disabled={busy} onClick={() => void operate({ type: "load" })}>
           Refresh devices
-        </Button>
-        <Button
-          variant="outline"
-          disabled={busy || !selected}
-          onClick={() => void operate({ type: "disconnect" })}
-        >
-          Disconnect selected device
         </Button>
       </div>
       <p role={failed ? "alert" : "status"} className="text-sm text-muted-foreground">
         {busy ? "Loading devices…" : message}
       </p>
       {selected ? (
-        <WorkerStatus key={selected.environmentId} environmentId={selected.environmentId} />
+        readinessInDetails ? (
+          <details
+            className="border-b pb-3 text-sm"
+            onToggle={(event) => setReadinessOpen(event.currentTarget.open)}
+          >
+            <summary className="cursor-pointer text-muted-foreground">
+              Selected interactive device readiness
+            </summary>
+            {readinessOpen ? (
+              <div className="pt-3">
+                <WorkerStatus key={selected.environmentId} environmentId={selected.environmentId} />
+              </div>
+            ) : null}
+          </details>
+        ) : (
+          <WorkerStatus key={selected.environmentId} environmentId={selected.environmentId} />
+        )
       ) : null}
       {catalog?.devices.length === 0 ? (
         <div className="rounded-lg border border-dashed p-6 text-sm">
@@ -119,13 +120,20 @@ export function DeviceCatalog() {
         </p>
       ) : null}
       {catalog?.devices.map((device) => (
-        <div key={device.deviceId} className="space-y-4 rounded-lg border bg-card p-4">
+        <article key={device.deviceId} className="space-y-3 border-b py-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="text-xs text-muted-foreground">
                 {selected?.environmentId === device.environmentId ? "Selected device" : "Device"}
               </p>
-              <h3 className="mt-1 break-all text-sm font-medium">{device.environmentId}</h3>
+              <h3 className="mt-1 text-sm font-semibold">
+                {device.automationExecution?.enabled
+                  ? "Factory execution machine"
+                  : "Interactive machine"}
+              </h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Environment {device.environmentId.slice(0, 8)}
+              </p>
             </div>
             <Badge
               variant={
@@ -145,7 +153,7 @@ export function DeviceCatalog() {
                   : "Offline"}
             </Badge>
           </div>
-          <dl className="grid gap-3 text-sm sm:grid-cols-2">
+          <dl className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
             <div>
               <dt className="text-xs text-muted-foreground">Interactive access</dt>
               <dd className="mt-1">{device.clientAccess.enabled ? "Allowed" : "Disabled"}</dd>
@@ -179,7 +187,7 @@ export function DeviceCatalog() {
             <summary className="cursor-pointer">Access and registration</summary>
             <div className="space-y-3 pt-3">
               <p className="break-all text-xs text-muted-foreground">
-                Device ID: {device.deviceId}
+                Environment: {device.environmentId} · Device ID: {device.deviceId}
               </p>
               <p className="text-xs text-muted-foreground">
                 Interactive access and factory execution are separate permissions. Allowing
@@ -239,10 +247,35 @@ export function DeviceCatalog() {
               ) : null}
             </div>
           </details>
-        </div>
+        </article>
       ))}
+      <details className="text-sm">
+        <summary className="cursor-pointer text-muted-foreground">Connection and sign-in</summary>
+        <div className="pt-3">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                void operate({ type: "disconnect" }).then((success) => {
+                  if (success) window.location.assign("/foundry?view=instance");
+                });
+              }}
+            >
+              Manage instance sign-in
+            </Button>
+            <Button
+              variant="outline"
+              disabled={busy || !selected}
+              onClick={() => void operate({ type: "disconnect" })}
+            >
+              Disconnect selected device
+            </Button>
+          </div>
+        </div>
+      </details>
       {catalog?.canManage ? (
-        <details className="rounded-lg border p-4">
+        <details className="border-t pt-4">
           <summary className="cursor-pointer font-medium">Register a machine</summary>
           <div className="space-y-3 pt-4">
             <p className="text-xs text-muted-foreground">
@@ -282,6 +315,6 @@ export function DeviceCatalog() {
           </div>
         </details>
       ) : null}
-    </div>
+    </section>
   );
 }

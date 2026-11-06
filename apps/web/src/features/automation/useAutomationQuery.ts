@@ -1,14 +1,18 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { AutomationApplicationError } from "@t3tools/contracts";
 import type {
   AutomationApplicationQuery,
   AutomationApplicationResult,
   EnvironmentId,
 } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
+import * as Schema from "effect/Schema";
 import { useContext, useEffect, useState } from "react";
 import { environmentSession, sessionHasScope } from "../../state/session";
 import { automationCommands } from "./commands";
+
+const isApplicationError = Schema.is(AutomationApplicationError);
 
 export function useAutomationQuery(
   environmentId: EnvironmentId,
@@ -56,7 +60,15 @@ export function useAutomationQuery(
       } else {
         setResult(null);
         const failure = squashAtomCommandFailure(response);
-        setError(failure instanceof Error ? failure.message : "Unable to load factory data.");
+        setError(
+          isApplicationError(failure) && failure.code === "unavailable"
+            ? "Factory data is unavailable. Check your connection and refresh to try again."
+            : isApplicationError(failure) && failure.code === "forbidden"
+              ? "Your session cannot read the requested data. Check your access or sign in again."
+              : failure instanceof Error
+                ? failure.message
+                : "Unable to load factory data. Refresh to try again.",
+        );
       }
       setLoading(false);
     };

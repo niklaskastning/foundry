@@ -23,7 +23,7 @@ export function FoundrySidebar() {
       <Link
         to="/"
         onClick={close}
-        className="mb-8 flex items-center gap-2 px-3 text-lg font-semibold tracking-tight"
+        className="mb-5 flex items-center gap-2 px-3 text-lg font-semibold tracking-tight"
         aria-label="Foundry home"
       >
         <Boxes className="size-5" /> Foundry
@@ -37,9 +37,9 @@ export function FoundrySidebar() {
             onClick={close}
             aria-current={current === view ? "page" : undefined}
             className={cn(
-              "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+              "flex items-center gap-3 rounded-lg px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
               current === view
-                ? "bg-accent font-medium text-accent-foreground"
+                ? "bg-primary/10 font-semibold text-primary"
                 : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
             )}
           >
@@ -52,7 +52,7 @@ export function FoundrySidebar() {
         <Link
           to="/chats"
           onClick={close}
-          className="flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-accent"
+          className="flex items-center gap-3 rounded-lg px-3 py-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         >
           <MessageSquare className="size-4" />
           Chats
@@ -60,7 +60,7 @@ export function FoundrySidebar() {
         <Link
           to="/settings/connections"
           onClick={close}
-          className="flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-accent"
+          className="flex items-center gap-3 rounded-lg px-3 py-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         >
           <Settings className="size-4" />
           Settings
@@ -69,7 +69,7 @@ export function FoundrySidebar() {
           to="/foundry"
           search={{ view: "instance" }}
           onClick={close}
-          className="block px-3 py-2 text-xs"
+          className="block rounded-lg px-3 py-2 text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         >
           Instance & sign-in
         </Link>

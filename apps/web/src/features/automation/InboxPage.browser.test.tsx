@@ -1,9 +1,15 @@
 import { expect, it, vi } from "vite-plus/test";
+import { AsyncResult } from "effect/reactivity";
 import { EnvironmentId } from "@t3tools/contracts";
 import { render } from "../../../test/render";
 import { InboxPage } from "./InboxPage";
 
-const mocks = vi.hoisted(() => ({ allowed: false, readable: false, command: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  allowed: false,
+  readable: false,
+  command: vi.fn(),
+  search: {} as Record<string, string>,
+}));
 vi.mock("../../lib/utils", () => ({
   cn: (...classes: string[]) => classes.filter(Boolean).join(" "),
 }));
@@ -17,7 +23,7 @@ vi.mock("../../state/session", () => ({
   sessionHasScope: () => mocks.readable,
 }));
 vi.mock("../../foundry/useWorkspaceNavigation", () => ({
-  useWorkspaceNavigation: () => ({ search: {}, update: vi.fn() }),
+  useWorkspaceNavigation: () => ({ search: mocks.search, update: vi.fn() }),
 }));
 vi.mock("./commands", () => ({
   automationCommands: { inboxQuery: { permissionAtom: () => null } },
@@ -29,6 +35,7 @@ function setup(allowed: boolean, readable: boolean) {
   mocks.allowed = allowed;
   mocks.readable = readable;
   mocks.command.mockReset();
+  mocks.search = {};
 }
 
 it.each([
@@ -48,3 +55,18 @@ it.each([
     expect(mocks.command).not.toHaveBeenCalled();
   },
 );
+
+it("keeps the factory attention summary independent of inbox type and unread filters", async () => {
+  setup(true, true);
+  mocks.search = { inboxKind: "answer", inboxUnread: "1" };
+  mocks.command.mockResolvedValue(AsyncResult.success({ items: [], nextCursor: null }));
+  await using screen = await render(
+    <InboxPage environmentId={EnvironmentId.make("main")} compact />,
+  );
+  await expect.element(screen.getByText("No open decisions")).toBeVisible();
+  expect(mocks.command.mock.calls[0]?.[2].input).toEqual({
+    status: "open",
+    unreadOnly: false,
+    limit: 5,
+  });
+});

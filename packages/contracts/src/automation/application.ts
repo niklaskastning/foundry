@@ -242,7 +242,12 @@ export const AutomationApplicationResult = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("runs"),
     items: Schema.Array(
-      Schema.Struct({ ...AutomationRun.fields, workItemTitle: Schema.optional(Schema.String) }),
+      Schema.Struct({
+        ...AutomationRun.fields,
+        workItemTitle: Schema.optional(Schema.String),
+        workflowName: Schema.optional(Schema.NullOr(Schema.String)),
+        enrolledAt: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
     ),
     ...Next,
   }),

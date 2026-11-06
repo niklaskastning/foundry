@@ -520,8 +520,8 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     const visibleFactoryRuns = yield* app.query(machineA, { op: "runs", limit: 1 });
     if (visibleFactoryRuns.kind === "runs")
       NodeAssert.deepEqual(
-        visibleFactoryRuns.items.map((run) => run.id),
-        ["p21-private-run"],
+        visibleFactoryRuns.items.map((run) => [run.id, run.workflowName, run.enrolledAt]),
+        [["p21-private-run", "main", null]],
       );
     for (const query of [
       { op: "run" as const, factoryId: "p21-b", runId: "p21-private-run" },
@@ -590,8 +590,8 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     });
     if (recent.kind === "runs") {
       NodeAssert.deepEqual(
-        recent.items.map((run) => [run.id, run.workItemTitle]),
-        [["a-newer-run", "Fixture work"]],
+        recent.items.map((run) => [run.id, run.workItemTitle, run.workflowName, run.enrolledAt]),
+        [["a-newer-run", "Fixture work", "main", "2026-01-02T00:00:00.000Z"]],
       );
       NodeAssert.equal(recent.next, "a-newer-run");
       const nextRecent = yield* app.query(operate, {
@@ -603,8 +603,8 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
       });
       if (nextRecent.kind === "runs") {
         NodeAssert.deepEqual(
-          nextRecent.items.map((run) => run.id),
-          ["z-older-run"],
+          nextRecent.items.map((run) => [run.id, run.workflowName, run.enrolledAt]),
+          [["z-older-run", "main", "2026-01-01T00:00:00.000Z"]],
         );
         NodeAssert.equal(nextRecent.next, null);
       }
@@ -663,6 +663,12 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     yield* sql`INSERT INTO foundry_automation.runs(id,factory_id,work_item_id,workflow_version_id,factory_version_id,repository,revision,state) VALUES('p21-v4-run','p21-a','p21-work','p21-v4-workflow',${active.version.factoryVersionId},'fixture-repo',${"a".repeat(40)},'pending')`;
     yield* sql`INSERT INTO foundry_automation.dispatch_runs(run_id,worker_id,binding,v4_state) VALUES('p21-v4-run','fixture-worker',${sql.json({ identity, projectId: "worker-project", model: "fixture", checks: [], requiredArtifacts: [] })},${sql.json(nodeState)})`;
     yield* sql`INSERT INTO foundry_automation.run_controls(run_id) VALUES('p21-v4-run')`;
+    const modularRuns = yield* app.query(operate, { op: "runs", factoryId: "p21-a", limit: 20 });
+    if (modularRuns.kind === "runs")
+      NodeAssert.equal(
+        modularRuns.items.find((run) => run.id === "p21-v4-run")?.workflowName,
+        "paged",
+      );
     const runtimePage = yield* app.query(operate, {
       op: "run",
       factoryId: "p21-a",
