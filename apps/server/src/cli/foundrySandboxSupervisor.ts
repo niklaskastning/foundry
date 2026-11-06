@@ -17,7 +17,7 @@ const decodeConfiguration = Schema.decodeEffect(Schema.fromJsonString(Transport.
 
 export const sandboxSupervisorCommand = Command.make("sandbox-supervise", {
   configuration: Flag.String("configuration"),
-  lockHeld: Flag.Boolean("lock-held"),
+  lockHeld: Flag.Boolean("lock-held").pipe(Flag.withDefault(false)),
 }).pipe(
   Command.withDescription(
     "Run the dedicated Linux sandbox provisioner using its own enrolled device identity.",
