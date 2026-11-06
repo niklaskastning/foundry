@@ -1,5 +1,8 @@
+import * as Struct from "effect/Struct";
 import {
   FoundrySandboxAllocation,
+  type FoundrySandboxAllocationSummary,
+  type FoundrySandboxProfileSummary,
   FoundrySandboxProfile,
   FoundrySandboxRequest,
   FoundrySandboxError,
@@ -78,7 +81,7 @@ export class Allocations extends Context.Service<
     readonly claim: (
       operatorId: string,
       leaseId: string,
-    ) => Effect.Effect<ReadonlyArray<FoundrySandboxAllocation>, FoundrySandboxError>;
+    ) => Effect.Effect<ReadonlyArray<FoundrySandboxAllocationSummary>, FoundrySandboxError>;
     readonly checkLease: (
       operatorId: string,
       allocationId: string,
@@ -98,8 +101,8 @@ export class Allocations extends Context.Service<
     ) => Effect.Effect<void, FoundrySandboxError>;
     readonly list: (operatorId: string) => Effect.Effect<
       {
-        profiles: ReadonlyArray<FoundrySandboxProfile>;
-        allocations: ReadonlyArray<FoundrySandboxAllocation>;
+        profiles: ReadonlyArray<FoundrySandboxProfileSummary>;
+        allocations: ReadonlyArray<FoundrySandboxAllocationSummary>;
       },
       FoundrySandboxError
     >;
@@ -130,6 +133,18 @@ export class Allocations extends Context.Service<
   }
 >()("t3/foundry/sandboxes/Allocations") {}
 
+const summarizeProfile = (profile: FoundrySandboxProfile): FoundrySandboxProfileSummary => ({
+  ...Struct.omit(profile, ["setup", "skills"]),
+  setupStepCount: profile.setup.length,
+});
+const summarizeAllocation = (
+  allocation: FoundrySandboxAllocation,
+): FoundrySandboxAllocationSummary => ({
+  ...allocation,
+  profile: summarizeProfile(allocation.profile),
+});
+const encodeProfile = Schema.encodeEffect(Schema.fromJsonString(FoundrySandboxProfile));
+const encodeSummary = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeProfile = Schema.decodeUnknownEffect(FoundrySandboxProfile, {
   onExcessProperty: "error",
 });
@@ -185,6 +200,12 @@ const make = Effect.gen(function* () {
     const instanceId = yield* authorize(operatorId);
     const profile = yield* decodeProfile(raw);
     if (
+      new TextEncoder().encode(yield* encodeProfile(profile)).byteLength > 262144 ||
+      new TextEncoder().encode(yield* encodeSummary(summarizeProfile(profile))).byteLength > 8192
+    )
+      return yield* new FoundrySandboxError({ code: "invalid_request" });
+
+    if (
       !policy.allowedRepositories.includes(profile.checkout.repository) ||
       !policy.allowedImages.includes(profile.image) ||
       profile.resources.cpuMillis > policy.maxCpuMillis ||
@@ -214,8 +235,8 @@ const make = Effect.gen(function* () {
     const allocations = yield* sql<Row>`SELECT allocation FROM foundry_instance.sandbox_allocations
       WHERE instance_id=${instanceId} AND operator_id=${operatorId} ORDER BY (allocation->>'createdAt')::bigint DESC LIMIT 128`;
     return {
-      profiles: profiles.map((row) => row.profile),
-      allocations: allocations.map((row) => row.allocation),
+      profiles: profiles.map((row) => summarizeProfile(row.profile)),
+      allocations: allocations.map((row) => summarizeAllocation(row.allocation)),
     };
   }, Effect.mapError(failure));
   const request = Effect.fn("SandboxAllocations.request")(function* (
@@ -430,7 +451,7 @@ const make = Effect.gen(function* () {
           yield* sql<Row>`UPDATE foundry_instance.sandbox_allocations SET claim_owner=${leaseId},claim_until=${now + 60000}
         WHERE instance_id=${instanceId} AND operator_id=${operatorId} AND allocation->>'state'<>'deleted'
         AND (claim_owner=${leaseId} OR claim_until<${now}) RETURNING allocation`;
-        return rows.map((row) => row.allocation);
+        return rows.map((row) => summarizeAllocation(row.allocation));
       }),
     );
   }, Effect.mapError(failure));

@@ -22,6 +22,7 @@ export declare function prepareRuntime(
     origin: string;
     registration: { environmentId: string; publicKey: string };
     environment?: Record<string, string>;
+    settings?: Record<string, unknown>;
     providerBinding?: {
       connectionId: string;
       connectionGeneration: number;
@@ -33,6 +34,7 @@ export declare function prepareRuntime(
   },
   identity: { environmentId: string; publicKey: string },
   privateDirectory?: string,
+  workspaceDirectory?: string,
 ): Promise<Record<string, string>>;
 
 export declare function restoreDeadline(

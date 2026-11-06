@@ -1,3 +1,4 @@
+import * as Struct from "effect/Struct";
 import * as Schema from "effect/Schema";
 import { FactoryV4Skill } from "./automation/definitionV4.ts";
 import { ProjectId, ThreadId, EnvironmentId } from "./baseSchemas.ts";
@@ -43,6 +44,15 @@ export const FoundrySandboxProfile = Schema.Struct({
   enabled: Schema.Boolean,
 });
 export type FoundrySandboxProfile = typeof FoundrySandboxProfile.Type;
+export const FoundrySandboxProfileSummary = Schema.Struct({
+  ...Struct.omit(FoundrySandboxProfile.fields, ["setup", "skills"]),
+  setupStepCount: Schema.Int.check(
+    Schema.isGreaterThanOrEqualTo(0),
+    Schema.isLessThanOrEqualTo(32),
+  ),
+});
+export type FoundrySandboxProfileSummary = typeof FoundrySandboxProfileSummary.Type;
+
 export const FoundrySandboxState = Schema.Literals([
   "requested",
   "provisioning",
@@ -60,9 +70,9 @@ export const FoundrySandboxOwner = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("interactive") }),
   Schema.Struct({
     kind: Schema.Literal("workflow"),
-    factoryId: Schema.String,
-    runId: Schema.String,
-    attemptId: Schema.optionalKey(Schema.String),
+    factoryId: Schema.String.check(Schema.isMaxLength(128)),
+    runId: Schema.String.check(Schema.isMaxLength(128)),
+    attemptId: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(128))),
   }),
 ]);
 export const FoundrySandboxRequest = Schema.Struct({
@@ -104,6 +114,12 @@ export const FoundrySandboxAllocation = Schema.Struct({
   runtimeAdmitted: Schema.Boolean,
 });
 export type FoundrySandboxAllocation = typeof FoundrySandboxAllocation.Type;
+export const FoundrySandboxAllocationSummary = Schema.Struct({
+  ...FoundrySandboxAllocation.fields,
+  profile: FoundrySandboxProfileSummary,
+});
+export type FoundrySandboxAllocationSummary = typeof FoundrySandboxAllocationSummary.Type;
+
 export class FoundrySandboxError extends Schema.TaggedError<FoundrySandboxError>()(
   "FoundrySandboxError",
   {
@@ -139,6 +155,12 @@ export const FoundrySandboxCommand = Schema.Union([
 export type FoundrySandboxCommand = typeof FoundrySandboxCommand.Type;
 
 export const FoundrySandboxMachineOperation = Schema.Union([
+  Schema.Struct({
+    op: Schema.Literal("setupProfile"),
+    leaseId: FoundrySandboxId,
+    allocationId: FoundrySandboxId,
+    generation: Positive,
+  }),
   Schema.Struct({
     op: Schema.Literal("setupArchive"),
     leaseId: FoundrySandboxId,
@@ -218,8 +240,9 @@ export const FoundrySandboxMachineRequest = Schema.Struct({
 export type FoundrySandboxMachineRequest = typeof FoundrySandboxMachineRequest.Type;
 
 export const FoundrySandboxListResult = Schema.Struct({
-  profiles: Schema.Array(FoundrySandboxProfile),
-  allocations: Schema.Array(FoundrySandboxAllocation),
+  sandboxSupported: Schema.optionalKey(Schema.Boolean),
+  profiles: Schema.Array(FoundrySandboxProfileSummary),
+  allocations: Schema.Array(FoundrySandboxAllocationSummary),
 });
 export const FoundrySandboxDetail = Schema.Struct({
   allocation: FoundrySandboxAllocation,

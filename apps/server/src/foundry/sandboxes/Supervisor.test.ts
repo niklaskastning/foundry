@@ -59,6 +59,7 @@ it.effect("fences lost setup leases and preserves work when archive fails", () =
     const interrupted = yield* Deferred.make<void>();
     const events = yield* Queue.unbounded<FoundrySandboxMachineOperation>();
     let claimed = true;
+    let fetchedProfiles = 0;
     let stopped = false;
     let removed = false;
     const oci = Oci.OciSupervisor.of({
@@ -95,15 +96,33 @@ it.effect("fences lost setup leases and preserves work when archive fails", () =
       artifactSend: () => Effect.die("unexpected artifact"),
       send: (request) =>
         request.op === "claim"
-          ? Effect.sync(() => (claimed ? [allocation] : []))
-          : request.op === "setupReport"
-            ? Effect.succeed(null)
-            : Queue.offer(events, request).pipe(Effect.as(null)),
+          ? Effect.sync(() =>
+              claimed
+                ? [
+                    {
+                      ...allocation,
+                      profile: {
+                        ...allocation.profile,
+                        setupStepCount: allocation.profile.setup.length,
+                      },
+                    },
+                  ]
+                : [],
+            )
+          : request.op === "setupProfile"
+            ? Effect.sync(() => {
+                fetchedProfiles++;
+                return allocation.profile;
+              })
+            : request.op === "setupReport"
+              ? Effect.succeed(null)
+              : Queue.offer(events, request).pipe(Effect.as(null)),
     });
     yield* Effect.gen(function* () {
       const service = yield* Supervisor.Supervisor;
       yield* Effect.forkScoped(service.run);
       yield* Deferred.await(started);
+      assert.equal(fetchedProfiles, 1);
       claimed = false;
       yield* TestClock.adjust("2 seconds");
       assert.isTrue(yield* Deferred.isDone(interrupted));

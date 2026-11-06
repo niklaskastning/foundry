@@ -1,3 +1,5 @@
+import { artifactSha256 } from "@t3tools/shared/foundryArtifacts";
+import * as Schema from "effect/Schema";
 import { verifyProviderConnections } from "./foundry-provider-connections-integration.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- This integration harness owns its isolated PostgreSQL child and temporary files.
 // @effect-diagnostics globalProcess:off -- Only the PostgreSQL binary directory is read from the environment.
@@ -26,6 +28,8 @@ import * as InstancePostgres from "../src/foundry/InstancePostgres.ts";
 import * as ServerEnvironment from "../src/environment/ServerEnvironment.ts";
 import * as ServerConfig from "../src/config.ts";
 
+const encodeWire = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const wireBytes = (value: unknown) => new TextEncoder().encode(encodeWire(value)).byteLength;
 const bin = process.env.FOUNDRY_TEST_PG_BIN;
 NodeAssert.ok(
   bin,
@@ -374,6 +378,89 @@ try {
       NodeAssert.equal(stopped.state, "stopped");
       NodeAssert.equal(stopped.generation, expired.generation);
     }),
+  );
+  const largeRuntime = Allocations.layer.pipe(
+    Layer.provide(InstancePostgres.layer),
+    Layer.provideMerge(db()),
+    Layer.provide(
+      Layer.succeed(Allocations.SandboxPolicy, {
+        supervisorDeviceId: FoundryDeviceId.make("6970d80d-d7d0-408f-a99d-2080362d6892"),
+        maxAllocations: 32,
+        maxCpuMillis: 32000,
+        maxMemoryMiB: 16384,
+        allowedImages: [profile.image],
+        allowedRepositories: [profile.checkout.repository],
+      }),
+    ),
+    Layer.provide(environment),
+    Layer.provide(ServerConfig.layerTest(root, `${root}/home`)),
+    Layer.provide(NodeServices.layer),
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* Allocations.Allocations;
+      const content = "x".repeat(180000);
+      const heavy = {
+        ...profile,
+        profileId: "large-skills",
+        skills: [
+          {
+            id: "large",
+            directory: "skills/large",
+            name: "large",
+            description: "large",
+            files: [
+              {
+                path: "skills/large/SKILL.md",
+                content,
+                encoding: "utf8" as const,
+                mode: "100644" as const,
+                sha256: artifactSha256(new TextEncoder().encode(content)),
+              },
+            ],
+          },
+        ],
+      };
+      yield* service.publishProfile(operatorId, heavy);
+      const full = [];
+      for (let i = 0; i < 16; i++)
+        full.push(
+          yield* service.request(operatorId, {
+            commandId: `large-${i}`,
+            profileId: heavy.profileId,
+            revision: heavy.revision,
+            owner: { kind: "interactive" },
+          }),
+        );
+      NodeAssert.ok(wireBytes(full) > 2 * 1024 * 1024);
+      const claims = yield* service.claim(operatorId, "66a4201c-5f1e-43b0-bd44-cf9bc331357f");
+      NodeAssert.ok(wireBytes(claims) < 2 * 1024 * 1024);
+      NodeAssert.ok(claims.every((row) => !("skills" in row.profile) && !("setup" in row.profile)));
+      const catalog = yield* service.list(operatorId);
+      NodeAssert.ok(wireBytes(catalog) < 3 * 1024 * 1024);
+      NodeAssert.ok(catalog.profiles.every((row) => !("skills" in row) && !("setup" in row)));
+      const pinned = yield* service.get(operatorId, full[0]!.allocationId);
+      NodeAssert.equal(pinned.allocation.profile.skills?.[0]?.files[0]?.content, content);
+      const oversized = yield* service
+        .publishProfile(operatorId, {
+          ...heavy,
+          profileId: "oversized",
+          setup: Array.from({ length: 32 }, () => ["x".repeat(4096), "x".repeat(4096)]),
+        })
+        .pipe(Effect.result);
+      NodeAssert.equal(oversized._tag, "Failure");
+      const oversizedMetadata = yield* service
+        .publishProfile(operatorId, {
+          ...profile,
+          profileId: "oversized-metadata",
+          tools: Array.from({ length: 32 }, () => ({
+            command: "x".repeat(128),
+            version: "1".repeat(128),
+          })),
+        })
+        .pipe(Effect.result);
+      NodeAssert.equal(oversizedMetadata._tag, "Failure");
+    }).pipe(Effect.provide(largeRuntime)),
   );
   await Effect.runPromise(
     Console.log(

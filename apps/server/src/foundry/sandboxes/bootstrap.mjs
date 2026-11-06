@@ -10,6 +10,10 @@ const PRIVATE = "/workspace/.foundry";
 const RUNTIME = "/run/foundry";
 const SERVER = "/app/dist/bin.mjs";
 const LIMIT = 64 * 1024;
+const PACKAGE_INSTALL_ENVIRONMENT = {
+  npm_config_package_import_method: "copy",
+  pnpm_config_package_import_method: "copy",
+};
 
 const writeJson = async (path, value) => {
   const temporary = `${path}.${NodeCrypto.randomUUID()}.tmp`;
@@ -42,6 +46,7 @@ const execute = (argv, cwd, output) =>
         HOME: `${WORKSPACE}/home`,
         LANG: "C.UTF-8",
         GIT_TERMINAL_PROMPT: "0",
+        ...PACKAGE_INSTALL_ENVIRONMENT,
         FOUNDRY_SANDBOX_ALLOCATION_ID: process.env.FOUNDRY_SANDBOX_ALLOCATION_ID,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -265,7 +270,12 @@ const signEnrollment = async (input) => {
   }
 };
 
-export const prepareRuntime = async (input, identity, privateDirectory = PRIVATE) => {
+export const prepareRuntime = async (
+  input,
+  identity,
+  privateDirectory = PRIVATE,
+  workspaceDirectory = WORKSPACE,
+) => {
   const origin = new URL(input.origin);
   if (
     origin.protocol !== "https:" ||
@@ -291,6 +301,7 @@ export const prepareRuntime = async (input, identity, privateDirectory = PRIVATE
     throw new Error("runtime_environment");
   const environment = {
     ...input.environment,
+    ...PACKAGE_INSTALL_ENVIRONMENT,
     T3CODE_TELEMETRY_ENABLED: "false",
     T3CODE_DISABLE_AUTO_UPDATE: "1",
   };
@@ -329,8 +340,18 @@ export const prepareRuntime = async (input, identity, privateDirectory = PRIVATE
     environment.FOUNDRY_WORKER_ENABLED = "true";
     environment.FOUNDRY_WORKER_CAPACITY = "1";
     environment.FOUNDRY_WORKER_PROVIDER_INSTANCE_ID = provider.providerInstanceId;
-    environment.FOUNDRY_WORKER_WORKSPACE_ROOTS = JSON.stringify([`${WORKSPACE}/repo`]);
+    environment.FOUNDRY_WORKER_WORKSPACE_ROOTS = JSON.stringify([workspaceDirectory]);
   }
+  if (
+    input.settings !== undefined &&
+    (input.settings === null || typeof input.settings !== "object" || Array.isArray(input.settings))
+  )
+    throw new Error("runtime_settings");
+  await NodeFSP.mkdir(`${privateDirectory}/t3/userdata`, { recursive: true, mode: 0o700 });
+  await writeJson(`${privateDirectory}/t3/userdata/settings.json`, {
+    ...input.settings,
+    worktreesDirectory: `${workspaceDirectory}/worktrees`,
+  });
   return environment;
 };
 
@@ -404,8 +425,6 @@ const supervise = async (initial, maximum) => {
           throw new Error("runtime_configuration");
         await NodeFSP.writeFile(`${RUNTIME}/codex/config.toml`, input.codexConfig, { mode: 0o600 });
       }
-      if (input.settings !== undefined)
-        await writeJson(`${PRIVATE}/t3/userdata/settings.json`, input.settings);
       const backend = spawn(
         ["--base-dir", `${PRIVATE}/t3`, "--host", "127.0.0.1", "--port", "3773", "--no-browser"],
         environment,
@@ -578,7 +597,12 @@ export const resume = async (
   return result;
 };
 const readSetupChunk = async (input) => {
-  const file = `${PRIVATE}/setup-snapshot.json`;
+  if (
+    input.part !== undefined &&
+    (!Number.isSafeInteger(input.part) || input.part < 0 || input.part >= 1024)
+  )
+    throw new Error("snapshot_part");
+  const file = `${PRIVATE}/setup-snapshot.json${input.part === undefined ? "" : `.part-${input.part}`}`;
   const stat = await NodeFSP.lstat(file);
   if (
     !stat.isFile() ||

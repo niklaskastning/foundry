@@ -7,6 +7,8 @@ import {
   FoundrySandboxArchiveManifest,
   FoundrySandboxArchiveReceipt,
   FoundrySandboxSetupArchive,
+  FoundrySandboxSetupIndex,
+  FOUNDRY_SETUP_PART_BYTES,
   type FoundrySandboxSetupReceipt,
   type FoundrySandboxEnvironmentReceipt,
   type EnvironmentId,
@@ -93,6 +95,7 @@ const decodeIdentity = Schema.decodeEffect(
   }),
 );
 const decodeAttachment = Schema.decodeEffect(ChatFileAttachment);
+const decodeSetupIndex = Schema.decodeEffect(Schema.fromJsonString(FoundrySandboxSetupIndex));
 const decodeSetup = Schema.decodeEffect(FoundrySandboxSetupArchive, { onExcessProperty: "error" });
 const decodeManifest = Schema.decodeEffect(FoundrySandboxArchiveManifest, {
   onExcessProperty: "error",
@@ -410,7 +413,8 @@ export const layerConfirmation = Layer.effect(
         if (archive.kind === "setup") {
           if (
             !sameOwner(archive.artifact.reference.owner, expected.owner) ||
-            archive.artifact.reference.instanceId !== principal.instanceId
+            archive.artifact.reference.instanceId !== principal.instanceId ||
+            archive.artifact.sizeBytes > FOUNDRY_SETUP_PART_BYTES
           )
             return yield* new FoundrySandboxArchiveError({ code: "foreign_archive" });
           const downloaded = yield* downloadArtifact((request) => {
@@ -420,6 +424,26 @@ export const layerConfirmation = Layer.effect(
           }, archive.artifact.reference);
           if (stableStringify(downloaded.manifest) !== stableStringify(archive.artifact))
             return yield* new FoundrySandboxArchiveError({ code: "changed" });
+          const index = yield* decodeSetupIndex(new TextDecoder().decode(downloaded.bytes));
+          const seen = new Set<string>();
+          for (const part of index.parts) {
+            if (
+              !sameOwner(part.reference.owner, expected.owner) ||
+              part.reference.instanceId !== principal.instanceId ||
+              part.sizeBytes > FOUNDRY_SETUP_PART_BYTES ||
+              seen.has(part.reference.artifactId) ||
+              part.reference.artifactId === archive.artifact.reference.artifactId
+            )
+              return yield* new FoundrySandboxArchiveError({ code: "foreign_archive" });
+            seen.add(part.reference.artifactId);
+            const confirmed = yield* downloadArtifact((request) => {
+              if (request.op === "metadata") return artifacts.metadata(principal, request.input);
+              if (request.op === "read") return artifacts.read(principal, request.input);
+              return Effect.fail(new FoundryArtifactError({ code: "invalid_request" }));
+            }, part.reference);
+            if (stableStringify(confirmed.manifest) !== stableStringify(part))
+              return yield* new FoundrySandboxArchiveError({ code: "changed" });
+          }
         }
         return {
           archive,

@@ -162,7 +162,11 @@ it.effect(
           Layer.provide(
             Layer.mergeAll(
               Layer.mock(Allocations.Allocations)({
-                list: () => Effect.succeed({ profiles: [profile], allocations: [] }),
+                list: () =>
+                  Effect.succeed({
+                    profiles: [{ ...profile, setupStepCount: 0 }],
+                    allocations: [],
+                  }),
                 request: (_operator, input) =>
                   Effect.suspend(() => {
                     requests.push(input);

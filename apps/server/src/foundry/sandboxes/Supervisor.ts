@@ -1,11 +1,15 @@
 import {
+  FoundrySandboxSetupLocalIndex,
+  FoundrySandboxSetupIndex,
+  FOUNDRY_SETUP_PART_BYTES,
   CommandId,
   EnvironmentId,
   FoundryDevice,
   FoundryEnrollment,
   FoundryEnrollmentRequest,
   FoundryProviderConnection,
-  FoundrySandboxAllocation,
+  FoundrySandboxAllocationSummary,
+  FoundrySandboxProfile,
   FoundrySandboxArchiveManifest,
   FoundrySandboxArchiveReceipt,
   FoundryArtifactChunk,
@@ -24,11 +28,13 @@ import * as Base64 from "effect/encoding/Base64";
 import * as OciSupervisor from "./OciSupervisor.ts";
 import * as Transport from "./Transport.ts";
 
+const decodeSetupIndex = Schema.decodeEffect(Schema.fromJsonString(FoundrySandboxSetupLocalIndex));
+const encodeSetupIndex = Schema.encodeEffect(Schema.fromJsonString(FoundrySandboxSetupIndex));
 const helper = ["node", "/app/foundry-sandbox-bootstrap.mjs"];
 const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const json = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
 const isSandboxError = Schema.is(FoundrySandboxError);
-const decodeAllocations = Schema.decodeUnknownEffect(Schema.Array(FoundrySandboxAllocation));
+const decodeAllocations = Schema.decodeUnknownEffect(Schema.Array(FoundrySandboxAllocationSummary));
 const Identity = Schema.Struct({ environmentId: EnvironmentId, publicKey: Schema.String });
 const Enrolled = Schema.Struct({ device: FoundryDevice, connection: FoundryProviderConnection });
 const Approval = Schema.Union([Enrolled, Schema.Struct({ enrollment: FoundryEnrollment })]);
@@ -58,25 +64,26 @@ const make = Effect.gen(function* () {
   const oci = yield* OciSupervisor.OciSupervisor;
   const crypto = yield* Crypto.Crypto;
   const leaseId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
-  const base = (allocation: FoundrySandboxAllocation) => ({
+  const base = (allocation: FoundrySandboxAllocationSummary) => ({
     leaseId,
     allocationId: allocation.allocationId,
     generation: allocation.generation,
   });
-  const identity = (allocation: FoundrySandboxAllocation) => ({
+  const identity = (allocation: FoundrySandboxAllocationSummary) => ({
     instanceId: transport.device.instanceId,
     allocationId: allocation.allocationId,
   });
   const send = transport.send;
+  const setupProfiles = new Map<string, { generation: number; profile: FoundrySandboxProfile }>();
   const step = Effect.fn("SandboxSupervisor.step")(function* (
-    allocation: FoundrySandboxAllocation,
-    state: FoundrySandboxAllocation["state"],
-    failure: FoundrySandboxAllocation["failure"] = null,
+    allocation: FoundrySandboxAllocationSummary,
+    state: FoundrySandboxAllocationSummary["state"],
+    failure: FoundrySandboxAllocationSummary["failure"] = null,
   ) {
     return yield* send({ op: "transition", ...base(allocation), state, failure });
   });
   const exec = Effect.fn("SandboxSupervisor.bootstrap")(function* (
-    allocation: FoundrySandboxAllocation,
+    allocation: FoundrySandboxAllocationSummary,
     mode: string,
     input?: unknown,
   ) {
@@ -89,7 +96,7 @@ const make = Effect.gen(function* () {
     return yield* json(result.stdout);
   });
   const finalize = Effect.fn("SandboxSupervisor.finalize")(function* (
-    allocation: FoundrySandboxAllocation,
+    allocation: FoundrySandboxAllocationSummary,
     argv: ReadonlyArray<string>,
     input?: unknown,
   ) {
@@ -102,7 +109,7 @@ const make = Effect.gen(function* () {
     return result.stdout;
   });
   const resume = Effect.fn("SandboxSupervisor.resume")(function* (
-    allocation: FoundrySandboxAllocation,
+    allocation: FoundrySandboxAllocationSummary,
   ) {
     if (!allocation.request.resumeAllocationId) return;
     let offset = 0;
@@ -124,15 +131,28 @@ const make = Effect.gen(function* () {
     yield* exec(allocation, "resume");
   });
   const setup = Effect.fn("SandboxSupervisor.setup")(function* (
-    allocation: FoundrySandboxAllocation,
+    allocation: FoundrySandboxAllocationSummary,
   ) {
+    const cached = setupProfiles.get(allocation.allocationId);
+    const profile =
+      cached?.generation === allocation.generation
+        ? cached.profile
+        : yield* send({ op: "setupProfile", ...base(allocation) }).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(FoundrySandboxProfile)),
+          );
+    if (
+      profile.profileId !== allocation.request.profileId ||
+      profile.revision !== allocation.request.revision
+    )
+      return yield* new FoundrySandboxError({ code: "conflict" });
+    setupProfiles.set(allocation.allocationId, { generation: allocation.generation, profile });
     yield* resume(allocation);
     const setupComplete = yield* exec(allocation, "setup", {
-      repositoryUrl: allocation.profile.checkout.repository,
-      revision: allocation.profile.checkout.commit,
-      setup: allocation.profile.setup,
-      tools: allocation.profile.tools,
-      skills: allocation.profile.skills ?? [],
+      repositoryUrl: profile.checkout.repository,
+      revision: profile.checkout.commit,
+      setup: profile.setup,
+      tools: profile.tools,
+      skills: profile.skills ?? [],
     }).pipe(
       Effect.matchEffect({
         onSuccess: () => Effect.succeed(true),
@@ -198,7 +218,7 @@ const make = Effect.gen(function* () {
     );
   });
   const archiveSetup = Effect.fn("SandboxSupervisor.archiveSetup")(function* (
-    allocation: FoundrySandboxAllocation,
+    allocation: FoundrySandboxAllocationSummary,
     snapshotThreadIds?: ReadonlyArray<ThreadId>,
   ) {
     if (!allocation.setupAdmitted) {
@@ -228,50 +248,84 @@ const make = Effect.gen(function* () {
       "--output",
       "/workspace/.foundry/setup-snapshot.json",
     ]);
-    const chunks: Uint8Array[] = [];
-    let offset = 0;
-    let expectedHash: string | undefined;
-    while (true) {
-      const part = yield* finalize(allocation, [...helper, "read-setup-chunk"], { offset }).pipe(
-        Effect.flatMap(json),
-        Effect.flatMap(Schema.decodeUnknownEffect(SetupChunk)),
-      );
-      if (part.offset !== offset || part.sizeBytes > 50 * 1024 * 1024)
+    const readSnapshot = Effect.fn("SandboxSupervisor.readSetupSnapshot")(function* (
+      partIndex?: number,
+    ) {
+      const chunks: Uint8Array[] = [];
+      let offset = 0;
+      let expectedHash: string | undefined;
+      let expectedSize: number | undefined;
+      while (true) {
+        const part = yield* finalize(allocation, [...helper, "read-setup-chunk"], {
+          offset,
+          ...(partIndex === undefined ? {} : { part: partIndex }),
+        }).pipe(Effect.flatMap(json), Effect.flatMap(Schema.decodeUnknownEffect(SetupChunk)));
+        if (
+          part.offset !== offset ||
+          part.sizeBytes > FOUNDRY_SETUP_PART_BYTES ||
+          part.sizeBytes < 1 ||
+          (expectedSize !== undefined && part.sizeBytes !== expectedSize)
+        )
+          return yield* new FoundrySandboxError({ code: "conflict" });
+        expectedSize = part.sizeBytes;
+        const bytes = yield* Effect.fromResult(Base64.decode(part.base64));
+        if (offset === 0) expectedHash = part.sha256;
+        chunks.push(bytes);
+        offset += bytes.length;
+        if (offset === part.sizeBytes) break;
+        if (!bytes.length || offset > part.sizeBytes)
+          return yield* new FoundrySandboxError({ code: "conflict" });
+      }
+      const content = new Uint8Array(offset);
+      let position = 0;
+      for (const chunk of chunks) {
+        content.set(chunk, position);
+        position += chunk.length;
+      }
+      if (expectedHash !== artifactSha256(content))
         return yield* new FoundrySandboxError({ code: "conflict" });
-      const bytes = yield* Effect.fromResult(Base64.decode(part.base64));
-      if (offset === 0) expectedHash = part.sha256;
-      chunks.push(bytes);
-      offset += bytes.length;
-      if (offset === part.sizeBytes) break;
-      if (!bytes.length || offset > part.sizeBytes)
-        return yield* new FoundrySandboxError({ code: "conflict" });
-    }
-    const content = new Uint8Array(offset);
-    let position = 0;
-    for (const chunk of chunks) {
-      content.set(chunk, position);
-      position += chunk.length;
-    }
-    const sha256 = artifactSha256(content);
-    if (expectedHash !== sha256) return yield* new FoundrySandboxError({ code: "conflict" });
-    const artifact = yield* publishArtifact(
-      transport.artifactSend,
-      {
-        instanceId: transport.device.instanceId,
-        commandId: CommandId.make(
-          `sandbox-setup-${allocation.allocationId}-${allocation.generation}`,
-        ),
-        owner: {
-          environmentId: transport.device.environmentId,
-          threadId: ThreadId.make(allocation.allocationId),
+      return content;
+    });
+    const local = yield* decodeSetupIndex(new TextDecoder().decode(yield* readSnapshot()));
+    const publish = Effect.fn("SandboxSupervisor.publishSetupSnapshot")(function* (
+      content: Uint8Array,
+      suffix: string,
+    ) {
+      return yield* publishArtifact(
+        transport.artifactSend,
+        {
+          instanceId: transport.device.instanceId,
+          commandId: CommandId.make(
+            `sandbox-setup-${allocation.allocationId}-${allocation.generation}-${suffix}`,
+          ),
+          owner: {
+            environmentId: transport.device.environmentId,
+            threadId: ThreadId.make(allocation.allocationId),
+          },
+          name: `sandbox-setup-${suffix}.json`,
+          mimeType: "application/json",
+          sizeBytes: content.byteLength,
+          sha256: artifactSha256(content),
         },
-        name: "sandbox-setup.json",
-        mimeType: "application/json",
-        sizeBytes: content.byteLength,
-        sha256,
-      },
-      content,
+        content,
+      );
+    });
+    const parts = yield* Effect.forEach(local.parts, (expected, index) =>
+      Effect.gen(function* () {
+        const content = yield* readSnapshot(index);
+        if (
+          content.byteLength !== expected.sizeBytes ||
+          artifactSha256(content) !== expected.sha256
+        )
+          return yield* new FoundrySandboxError({ code: "conflict" });
+        return yield* publish(content, `part-${index}`);
+      }),
     );
+    const index = yield* encodeSetupIndex({
+      format: "foundry-setup-snapshot-2",
+      parts,
+    });
+    const artifact = yield* publish(new TextEncoder().encode(index), "index");
     yield* send({
       op: "setupArchive",
       ...base(allocation),
@@ -285,7 +339,7 @@ const make = Effect.gen(function* () {
     });
   });
   const archive = Effect.fn("SandboxSupervisor.archive")(function* (
-    allocation: FoundrySandboxAllocation,
+    allocation: FoundrySandboxAllocationSummary,
   ) {
     if (!allocation.runtimeAdmitted) return yield* archiveSetup(allocation);
     yield* finalize(allocation, [
@@ -313,7 +367,7 @@ const make = Effect.gen(function* () {
     yield* send({ op: "archive", ...base(allocation), ...snapshot });
   });
   const reconcile = Effect.fn("SandboxSupervisor.reconcile")(function* (
-    allocation: FoundrySandboxAllocation,
+    allocation: FoundrySandboxAllocationSummary,
   ) {
     switch (allocation.state) {
       case "requested":
@@ -380,6 +434,7 @@ const make = Effect.gen(function* () {
         yield* FiberMap.remove(jobs, id);
         yield* FiberMap.remove(jobs, `logs:${id}`);
         current.delete(id);
+        setupProfiles.delete(id);
       }
       for (const allocation of allocations) {
         const key = `${allocation.generation}:${allocation.state}`;

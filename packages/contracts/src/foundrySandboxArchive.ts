@@ -46,6 +46,27 @@ const CleanupIdentity = {
   allocationId: FoundrySandboxArchiveManifest.fields.allocationId,
   fence: PositiveInt,
 };
+export const FOUNDRY_SETUP_PART_BYTES = 8 * 1024 * 1024;
+export const FOUNDRY_SETUP_MAX_PARTS = 1024;
+const SetupPartMetadata = Schema.Struct({
+  sizeBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(FOUNDRY_SETUP_PART_BYTES)),
+  sha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+});
+export const FoundrySandboxSetupLocalIndex = Schema.Struct({
+  format: Schema.Literal("foundry-setup-local-2"),
+  parts: Schema.Array(SetupPartMetadata).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(FOUNDRY_SETUP_MAX_PARTS),
+  ),
+});
+export const FoundrySandboxSetupIndex = Schema.Struct({
+  format: Schema.Literal("foundry-setup-snapshot-2"),
+  parts: Schema.Array(FoundryArtifactManifest).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(FOUNDRY_SETUP_MAX_PARTS),
+  ),
+});
+
 export const FoundrySandboxSetupArchive = Schema.Union([
   Schema.Struct({
     ...CleanupIdentity,

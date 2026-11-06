@@ -1,5 +1,6 @@
 import {
   FoundryMain,
+  FoundryOnboarding,
   FoundrySandboxes,
   ConnectionBlockedError,
 } from "@t3tools/client-runtime/connection";
@@ -27,6 +28,33 @@ export const sandboxCommands = FoundrySandboxes.makeCommands(
         maxResponseBytes: 4 * 1024 * 1024,
       });
       const connection = yield* main.prepare(binding);
+      if (
+        typeof input === "object" &&
+        input !== null &&
+        "action" in input &&
+        input.action === "list"
+      ) {
+        const value = yield* connection.request("/.well-known/foundry?protocolVersion=1");
+        const { descriptor } = yield* Effect.try({
+          try: () => FoundryOnboarding.verifyDescriptor(value, binding.origin, binding),
+          catch: () => new FoundrySandboxError({ code: "forbidden" }),
+        });
+        if (descriptor.sandboxes?.protocolVersion !== "1")
+          return {
+            binding,
+            status: 200,
+            value: { sandboxSupported: false, profiles: [], allocations: [] },
+          };
+        const result = yield* connection.response("/api/foundry/sandboxes", input, true);
+        return {
+          binding,
+          ...result,
+          value:
+            typeof result.value === "object" && result.value !== null
+              ? { ...result.value, sandboxSupported: true }
+              : result.value,
+        };
+      }
       return { binding, ...(yield* connection.response("/api/foundry/sandboxes", input, true)) };
     },
     Effect.provide(Layer.merge(layerFoundryInstanceSession, FetchHttpClient.layer)),

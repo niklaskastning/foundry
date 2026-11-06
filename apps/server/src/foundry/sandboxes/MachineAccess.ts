@@ -80,6 +80,11 @@ export const layer = Layer.effect(
               return yield* operation;
             }),
           ).pipe(Effect.provideService(InstanceDatabase.InstanceDatabase, sql));
+        if (request.op === "setupProfile") {
+          if (allocation.state !== "setup")
+            return yield* new FoundrySandboxError({ code: "conflict" });
+          return allocation.profile;
+        }
         if (request.op === "setupReport") {
           yield* withLease(
             allocations.reportSetup(

@@ -1086,6 +1086,14 @@ mit `node <server-bundle>/bin.mjs foundry sandbox-supervise --configuration
 Docker-Socket und den Netzwerkhelper; Sandboxcontainer bekommen beides nicht.
 Sein eingebauter Hostlock verhindert überlappende Supervisorprozesse.
 
+Setup-Archive ohne Thread enthalten einen zentral bestätigten JSON-Index und
+bestätigte Teile von höchstens 8 MiB; auch Abhängigkeitsverzeichnisse werden
+aufgenommen. Große Dateien behalten Teiloffsets. Maximal 1024 Teile und 64
+Verzeichnisebenen werden unterstützt; Hardlinks bleiben gesperrt, damit keine
+privaten Runtime-Dateien über Aliasnamen ins Archiv gelangen. Bei überschrittenen
+Grenzen oder unbestätigten Teilen bleibt die Allocation erhalten. Diese inert
+lesbaren Setup-Archive sind kein wiederaufnehmbarer Threadcheckpoint.
+
 ### Versionierte Factory-HTTP-API (P58a)
 
 Bei aktivierter Automation stehen dieselben Benutzeroperationen unter

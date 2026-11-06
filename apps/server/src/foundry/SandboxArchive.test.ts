@@ -8,6 +8,7 @@ import * as Base64 from "effect/encoding/Base64";
 import {
   EnvironmentId,
   FoundryArtifactId,
+  FoundrySandboxSetupIndex,
   FoundryDeviceId,
   FoundryInstanceId,
   ThreadId,
@@ -37,6 +38,8 @@ const infrastructure = Git.layer.pipe(
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "sandbox-archive-test-" })),
   Layer.provideMerge(NodeServices.layer),
 );
+const encodeSetupIndex = Schema.encodeEffect(Schema.fromJsonString(FoundrySandboxSetupIndex));
+
 it.live(
   "confirms actual Git objects and final events, then restores dirty checkpoint files after source deletion",
   () =>
@@ -85,6 +88,13 @@ it.live(
       let unlistedThread = false;
       let lateBatchCursor = 0;
       let artifact: { manifest: FoundryArtifactManifest; bytes: Uint8Array } | undefined;
+      const setupArtifacts = new Map<
+        string,
+        { manifest: FoundryArtifactManifest; bytes: Uint8Array }
+      >();
+      const findArtifact = (id: string) =>
+        setupArtifacts.get(id) ??
+        (artifact?.manifest.reference.artifactId === id ? artifact : undefined);
       const unavailable = () => new FoundryArtifactError({ code: "unavailable" });
       const external = Layer.mergeAll(
         Layer.succeed(ArtifactPublication.ArtifactPublication, {
@@ -140,20 +150,23 @@ it.live(
             }),
         }),
         Layer.succeed(Artifacts.Artifacts, {
-          metadata: () => {
+          metadata: (_principal, input) => {
             if (advanceDuringDownload) status = { ...status, confirmedCursor: 4, sourceHead: 4 };
-            return artifact ? Effect.succeed(artifact.manifest) : Effect.fail(unavailable());
+            const found = findArtifact(input.artifactId);
+            return found ? Effect.succeed(found.manifest) : Effect.fail(unavailable());
           },
-          read: (_principal, input) =>
-            artifact
+          read: (_principal, input) => {
+            const found = findArtifact(input.reference.artifactId);
+            return found
               ? Effect.succeed({
                   offset: input.offset,
-                  total: artifact.bytes.length,
-                  fileSha256: artifact.manifest.sha256,
-                  sha256: artifactSha256(artifact.bytes),
-                  data: Base64.encode(artifact.bytes),
+                  total: found.bytes.length,
+                  fileSha256: found.manifest.sha256,
+                  sha256: artifactSha256(found.bytes),
+                  data: Base64.encode(found.bytes),
                 })
-              : Effect.fail(unavailable()),
+              : Effect.fail(unavailable());
+          },
           begin: () => Effect.die("Unexpected begin"),
           status: () => Effect.die("Unexpected status"),
           write: () => Effect.die("Unexpected write"),
@@ -218,18 +231,68 @@ it.live(
         );
         unlistedThread = false;
         const setupExpected = { ...expected, setupAdmitted: true, runtimeAdmitted: false };
+        const partBytes = new TextEncoder().encode("setup-file-fixture");
+        const partManifest = {
+          ...manifest.bundle,
+          reference: {
+            ...manifest.bundle.reference,
+            artifactId: FoundryArtifactId.make("11111111-1111-4111-8111-111111111111"),
+          },
+          sizeBytes: partBytes.byteLength,
+          sha256: artifactSha256(partBytes),
+        };
+        const indexBytes = new TextEncoder().encode(
+          yield* encodeSetupIndex({ format: "foundry-setup-snapshot-2", parts: [partManifest] }),
+        );
+        const indexManifest = {
+          ...manifest.bundle,
+          reference: {
+            ...manifest.bundle.reference,
+            artifactId: FoundryArtifactId.make("22222222-2222-4222-8222-222222222222"),
+          },
+          sizeBytes: indexBytes.byteLength,
+          sha256: artifactSha256(indexBytes),
+        };
+        setupArtifacts.set(indexManifest.reference.artifactId, {
+          manifest: indexManifest,
+          bytes: indexBytes,
+        });
         const setupArchive = {
           allocationId: input.allocationId,
           fence: 1,
           kind: "setup" as const,
-          artifact: manifest.bundle,
+          artifact: indexManifest,
         };
+        assert.equal(
+          (yield* confirmation
+            .confirmSetup(principal, setupArchive, setupExpected)
+            .pipe(Effect.flip)).code,
+          "unavailable",
+        );
+        setupArtifacts.set(partManifest.reference.artifactId, {
+          manifest: partManifest,
+          bytes: partBytes,
+        });
         const setupReceipt = yield* confirmation.confirmSetup(
           principal,
           setupArchive,
           setupExpected,
         );
         assert.deepEqual(setupReceipt.archive, setupArchive);
+        setupArtifacts.set(partManifest.reference.artifactId, {
+          manifest: partManifest,
+          bytes: new TextEncoder().encode("tampered"),
+        });
+        assert.equal(
+          (yield* confirmation
+            .confirmSetup(principal, setupArchive, setupExpected)
+            .pipe(Effect.flip)).code,
+          "unavailable",
+        );
+        setupArtifacts.set(partManifest.reference.artifactId, {
+          manifest: partManifest,
+          bytes: partBytes,
+        });
         assert.equal(
           (yield* confirmation
             .confirmSetup(principal, setupArchive, { ...setupExpected, runtimeAdmitted: true })
@@ -365,21 +428,24 @@ it.live(
             "worktrees/attempt",
           ]);
           assert.equal(new Set(captured.manifests.map((value) => value.checkpointTree)).size, 2);
-          yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=${encodeWorkspace({ worktreePath: root })} WHERE thread_id='attempt-thread'`;
-          assert.equal(
-            (yield* SandboxArchiveEnvironment.SandboxArchiveEnvironment.pipe(
-              Effect.flatMap((environment) =>
-                environment.capture({
-                  allocationId: input.allocationId,
-                  fence: 3,
-                  cwd: restored,
-                  attachmentsDir,
-                }),
-              ),
-              Effect.flip,
-            )).code,
-            "foreign_archive",
-          );
+          yield* fs.makeDirectory(`${root}/.foundry/private`, { recursive: true });
+          for (const invalidWorkspace of [root, `${root}/.foundry/private`]) {
+            yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=${encodeWorkspace({ worktreePath: invalidWorkspace })} WHERE thread_id='attempt-thread'`;
+            assert.equal(
+              (yield* SandboxArchiveEnvironment.SandboxArchiveEnvironment.pipe(
+                Effect.flatMap((environment) =>
+                  environment.capture({
+                    allocationId: input.allocationId,
+                    fence: 3,
+                    cwd: restored,
+                    attachmentsDir,
+                  }),
+                ),
+                Effect.flip,
+              )).code,
+              "foreign_archive",
+            );
+          }
         }).pipe(
           Effect.provide(
             SandboxArchiveEnvironment.layer.pipe(

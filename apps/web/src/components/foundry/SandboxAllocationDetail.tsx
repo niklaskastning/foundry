@@ -1,4 +1,4 @@
-import { AttachmentFilePreview } from "../files/AttachmentFilePreview";
+import { SandboxSetupArchive } from "./SandboxSetupArchive";
 import type { FoundrySandboxDetail, FoundrySandboxMutation, ThreadId } from "@t3tools/contracts";
 import { useState } from "react";
 import { Button } from "../ui/button";
@@ -90,18 +90,17 @@ export function SandboxAllocationDetail({
         </Button>
         <Button
           variant="outline"
-          disabled={
-            busy || !canOperate || allocation.state !== "failed" || allocation.deleteRequested
-          }
+          disabled={busy || !canOperate || allocation.state !== "failed"}
           onClick={() => onCommand({ action: "retry", allocationId: allocation.allocationId })}
         >
-          Retry setup
+          {allocation.deleteRequested ? "Retry archive and cleanup" : "Retry setup"}
         </Button>
         <Button
           variant="outline"
           disabled={
             busy ||
             !canOperate ||
+            !["requested", "provisioning", "setup", "ready"].includes(allocation.state) ||
             terminal ||
             allocation.deleteRequested ||
             extension <= allocation.expiresAt
@@ -172,19 +171,10 @@ export function SandboxAllocationDetail({
             </Button>
           ) : null}
           {showSetupArchive && setupArtifact ? (
-            <div className="flex h-96 flex-col overflow-hidden rounded-lg border">
-              <AttachmentFilePreview
-                name={setupArtifact.name}
-                mimeType={setupArtifact.mimeType}
-                sizeBytes={setupArtifact.sizeBytes}
-                asset={{
-                  environmentId: setupArtifact.reference.owner.environmentId,
-                  attachmentId: setupArtifact.reference.artifactId,
-                  foundryArtifact: setupArtifact,
-                }}
-                onClose={() => setShowSetupArchive(false)}
-              />
-            </div>
+            <SandboxSetupArchive
+              manifest={setupArtifact}
+              onClose={() => setShowSetupArchive(false)}
+            />
           ) : null}
           {selected ? (
             <ThreadArchiveLibrary

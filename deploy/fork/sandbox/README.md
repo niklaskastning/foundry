@@ -64,3 +64,20 @@ It uses its own bridges in `172.30.241.0/28` and `172.30.242.0/28`, verifies act
 peer/host/private/metadata blocking, an exact control exception, public GitHub and
 unauthenticated OpenAI HTTPS, policy drift rejection and cleanup. Occupied fixture
 subnets cause refusal. It starts no agent turn and sends no provider credentials.
+
+## Package installation and archives
+
+Sandbox setup and runtime set `npm_config_package_import_method=copy` and
+`pnpm_config_package_import_method=copy` (required by pnpm 12) so supported
+pnpm/vp installs materialize independent files instead of hardlinking the package
+store into the workspace. Profiles using another installer must configure copying
+or reflinks (distinct inodes), including for their dependency caches. An installer
+CLI flag or project configuration that explicitly overrides the environment can
+still create hardlinks; such profiles are not archive-ready.
+
+The snapshot guard intentionally rejects files whose link count is not one. It
+protects against archiving another allocation or private runtime file through a
+hardlink. Explicitly created hardlinks still block archive confirmation and keep
+the environment retained; the copy setting does not weaken that check or rewrite
+existing links. Correct the profile before allocation and verify its actual
+installer output before relying on automatic archive/delete.

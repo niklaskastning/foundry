@@ -351,3 +351,72 @@ it("keeps pinned checkout history complete so an archive restores into an empty 
     "archived second commit",
   );
 });
+
+it("installs local package files as copies with the actual package manager and an isolated offline store", async () => {
+  const workspace = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "foundry-package-copy-"));
+  await using _cleanup = {
+    [Symbol.asyncDispose]: () => NodeFSP.rm(workspace, { recursive: true, force: true }),
+  };
+  const run = NodeUtil.promisify(NodeChildProcess.execFile);
+  const packed = NodePath.join(workspace, "packed");
+  const project = NodePath.join(workspace, "repo");
+  const privateDirectory = NodePath.join(workspace, ".foundry");
+  for (const directory of [
+    NodePath.join(packed, "package"),
+    project,
+    privateDirectory,
+    NodePath.join(workspace, "home"),
+  ])
+    await NodeFSP.mkdir(directory, { recursive: true });
+  await NodeFSP.writeFile(
+    NodePath.join(packed, "package", "package.json"),
+    JSON.stringify({ name: "foundry-offline-fixture", version: "1.0.0", main: "index.js" }),
+  );
+  await NodeFSP.writeFile(
+    NodePath.join(packed, "package", "index.js"),
+    "module.exports = 'copied fixture';\n",
+  );
+  const tarball = NodePath.join(workspace, "fixture.tgz");
+  await run("tar", ["-czf", tarball, "-C", packed, "package"]);
+  await NodeFSP.writeFile(
+    NodePath.join(project, "package.json"),
+    JSON.stringify({
+      name: "sandbox-installer-fixture",
+      private: true,
+      dependencies: { "foundry-offline-fixture": "file:../fixture.tgz" },
+    }),
+  );
+  const config = NodePath.join(workspace, "empty.npmrc");
+  await NodeFSP.writeFile(config, "");
+  const identity = { environmentId: "sandbox", publicKey: "fixture-key" };
+  const runtime = await prepareRuntime(
+    { origin: "https://foundry.example", registration: identity },
+    identity,
+    privateDirectory,
+    workspace,
+  );
+  await run(
+    "pnpm",
+    ["install", "--offline", "--ignore-scripts", "--store-dir", NodePath.join(workspace, "store")],
+    {
+      cwd: project,
+      env: {
+        PATH: process.env.PATH,
+        HOME: NodePath.join(workspace, "home"),
+        XDG_CACHE_HOME: NodePath.join(workspace, "cache"),
+        XDG_CONFIG_HOME: NodePath.join(workspace, "config"),
+        XDG_DATA_HOME: NodePath.join(workspace, "data"),
+        npm_config_userconfig: config,
+        npm_config_globalconfig: config,
+        COREPACK_ENABLE_NETWORK: "0",
+        PNPM_DISABLE_SELF_UPDATE_CHECK: "true",
+        npm_config_package_import_method: "hardlink",
+        pnpm_config_package_import_method: "hardlink",
+        ...runtime,
+      },
+    },
+  );
+  const installed = NodePath.join(project, "node_modules", "foundry-offline-fixture", "index.js");
+  expect(await NodeFSP.readFile(installed, "utf8")).toBe("module.exports = 'copied fixture';\n");
+  expect((await NodeFSP.stat(installed)).nlink).toBe(1);
+});
