@@ -41,6 +41,8 @@ import { BackgroundThreadAnnouncer } from "./BackgroundThreadAnnouncer";
 import { HistorySwipeNavigation } from "./HistorySwipeNavigation";
 import ThreadSidebar from "./Sidebar";
 import { FoundrySidebar } from "../foundry/FoundrySidebar";
+import { useAutomationCapability } from "../foundry/FactoryNavigation";
+import { initialState as foundryState } from "../foundry/onboarding";
 import { SidebarBrandWidthProbe } from "./sidebar/SidebarChrome";
 import { isAppModalPage } from "./sidebar/mainAppLocation";
 import type { SidebarRouteReveal } from "./sidebar/routeReveal";
@@ -403,7 +405,13 @@ function SidebarControl() {
 }
 
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
-  const factoryWorkspace = useLocation({ select: (location) => location.pathname === "/foundry" });
+  const sidebarPath = useLocation({ select: (location) => location.pathname });
+  const factoryCapability = useAutomationCapability();
+  const factoryWorkspace =
+    sidebarPath === "/foundry" ||
+    (sidebarPath.startsWith("/settings") &&
+      foundryState().confirmed &&
+      factoryCapability !== "unsupported");
   const sidebarArea = workspaceAreaProps("sidebar", 0, factoryWorkspace ? "Foundry" : "Threads");
   const [sidebarRouteReveal] = useState<SidebarRouteReveal>(() => ({
     observedKey: null,

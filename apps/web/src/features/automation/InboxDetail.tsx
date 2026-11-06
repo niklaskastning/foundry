@@ -10,6 +10,7 @@ import type {
 import { AsyncResult } from "effect/reactivity";
 import { useAutomationQuery } from "./useAutomationQuery";
 import { AttemptResult } from "./RunDetail";
+import { runExecutionStep } from "./runTopology";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Textarea } from "../../components/ui/textarea";
@@ -126,7 +127,7 @@ export function InboxDetail({
   }
   return (
     <aside
-      className="min-w-0 space-y-5 rounded-lg border bg-card p-5"
+      className="min-w-0 space-y-4 rounded-lg border bg-card p-4"
       aria-label="Inbox item details"
     >
       <div className="flex items-start justify-between gap-3">
@@ -154,19 +155,27 @@ export function InboxDetail({
           Close
         </Button>
       </div>
-      <p className="whitespace-pre-wrap text-sm">{item.detail}</p>
+      <p className="whitespace-pre-wrap break-words text-sm">
+        {item.detail === "iterations_exhausted"
+          ? "The workflow used all available review rounds without meeting its completion condition. Inspect the last result and decide how to continue."
+          : item.detail}
+      </p>
       <div className="space-y-3">
-        <Button variant="outline" onClick={() => setShowEvidence(!showEvidence)}>
+        <Button variant="outline" size="multiline" onClick={() => setShowEvidence(!showEvidence)}>
           {showEvidence ? "Hide evidence" : "Review tests, changes and artifacts"}
         </Button>
         {showEvidence ? <InboxEvidence environmentId={environmentId} item={item} /> : null}
       </div>
       {item.kind === "approval" && item.active ? (
-        <div className="space-y-2">
-          <p className="text-sm">
-            Review the run and its results before approving this exact revision.
-          </p>
-          <div className="flex gap-2">
+        <div className="space-y-3 border-y py-4">
+          <div>
+            <h3 className="font-medium">Decide on this result</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Approval applies to result revision {item.resultRevision}. Review the evidence before
+              allowing the workflow to continue.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
             <Button
               disabled={
                 busy || !canDecide || (pendingAction !== null && pendingAction !== "approve")
@@ -183,7 +192,7 @@ export function InboxDetail({
               Approve revision
             </Button>
             <Button
-              variant="outline"
+              variant="destructive"
               disabled={
                 busy || !canDecide || (pendingAction !== null && pendingAction !== "reject")
               }
@@ -329,12 +338,12 @@ export function InboxDetail({
       ) : null}
       <details className="border-t pt-3">
         <summary className="cursor-pointer text-sm text-muted-foreground">
-          Inbox organization and revision details
+          Personal inbox organization
         </summary>
         <div className="space-y-3 pt-3">
-          <p className="text-xs text-muted-foreground">
-            {item.active ? "Current" : "Resolved or superseded"} · Revision {item.expectedRevision}{" "}
-            · Result {item.resultRevision}
+          <p className="text-sm text-muted-foreground">
+            Marking done only organizes your inbox. It does not approve a result or answer a
+            question.
           </p>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -353,8 +362,8 @@ export function InboxDetail({
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Marking done only organizes your inbox. It does not approve a result or answer a
-            question.
+            {item.active ? "Current request" : "Resolved or superseded"} · Run revision{" "}
+            {item.expectedRevision} · Result revision {item.resultRevision}
           </p>
         </div>
       </details>
@@ -393,7 +402,7 @@ function InboxEvidence({
     detail?.control?.revision === item.expectedRevision &&
     detail.control.resultRevision === item.resultRevision;
   return (
-    <section className="space-y-3 rounded-lg border p-3" aria-label="Decision evidence">
+    <section className="space-y-3 border-l-2 pl-3" aria-label="Decision evidence">
       <h3 className="font-medium">Evidence for this decision</h3>
       <p className="text-sm">
         Decision revision {item.expectedRevision} · Result revision {item.resultRevision}
@@ -415,8 +424,16 @@ function InboxEvidence({
                 className="flex flex-wrap items-center justify-between gap-2 text-sm"
               >
                 <span>
-                  {detail?.workflow.steps[attempt.ordinal]?.id ?? `Step ${attempt.ordinal + 1}`} ·
-                  Attempt {attempt.attemptNumber + 1} · {attempt.state}
+                  {detail
+                    ? runExecutionStep(detail, attempt.ordinal).label
+                    : `Execution ${attempt.ordinal + 1}`}{" "}
+                  ·{" "}
+                  {detail?.runtimeWorkflow
+                    ? attempt.attemptNumber === 0
+                      ? "Initial execution"
+                      : `Technical retry ${attempt.attemptNumber}`
+                    : `Attempt ${attempt.attemptNumber + 1}`}{" "}
+                  · {attempt.state}
                 </span>
                 <Button variant="outline" onClick={() => setSelected(attempt.commandId)}>
                   Inspect evidence
@@ -424,7 +441,7 @@ function InboxEvidence({
               </li>
             ))}
           </ul>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant="outline" disabled={!after} onClick={() => setAfter(undefined)}>
               First attempts
             </Button>

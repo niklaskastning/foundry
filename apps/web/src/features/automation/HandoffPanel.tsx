@@ -64,13 +64,16 @@ export function TakeOverPanel({
   const eligible =
     control !== null && ["paused", "succeeded", "failed", "cancelled"].includes(control.state);
   return (
-    <section aria-label="Take over in T3" className="space-y-3 rounded border p-3">
-      <h3 className="font-medium">Take over in T3</h3>
+    <section aria-label="Take over in T3" className="space-y-3 border-t pt-4">
+      <h3 className="text-lg font-semibold">Continue interactively</h3>
       <p className="text-sm text-muted-foreground">
         Continue from a confirmed checkpoint. Pause an active run and wait for its current work to
         finish before taking over.
       </p>
-      <fieldset disabled={action.busy || Boolean(action.pending)} className="space-y-2">
+      <fieldset
+        disabled={action.busy || !action.allowed || Boolean(action.pending)}
+        className="space-y-2"
+      >
         <legend className="text-sm">Choose the source attempt</legend>
         {attempts
           .filter((attempt) => attempt.threadId)
@@ -89,6 +92,7 @@ export function TakeOverPanel({
           {(["existing", "branch", "archive"] as const).map((value) => (
             <Button
               key={value}
+              size="multiline"
               variant={mode === value ? "default" : "outline"}
               onClick={() => setMode(value)}
             >
@@ -134,7 +138,20 @@ export function TakeOverPanel({
             ? "Retry the same takeover"
             : "Take over in T3"}
       </Button>
-      {!eligible ? <p className="text-sm">Pause the run before taking over.</p> : null}
+      {!action.allowed ? (
+        <p className="text-sm text-muted-foreground">
+          Your connection can view this run but cannot take over its workspace.
+        </p>
+      ) : !eligible ? (
+        <p className="text-sm text-muted-foreground">
+          Pause the run and wait for its current work to finish before taking over.
+        </p>
+      ) : attempts.every((attempt) => !attempt.threadId) ? (
+        <p className="text-sm text-muted-foreground">
+          No source thread is available on this attempts page. Open another page or wait for an
+          execution to finish.
+        </p>
+      ) : null}
       {action.message ? <p role="status">{action.message}</p> : null}
       {action.pending ? (
         <p className="text-xs">
@@ -157,7 +174,7 @@ export function HandoffList({
   const query = useAutomationQuery(environmentId, { op: "handoffs", factoryId, workItemId });
   return (
     <section aria-label="Interactive handoffs" className="space-y-3">
-      <h3 className="font-medium">Interactive work</h3>
+      <h3 className="text-lg font-semibold">Interactive work</h3>
       {query.loading && !query.result ? <p role="status">Loading interactive work…</p> : null}
       {query.error ? <p role="alert">{query.error}</p> : null}
       {query.result?.kind === "handoffs" ? (
@@ -199,7 +216,7 @@ function HandoffPanel({
       ? [...handoff.pendingCommands, action.pending]
       : handoff.pendingCommands;
   return (
-    <section aria-label="Interactive handoff" className="space-y-3 rounded border p-3">
+    <section aria-label="Interactive handoff" className="space-y-3 rounded-lg border p-4">
       <div className="flex flex-wrap items-center gap-2">
         <Badge
           variant={
@@ -220,33 +237,17 @@ function HandoffPanel({
               : "Restored archive"}
         </span>
       </div>
-      <details className="text-xs text-muted-foreground">
-        <summary className="cursor-pointer">Workspace & revision details</summary>
-        <div className="space-y-1 break-all pt-2">
-          <p>
-            Input revision: {handoff.baseRevision} · Generation {handoff.generation}
-          </p>
-          {receipt ? (
-            <>
-              <p>Base commit: {receipt.baseCommit}</p>
-              <p>
-                Workspace: {receipt.workspacePath} · Branch: {receipt.branch ?? "detached"}
-              </p>
-            </>
-          ) : null}
-        </div>
-      </details>
       {receipt ? (
         <>
           <div className="flex flex-wrap gap-3 text-sm">
             <a
-              className="underline"
+              className="underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               href={`/${encodeURIComponent(handoff.environmentId)}/${encodeURIComponent(receipt.threadId)}?factoryId=${encodeURIComponent(handoff.factoryId)}&runId=${encodeURIComponent(handoff.runId)}`}
             >
               Open T3 thread
             </a>
             <a
-              className="underline"
+              className="underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               href={`/foundry?archiveEnvironmentId=${encodeURIComponent(handoff.environmentId)}&archiveThreadId=${encodeURIComponent(receipt.threadId)}`}
             >
               Read central archive
@@ -258,7 +259,10 @@ function HandoffPanel({
       )}
       {handoff.state === "open" && pendingCommands.length === 0 ? (
         <>
-          <fieldset disabled={action.busy || Boolean(action.pending)} className="space-y-2">
+          <fieldset
+            disabled={action.busy || !action.allowed || Boolean(action.pending)}
+            className="space-y-2"
+          >
             <legend className="font-medium">Return to factory</legend>
             <p className="text-sm">
               Finish interactive work before returning. The server confirms the checkpoint and
@@ -307,6 +311,11 @@ function HandoffPanel({
                 : "Return to factory"}
           </Button>
         </>
+      ) : null}
+      {!action.allowed && handoff.state === "open" ? (
+        <p className="text-sm text-muted-foreground">
+          Your connection can read this handoff but cannot return it to the factory.
+        </p>
       ) : null}
       {handoff.state === "returning" ? (
         <>
@@ -368,10 +377,22 @@ function HandoffPanel({
         </div>
       ))}
       {handoff.result ? (
-        <div className="space-y-1 text-sm">
-          <p className="break-all">Confirmed return commit: {handoff.result.commitSha}</p>
-          <p className="break-all">Checkpoint: {handoff.result.checkpointRef}</p>
-          <p>Central archive confirmed through event {handoff.result.archive.cursor}.</p>
+        <div className="space-y-2 border-t pt-3 text-sm">
+          <h4 className="font-medium">Return confirmed</h4>
+          <p className="text-muted-foreground">
+            The checkpoint and central archive are saved. Open the continuation to review and resume
+            the workflow.
+          </p>
+          <details>
+            <summary className="cursor-pointer text-xs text-muted-foreground">
+              Confirmed checkpoint and archive
+            </summary>
+            <div className="space-y-1 pt-2 text-xs text-muted-foreground">
+              <p className="break-all">Commit: {handoff.result.commitSha}</p>
+              <p className="break-all">Checkpoint: {handoff.result.checkpointRef}</p>
+              <p>Central archive confirmed through event {handoff.result.archive.cursor}.</p>
+            </div>
+          </details>
           <p className="whitespace-pre-wrap">
             Reported tests: {handoff.result.tests || "None reported"}
           </p>
@@ -382,12 +403,28 @@ function HandoffPanel({
       ) : null}
       {handoff.continuationRunId ? (
         <a
-          className="text-sm underline"
+          className="text-sm font-medium underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           href={`/foundry?view=runs&factoryId=${encodeURIComponent(handoff.factoryId)}&runId=${encodeURIComponent(handoff.continuationRunId)}`}
         >
           Open continuation run (created paused)
         </a>
       ) : null}
+      <details className="text-xs text-muted-foreground">
+        <summary className="cursor-pointer">Workspace & revision details</summary>
+        <div className="space-y-1 break-all pt-2">
+          <p>
+            Input revision: {handoff.baseRevision} · Generation {handoff.generation}
+          </p>
+          {receipt ? (
+            <>
+              <p>Base commit: {receipt.baseCommit}</p>
+              <p>
+                Workspace: {receipt.workspacePath} · Branch: {receipt.branch ?? "detached"}
+              </p>
+            </>
+          ) : null}
+        </div>
+      </details>
       {action.message ? <p role="status">{action.message}</p> : null}
     </section>
   );

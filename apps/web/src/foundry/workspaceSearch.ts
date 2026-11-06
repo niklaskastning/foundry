@@ -2,6 +2,7 @@ export const factoryTabs = [
   "overview",
   "work",
   "agents",
+  "workflows",
   "runs",
   "definition",
   "triggers",
@@ -22,6 +23,8 @@ export type FoundrySearch = {
   factoryId?: string | undefined;
   runId?: string | undefined;
   workItemId?: string | undefined;
+  createWork?: string | undefined;
+  workStatus?: "active" | "all" | undefined;
   tab?: (typeof factoryTabs)[number] | undefined;
   runState?: (typeof runStates)[number] | undefined;
   filterFactory?: string | undefined;
@@ -44,6 +47,7 @@ const fields = [
   "factoryId",
   "runId",
   "workItemId",
+  "createWork",
   "filterFactory",
   "search",
   "after",
@@ -69,6 +73,9 @@ export function validateFoundrySearch(search: Record<string, unknown>): FoundryS
   );
   return {
     ...strings,
+    ...(["active", "all"].includes(String(search.workStatus))
+      ? { workStatus: search.workStatus as FoundrySearch["workStatus"] }
+      : {}),
     ...(factoryTabs.some((tab) => tab === search.tab)
       ? { tab: search.tab as FoundrySearch["tab"] }
       : {}),
@@ -81,5 +88,24 @@ export function validateFoundrySearch(search: Record<string, unknown>): FoundryS
     ...(["question", "answer", "approval", "blocker", "error"].includes(String(search.inboxKind))
       ? { inboxKind: search.inboxKind as FoundrySearch["inboxKind"] }
       : {}),
+  };
+}
+
+export function mergeWorkspaceSearch(
+  previous: FoundrySearch,
+  patch: Partial<FoundrySearch>,
+): FoundrySearch {
+  const changedRun = Object.hasOwn(patch, "runId") && patch.runId !== previous.runId;
+  return {
+    ...previous,
+    ...(changedRun
+      ? {
+          nodeOffset: undefined,
+          nodePath: undefined,
+          attemptId: undefined,
+          attemptsAfter: undefined,
+        }
+      : {}),
+    ...patch,
   };
 }

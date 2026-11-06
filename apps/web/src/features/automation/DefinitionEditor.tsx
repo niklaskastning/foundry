@@ -129,13 +129,23 @@ export function DefinitionEditor({
   if (definition.schemaVersion === 4)
     return (
       <section className="space-y-4" aria-label="Factory definition">
-        <h2 className="text-lg font-medium">Modular definition draft · v4</h2>
+        <h2 className="text-lg font-semibold">Definition draft</h2>
         <p className="text-sm">
           Review the complete file bundle before activation. Existing runs keep their pinned
           resources.
         </p>
+        {!permission ? (
+          <p role="status" className="text-sm text-muted-foreground">
+            Read-only access. Inspect or export this draft; activation requires additional
+            permission.
+          </p>
+        ) : null}
         {definition.workflows.map((workflow) => (
-          <details key={workflow.id} className="rounded-lg border p-3">
+          <details
+            key={workflow.id}
+            open={definition.workflows.length === 1}
+            className="border-y py-3"
+          >
             <summary className="cursor-pointer">{workflow.id}</summary>
             <V4WorkflowConfiguration definition={definition} workflow={workflow} />
           </details>
@@ -157,32 +167,41 @@ export function DefinitionEditor({
             Reload active version
           </Button>
         </div>
-        <Textarea
-          aria-label="Definition files JSON"
-          value={filesText}
-          onChange={(event) => setFilesText(event.target.value)}
-        />
-        <Button
-          variant="outline"
-          onClick={() => {
-            try {
-              const parsed = validateFactoryFiles(JSON.parse(filesText));
-              if (Result.isFailure(parsed))
-                setMessage(
-                  parsed.failure.map((issue) => `${issue.file}: ${issue.message}`).join("\n"),
-                );
-              else {
-                setDefinition(parsed.success);
-                setPending(null);
-                setMessage("Imported locally. Review and activate explicitly.");
+        <details className="border-t pt-3" open={filesText.length > 0}>
+          <summary className="cursor-pointer text-sm font-medium">
+            Import / export definition files · advanced
+          </summary>
+          <p className="py-3 text-xs text-muted-foreground">
+            Use a canonical file bundle to exchange a definition. Import prepares a local draft;
+            activation is a separate action.
+          </p>
+          <Textarea
+            aria-label="Definition files JSON"
+            value={filesText}
+            onChange={(event) => setFilesText(event.target.value)}
+          />
+          <Button
+            variant="outline"
+            onClick={() => {
+              try {
+                const parsed = validateFactoryFiles(JSON.parse(filesText));
+                if (Result.isFailure(parsed))
+                  setMessage(
+                    parsed.failure.map((issue) => `${issue.file}: ${issue.message}`).join("\n"),
+                  );
+                else {
+                  setDefinition(parsed.success);
+                  setPending(null);
+                  setMessage("Imported locally. Review and activate explicitly.");
+                }
+              } catch {
+                setMessage("Enter a valid definition file bundle.");
               }
-            } catch {
-              setMessage("Enter a valid definition file bundle.");
-            }
-          }}
-        >
-          Import reviewed files
-        </Button>
+            }}
+          >
+            Import reviewed files
+          </Button>
+        </details>
         {message ? (
           <p role="status" className="whitespace-pre-wrap text-sm">
             {message}
@@ -193,7 +212,7 @@ export function DefinitionEditor({
   return (
     <section className="space-y-4" aria-label="Factory definition">
       <div>
-        <h2 className="text-lg font-medium">Definition draft</h2>
+        <h2 className="text-lg font-semibold">Definition draft</h2>
         <p className="text-sm text-muted-foreground">
           {active
             ? "Editing a local draft of the active definition"

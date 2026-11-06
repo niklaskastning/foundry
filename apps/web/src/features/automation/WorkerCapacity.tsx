@@ -25,7 +25,7 @@ export function WorkerCapacity({ environmentId }: { environmentId: EnvironmentId
     <section aria-label="Factory workers" className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-medium">Factory workers</h2>
+          <h2 className="text-lg font-semibold">Factory workers</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             Configured execution targets. Pausing stops new dispatch; running work continues.
           </p>
@@ -39,7 +39,7 @@ export function WorkerCapacity({ environmentId }: { environmentId: EnvironmentId
           {query.error}
         </p>
       ) : null}
-      {query.loading ? (
+      {query.loading && !binding ? (
         <p role="status" className="text-sm text-muted-foreground">
           Loading configured workers…
         </p>
@@ -100,7 +100,7 @@ function SelectedWorker({
           </Button>
         </div>
       ) : null}
-      {query.loading ? (
+      {query.loading && !binding ? (
         <p role="status" className="text-sm">
           Checking selected worker…
         </p>
@@ -165,12 +165,13 @@ function WorkerDetails({
     onRefresh();
   }
   return (
-    <article className="space-y-4 rounded-lg border bg-card p-5">
+    <article className="space-y-3 border-y py-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="break-all font-medium">{binding.environmentId}</h3>
+          <h3 className="font-semibold">Execution worker</h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            Checked {new Date(status.checkedAt).toLocaleString()}
+            {binding.projects.length} available projects · checked{" "}
+            {new Date(status.checkedAt).toLocaleString()}
           </p>
         </div>
         <Badge variant={binding.paused ? "warning" : "outline"}>
@@ -181,19 +182,19 @@ function WorkerDetails({
               : "Dispatch enabled"}
         </Badge>
       </div>
-      <dl className="grid gap-4 text-sm sm:grid-cols-3">
+      <dl className="grid gap-3 text-sm sm:grid-cols-2">
         <div>
           <dt className="text-xs text-muted-foreground">Provider</dt>
-          <dd className="mt-2">
+          <dd className="mt-1 flex flex-wrap items-center gap-2">
             <Badge variant={status.providerReady ? "success" : "warning"}>
               {status.providerReady ? "Ready" : "Needs attention"}
             </Badge>
+            <span className="break-words">{status.providerInstanceId ?? "No provider bound"}</span>
           </dd>
-          <dd className="mt-2 break-words">{status.providerInstanceId ?? "No provider bound"}</dd>
         </div>
         <div>
           <dt className="text-xs text-muted-foreground">Execution capacity</dt>
-          <dd className="mt-2 font-medium">
+          <dd className="mt-1 font-medium">
             {status.capacity !== undefined && status.free != null
               ? `${status.free} of ${status.capacity} slots free`
               : status.capacityAvailable === null
@@ -202,18 +203,9 @@ function WorkerDetails({
                   ? "Available"
                   : "Occupied"}
           </dd>
-          <dd className="mt-2 text-muted-foreground">
+          <dd className="mt-1 text-xs text-muted-foreground">
             {status.occupied != null ? `${status.occupied} occupied` : "Occupied slots unavailable"}
             {binding.reserved !== undefined ? ` · ${binding.reserved} reserved by Main` : ""}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs text-muted-foreground">Parallel execution</dt>
-          <dd className="mt-2 font-medium">
-            {status.parallelExecutionVersion === 1 ? "Supported" : "Not advertised"}
-          </dd>
-          <dd className="mt-2 text-muted-foreground">
-            {binding.projects.length} available projects
           </dd>
         </div>
       </dl>
@@ -252,7 +244,12 @@ function WorkerDetails({
         <summary className="cursor-pointer">Projects and worker details</summary>
         <div className="space-y-3 pt-3">
           <p className="break-all text-muted-foreground">
-            Device: {binding.deviceId} · Provider version: {status.version ?? "Unknown"}
+            Environment: {binding.environmentId} · Device: {binding.deviceId} · Provider version:{" "}
+            {status.version ?? "Unknown"}
+          </p>
+          <p className="text-muted-foreground">
+            Parallel execution:{" "}
+            {status.parallelExecutionVersion === 1 ? "Supported" : "Not advertised"}.
           </p>
           <p className="text-muted-foreground">
             Capacity is a snapshot, not a reservation. Client access and factory execution

@@ -35,9 +35,9 @@ export function InboxPage({
   const session = useAtomValue(environmentSession.sessionStateAtom(environmentId));
   const canRead = useAtomValue(automationCommands.inboxQuery.permissionAtom(environmentId));
   const navigation = useWorkspaceNavigation();
-  const kind = navigation.search.inboxKind;
+  const kind = compact ? undefined : navigation.search.inboxKind;
   const status = compact ? "open" : (navigation.search.inboxStatus ?? "open");
-  const unreadOnly = navigation.search.inboxUnread === "1";
+  const unreadOnly = !compact && navigation.search.inboxUnread === "1";
   const filterFactory = factoryId ?? navigation.search.filterFactory ?? "";
   const cursor = compact ? undefined : navigation.search.inboxCursor;
   const setCursor = (inboxCursor?: string) => navigation.update({ inboxCursor });
@@ -60,8 +60,8 @@ export function InboxPage({
   });
   const [responseKey, setResponseKey] = useState<string>();
   const current = responseKey === queryKey;
-  const visibleItems =
-    current && canRead && sessionHasScope(session, "orchestration:read") ? items : [];
+  const readable = canRead && sessionHasScope(session, "orchestration:read");
+  const visibleItems = current && readable ? items : [];
   const selected = visibleItems.find((item) => item.id === selectedId);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Reload durable inbox facts after navigation, browser reconnection, focus or an explicit refresh.
   useEffect(() => {
@@ -133,13 +133,15 @@ export function InboxPage({
   const refresh = () => setGeneration((value) => value + 1);
   return (
     <section className="space-y-4" aria-label="Personal inbox">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold">
-            {compact ? "Needs your attention" : "Decisions"}
-          </h1>
+          {compact ? (
+            <h2 className="text-lg font-semibold">Needs your attention</h2>
+          ) : (
+            <h1 className="text-2xl font-semibold tracking-tight">Decisions</h1>
+          )}
           <p className="text-sm text-muted-foreground">
-            Review requests, unblock runs and keep track of your decisions.
+            Review results, answer questions and unblock work.
           </p>
         </div>
         <Button variant="outline" disabled={busy || !canRead} onClick={refresh}>
@@ -169,7 +171,7 @@ export function InboxPage({
             }}
           />
           <label className="space-y-1">
-            <span className="text-sm">Type</span>
+            <span className="text-xs text-muted-foreground">Type</span>
             <Select
               value={kind ?? "all"}
               onValueChange={(value) => {
@@ -180,7 +182,7 @@ export function InboxPage({
                 });
               }}
             >
-              <SelectTrigger>
+              <SelectTrigger aria-label="Filter by decision type">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -223,18 +225,18 @@ export function InboxPage({
         }
       >
         <div className="space-y-3">
-          <ul className="space-y-2" aria-label="Inbox items">
+          <ul
+            className={visibleItems.length ? "divide-y rounded-lg border" : undefined}
+            aria-label="Inbox items"
+          >
             {visibleItems.map((item) => (
               <li
                 key={item.id}
-                className={
-                  selectedId === item.id
-                    ? "rounded-lg border border-primary bg-accent/30 p-4"
-                    : "rounded-lg border bg-card p-4"
-                }
+                className={selectedId === item.id ? "bg-accent/50 px-4 py-3" : "px-4 py-3"}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 space-y-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <p className="break-words text-sm font-medium">{item.title}</p>
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge
                         variant={
@@ -249,15 +251,20 @@ export function InboxPage({
                       </Badge>
                       {!item.isRead ? <span className="text-xs font-medium">Unread</span> : null}
                     </div>
-                    <p className="break-words text-sm font-medium">{item.title}</p>
-                    <p className="line-clamp-2 whitespace-pre-wrap text-sm text-muted-foreground">
-                      {item.detail}
+                    <p className="line-clamp-2 break-words text-sm text-muted-foreground">
+                      {item.detail === "iterations_exhausted"
+                        ? "Review rounds reached their limit. Inspect the last result before continuing."
+                        : item.detail}
                     </p>
                     <p className="text-xs text-muted-foreground">
                       {item.isDone
                         ? "Done in your inbox"
                         : item.active
-                          ? "Needs review"
+                          ? item.kind === "approval"
+                            ? "Approval required"
+                            : item.kind === "question"
+                              ? "Answer required"
+                              : "Needs attention"
                           : "Resolved"}
                       {item.stepId ? ` · Step ${item.stepId}` : ""}
                     </p>
@@ -267,17 +274,27 @@ export function InboxPage({
                     aria-pressed={selectedId === item.id}
                     onClick={() => setSelectedId(item.id)}
                   >
-                    {item.active && !item.isDone ? "Review" : "View"}
+                    {item.active && !item.isDone
+                      ? item.kind === "question"
+                        ? "Answer"
+                        : "Review"
+                      : "View"}
                   </Button>
                 </div>
               </li>
             ))}
           </ul>
-          {canRead && current && !busy && !message && visibleItems.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No decisions match these filters. New questions, approvals and blockers will appear
-              here.
-            </p>
+          {readable && current && !message && visibleItems.length === 0 ? (
+            <div className="rounded-lg border border-dashed px-4 py-5">
+              <p className="text-sm font-medium">
+                {compact ? "No open decisions" : "No decisions match these filters"}
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {compact
+                  ? "Questions, approvals and blockers will appear here."
+                  : "Try another status or factory to find earlier decisions."}
+              </p>
+            </div>
           ) : null}
           {!compact ? (
             <div className="flex gap-2">
@@ -306,11 +323,9 @@ export function InboxPage({
           />
         ) : null}
       </div>
-      {canRead &&
-      sessionHasScope(session, "orchestration:read") &&
-      (busy || !current || message) ? (
-        <p role="status" className="text-sm">
-          {busy || !current ? "Loading inbox…" : message}
+      {readable && (!current || message) ? (
+        <p role={message ? "alert" : "status"} className="text-sm text-muted-foreground">
+          {!current ? "Loading inbox…" : message}
         </p>
       ) : null}
     </section>

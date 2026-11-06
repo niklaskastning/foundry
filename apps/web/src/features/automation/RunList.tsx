@@ -3,6 +3,7 @@ import { useWorkspaceNavigation } from "../../foundry/useWorkspaceNavigation";
 import { runStates } from "../../foundry/workspaceSearch";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { runStatusVariant } from "./runTopology";
 import { ListFilters } from "./ListFilters";
 import { useAutomationQuery } from "./useAutomationQuery";
 
@@ -37,7 +38,7 @@ export function RunList({
     <section className="space-y-3" aria-label="Runs">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">{compact ? "Recent results" : "Runs"}</h2>
+          <h2 className="text-lg font-semibold">{compact ? "Recent runs" : "Runs"}</h2>
           {!compact ? (
             <p className="text-sm text-muted-foreground">
               Follow execution, review results and resolve blocked work.
@@ -67,32 +68,41 @@ export function RunList({
         />
       ) : null}
       {error ? <p role="alert">{error}</p> : null}
-      {loading ? <p role="status">Loading runs…</p> : null}
+      {loading && !result ? <p role="status">Loading runs…</p> : null}
       {result?.kind === "runs" ? (
         <>
           <ul className="divide-y rounded-lg border bg-card">
             {result.items.map((run) => (
-              <li key={run.id} className="flex flex-wrap items-center justify-between gap-2 p-3">
+              <li
+                key={run.id}
+                className="flex flex-wrap items-center justify-between gap-2 px-3 py-3 sm:px-4"
+              >
                 <div className="min-w-0 flex-1 space-y-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="break-words text-sm font-medium">
                       {run.workItemTitle ?? "Work item"}
                     </p>
-                    <Badge
-                      variant={
-                        run.state === "succeeded"
-                          ? "success"
-                          : run.state === "failed"
-                            ? "error"
-                            : run.state === "waiting" || run.state === "paused"
-                              ? "warning"
-                              : "secondary"
-                      }
-                    >
+                    <Badge variant={runStatusVariant(run.state)}>
                       {run.state.replaceAll("_", " ")}
                     </Badge>
                   </div>
-                  <p className="text-xs text-muted-foreground">{run.repository}</p>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    {run.workflowName ? <span>{run.workflowName}</span> : null}
+                    <span>{run.repository}</span>
+                    {run.enrolledAt ? (
+                      <time dateTime={run.enrolledAt}>
+                        Queued{" "}
+                        {new Date(run.enrolledAt).toLocaleString(undefined, {
+                          year: "numeric",
+                          month: "short",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          second: "2-digit",
+                        })}
+                      </time>
+                    ) : null}
+                  </div>
                 </div>
                 <Button variant="ghost" onClick={() => onOpen(run.factoryId, run.id)}>
                   Open run
