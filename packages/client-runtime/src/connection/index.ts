@@ -30,3 +30,7 @@ export { OutdatedHostUpdateError } from "./outdatedHostUpdate.ts";
 export * as FoundryArchive from "./foundryArchive.ts";
 
 export * as FoundryMain from "./foundryMain.ts";
+
+export * as FoundrySandboxes from "./foundrySandboxes.ts";
+
+export * as FoundryProviderConnections from "./foundryProviderConnections.ts";

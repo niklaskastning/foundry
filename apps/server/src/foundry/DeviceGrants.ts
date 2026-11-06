@@ -1,4 +1,5 @@
 import {
+  EnvironmentId,
   FoundryDeviceGrant,
   FoundryDeviceGrantUpdate,
   FoundryDeviceId,
@@ -14,6 +15,15 @@ import * as InstancePostgres from "./InstancePostgres.ts";
 const decodeUpdate = Schema.decodeUnknownEffect(FoundryDeviceGrantUpdate, {
   onExcessProperty: "error",
 });
+const ProvisioningUpdate = Schema.Struct({
+  deviceId: FoundryDeviceId,
+  environmentId: EnvironmentId,
+  generation: FoundryDeviceGrantUpdate.fields.generation,
+  enabled: Schema.Boolean,
+});
+const decodeProvisioningUpdate = Schema.decodeUnknownEffect(ProvisioningUpdate, {
+  onExcessProperty: "error",
+});
 const decodeRows = Schema.decodeUnknownEffect(Schema.Array(FoundryDeviceGrant));
 const forbidden = () => new FoundryGatewayError({ code: "forbidden" });
 const unavailable = () => new FoundryGatewayError({ code: "unavailable" });
@@ -25,6 +35,10 @@ export class DeviceGrants extends Context.Service<
       operatorId: string,
     ) => Effect.Effect<ReadonlyArray<FoundryDeviceGrant>, FoundryGatewayError>;
     readonly update: (
+      input: unknown,
+      operatorId: string,
+    ) => Effect.Effect<FoundryDeviceGrant, FoundryGatewayError>;
+    readonly updateProvisioning: (
       input: unknown,
       operatorId: string,
     ) => Effect.Effect<FoundryDeviceGrant, FoundryGatewayError>;
@@ -69,26 +83,52 @@ const make = Effect.gen(function* () {
       return yield* forbidden();
     return grant.generation;
   });
-  const update = Effect.fn("DeviceGrants.update")(
-    function* (input: unknown, operatorId: string) {
-      const value = yield* decodeUpdate(input).pipe(
-        Effect.mapError(() => new FoundryGatewayError({ code: "invalid_request" })),
-      );
-      if (value.kind !== "clientAccess" && value.kind !== "automationExecution")
-        return yield* forbidden();
+  const updateGrant = Effect.fn("DeviceGrants.updateGrant")(
+    function* (
+      value: typeof FoundryDeviceGrantUpdate.Type,
+      operatorId: string,
+      environmentId?: EnvironmentId,
+    ) {
       const instanceId = yield* identity.readIdentity;
       const rows =
         yield* sql`UPDATE foundry_instance.device_grants g SET enabled = ${value.enabled}, generation = g.generation + 1
-      FROM foundry_instance.devices d WHERE g.device_id = d.device_id AND d.device_id = ${value.deviceId}
-      AND d.instance_id = ${instanceId} AND d.operator_id = ${operatorId} AND NOT d.revoked
-      AND g.kind = ${value.kind} AND g.generation = ${value.generation}
-      RETURNING g.device_id AS "deviceId", g.kind, g.enabled, g.generation`;
+        FROM foundry_instance.devices d WHERE g.device_id = d.device_id AND d.device_id = ${value.deviceId}
+        AND d.instance_id = ${instanceId} AND d.operator_id = ${operatorId} AND NOT d.revoked
+        AND (${environmentId ?? null}::text IS NULL OR d.environment_id = ${environmentId ?? null})
+        AND g.kind = ${value.kind} AND g.generation = ${value.generation}
+        RETURNING g.device_id AS "deviceId", g.kind, g.enabled, g.generation`;
       if (rows.length !== 1) return yield* forbidden();
       return (yield* decodeRows(rows))[0]!;
     },
     Effect.timeout("2 seconds"),
     Effect.catchTags(failures),
   );
-  return DeviceGrants.of({ read, update, check });
+  const update = Effect.fn("DeviceGrants.update")(function* (input: unknown, operatorId: string) {
+    const value = yield* decodeUpdate(input).pipe(
+      Effect.mapError(() => new FoundryGatewayError({ code: "invalid_request" })),
+    );
+    if (value.kind !== "clientAccess" && value.kind !== "automationExecution")
+      return yield* forbidden();
+    return yield* updateGrant(value, operatorId);
+  });
+  const updateProvisioning = Effect.fn("DeviceGrants.updateProvisioning")(function* (
+    input: unknown,
+    operatorId: string,
+  ) {
+    const value = yield* decodeProvisioningUpdate(input).pipe(
+      Effect.mapError(() => new FoundryGatewayError({ code: "invalid_request" })),
+    );
+    return yield* updateGrant(
+      {
+        deviceId: value.deviceId,
+        kind: "sandboxProvisioning",
+        generation: value.generation,
+        enabled: value.enabled,
+      },
+      operatorId,
+      value.environmentId,
+    );
+  });
+  return DeviceGrants.of({ read, update, updateProvisioning, check });
 });
 export const layer = Layer.effect(DeviceGrants, make);

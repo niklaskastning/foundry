@@ -46,7 +46,17 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
     enabled,
     config,
     environment: yield* mergeProviderInstanceEnvironment(input.environment),
-  });
+  }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new ProviderDriverError({
+          driver: DRIVER,
+          instanceId,
+          detail: "Could not prepare the Codex runtime.",
+          cause,
+        }),
+    ),
+  );
   const continuationIdentity = codexContinuationIdentity(runtime.homeLayout);
   const stamp = withInstanceIdentity({
     instanceId,
@@ -55,7 +65,7 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
     accentColor,
     continuationGroupKey: continuationIdentity.continuationKey,
   });
-  const setup = { canAuthenticate: true, canInstall: true };
+  const setup = { canAuthenticate: !runtime.delegated, canInstall: true };
   const runtimePaths = {
     homePath: runtime.homeLayout.sharedHomePath,
     shadowHomePath: runtime.homeLayout.mode === "authOverlay" ? runtime.homePath : null,

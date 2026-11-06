@@ -10,6 +10,8 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { resolveSelfInvocation, selfInvocationArgs } from "@t3tools/shared/nodeRuntime";
 import * as CodexInstallation from "./CodexInstallation.ts";
 import { makeCodexChatGptAuth } from "./CodexChatGptAuth.ts";
+import * as ProviderConnectionTransport from "../foundry/ProviderConnectionTransport.ts";
+import * as DelegatedCodexAuth from "../foundry/DelegatedCodexAuth.ts";
 import { COMMAND_TIMEOUT_MS } from "./CodexManagedTokenProtocol.ts";
 import { materializeCodexShadowHome } from "./Drivers/CodexHomeLayout.ts";
 
@@ -45,13 +47,16 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
   const environmentIdentity = yield* ServerEnvironment.ServerEnvironmentIdentity;
   const environmentId = yield* environmentIdentity.getEnvironmentId;
   const invocation = yield* resolveSelfInvocation();
-  const auth = yield* makeCodexChatGptAuth({
-    instanceId: options.instanceId,
-    defaultReturnUrl: new URL(
-      "/welcome",
-      config.devUrl ?? `http://localhost:${config.port}`,
-    ).toString(),
-  });
+  const delegated = yield* ProviderConnectionTransport.ProviderConnectionTransport;
+  const auth = delegated
+    ? yield* DelegatedCodexAuth.make(options.instanceId)
+    : yield* makeCodexChatGptAuth({
+        instanceId: options.instanceId,
+        defaultReturnUrl: new URL(
+          "/welcome",
+          config.devUrl ?? `http://localhost:${config.port}`,
+        ).toString(),
+      });
   const homeLayout = yield* resolveManagedCodexHomeLayout(
     config.stateDir,
     options.instanceId,
@@ -134,5 +139,5 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
       revision: profileKey,
     } satisfies CodexEffectiveRuntime;
   });
-  return { auth, resolve, installation, homePath, homeLayout };
+  return { auth, resolve, installation, homePath, homeLayout, delegated: delegated !== undefined };
 });

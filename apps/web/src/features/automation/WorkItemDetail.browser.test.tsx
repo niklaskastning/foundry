@@ -19,6 +19,7 @@ vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => mocks.command }));
 vi.mock("./commands", () => ({ automationCommands: { command: { permissionAtom: () => null } } }));
 vi.mock("./useAutomationQuery", () => ({ useAutomationQuery: mocks.query }));
+vi.mock("../../foundry/useSandboxProfiles", () => ({ useSandboxProfiles: () => undefined }));
 vi.mock("./HandoffPanel", () => ({ HandoffList: () => null }));
 vi.mock("./RunList", () => ({ RunList: () => null }));
 vi.mock("./AgentCatalog", () => ({ WorkflowConfiguration: () => null }));

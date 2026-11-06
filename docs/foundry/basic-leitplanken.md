@@ -553,6 +553,8 @@ Access-/CI-Abnahme getrennt. P58b samt MCP-Instruktionsevals und G12 bleiben off
 
 ### P28 · Versionierter Agent- und Skill-Katalog
 
+**Stand:** Linux/Codex/Web einschließlich dateibasierter Skills und MCP im v4-Durchstich [#72](https://github.com/niklaskastning/foundry/pull/72) abgenommen. Native Windows-Bedienung, weitere Provider/OAuth und öffentliches SSO bleiben getrennt offen.
+
 **Voraussetzungen:** G5, P47.
 
 **Technischer Umsetzungsrahmen:** Gepinnte Agent-/Skill-Versionen im kanonischen Definitionsformat, Hashprüfung und effektiven Run-Snapshot hinzufügen; zunächst vorhandene Providerfähigkeiten nutzen.
@@ -572,6 +574,8 @@ Access-/CI-Abnahme getrennt. P58b samt MCP-Instruktionsevals und G12 bleiben off
 **Gate P52a/P52b – Nachweis:** Fehlendes Recht und zwingend fehlende Fähigkeit blockieren verständlich. Widerruf wirkt auch nach einem gespeicherten Snapshot. Für Codex, Claude, Cursor, Grok, OpenCode und Antigravity je eine ausdrückliche Capability-Entscheidung dokumentieren; unterstützte Adapter gezielt prüfen, übrige deaktiviert lassen. Kein stiller Provider-/Kontowechsel. Routing ohne passenden autorisierten Kandidaten blockiert; ein Retry ändert die gespeicherte Auswahl nicht.
 
 ### P29 · Fan-out/Join und begrenzte Reparaturschleifen
+
+**Stand:** Implementiert; reale Swarm-Überlappung und Review/Fix-Loop unter Linux/Codex/Web in [#72](https://github.com/niklaskastning/foundry/pull/72) abgenommen. Die Pool-/Fairnesskorrekturen aus #66/#70/#71 sind integriert. Dies bestätigt weder native Windows-Ausführung noch zusätzliche reale Maschinen.
 
 **Voraussetzungen:** P28.
 

@@ -97,30 +97,32 @@ describe("command permissions", () => {
     ),
   );
 
-  it.effect("requires the destination settings grant to run storage cleanup", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* setup;
-        const cleanup = createCommandPermissions(runtime, WS_METHODS.serverRunStorageCleanup);
-        registry.set(sessions(env), AsyncResult.success(grant(true)));
-        expect(registry.get(cleanup.permissionAtom(env))).toBe(false);
-        expect((yield* cleanup.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
-          "EnvironmentAuthorizationError",
-        );
-        registry.set(
-          sessions(env),
-          AsyncResult.success({
-            ...grant(true),
-            scopes: [AuthSettingsWriteScope],
-            permissions: [AuthSettingsWriteScope],
-          }),
-        );
-        expect(registry.get(cleanup.permissionAtom(env))).toBe(true);
-        yield* cleanup.authorize(registry, env);
-        registry.set(sessions(other), AsyncResult.success(grant(false)));
-        expect(registry.get(cleanup.permissionAtom(other))).toBe(false);
-      }),
-    ),
+  it.effect.each([WS_METHODS.serverRunStorageCleanup, WS_METHODS.foundryProviderConnectionCommand])(
+    "requires the destination settings grant for %s",
+    (method) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const registry = yield* setup;
+          const cleanup = createCommandPermissions(runtime, method);
+          registry.set(sessions(env), AsyncResult.success(grant(true)));
+          expect(registry.get(cleanup.permissionAtom(env))).toBe(false);
+          expect((yield* cleanup.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+            "EnvironmentAuthorizationError",
+          );
+          registry.set(
+            sessions(env),
+            AsyncResult.success({
+              ...grant(true),
+              scopes: [AuthSettingsWriteScope],
+              permissions: [AuthSettingsWriteScope],
+            }),
+          );
+          expect(registry.get(cleanup.permissionAtom(env))).toBe(true);
+          yield* cleanup.authorize(registry, env);
+          registry.set(sessions(other), AsyncResult.success(grant(false)));
+          expect(registry.get(cleanup.permissionAtom(other))).toBe(false);
+        }),
+      ),
   );
 
   it.effect("requires the destination settings grant to check OTLP endpoints", () =>
@@ -155,6 +157,7 @@ describe("command permissions", () => {
     WS_METHODS.foundryWorkerHandoffReopen,
     WS_METHODS.foundryWorkerRenew,
     WS_METHODS.foundryWorkerCancel,
+    WS_METHODS.foundrySandboxCommand,
     WS_METHODS.foundryAutomationCommand,
     WS_METHODS.foundryAutomationControl,
   ])("uses the target grant for both availability and execution of %s", (method) =>
@@ -553,6 +556,8 @@ it.effect.each([
   WS_METHODS.foundryWorkerRead,
   WS_METHODS.foundryWorkerFollow,
   WS_METHODS.foundryAutomationTriggerQuery,
+  WS_METHODS.foundryProviderConnectionQuery,
+  WS_METHODS.foundrySandboxQuery,
   WS_METHODS.foundryAutomationQuery,
   WS_METHODS.foundryAutomationInboxQuery,
   WS_METHODS.foundryAutomationInboxMark,

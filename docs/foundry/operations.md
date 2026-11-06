@@ -1021,6 +1021,71 @@ enthält `workers` bis zu acht zusätzliche, unterschiedliche Paare aus `deviceI
 und `environmentId`. Diese Betriebsauswahl ersetzt weder die registrierte
 Instanz-/Betreiberzugehörigkeit noch aktuelle Device- und Automation-Freigaben.
 
+### Linux-Sandbox-Main: Schema und Betriebsprofil (P34–P40)
+
+Der Sandbox-Main benötigt Instanzschema 9 und Automation-Schema 11. Der bestehende
+Updater migriert den geprüften Stand mit Schema 8/11 unter seinem eigenen
+Deployment-Lock; keinen zweiten Lock um diesen Aufruf legen:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-sandboxes sha256:<digest> <commit>
+```
+
+Dies aktiviert noch keine Sandboxausführung. Der Aufruf sichert Instanz- und
+Automation-Datenbank sowie Main-State/Workspaces gemeinsam, migriert bei gestopptem
+Main und sperrt den Migrationslogin anschließend wieder. `manifest.json` und
+`success` im ausgegebenen Recovery-Verzeichnis enthalten vorherigen und geprüften
+Zielstand. Bei Migrationsfehlern bleibt Main gestoppt; die Rückkehr zu Schema-8-Code
+verlangt diesen koordinierten Restore. Weitere Schema-9-Updates verwenden `update`.
+
+Die geprüfte, **secretfreie** Profil-/Quota-Konfiguration wird als root-eigene
+`/etc/foundry-deploy/sandbox-policy.json` installiert (Modus `0644`, keine
+Symlinks). Sie benennt den registrierten Provisioner, erlaubte Repositories und
+immutable Images. Main validiert sie beim Start. Credentials gehören in den
+bestehenden Secretpfad, niemals in diese Datei. Anschließend:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py sandboxes enable
+sudo -n python3 -I deploy/fork/updater/activate-access.py status
+```
+
+Der bestehende Profilwechsel setzt beide Sandboxvariablen und bindet ausschließlich
+diese Datei readonly nach `/etc/foundry/sandboxes.json`. Er prüft die gestartete
+Konfiguration und stellt bei Fehlern Runtime-Datei und Compose-Mount gemeinsam
+wieder her. Main erhält keinen Docker-Socket. Der getrennte Linux-Provisioner
+braucht eine eigene Geräteidentität und Sandbox-Provisionierungsfreigabe;
+die Main-Aktivierung ersetzt dies nicht und ist keine OCI-Abnahme.
+Vor `sandboxes disable` müssen alle Allocations bestätigt archiviert und gelöscht
+sein. Änderungen dieser Konfigurationsdatei ebenfalls erst nach diesem Drain und
+anschließendem erneuten Aktivieren durchführen. Keine fremden Runs dafür stoppen.
+
+Den Provisioner auf dem Linux-Dockerhost aus dem geprüften Serverartefakt mit
+eigenem privaten Verzeichnis und neuen Gerätekeys installieren. Die oben
+beschriebene Geräteaufnahme liefert seine Registration; keine bestehende
+Workeridentität oder persönlichen Credentials übernehmen. Seine Device-ID muss
+auch `supervisorDeviceId` der Main-Policy entsprechen. Nur der lokale
+Betreiberbefehl erlaubt die Provisionierungsfreigabe:
+
+```sh
+sudo -n docker exec foundry-main-1 node /app/dist/bin.mjs foundry sandbox-provisioning-access --base-dir /var/lib/foundry --device-id <device-id> --environment-id <environment-id> --generation <aktuelle-grant-generation> --enabled true
+```
+
+Die zurückgegebene Grantgeneration für einen späteren Widerruf mit
+`--enabled false` verwenden. Geräte-/Environment-ID und aktuelle Generation werden
+gemeinsam geprüft; der HTTP-Geräteadapter erlaubt diese Freigabe weiterhin nicht.
+Vor einem geplanten Widerruf eigene Allocations archivieren und löschen.
+
+Die private Supervisor-Konfiguration enthält `origin`, `registrationFile`,
+`keyFile`, `networkName`, `maxCpuMillis`, `maxMemoryMiB` und `maxPids`; optional
+`accessFile` für den bestehenden Access-Maschinenzugang. Credentialdateien bleiben
+hostseitig privat. Den Netzwerkhelper aus
+[Linux sandbox networking](../../deploy/fork/sandbox/README.md) zuerst installieren
+und das geprüfte Netz angeben. Den Supervisor als separaten betreuten Hostdienst
+mit `node <server-bundle>/bin.mjs foundry sandbox-supervise --configuration
+<private-konfiguration.json>` starten. Er braucht Zugriff auf den lokalen
+Docker-Socket und den Netzwerkhelper; Sandboxcontainer bekommen beides nicht.
+Sein eingebauter Hostlock verhindert überlappende Supervisorprozesse.
+
 ### Versionierte Factory-HTTP-API (P58a)
 
 Bei aktivierter Automation stehen dieselben Benutzeroperationen unter

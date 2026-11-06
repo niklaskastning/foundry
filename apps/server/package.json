@@ -31,6 +31,7 @@
     "record:muse-replay": "node scripts/record-muse-msp-replay-fixture.ts",
     "generate": "graphqlgen",
     "generate:expo-schema": "node scripts/fetch-expo-schema.ts",
+    "test:foundry-sandboxes": "node scripts/test-foundry-sandboxes.ts",
     "test:foundry-postgres": "node scripts/test-foundry-postgres.ts",
     "test:foundry-archive": "node scripts/test-foundry-archive.ts",
     "test:foundry-v4-codex": "node scripts/test-foundry-v4-codex.ts",

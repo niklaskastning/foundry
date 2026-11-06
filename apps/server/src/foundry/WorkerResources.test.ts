@@ -15,7 +15,28 @@ import {
   codexResourceConfig,
   isolateCodexMcpConfig,
   prepareWorkspaceResources,
+  prepareSandboxSkills,
 } from "./WorkerResources.ts";
+
+it.effect("verifies pinned sandbox skill bytes on restart and refuses changed resources", () =>
+  Effect.gen(function* () {
+    const cwd = yield* Effect.promise(() =>
+      NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "sandbox-skills-")),
+    );
+    yield* Effect.addFinalizer(() =>
+      Effect.promise(() => NodeFSP.rm(cwd, { recursive: true, force: true })),
+    );
+    const skills = fixture().resources.skills;
+    const directory = yield* prepareSandboxSkills(cwd, skills);
+    expect(yield* prepareSandboxSkills(cwd, skills)).toBe(directory);
+    const first = skills[0]!.files[0]!;
+    yield* Effect.promise(() => NodeFSP.chmod(NodePath.join(directory, first.path), 0o600));
+    yield* Effect.promise(() =>
+      NodeFSP.writeFile(NodePath.join(directory, first.path), "tampered"),
+    );
+    expect((yield* prepareSandboxSkills(cwd, skills).pipe(Effect.result))._tag).toBe("Failure");
+  }).pipe(Effect.scoped),
+);
 
 const fixture = (): FoundryWorkerDefinitionV4 => ({
   factoryId: "factory",

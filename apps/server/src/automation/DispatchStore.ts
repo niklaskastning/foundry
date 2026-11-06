@@ -209,6 +209,10 @@ export class DispatchStore extends Context.Service<
         readonly result: unknown | null;
       },
     ) => Effect.Effect<boolean, DispatchError>;
+    readonly failTarget: (
+      claim: DispatchClaim,
+      reason: "sandbox_deleted",
+    ) => Effect.Effect<boolean, DispatchError>;
     readonly wait: (claim: DispatchClaim, reason: string) => Effect.Effect<boolean, DispatchError>;
     readonly archiveCursor: (commandId: string) => Effect.Effect<number, DispatchError>;
     readonly projectQuestions: (
@@ -445,7 +449,12 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         if (!(yield* lockClaim(claim))) return yield* new DispatchError({ reason: "stale_claim" });
         const current = yield* read(claim.run.factoryId, claim.run.id);
-        if (!current.workflow.v4 || !current.v4State) return current;
+        if (
+          !current.workflow.v4 ||
+          !current.v4State ||
+          (current.state === "failed" && current.reason === "sandbox_deleted")
+        )
+          return current;
         const state = reconcileV4(
           current.workflow.v4,
           current.v4State,
@@ -617,6 +626,24 @@ const make = Effect.gen(function* () {
             latest.every((attempt) => attempt.capacityReleased !== false))
         )
           yield* sql`UPDATE foundry_automation.dispatch_workers SET run_id=NULL,claim_owner=NULL,lease_until='-infinity' WHERE worker_id=${claim.workerId}`;
+        return true;
+      }),
+    );
+  }, Effect.mapError(operationError));
+  const failTarget = Effect.fn("DispatchStore.failTarget")(function* (
+    claim: DispatchClaim,
+    reason: "sandbox_deleted",
+  ) {
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        if (!(yield* lockClaim(claim))) return false;
+        // Only confirmed allocation deletion permits ending attempts without a worker receipt.
+        const rows =
+          yield* sql`UPDATE foundry_automation.dispatch_runs SET state='failed',reason=${reason},v4_state=CASE WHEN v4_state IS NULL THEN NULL ELSE v4_state || ${sql.json({ status: "failed", reason })}::jsonb END WHERE run_id=${claim.run.id} AND state IN ('pending','running','waiting','finalizing') RETURNING run_id`;
+        if (!rows.length) return false;
+        yield* sql`UPDATE foundry_automation.step_attempts SET state='failed',reason=${reason},capacity_released=true WHERE run_id=${claim.run.id} AND state NOT IN ('succeeded','failed')`;
+        yield* sql`UPDATE foundry_automation.dispatch_outbox o SET state='confirmed' FROM foundry_automation.step_attempts a WHERE o.command_id=a.command_id AND a.run_id=${claim.run.id}`;
+        yield* sql`UPDATE foundry_automation.run_controls SET revision=revision+1,mode=CASE WHEN mode='cancel_requested' THEN 'cancelled' ELSE mode END WHERE run_id=${claim.run.id}`;
         return true;
       }),
     );
@@ -1050,6 +1077,7 @@ const make = Effect.gen(function* () {
     prepare,
     record,
     wait,
+    failTarget,
     release,
     permitted,
     admission,

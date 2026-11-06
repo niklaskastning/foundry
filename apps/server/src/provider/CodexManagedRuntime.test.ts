@@ -7,6 +7,9 @@ import * as CodexManagedTokenBroker from "./CodexManagedTokenBroker.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { CodexSettings, EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
+import * as ProviderConnectionTransport from "../foundry/ProviderConnectionTransport.ts";
+import { FoundryProviderConnectionError } from "@t3tools/contracts";
+import * as Redacted from "effect/Redacted";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -29,12 +32,18 @@ const decodeCommand = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.Array(Schema.String)])),
 );
 it.live.each(
-  (["managed", "local"] as const).flatMap((source) =>
-    (["primary", "additional"] as const).map((account) => ({ source, account })),
-  ),
+  (["managed", "local"] as const)
+    .flatMap((source) =>
+      (["primary", "additional"] as const).map((account) => ({
+        source,
+        account,
+        delegated: false,
+      })),
+    )
+    .concat([{ source: "managed", account: "primary", delegated: true }]),
 )(
-  "$source Codex $account account shares home state without routing owned tokens through ambient CLI overrides",
-  ({ source, account }) =>
+  "$source Codex $account account (central delegation: $delegated) shares home state without routing owned tokens through ambient CLI overrides",
+  ({ source, account, delegated }) =>
     Effect.gen(function* () {
       const instanceId = ProviderInstanceId.make(
         account === "primary" ? "codex" : "codex-personal",
@@ -46,6 +55,7 @@ it.live.each(
       yield* fs.writeFileString(path.join(sharedHome, "config.toml"), "# shared config\n");
       const data = new Map<string, Uint8Array>();
       let renewals = 0;
+      let delegatedToken: string | null = "fixture-central-access";
       const secrets = ServerSecretStore.ServerSecretStore.of({
         get: (key) => Effect.sync(() => Option.fromUndefinedOr(data.get(key))),
         set: (key, value) =>
@@ -172,27 +182,47 @@ it.live.each(
               );
               return { stdout, stderr, code: Number(code) };
             }).pipe(Effect.scoped);
-            assert.deepEqual(yield* runHelper, {
-              stdout: "dummy-owned-access",
-              stderr: "",
-              code: 0,
-            });
-            const saved = Option.getOrThrow(yield* runtime.auth.read);
-            const expired = yield* encodeJson({ ...saved, expiresAt: 0 });
-            yield* store.set(new TextEncoder().encode(expired));
-            assert.deepEqual(yield* runHelper, { stdout: "renewed-access", stderr: "", code: 0 });
-            assert.equal(renewals, 1);
-            assert.equal(
-              Option.getOrThrow(yield* runtime.auth.read).refreshToken,
-              "renewed-refresh",
-            );
-            assert.equal((yield* runtime.resolve).revision, effective.revision);
-            const replaced = yield* encodeJson({ ...saved, subject: "replacement-user" });
-            yield* store.set(new TextEncoder().encode(replaced));
-            const refused = yield* runHelper;
-            assert.equal(refused.code, 1);
-            assert.equal(refused.stdout, "");
-            assert.isFalse(yield* fs.exists(ambient.T3CODE_HOME));
+            if (delegated) {
+              assert.deepEqual(yield* runHelper, {
+                stdout: "fixture-central-access",
+                stderr: "",
+                code: 0,
+              });
+              delegatedToken = "fixture-central-renewed";
+              assert.deepEqual(yield* runHelper, {
+                stdout: "fixture-central-renewed",
+                stderr: "",
+                code: 0,
+              });
+              delegatedToken = null;
+              const revoked = yield* runHelper;
+              assert.equal(revoked.code, 1);
+              assert.equal(revoked.stdout, "");
+              assert.equal(renewals, 0);
+              assert.equal((yield* runtime.auth.access.pipe(Effect.result))._tag, "Failure");
+            } else {
+              assert.deepEqual(yield* runHelper, {
+                stdout: "dummy-owned-access",
+                stderr: "",
+                code: 0,
+              });
+              const saved = Option.getOrThrow(yield* runtime.auth.read);
+              const expired = yield* encodeJson({ ...saved, expiresAt: 0 });
+              yield* store.set(new TextEncoder().encode(expired));
+              assert.deepEqual(yield* runHelper, { stdout: "renewed-access", stderr: "", code: 0 });
+              assert.equal(renewals, 1);
+              assert.equal(
+                Option.getOrThrow(yield* runtime.auth.read).refreshToken,
+                "renewed-refresh",
+              );
+              assert.equal((yield* runtime.resolve).revision, effective.revision);
+              const replaced = yield* encodeJson({ ...saved, subject: "replacement-user" });
+              yield* store.set(new TextEncoder().encode(replaced));
+              const refused = yield* runHelper;
+              assert.equal(refused.code, 1);
+              assert.equal(refused.stdout, "");
+              assert.isFalse(yield* fs.exists(ambient.T3CODE_HOME));
+            }
           }
           assert.include(args, "features.api_key_model_discovery=true");
           assert.include(args, "features.multi_agent=false");
@@ -208,13 +238,36 @@ it.live.each(
           assert.strictEqual(ambient.CODEX_HOME, "/user/.codex");
         }).pipe(Effect.scoped);
         assert.strictEqual(leases, 0);
-        yield* runtime.auth.controller.logout(Effect.void);
+        if (delegated)
+          assert.equal(
+            (yield* runtime.auth.controller.logout(Effect.void).pipe(Effect.result))._tag,
+            "Failure",
+          );
+        else yield* runtime.auth.controller.logout(Effect.void);
         assert.equal(
           yield* fs.readFileString(path.join(sharedHome, "auth.json")),
           "native-auth-unchanged",
         );
       }).pipe(
         Effect.provide(CodexManagedTokenBroker.layer),
+        Effect.provideService(
+          ProviderConnectionTransport.ProviderConnectionTransport,
+          delegated
+            ? {
+                providerInstanceId: instanceId,
+                profileKey: "a".repeat(64),
+                connectionId: "central-fixture",
+                access: Effect.suspend(() =>
+                  delegatedToken === null
+                    ? Effect.fail(new FoundryProviderConnectionError({ code: "forbidden" }))
+                    : Effect.succeed({
+                        accessToken: Redacted.make(delegatedToken),
+                        expiresAt: 9_000_000_000_000,
+                      }),
+                ),
+              }
+            : undefined,
+        ),
         Effect.provideService(HostProcess.Arguments, [
           process.execPath,
           NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),

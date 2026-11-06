@@ -635,4 +635,27 @@ export const v4Gates = Effect.fn("V4.postgresGates")(function* <E, E2>(
     NodeAssert.equal(claim.attempts.length, 2);
     yield* call((store) => store.release(claim));
   }
+  yield* startVariant("v4-sandbox-deleted", {
+    id: "review",
+    limits: { maxConcurrentAgents: 1, maxAgentExecutions: 2 },
+    steps: [leaf("work")],
+  });
+  const deletedAttempt = yield* prepare(0);
+  yield* call((store) => store.beginDelivery(claim, deletedAttempt.commandId));
+  NodeAssert.equal(
+    yield* call((store) =>
+      store.failTarget({ ...claim, generation: claim.generation - 1 }, "sandbox_deleted"),
+    ),
+    false,
+  );
+  NodeAssert.equal((yield* call((store) => store.workerCapacity("v4-leaf")))?.occupied, 1);
+  NodeAssert.equal(yield* call((store) => store.failTarget(claim, "sandbox_deleted")), true);
+  yield* refresh();
+  NodeAssert.equal(claim.state, "failed");
+  NodeAssert.equal(claim.reason, "sandbox_deleted");
+  NodeAssert.equal(claim.v4State?.status, "failed");
+  NodeAssert.equal(claim.attempts[0]?.receipt, null);
+  NodeAssert.equal((yield* call((store) => store.workerCapacity("v4-leaf")))?.occupied, 0);
+  NodeAssert.equal(yield* call((store) => store.failTarget(claim, "sandbox_deleted")), false);
+  yield* call((store) => store.release(claim));
 });

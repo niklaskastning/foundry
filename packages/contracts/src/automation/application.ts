@@ -35,6 +35,7 @@ export const FactoryExecutionDefaults = Schema.Struct({
   factoryId: Key,
   repository: Key,
   generation: Schema.Int.check(Schema.isGreaterThan(0)),
+  sandbox: ManualStart.fields.sandbox,
   workers: ManualStart.fields.workers,
   projectId: ManualStart.fields.projectId,
   model: ManualStart.fields.model,
@@ -115,6 +116,7 @@ export const AutomationApplicationCommand = Schema.Union([
     op: Schema.Literal("configureExecutionDefaults"),
     factoryId: Key,
     repository: Key,
+    sandbox: ManualStart.fields.sandbox,
     workers: ManualStart.fields.workers,
     projectId: ManualStart.fields.projectId,
     model: ManualStart.fields.model,
@@ -258,6 +260,7 @@ export const AutomationApplicationResult = Schema.Union([
     executionBinding: Schema.optional(
       Schema.NullOr(
         Schema.Struct({
+          sandbox: ManualStart.fields.sandbox,
           workers: ManualStart.fields.workers,
           projectId: ManualStart.fields.projectId,
           model: ManualStart.fields.model,

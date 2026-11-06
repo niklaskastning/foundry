@@ -28,6 +28,7 @@ import { readyV4Nodes } from "./V4Execution.ts";
 import * as McpBindings from "./McpBindings.ts";
 import * as DispatchStore from "./DispatchStore.ts";
 import * as Publish from "./Publish.ts";
+import * as SandboxTargets from "./SandboxTargets.ts";
 import * as WorkerTransport from "./WorkerTransport.ts";
 import * as ThreadArchive from "../foundry/ThreadArchive.ts";
 import * as Artifacts from "../foundry/Artifacts.ts";
@@ -36,6 +37,7 @@ import { decideStep } from "./stepDecision.ts";
 
 const Text = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(20_000));
 export const DispatchBinding = Schema.Struct({
+  sandbox: ManualStart.fields.sandbox,
   manualInput: Schema.optional(
     Schema.Struct({ title: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(500)) }),
   ),
@@ -206,6 +208,7 @@ const make = Effect.gen(function* () {
   const mcpBindings = yield* McpBindings.McpBindings;
   const publish = yield* Publish.Publish;
   const worker = yield* WorkerTransport.WorkerTransport;
+  const sandboxes = yield* SandboxTargets.SandboxTargets;
   const archive = yield* ThreadArchive.ThreadArchive;
   const artifacts = yield* Artifacts.Artifacts;
   const config = yield* SchedulerConfig;
@@ -236,6 +239,7 @@ const make = Effect.gen(function* () {
       }),
     );
     const binding = yield* decodeBinding({
+      ...(input.sandbox ? { sandbox: input.sandbox } : {}),
       ...(workers.length ? { workers } : {}),
       identity,
       projectId: input.projectId,
@@ -257,9 +261,15 @@ const make = Effect.gen(function* () {
     const workflow = yield* store.readWorkflow(input.factoryId, input.workflowVersionId);
     if (!workflow.execution && !workflow.v4 && binding.workers?.length)
       return yield* new SchedulerError({ reason: "invalid_binding" });
+    if (binding.sandbox && (!sandboxes || !workflow.v4 || binding.workers?.length))
+      return yield* new SchedulerError({ reason: "invalid_binding" });
+    if (binding.sandbox && sandboxes)
+      yield* sandboxes.validate(identity.operatorId, binding.sandbox, input.revision);
     const primary = binding.workers?.[0] ?? { identity, projectId: input.projectId };
-    const status = yield* worker.status(primary.identity, primary.projectId);
-    if (status.projectReady !== true)
+    const status = binding.sandbox
+      ? null
+      : yield* worker.status(primary.identity, primary.projectId);
+    if (status && status.projectReady !== true)
       return yield* new SchedulerError({ reason: "invalid_binding" });
     if ((workflow.execution || workflow.v4) && !/^[a-f0-9]{40}$/.test(input.revision))
       return yield* new SchedulerError({ reason: "invalid_binding" });
@@ -273,7 +283,7 @@ const make = Effect.gen(function* () {
       )
         return yield* new SchedulerError({ reason: "invalid_binding" });
     }
-    const issue = executionConfigurationIssue(workflow, status, binding.model);
+    const issue = status ? executionConfigurationIssue(workflow, status, binding.model) : null;
     if (issue) return yield* new SchedulerError({ reason: issue });
     if (
       workflow.steps.some(
@@ -388,6 +398,31 @@ const make = Effect.gen(function* () {
       binding.identity.environmentId !== config.environmentId
     )
       return yield* new SchedulerError({ reason: "invalid_binding" });
+    if (binding.sandbox) {
+      if (!sandboxes) {
+        yield* store.wait(claim, "sandbox_unavailable");
+        return;
+      }
+      if (claim.mode === "cancel_requested" && !claim.attempts.length) {
+        yield* sandboxes.cancel(binding.identity.operatorId, claim.run.id);
+        yield* store.confirmCancel(claim);
+        return;
+      }
+      const target = yield* sandboxes.resolve(binding.identity, binding.sandbox, claim.run);
+      if (target.state === "failed") {
+        yield* store.failTarget(claim, target.reason);
+        return;
+      }
+      if (target.state === "waiting") {
+        yield* store.wait(claim, target.reason);
+        return;
+      }
+      binding = {
+        ...binding,
+        workers: [{ identity: target.identity, projectId: target.projectId }],
+        projectId: target.projectId,
+      };
+    }
     const attempts = [
       ...new Map(claim.attempts.map((attempt) => [attempt.ordinal, attempt])).values(),
     ];
@@ -1006,13 +1041,15 @@ const make = Effect.gen(function* () {
           const assigned = attempt.workerBinding
             ? yield* decodeWorkerAssignment(attempt.workerBinding)
             : { identity: binding.identity, projectId: binding.projectId };
-          const identity = (
-            binding.workers ?? [{ identity: binding.identity, projectId: binding.projectId }]
-          ).find(
-            (entry) =>
-              entry.identity.deviceId === assigned.identity.deviceId &&
-              entry.identity.environmentId === assigned.identity.environmentId,
-          )?.identity;
+          const identity = binding.sandbox
+            ? assigned.identity
+            : (
+                binding.workers ?? [{ identity: binding.identity, projectId: binding.projectId }]
+              ).find(
+                (entry) =>
+                  entry.identity.deviceId === assigned.identity.deviceId &&
+                  entry.identity.environmentId === assigned.identity.environmentId,
+              )?.identity;
           if (!identity) return;
           yield* worker.renew(identity, {
             commandId: CommandId.make(attempt.commandId),
@@ -1023,6 +1060,7 @@ const make = Effect.gen(function* () {
     );
   });
   const tick = Effect.gen(function* () {
+    if (sandboxes) yield* sandboxes.reconcileCleanup;
     const claim = yield* store.claimNext({ workerId, owner, leaseMillis: 60_000 });
     if (!claim) return false;
     const reconcile = Effect.gen(function* () {
@@ -1044,6 +1082,9 @@ const make = Effect.gen(function* () {
           };
         }
         if (fresh.mode === "cancel_requested") {
+          const binding = yield* decodeBinding(fresh.binding);
+          if (binding.sandbox && sandboxes && !active.length)
+            yield* sandboxes.cancel(binding.identity.operatorId, fresh.run.id);
           yield* store.confirmCancel(fresh);
           return;
         }

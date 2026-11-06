@@ -90,6 +90,7 @@ const decodeDefaults = Schema.decodeUnknownEffect(FactoryExecutionDefaults);
 const decodeLaunch = Schema.decodeUnknownOption(FoundryWorkerLaunchInput);
 const decodeExecutionBinding = Schema.decodeUnknownEffect(
   Schema.Struct({
+    sandbox: ManualStart.fields.sandbox,
     workers: Scheduler.DispatchBinding.fields.workers,
     projectId: ManualStart.fields.projectId,
     model: ManualStart.fields.model,
@@ -254,6 +255,7 @@ const make = Effect.gen(function* () {
           )
             return yield* new AutomationApplicationError({ code: "conflict" });
           const settings = {
+            ...(input.sandbox ? { sandbox: input.sandbox } : {}),
             ...(input.workers ? { workers: input.workers } : {}),
             projectId: input.projectId,
             model: input.model,

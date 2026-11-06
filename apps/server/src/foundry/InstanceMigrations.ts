@@ -66,7 +66,7 @@ const make = Effect.gen(function* () {
           }>`SELECT version FROM foundry_instance.schema_version`;
           if (
             versions.length !== 1 ||
-            ![1, 2, 3, 4, 5, 6, 7, 8].includes(versions[0]?.version ?? 0)
+            ![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(versions[0]?.version ?? 0)
           ) {
             return yield* new InstanceDatabase.InstanceDatabaseError({
               reason: "schema_incompatible",
@@ -184,6 +184,29 @@ const make = Effect.gen(function* () {
               revoked boolean NOT NULL DEFAULT false)`;
             yield* sql`UPDATE foundry_instance.schema_version SET version=8`;
           }
+          if ((versions[0]?.version ?? 0) < 9) {
+            yield* sql`CREATE TABLE foundry_instance.sandbox_profiles (
+              profile_id text NOT NULL, revision uuid NOT NULL,
+              instance_id uuid NOT NULL REFERENCES foundry_instance.instance(instance_id),
+              operator_id uuid NOT NULL REFERENCES foundry_instance.operator_binding(operator_id),
+              profile jsonb NOT NULL, PRIMARY KEY(instance_id, profile_id, revision))`;
+            yield* sql`CREATE TABLE foundry_instance.sandbox_allocations (
+              allocation_id uuid PRIMARY KEY,
+              instance_id uuid NOT NULL REFERENCES foundry_instance.instance(instance_id),
+              operator_id uuid NOT NULL REFERENCES foundry_instance.operator_binding(operator_id),
+              command_id text NOT NULL, allocation jsonb NOT NULL,
+              archive_receipt jsonb, setup_log text NOT NULL DEFAULT '', claim_owner uuid, claim_until bigint NOT NULL DEFAULT 0,
+              UNIQUE(instance_id,operator_id,command_id))`;
+            yield* sql`CREATE INDEX sandbox_allocations_active ON foundry_instance.sandbox_allocations(instance_id)
+              WHERE allocation->>'state' <> 'deleted'`;
+            yield* sql`CREATE TABLE foundry_instance.provider_connections (
+              id text PRIMARY KEY,
+              instance_id uuid NOT NULL REFERENCES foundry_instance.instance(instance_id),
+              operator_id uuid NOT NULL REFERENCES foundry_instance.operator_binding(operator_id),
+              generation integer NOT NULL CHECK(generation > 0), connection jsonb NOT NULL,
+              revoked boolean NOT NULL DEFAULT false, last_issued_expires_at bigint NOT NULL DEFAULT 0)`;
+            yield* sql`UPDATE foundry_instance.schema_version SET version=9`;
+          }
           yield* InstanceDatabase.checkSchema();
           const identities = yield* sql<{
             instance_id: string;
@@ -198,6 +221,8 @@ const make = Effect.gen(function* () {
               reason: "identity_conflict",
             });
           }
+          yield* sql`GRANT SELECT, INSERT ON foundry_instance.sandbox_profiles TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT SELECT, INSERT, UPDATE ON foundry_instance.sandbox_allocations, foundry_instance.provider_connections TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT USAGE ON SCHEMA foundry_instance TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT SELECT ON foundry_instance.schema_version, foundry_instance.instance, foundry_instance.operator_binding TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT UPDATE (access_generation) ON foundry_instance.instance TO ${sql(input.runtimeRole)}`;

@@ -1,0 +1,264 @@
+import { expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as ProcessRunner from "../../processRunner.ts";
+import * as OciSupervisor from "./OciSupervisor.ts";
+
+const input = {
+  instanceId: "instance-one",
+  allocationId: "allocation-one",
+  image: `ghcr.io/example/runtime@sha256:${"a".repeat(64)}`,
+  architecture: "amd64" as const,
+  cpuMillis: 1000,
+  memoryMiB: 512,
+  pids: 128,
+  network: "none" as const,
+  command: ["node", "/app/sandbox.mjs"],
+};
+
+const fixture = () => {
+  const resources = new Map<
+    string,
+    {
+      Id: string;
+      Name: string;
+      Labels: Record<string, string>;
+      Config: { Labels: Record<string, string> };
+      State: { Running: boolean };
+    }
+  >();
+  const invocations: string[][] = [];
+  let loseStartResponse = false;
+  let policyValid = true;
+  const runner = ProcessRunner.ProcessRunner.of({
+    run: (command) =>
+      Effect.sync(() => {
+        const args = command.args.filter((arg) => !arg.startsWith("--host="));
+        invocations.push(args);
+        const [kind, operation] = args;
+        const name = args.at(-1)!;
+        let stdout = "";
+        let code = 0;
+        if (command.command === "/usr/bin/python3") {
+          code = policyValid ? 0 : 1;
+          stdout = JSON.stringify({
+            name: "foundry-sandbox-test",
+            action: "inspect",
+            verified: true,
+            dns: "1.1.1.1",
+          });
+        } else if (kind === "network" && operation === "inspect") {
+          stdout = JSON.stringify([
+            { Driver: "bridge", Labels: { "com.foundry.egress-policy": "restricted-v1" } },
+          ]);
+        } else if (operation === "ls") {
+          stdout = [...resources.values()]
+            .filter((r) => r.Name === name.replace(/^name=\^\/?/, "").replace(/\$$/, ""))
+            .map((r) => r.Name)
+            .join("\n");
+        } else if (operation === "inspect") {
+          const found = resources.get(`${kind}:${name}`);
+          if (found) stdout = JSON.stringify([found]);
+          else code = 1;
+        } else if (operation === "create") {
+          const resourceName = kind === "container" ? args[args.indexOf("--name") + 1]! : name;
+          if (resources.has(`${kind}:${resourceName}`)) code = 1;
+          else {
+            const labels = Object.fromEntries(
+              args.flatMap((arg, i) => (arg === "--label" ? [args[i + 1]!.split("=")] : [])),
+            );
+            const resource = {
+              Id: resourceName,
+              Name: resourceName,
+              Labels: labels,
+              Config: { Labels: labels },
+              State: { Running: false },
+            };
+            resources.set(`${kind}:${resourceName}`, resource);
+            stdout = resourceName;
+          }
+        } else if (operation === "start") {
+          resources.get(`container:${name}`)!.State.Running = !args.includes("--attach");
+          if (args.includes("--attach")) stdout = '{"manifests":[]}';
+          if (loseStartResponse) {
+            loseStartResponse = false;
+            code = 1;
+          }
+        } else if (operation === "stop") resources.get(`container:${name}`)!.State.Running = false;
+        else if (operation === "rm") resources.delete(`${kind}:${name}`);
+        else throw new Error(`Unexpected command ${args.join(" ")}`);
+        return {
+          stdout,
+          stderr: "",
+          code: ChildProcessSpawner.ExitCode(code),
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          stdoutInvalidUtf8: false,
+          stderrInvalidUtf8: false,
+        };
+      }),
+  });
+  return {
+    resources,
+    invocations,
+    invalidatePolicy: () => {
+      policyValid = false;
+    },
+    loseStart: () => {
+      loseStartResponse = true;
+    },
+    layer: OciSupervisor.layer({
+      maxCpuMillis: 4000,
+      maxMemoryMiB: 4096,
+      maxPids: 512,
+      networkName: "foundry-sandbox-test",
+    }).pipe(Layer.provide(Layer.succeed(ProcessRunner.ProcessRunner, runner))),
+  };
+};
+
+it.effect(
+  "reconciles a lost start response and restart without duplicate containers or volumes",
+  () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      f.loseStart();
+      const first = yield* Effect.gen(function* () {
+        return yield* (yield* OciSupervisor.OciSupervisor).ensure(input);
+      }).pipe(Effect.provide(f.layer));
+      const second = yield* Effect.gen(function* () {
+        return yield* (yield* OciSupervisor.OciSupervisor).ensure(input);
+      }).pipe(Effect.provide(f.layer));
+      expect(second).toEqual(first);
+      expect(f.resources.size).toBe(2);
+      expect(
+        f.invocations.filter((args) => args[0] === "container" && args[1] === "create"),
+      ).toHaveLength(1);
+      const create = f.invocations.find((args) => args[0] === "container" && args[1] === "create")!;
+      expect(create).toContain("--read-only");
+      expect(create).toContain("--cap-drop=ALL");
+      expect(create).toContain("--security-opt=no-new-privileges:true");
+      expect(create).toContain("--user=1000:1000");
+      expect(create).toContain("--network=none");
+      expect(create).toContain("--memory=512m");
+      expect(create).toContain("--memory-swap=512m");
+      expect(create).toContain("--pids-limit=128");
+      expect(create).toContain("--cpus=1");
+    }),
+);
+
+it.effect(
+  "rejects drift, excessive limits and foreign ownership, and never removes a running writer",
+  () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      yield* Effect.gen(function* () {
+        const supervisor = yield* OciSupervisor.OciSupervisor;
+        const started = yield* supervisor.ensure(input);
+        expect(
+          (yield* supervisor.ensure({ ...input, image: "ubuntu:latest" }).pipe(Effect.result))._tag,
+        ).toBe("Failure");
+        expect(
+          (yield* supervisor.ensure({ ...input, cpuMillis: 8000 }).pipe(Effect.result))._tag,
+        ).toBe("Failure");
+        expect(
+          (yield* supervisor.ensure({ ...input, memoryMiB: 1024 }).pipe(Effect.result))._tag,
+        ).toBe("Failure");
+        expect((yield* supervisor.remove(input).pipe(Effect.result))._tag).toBe("Failure");
+        expect(f.resources.size).toBe(2);
+        const resource = f.resources.get(`container:${started.containerName}`)!;
+        resource.Config.Labels["com.foundry.instance"] = "foreign";
+        expect((yield* supervisor.stop(input).pipe(Effect.result))._tag).toBe("Failure");
+        expect((yield* supervisor.remove(input).pipe(Effect.result))._tag).toBe("Failure");
+        expect(resource.State.Running).toBe(true);
+      }).pipe(Effect.provide(f.layer));
+    }),
+);
+
+it.effect("stops and deletes only its resources, with idempotent repeated cleanup", () =>
+  Effect.gen(function* () {
+    const f = fixture();
+    yield* Effect.gen(function* () {
+      const supervisor = yield* OciSupervisor.OciSupervisor;
+      yield* supervisor.ensure(input);
+      yield* supervisor.ensure({ ...input, allocationId: "another" });
+      yield* supervisor.stop(input);
+      yield* supervisor.remove(input);
+      yield* supervisor.remove(input);
+      expect(yield* supervisor.inspect(input)).toBeNull();
+      expect(f.resources.size).toBe(2);
+      expect((yield* supervisor.inspect({ ...input, allocationId: "another" }))?.running).toBe(
+        true,
+      );
+    }).pipe(Effect.provide(f.layer));
+  }),
+);
+
+it.effect(
+  "fences finalization behind stopped writers and blocks restart or deletion while its helper runs",
+  () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      yield* Effect.gen(function* () {
+        const supervisor = yield* OciSupervisor.OciSupervisor;
+        const original = yield* supervisor.ensure(input);
+        const command = {
+          argv: ["node", "/app/dist/bin.mjs", "foundry", "sandbox-archive", "capture-environment"],
+        };
+        expect((yield* supervisor.finalize(input, command).pipe(Effect.result))._tag).toBe(
+          "Failure",
+        );
+        yield* supervisor.stop(input);
+        expect(
+          (yield* supervisor
+            .finalize(input, { argv: ["sh", "-c", "anything"] })
+            .pipe(Effect.result))._tag,
+        ).toBe("Failure");
+        const result = yield* supervisor.finalize(input, command);
+        expect(result).toEqual({
+          state: "completed",
+          stdout: '{"manifests":[]}',
+          stderr: "",
+          exitCode: 0,
+        });
+        expect((yield* supervisor.inspect(input))?.running).toBe(false);
+        expect(f.resources.size).toBe(2);
+        const parent = f.resources.get(`container:${original.containerName}`)!;
+        const labels = {
+          ...parent.Labels,
+          "com.foundry.role": "finalizer",
+          "com.foundry.finalizer-deadline": "600000",
+        };
+        const name = `${original.containerName}-finalizer`;
+        f.resources.set(`container:${name}`, {
+          Id: name,
+          Name: name,
+          Labels: labels,
+          Config: { Labels: labels },
+          State: { Running: true },
+        });
+        expect(yield* supervisor.finalize(input, command)).toEqual({ state: "running" });
+        expect((yield* supervisor.ensure(input).pipe(Effect.result))._tag).toBe("Failure");
+        expect((yield* supervisor.remove(input).pipe(Effect.result))._tag).toBe("Failure");
+        expect(parent.State.Running).toBe(false);
+      }).pipe(Effect.provide(f.layer));
+    }),
+);
+
+it.effect("verifies actual operator firewall policy before creation and restart and pins DNS", () =>
+  Effect.gen(function* () {
+    const f = fixture();
+    yield* Effect.gen(function* () {
+      const oci = yield* OciSupervisor.OciSupervisor;
+      yield* oci.ensure({ ...input, network: "configured" });
+      const create = f.invocations.find((args) => args[0] === "container" && args[1] === "create")!;
+      expect(create).toContain("--dns=1.1.1.1");
+      f.invalidatePolicy();
+      expect(
+        (yield* oci.ensure({ ...input, network: "configured" }).pipe(Effect.flip)).reason,
+      ).toBe("network-policy");
+      expect(f.resources.size).toBe(2);
+    }).pipe(Effect.provide(f.layer));
+  }),
+);

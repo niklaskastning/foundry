@@ -97,3 +97,8 @@ export * from "./automation/handoff.ts";
 export * from "./automation/definitionV4.ts";
 export * from "./automation/mcpBinding.ts";
 export * from "./automation/executionV4.ts";
+
+export * from "./foundrySandbox.ts";
+export * from "./foundrySandboxArchive.ts";
+
+export * from "./foundryProviderConnection.ts";

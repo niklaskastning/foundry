@@ -43,6 +43,7 @@ import * as Queue from "effect/Queue";
 import * as DeviceChannel from "./DeviceChannel.ts";
 import * as DeviceConfig from "./DeviceConfig.ts";
 import * as FoundrySessions from "./FoundrySessions.ts";
+import * as SandboxGatewayAccess from "./SandboxGatewayAccess.ts";
 import * as GatewayGrants from "./GatewayGrants.ts";
 import * as GatewayHttp from "./gatewayHttp.ts";
 import * as AutomationApiHttp from "../automation/ApiHttp.ts";
@@ -69,6 +70,7 @@ const fixture = Effect.gen(function* () {
   let accessGeneration = 1;
   let accessEnabled = true;
   let automationEnabled = false;
+  let sandboxEnabled = true;
   let automationGeneration = 1;
   let databaseHangs = false;
   let stream: DeviceChannel.DeviceChannel["Service"]["stream"] = () => Effect.void;
@@ -77,6 +79,21 @@ const fixture = Effect.gen(function* () {
   const finish = yield* Deferred.make<void>();
   const services = yield* Layer.build(
     GatewayGrants.layer.pipe(
+      Layer.provide(
+        Layer.succeed(SandboxGatewayAccess.SandboxGatewayAccess, {
+          validateDevice: () =>
+            sandboxEnabled
+              ? Effect.void
+              : Effect.fail(new FoundryGatewayError({ code: "forbidden" })),
+          validate: (target) =>
+            sandboxEnabled &&
+            target.deviceId === device.deviceId &&
+            target.environmentId === device.environmentId &&
+            target.operatorId === "operator"
+              ? Effect.succeed(expiresAt)
+              : Effect.fail(new FoundryGatewayError({ code: "forbidden" })),
+        }),
+      ),
       Layer.provide(
         Layer.succeed(DeviceRegistry.DeviceRegistry, {
           list: (operatorId) =>
@@ -122,6 +139,7 @@ const fixture = Effect.gen(function* () {
               })),
             ),
           update: () => Effect.die("not used"),
+          updateProvisioning: () => Effect.die("not used"),
           check: (_id, _operator, generation) =>
             Effect.suspend(() =>
               databaseHangs
@@ -232,6 +250,9 @@ const fixture = Effect.gen(function* () {
     setAccess: (enabled: boolean) => {
       accessEnabled = enabled;
       accessGeneration++;
+    },
+    setSandbox: (enabled: boolean) => {
+      sandboxEnabled = enabled;
     },
     setAutomation: (enabled: boolean) => {
       automationEnabled = enabled;
@@ -659,22 +680,27 @@ it.live("bounds HTTP bodies without Content-Length and returns no credential or 
   }).pipe(Effect.scoped),
 );
 
-it.effect.each(["success", "session-revoke", "grant-remove", "foundry-logout"] as const)(
-  "revalidates authority before returning a device response: %s",
-  (action) =>
-    Effect.gen(function* () {
-      const f = yield* fixture;
-      const request = f.request(f.read.token);
-      const grant = yield* f.grants.create(request, f.input);
-      const lookup = { ...f.target, grantId: grant.grantId };
-      const read = yield* f.grants.projects(request, lookup).pipe(Effect.result, Effect.forkScoped);
-      yield* Deferred.await(f.dispatched);
-      if (action === "session-revoke") yield* f.sessions.revoke(f.read.sessionId);
-      if (action === "grant-remove") yield* f.grants.remove(request, lookup);
-      if (action === "foundry-logout") f.logout();
-      yield* Deferred.succeed(f.finish, undefined);
-      expect((yield* Fiber.join(read))._tag).toBe(action === "success" ? "Success" : "Failure");
-    }).pipe(Effect.scoped),
+it.effect.each([
+  "success",
+  "session-revoke",
+  "grant-remove",
+  "foundry-logout",
+  "sandbox-draining",
+] as const)("revalidates authority before returning a device response: %s", (action) =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    const request = f.request(f.read.token);
+    const grant = yield* f.grants.create(request, f.input);
+    const lookup = { ...f.target, grantId: grant.grantId };
+    const read = yield* f.grants.projects(request, lookup).pipe(Effect.result, Effect.forkScoped);
+    yield* Deferred.await(f.dispatched);
+    if (action === "session-revoke") yield* f.sessions.revoke(f.read.sessionId);
+    if (action === "grant-remove") yield* f.grants.remove(request, lookup);
+    if (action === "foundry-logout") f.logout();
+    if (action === "sandbox-draining") f.setSandbox(false);
+    yield* Deferred.succeed(f.finish, undefined);
+    expect((yield* Fiber.join(read))._tag).toBe(action === "success" ? "Success" : "Failure");
+  }).pipe(Effect.scoped),
 );
 
 it.effect("binds single-use stream tickets to live sessions, scopes, origin and expiry", () =>
@@ -896,6 +922,7 @@ it.effect.each([
   "device-revoked",
   "client-access-reenabled",
   "foundry-expired",
+  "sandbox-revoked",
 ] as const)("revalidates persisted Automation authority after %s", (action) =>
   Effect.gen(function* () {
     const f = yield* fixture;
@@ -913,7 +940,14 @@ it.effect.each([
       (yield* f.grants.authorizeAutomation(f.request(f.read.token), f.target).pipe(Effect.result))
         ._tag,
     ).toBe("Failure");
-    const identity = yield* f.grants.authorizeAutomation(request, f.target);
+    const admitted = yield* f.grants.authorizeAutomation(request, f.target);
+    const identity =
+      action === "sandbox-revoked"
+        ? yield* f.grants.retargetSandbox(admitted, {
+            ...admitted,
+            allocationId: "73b4c050-4155-44a8-abd8-eaa8256b1e45",
+          })
+        : admitted;
     const socket = Socket.make({ reader: Effect.die("unused"), writer: Effect.die("unused") });
     let opened = 0;
     f.setStream((grant, validate) =>
@@ -934,6 +968,9 @@ it.effect.each([
     yield* f.grants.openAutomation(identity, socket);
     expect(opened).toBe(2);
     switch (action) {
+      case "sandbox-revoked":
+        f.setSandbox(false);
+        break;
       case "automation-disabled":
         f.setAutomation(false);
         break;
@@ -1050,4 +1087,35 @@ it.effect.each(["delegation", "device", "access", "automation"] as const)(
         (yield* f.grants.openAutomation(identity, socket, authorize).pipe(Effect.result))._tag,
       ).toBe("Failure");
     }).pipe(Effect.scoped),
+);
+
+it.effect("limits allocation readiness probes to reads and revalidates their live allocation", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    f.setAutomation(true);
+    const identity = yield* f.grants.sandboxProbe({
+      ...f.target,
+      instanceId: FoundryInstanceId.make("22222222-2222-4222-8222-222222222222"),
+      operatorId: "operator",
+      allocationId: "73b4c050-4155-44a8-abd8-eaa8256b1e45",
+    });
+    const socket = Socket.make({ reader: Effect.die("unused"), writer: Effect.die("unused") });
+    let opens = 0;
+    f.setStream((grant, validate) =>
+      validate.pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            expect(grant.scopes).toEqual(["orchestration:read"]);
+            opens++;
+          }),
+        ),
+      ),
+    );
+    yield* f.grants.openAutomation(identity, socket);
+    f.setSandbox(false);
+    expect((yield* f.grants.openAutomation(identity, socket).pipe(Effect.result))._tag).toBe(
+      "Failure",
+    );
+    expect(opens).toBe(1);
+  }).pipe(Effect.scoped),
 );
