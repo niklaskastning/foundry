@@ -1093,6 +1093,11 @@ mit `node <server-bundle>/bin.mjs foundry sandbox-supervise --configuration
 <private-konfiguration.json>` starten. Er braucht Zugriff auf den lokalen
 Docker-Socket und den Netzwerkhelper; Sandboxcontainer bekommen beides nicht.
 Sein eingebauter Hostlock verhindert überlappende Supervisorprozesse.
+Der Dienst benötigt `/usr/sbin` im `PATH` für die Firewallprüfung. Bei
+`ProtectSystem=strict` müssen `/var/lib/foundry-sandbox` und
+`/var/lib/foundry-sandbox-networks` schreibbar bleiben: Auch die Prüfung des
+Netzwerks nimmt dessen eigene Lockdatei. Nach einem Supervisorneustart kann die
+Übernahme bis zum Ablauf der bisherigen 60-Sekunden-Lease warten.
 
 Setup-Archive ohne Thread enthalten einen zentral bestätigten JSON-Index und
 bestätigte Teile von höchstens 8 MiB; auch Abhängigkeitsverzeichnisse werden

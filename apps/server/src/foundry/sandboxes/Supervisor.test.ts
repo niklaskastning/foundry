@@ -4,6 +4,7 @@ import {
   EnvironmentId,
   FoundryDeviceId,
   FoundryInstanceId,
+  FoundrySandboxError,
   type FoundrySandboxAllocation,
   type FoundrySandboxMachineOperation,
 } from "@t3tools/contracts";
@@ -62,6 +63,7 @@ it.effect("fences lost setup leases and preserves work when archive fails", () =
     let fetchedProfiles = 0;
     let stopped = false;
     let removed = false;
+    let completeSetup = false;
     const oci = Oci.OciSupervisor.of({
       ensure: () => Effect.die("unexpected provision"),
       inspect: () => Effect.succeed(null),
@@ -77,10 +79,20 @@ it.effect("fences lost setup leases and preserves work when archive fails", () =
       exec: (_, input) =>
         input.argv.at(-1) === "logs"
           ? Effect.succeed({ stdout: '{"log":""}', stderr: "", exitCode: 0 })
-          : Deferred.succeed(started, undefined).pipe(
-              Effect.andThen(Effect.never),
-              Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
-            ),
+          : completeSetup
+            ? Effect.succeed({
+                stdout: JSON.stringify(
+                  input.argv.at(-1) === "identity"
+                    ? { environmentId: "sandbox", publicKey: "fixture" }
+                    : null,
+                ),
+                stderr: "",
+                exitCode: 0,
+              })
+            : Deferred.succeed(started, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+              ),
       finalize: () => Effect.fail(new Oci.OciError({ operation: "exec", reason: "command" })),
     });
     const transport = Transport.Transport.of({
@@ -114,9 +126,11 @@ it.effect("fences lost setup leases and preserves work when archive fails", () =
                 fetchedProfiles++;
                 return allocation.profile;
               })
-            : request.op === "setupReport"
-              ? Effect.succeed(null)
-              : Queue.offer(events, request).pipe(Effect.as(null)),
+            : request.op === "approve"
+              ? Effect.fail(new FoundrySandboxError({ code: "credentials_required" }))
+              : request.op === "setupReport"
+                ? Effect.succeed(null)
+                : Queue.offer(events, request).pipe(Effect.as(null)),
     });
     yield* Effect.gen(function* () {
       const service = yield* Supervisor.Supervisor;
@@ -144,6 +158,16 @@ it.effect("fences lost setup leases and preserves work when archive fails", () =
       if (failed.op === "transition") {
         assert.equal(failed.state, "failed");
         assert.equal(failed.failure, "archive");
+      }
+      assert.isFalse(removed);
+      completeSetup = true;
+      allocation = { ...allocation, generation: 3, state: "setup", runtimeAdmitted: false };
+      yield* TestClock.adjust("2 seconds");
+      const credentials = yield* Queue.take(events);
+      assert.equal(credentials.op, "transition");
+      if (credentials.op === "transition") {
+        assert.equal(credentials.state, "failed");
+        assert.equal(credentials.failure, "credentials");
       }
       assert.isFalse(removed);
     }).pipe(

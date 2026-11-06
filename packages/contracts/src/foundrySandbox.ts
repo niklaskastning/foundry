@@ -131,6 +131,7 @@ export class FoundrySandboxError extends Schema.TaggedError<FoundrySandboxError>
       "capacity",
       "unavailable",
       "archive_required",
+      "credentials_required",
     ]),
   },
 ) {

@@ -468,7 +468,9 @@ const make = Effect.gen(function* () {
                   ? "archive"
                   : allocation.state === "provisioning"
                     ? "provisioning"
-                    : "unavailable";
+                    : isSandboxError(error) && error.code === "credentials_required"
+                      ? "credentials"
+                      : "unavailable";
               return step(allocation, "failed", failure).pipe(Effect.ignore);
             }),
           ),

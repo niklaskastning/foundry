@@ -1,5 +1,10 @@
 import * as WorkerTransport from "../../automation/WorkerTransport.ts";
-import { ThreadId, FoundrySandboxMachineRequest, FoundrySandboxError } from "@t3tools/contracts";
+import {
+  ThreadId,
+  FoundrySandboxMachineRequest,
+  FoundrySandboxError,
+  FoundryProviderConnectionError,
+} from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -27,6 +32,7 @@ const decode = Schema.decodeUnknownEffect(FoundrySandboxMachineRequest, {
   onExcessProperty: "error",
 });
 const isError = Schema.is(FoundrySandboxError);
+const isConnectionError = Schema.is(FoundryProviderConnectionError);
 export const layer = Layer.effect(
   MachineAccess,
   Effect.gen(function* () {
@@ -318,7 +324,15 @@ export const layer = Layer.effect(
         );
       },
       Effect.mapError((error) =>
-        isError(error) ? error : new FoundrySandboxError({ code: "unavailable" }),
+        isError(error)
+          ? error
+          : new FoundrySandboxError({
+              code:
+                isConnectionError(error) &&
+                (error.code === "forbidden" || error.code === "login_required")
+                  ? "credentials_required"
+                  : "unavailable",
+            }),
       ),
     );
     return { handle };
