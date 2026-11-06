@@ -177,7 +177,7 @@ def main():
                 control_rules(args.name, manifest['control'], '-D')
                 run('nft', '-f', '-', input=f'delete table inet {table}\ndelete table bridge {table}\n')
                 path.unlink()
-        print(json.dumps({'name': args.name, 'action': args.action, 'verified': True, 'dns': manifest['dns']}))
+        print(json.dumps({'name': args.name, 'action': args.action, 'verified': True, 'dns': manifest['dns'], 'control': manifest['control']}))
 
 if __name__ == '__main__':
     try:

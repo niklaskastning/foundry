@@ -47,6 +47,10 @@ const execute = (argv, cwd, output) =>
         LANG: "C.UTF-8",
         GIT_TERMINAL_PROMPT: "0",
         ...PACKAGE_INSTALL_ENVIRONMENT,
+        ...(process.env.FOUNDRY_SANDBOX_CONTROL_CA_SHA256 &&
+        NodeFS.existsSync(`${PRIVATE}/control-ca.pem`)
+          ? { NODE_EXTRA_CA_CERTS: `${PRIVATE}/control-ca.pem` }
+          : {}),
         FOUNDRY_SANDBOX_ALLOCATION_ID: process.env.FOUNDRY_SANDBOX_ALLOCATION_ID,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -299,9 +303,33 @@ export const prepareRuntime = async (
     )
   )
     throw new Error("runtime_environment");
+  if (input.controlCaPem !== undefined) {
+    if (
+      typeof input.controlCaPem !== "string" ||
+      input.controlCaPem.length > 16384 ||
+      !/^-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\s]+-----END CERTIFICATE-----\s*$/.test(
+        input.controlCaPem,
+      )
+    )
+      throw new Error("runtime_control_ca");
+    const ca = new NodeCrypto.X509Certificate(input.controlCaPem);
+    const expected = process.env.FOUNDRY_SANDBOX_CONTROL_CA_SHA256;
+    if (
+      !ca.ca ||
+      !expected ||
+      NodeCrypto.createHash("sha256").update(ca.raw).digest("hex") !== expected
+    )
+      throw new Error("runtime_control_ca");
+    const caFile = `${privateDirectory}/control-ca.pem`;
+    if ((await exists(caFile)) && (await NodeFSP.readFile(caFile, "utf8")) !== input.controlCaPem)
+      throw new Error("runtime_control_ca_drift");
+    await NodeFSP.writeFile(caFile, input.controlCaPem, { mode: 0o600 });
+  } else if (process.env.FOUNDRY_SANDBOX_CONTROL_CA_SHA256)
+    throw new Error("runtime_control_ca_required");
   const environment = {
     ...input.environment,
     ...PACKAGE_INSTALL_ENVIRONMENT,
+    ...(input.controlCaPem ? { NODE_EXTRA_CA_CERTS: `${privateDirectory}/control-ca.pem` } : {}),
     T3CODE_TELEMETRY_ENABLED: "false",
     T3CODE_DISABLE_AUTO_UPDATE: "1",
   };

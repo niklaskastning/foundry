@@ -362,7 +362,8 @@ function StartWorkflow({
             {sandbox ? (
               <span className="text-xs text-muted-foreground">
                 Fresh Linux environment · checkout {sandbox.checkout.commit.slice(0, 12)} ·{" "}
-                {sandbox.lifetimeSeconds / 60} minutes
+                {sandbox.lifetimeSeconds / 60} minutes. Applies to manual starts; scheduled and
+                GitHub triggers use their configured worker.
               </span>
             ) : null}
             {sandboxCatalog.error ? <span role="alert">{sandboxCatalog.error}</span> : null}

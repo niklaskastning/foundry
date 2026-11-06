@@ -1,3 +1,4 @@
+import { TEST_SANDBOX_CA } from "./tls.fixture.ts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -17,7 +18,7 @@ const input = {
   command: ["node", "/app/sandbox.mjs"],
 };
 
-const fixture = () => {
+const fixture = (controlTls?: { hostname: string; bridgeAddress: string; publicCaPem: string }) => {
   const resources = new Map<
     string,
     {
@@ -31,6 +32,7 @@ const fixture = () => {
   const invocations: string[][] = [];
   let loseStartResponse = false;
   let policyValid = true;
+  let policyControl: string | null = controlTls ? `${controlTls.bridgeAddress}:443` : null;
   const runner = ProcessRunner.ProcessRunner.of({
     run: (command) =>
       Effect.sync(() => {
@@ -46,6 +48,7 @@ const fixture = () => {
             name: "foundry-sandbox-test",
             action: "inspect",
             verified: true,
+            control: policyControl,
             dns: "1.1.1.1",
           });
         } else if (kind === "network" && operation === "inspect") {
@@ -103,6 +106,9 @@ const fixture = () => {
   return {
     resources,
     invocations,
+    changeControl: () => {
+      policyControl = "172.30.240.1:444";
+    },
     invalidatePolicy: () => {
       policyValid = false;
     },
@@ -114,6 +120,7 @@ const fixture = () => {
       maxMemoryMiB: 4096,
       maxPids: 512,
       networkName: "foundry-sandbox-test",
+      ...(controlTls ? { controlTls } : {}),
     }).pipe(Layer.provide(Layer.succeed(ProcessRunner.ProcessRunner, runner))),
   };
 };
@@ -259,6 +266,46 @@ it.effect("verifies actual operator firewall policy before creation and restart 
         (yield* oci.ensure({ ...input, network: "configured" }).pipe(Effect.flip)).reason,
       ).toBe("network-policy");
       expect(f.resources.size).toBe(2);
+    }).pipe(Effect.provide(f.layer));
+  }),
+);
+
+it.effect("pins the verified control endpoint and CA for runtime and archive helpers", () =>
+  Effect.gen(function* () {
+    const control = {
+      hostname: "foundry.example.test",
+      bridgeAddress: "172.30.240.1",
+      publicCaPem: TEST_SANDBOX_CA,
+    };
+    const f = fixture(control);
+    yield* Effect.gen(function* () {
+      const oci = yield* OciSupervisor.OciSupervisor;
+      yield* oci.ensure({ ...input, network: "configured" });
+      const original = f.invocations.find(
+        (args) => args[0] === "container" && args[1] === "create",
+      )!;
+      expect(original).toContain("--add-host=foundry.example.test:172.30.240.1");
+      expect(
+        original.some((arg) => arg.startsWith("--env=FOUNDRY_SANDBOX_CONTROL_CA_SHA256=")),
+      ).toBe(true);
+      yield* oci.stop(input);
+      yield* oci.finalize(input, {
+        argv: ["node", "/app/foundry-sandbox-bootstrap.mjs", "read-archive"],
+      });
+      const helper = f.invocations
+        .filter((args) => args[0] === "container" && args[1] === "create")
+        .at(-1)!;
+      expect(helper).toContain("--add-host=foundry.example.test:172.30.240.1");
+      expect(helper).toContain("--env=NODE_EXTRA_CA_CERTS=/workspace/.foundry/control-ca.pem");
+      control.hostname = "changed.example.test";
+      expect(
+        (yield* oci.ensure({ ...input, network: "configured" }).pipe(Effect.flip)).reason,
+      ).toBe("drift");
+      control.hostname = "foundry.example.test";
+      f.changeControl();
+      expect(
+        (yield* oci.ensure({ ...input, network: "configured" }).pipe(Effect.flip)).reason,
+      ).toBe("network-policy");
     }).pipe(Effect.provide(f.layer));
   }),
 );

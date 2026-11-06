@@ -81,3 +81,39 @@ hardlink. Explicitly created hardlinks still block archive confirmation and keep
 the environment retained; the copy setting does not weaken that check or rewrite
 existing links. Correct the profile before allocation and verify its actual
 installer output before relying on automatic archive/delete.
+
+## Direct machine transport for sandbox acceptance
+
+For development acceptance behind Cloudflare Access, an operator can run
+`control-proxy.py` bound only to the sandbox bridge gateway on port 443. Give it
+root-owned `--certificate` and private `--key` files from the approved secret
+provisioning path, the canonical `--hostname`, the bridge `--listen` IPv4 address,
+and `--upstream-port` for Main on `127.0.0.1`. The key must have no group/other
+permissions; neither it nor Cloudflare credentials enter the container.
+
+Create the network with the exact `--control <bridgeIPv4>:443` exception. In the
+supervisor configuration, `controlTls` contains `hostname`, `bridgeAddress` and
+`publicCaPem` (one public CA certificate). The hostname must match the canonical
+`origin`. The optional host-side `connectOrigin` can target a literal loopback HTTP
+origin; signatures and sandbox runtime binding still use the canonical HTTPS
+origin. It cannot be combined with Cloudflare machine credentials.
+
+OCI pins the hostname mapping and CA digest in allocation metadata and verifies
+the real network policy. Original and archive-helper containers share the same
+mapping. Bootstrap writes the matching public CA to its fixed private runtime
+path; backend, connector and native archive helpers use `NODE_EXTRA_CA_CERTS`.
+TLS verification remains enabled. This extra CA is trusted by Node processes
+inside the allocation; it is not a general host trust-store change.
+
+The proxy accepts only JSON POSTs to `/api/foundry/devices/channel` and websocket
+GET upgrades to that channel or `/api/foundry/devices/stream`. Query variants,
+other hosts/routes/methods, oversized bodies and chunked requests are rejected.
+Cookie, Authorization and Cloudflare headers are not forwarded. Main remains
+responsible for device signatures, revocation and single-use stream tickets.
+The proxy supplies no identity or credentials itself. It is a trusted local
+control endpoint, not a replacement for public SSO acceptance.
+
+`python3 deploy/fork/sandbox/test-control-proxy.py` exercises local ephemeral TLS,
+Node certificate trust, websocket forwarding, route/method/body denial and
+credential-header removal. It generates only isolated fixture certificates and
+opens only ephemeral loopback listeners; it installs no live proxy or firewall.

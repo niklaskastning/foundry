@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Deterministic OCI resource names and spec fingerprints use SHA-256 at the process adapter boundary.
 import * as NodeCrypto from "node:crypto";
+import * as NodeNet from "node:net";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -137,6 +138,11 @@ type Configuration = {
   readonly maxMemoryMiB: number;
   readonly maxPids: number;
   readonly networkName?: string;
+  readonly controlTls?: {
+    readonly hostname: string;
+    readonly bridgeAddress: string;
+    readonly publicCaPem: string;
+  };
   readonly networkPolicyPath?: string;
   readonly executable?: string;
   readonly socketPath?: string;
@@ -148,16 +154,23 @@ const decodePolicy = Schema.decodeEffect(
       name: Schema.String,
       action: Schema.Literal("inspect"),
       verified: Schema.Literal(true),
+      control: Schema.optionalKey(Schema.NullOr(Schema.String)),
       dns: Schema.String.check(Schema.isPattern(/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/)),
     }),
   ),
 );
 const encodeIdentity = Schema.encodeSync(Schema.fromJsonString(Identity));
+const ControlTls = Schema.Struct({
+  hostname: Schema.String,
+  bridgeAddress: Schema.String,
+  caSha256: Schema.String,
+});
 const StoredProvision = Schema.fromJsonString(
   Schema.Struct({
     ...Provision.fields,
     resolvedNetwork: Schema.String,
     resolvedDns: Schema.NullOr(Schema.String),
+    controlTls: Schema.optionalKey(Schema.NullOr(ControlTls)),
   }),
 );
 const encodeProvision = Schema.encodeSync(StoredProvision);
@@ -286,7 +299,10 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
     yield* verifyOwner(identity, decoded[0].Labels, fingerprint);
     return true;
   });
-  const verifyNetwork = Effect.fn("OciSupervisor.verifyNetwork")(function* (network: string) {
+  const verifyNetwork = Effect.fn("OciSupervisor.verifyNetwork")(function* (
+    network: string,
+    control: typeof ControlTls.Type | null = null,
+  ) {
     if (network === "none") return null;
     if (!/^foundry-sandbox-[a-z0-9-]+$/.test(network))
       return yield* new OciError({ operation: "network", reason: "network-policy" });
@@ -324,7 +340,7 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
         (cause) => new OciError({ operation: "network", reason: "network-policy", cause }),
       ),
     );
-    if (policy.name !== network)
+    if (policy.name !== network || (control && policy.control !== `${control.bridgeAddress}:443`))
       return yield* new OciError({ operation: "network", reason: "network-policy" });
     return policy.dns;
   });
@@ -336,6 +352,7 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
     argv: ReadonlyArray<string>,
     interactive = false,
     dns: string | null = null,
+    control: typeof ControlTls.Type | null = null,
   ) => [
     "container",
     "create",
@@ -357,6 +374,13 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
     "--log-driver=none",
     `--network=${network}`,
     ...(dns ? [`--dns=${dns}`] : []),
+    ...(control
+      ? [
+          `--add-host=${control.hostname}:${control.bridgeAddress}`,
+          ...(interactive ? ["--env=NODE_EXTRA_CA_CERTS=/workspace/.foundry/control-ca.pem"] : []),
+          `--env=FOUNDRY_SANDBOX_CONTROL_CA_SHA256=${control.caSha256}`,
+        ]
+      : []),
     "--ipc=private",
     "--tmpfs=/tmp:rw,nosuid,nodev,size=67108864,mode=1777",
     "--tmpfs=/run:rw,nosuid,nodev,noexec,size=16777216,uid=1000,gid=1000,mode=0700",
@@ -393,9 +417,42 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
     )
       return yield* new OciError({ operation: "validate", reason: "limit" });
     const network = spec.network === "configured" ? (configuration.networkName ?? "") : "none";
-    const dns = yield* verifyNetwork(network);
+    const controlTls =
+      network !== "none" && configuration.controlTls
+        ? yield* Effect.try({
+            try: () => {
+              const control = configuration.controlTls!;
+              if (
+                !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9-]+$/.test(control.hostname) ||
+                NodeNet.isIP(control.bridgeAddress) !== 4 ||
+                control.publicCaPem.length > 16384 ||
+                !/^-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\s]+-----END CERTIFICATE-----\s*$/.test(
+                  control.publicCaPem,
+                )
+              )
+                throw new Error("control_tls");
+              const certificate = new NodeCrypto.X509Certificate(control.publicCaPem);
+              if (!certificate.ca) throw new Error("control_ca");
+              return {
+                hostname: control.hostname,
+                bridgeAddress: control.bridgeAddress,
+                caSha256: NodeCrypto.createHash("sha256").update(certificate.raw).digest("hex"),
+              };
+            },
+            catch: (cause) =>
+              new OciError({ operation: "network", reason: "network-policy", cause }),
+          })
+        : null;
+    const dns = yield* verifyNetwork(network, controlTls);
     const fingerprint = NodeCrypto.createHash("sha256")
-      .update(encodeProvision({ ...spec, resolvedNetwork: network, resolvedDns: dns }))
+      .update(
+        encodeProvision({
+          ...spec,
+          resolvedNetwork: network,
+          resolvedDns: dns,
+          ...(controlTls ? { controlTls } : {}),
+        }),
+      )
       .digest("hex");
     const labels = Object.entries({
       ...ownerLabels(spec),
@@ -404,6 +461,7 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
         ...spec,
         resolvedNetwork: network,
         resolvedDns: dns,
+        ...(controlTls ? { controlTls } : {}),
       }),
     }).flatMap(([key, value]) => ["--label", `${key}=${value}`]);
     const resourceNames = names(spec);
@@ -426,6 +484,7 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
           spec.command,
           false,
           dns,
+          controlTls,
         ),
       );
       current = yield* inspectContainer(spec, fingerprint);
@@ -539,7 +598,7 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
         (current.image !== undefined && current.image !== spec.image)
       )
         return yield* new OciError({ operation: "inspect", reason: "ownership" });
-      const verifiedDns = yield* verifyNetwork(spec.resolvedNetwork);
+      const verifiedDns = yield* verifyNetwork(spec.resolvedNetwork, spec.controlTls);
       if (verifiedDns !== spec.resolvedDns)
         return yield* new OciError({ operation: "network", reason: "network-policy" });
       const fingerprint = NodeCrypto.createHash("sha256")
@@ -577,6 +636,7 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
           input.argv,
           true,
           spec.resolvedDns,
+          spec.controlTls,
         ),
       );
       const helper = yield* inspectContainer(identity, fingerprint, true);

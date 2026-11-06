@@ -187,6 +187,7 @@ const make = Effect.gen(function* () {
     const connection = enrolled.connection;
     yield* exec(allocation, "runtime", {
       origin: transport.origin,
+      ...(transport.publicCaPem ? { controlCaPem: transport.publicCaPem } : {}),
       registration: enrolled.device,
       environment: { FOUNDRY_SANDBOX_ALLOCATION_ID: allocation.allocationId },
       providerBinding: {

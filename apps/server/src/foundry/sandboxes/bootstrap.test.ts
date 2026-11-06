@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Bootstrap fixtures use isolated directories to verify pinned checkout state across restart.
+import { TEST_SANDBOX_CA } from "./tls.fixture.ts";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
 import * as NodeCrypto from "node:crypto";
@@ -419,4 +420,36 @@ it("installs local package files as copies with the actual package manager and a
   const installed = NodePath.join(project, "node_modules", "foundry-offline-fixture", "index.js");
   expect(await NodeFSP.readFile(installed, "utf8")).toBe("module.exports = 'copied fixture';\n");
   expect((await NodeFSP.stat(installed)).nlink).toBe(1);
+});
+
+it("trusts only the public control CA pinned by OCI and retains it for archive helpers", async () => {
+  const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "foundry-control-ca-"));
+  const previous = process.env.FOUNDRY_SANDBOX_CONTROL_CA_SHA256;
+  await using _cleanup = {
+    [Symbol.asyncDispose]: async () => {
+      if (previous === undefined) delete process.env.FOUNDRY_SANDBOX_CONTROL_CA_SHA256;
+      else process.env.FOUNDRY_SANDBOX_CONTROL_CA_SHA256 = previous;
+      await NodeFSP.rm(directory, { recursive: true, force: true });
+    },
+  };
+  const identity = { environmentId: "sandbox", publicKey: "fixture" };
+  const input = {
+    origin: "https://foundry.example",
+    registration: identity,
+    controlCaPem: TEST_SANDBOX_CA,
+  };
+  delete process.env.FOUNDRY_SANDBOX_CONTROL_CA_SHA256;
+  await expect(prepareRuntime(input, identity, directory)).rejects.toThrow("runtime_control_ca");
+  process.env.FOUNDRY_SANDBOX_CONTROL_CA_SHA256 = NodeCrypto.createHash("sha256")
+    .update(new NodeCrypto.X509Certificate(TEST_SANDBOX_CA).raw)
+    .digest("hex");
+  const environment = await prepareRuntime(input, identity, directory);
+  expect(await NodeFSP.readFile(environment.NODE_EXTRA_CA_CERTS!, "utf8")).toBe(TEST_SANDBOX_CA);
+  expect((await NodeFSP.stat(environment.NODE_EXTRA_CA_CERTS!)).mode & 0o777).toBe(0o600);
+  await expect(
+    prepareRuntime({ ...input, controlCaPem: "-----BEGIN PRIVATE KEY-----" }, identity, directory),
+  ).rejects.toThrow("runtime_control_ca");
+  await expect(
+    prepareRuntime({ origin: input.origin, registration: identity }, identity, directory),
+  ).rejects.toThrow("runtime_control_ca_required");
 });

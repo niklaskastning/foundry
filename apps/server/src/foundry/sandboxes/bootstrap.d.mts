@@ -23,6 +23,7 @@ export declare function prepareRuntime(
     registration: { environmentId: string; publicKey: string };
     environment?: Record<string, string>;
     settings?: Record<string, unknown>;
+    controlCaPem?: string;
     providerBinding?: {
       connectionId: string;
       connectionGeneration: number;

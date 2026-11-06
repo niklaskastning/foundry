@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Validate operator-provided public CA certificates at the HTTP transport boundary.
+import * as NodeCrypto from "node:crypto";
 import {
   FoundryDevice,
   FoundrySandboxError,
@@ -19,6 +21,14 @@ import { signSandboxRequest } from "./Proof.ts";
 
 export const Configuration = Schema.Struct({
   origin: Schema.String,
+  connectOrigin: Schema.optionalKey(Schema.String),
+  controlTls: Schema.optionalKey(
+    Schema.Struct({
+      hostname: Schema.String,
+      bridgeAddress: Schema.String,
+      publicCaPem: Schema.String.check(Schema.isMaxLength(16384)),
+    }),
+  ),
   registrationFile: Schema.String,
   keyFile: Schema.String,
   accessFile: Schema.optionalKey(Schema.String),
@@ -37,6 +47,7 @@ export class Transport extends Context.Service<
     ) => Effect.Effect<unknown, FoundryArtifactError>;
     readonly device: FoundryDevice;
     readonly origin: string;
+    readonly publicCaPem?: string;
     readonly send: (
       request: FoundrySandboxMachineOperation,
     ) => Effect.Effect<unknown, FoundrySandboxError>;
@@ -67,6 +78,44 @@ const make = Effect.fn("SandboxTransport.make")(function* (configuration: Config
   });
   if (url.protocol !== "https:" || url.origin !== configuration.origin)
     return yield* new FoundrySandboxError({ code: "invalid_request" });
+  if (configuration.connectOrigin !== undefined) {
+    const connect = yield* Effect.try({
+      try: () => new URL(configuration.connectOrigin!),
+      catch: () => new FoundrySandboxError({ code: "invalid_request" }),
+    });
+    if (
+      !/^http:\/\/(?:127\.0\.0\.1|\[::1\]):[1-9][0-9]{0,4}$/.test(configuration.connectOrigin) ||
+      connect.origin !== configuration.connectOrigin ||
+      !connect.port ||
+      configuration.accessFile
+    )
+      return yield* new FoundrySandboxError({ code: "invalid_request" });
+  }
+  if (configuration.controlTls) {
+    const control = configuration.controlTls;
+    yield* Effect.try({
+      try: () => {
+        if (
+          url.port !== "" ||
+          control.hostname !== url.hostname ||
+          !control.hostname
+            .split(".")
+            .every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) ||
+          !/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(control.bridgeAddress) ||
+          !control.bridgeAddress
+            .split(".")
+            .every((part) => String(Number(part)) === part && Number(part) <= 255) ||
+          control.publicCaPem.length > 16384 ||
+          !/^-----BEGIN CERTIFICATE-----\r?\n(?:[A-Za-z0-9+/=]+\r?\n)+-----END CERTIFICATE-----\r?\n?$/.test(
+            control.publicCaPem,
+          ) ||
+          !new NodeCrypto.X509Certificate(control.publicCaPem).ca
+        )
+          throw new Error("invalid_control_tls");
+      },
+      catch: () => new FoundrySandboxError({ code: "invalid_request" }),
+    });
+  }
   const device = yield* read(configuration.registrationFile).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(FoundryDevice)),
   );
@@ -82,7 +131,7 @@ const make = Effect.fn("SandboxTransport.make")(function* (configuration: Config
   const post = Effect.fn("SandboxTransport.post")(
     function* (envelope: unknown) {
       const call = yield* HttpClientRequest.post(
-        `${configuration.origin}/api/foundry/devices/channel`,
+        `${configuration.connectOrigin ?? configuration.origin}/api/foundry/devices/channel`,
       ).pipe(
         HttpClientRequest.bodyJson(envelope),
         Effect.map((value) =>
@@ -161,6 +210,12 @@ const make = Effect.fn("SandboxTransport.make")(function* (configuration: Config
     },
     Effect.mapError(() => new FoundryArtifactError({ code: "unavailable" })),
   );
-  return Transport.of({ device, origin: configuration.origin, send, artifactSend });
+  return Transport.of({
+    device,
+    origin: configuration.origin,
+    ...(configuration.controlTls ? { publicCaPem: configuration.controlTls.publicCaPem } : {}),
+    send,
+    artifactSend,
+  });
 });
 export const layer = (configuration: Configuration) => Layer.effect(Transport, make(configuration));

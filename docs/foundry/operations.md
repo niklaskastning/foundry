@@ -1023,6 +1023,10 @@ Instanz-/Betreiberzugehörigkeit noch aktuelle Device- und Automation-Freigaben.
 
 ### Linux-Sandbox-Main: Schema und Betriebsprofil (P34–P40)
 
+Sandboxziele stehen für interaktive Arbeit und manuell gestartete v4-Runs zur
+Verfügung. Zeitplan- und GitHub-Trigger behalten ihre explizite Workerfreigabe;
+gespeicherte Sandbox-Startvorgaben ändern diese unbeaufsichtigten Ziele nicht.
+
 Der Sandbox-Main benötigt Instanzschema 9 und Automation-Schema 11. Der bestehende
 Updater migriert den geprüften Stand mit Schema 8/11 unter seinem eigenen
 Deployment-Lock; keinen zweiten Lock um diesen Aufruf legen:
@@ -1078,7 +1082,11 @@ Vor einem geplanten Widerruf eigene Allocations archivieren und löschen.
 Die private Supervisor-Konfiguration enthält `origin`, `registrationFile`,
 `keyFile`, `networkName`, `maxCpuMillis`, `maxMemoryMiB` und `maxPids`; optional
 `accessFile` für den bestehenden Access-Maschinenzugang. Credentialdateien bleiben
-hostseitig privat. Den Netzwerkhelper aus
+hostseitig privat. Hinter Cloudflare Access benötigt auch die Sandbox selbst einen
+erreichbaren, weiterhin authentifizierten Maschinenendpunkt. Der begrenzte
+TLS-Kontrollpfad mit `controlTls` und hostseitigem `connectOrigin` ist im folgenden
+Netzwerkleitfaden beschrieben; Access-Credentials werden nicht in Container kopiert.
+Den Netzwerkhelper aus
 [Linux sandbox networking](../../deploy/fork/sandbox/README.md) zuerst installieren
 und das geprüfte Netz angeben. Den Supervisor als separaten betreuten Hostdienst
 mit `node <server-bundle>/bin.mjs foundry sandbox-supervise --configuration
