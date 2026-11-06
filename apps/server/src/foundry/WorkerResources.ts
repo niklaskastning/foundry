@@ -7,6 +7,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
 import {
   FoundryWorkerDefinitionV4,
+  FactoryV4Skill,
   type FactoryV4ResultSchema,
   type FactoryV4File,
   type SecretReference,
@@ -37,6 +38,7 @@ const decode = Schema.decodeUnknownSync(FoundryWorkerDefinitionV4, { onExcessPro
 const encodeRequest = Schema.encodeSync(Schema.fromJsonString(FoundryWorkerDefinitionV4));
 const decodeRequest = Schema.decodeUnknownSync(Schema.fromJsonString(FoundryWorkerDefinitionV4));
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json));
+const decodeSkills = Schema.decodeUnknownSync(Schema.Array(FactoryV4Skill));
 const WorkspaceResources = Schema.Struct({ cwd: Schema.String, directory: Schema.String });
 const decodeWorkspace = Schema.decodeUnknownSync(Schema.fromJsonString(WorkspaceResources));
 const encodeWorkspace = Schema.encodeSync(Schema.fromJsonString(WorkspaceResources));
@@ -53,7 +55,8 @@ const bytesFor = (file: FactoryV4File) => {
     throw invalid();
   return bytes;
 };
-const fileEntries = (request: FoundryWorkerDefinitionV4) => {
+type SkillResources = { readonly resources: { readonly skills: ReadonlyArray<FactoryV4Skill> } };
+const fileEntries = (request: SkillResources) => {
   const entries: { file: FactoryV4File; bytes: Buffer }[] = [];
   const paths = new Set<string>();
   let total = 0;
@@ -87,7 +90,7 @@ async function readFile(path: string) {
     await handle.close();
   }
 }
-async function verify(directory: string, request: FoundryWorkerDefinitionV4, metadata = false) {
+async function verify(directory: string, request: SkillResources, metadata = false) {
   const entries = fileEntries(request);
   if (!(await NodeFSP.lstat(directory)).isDirectory()) throw invalid();
   const permitted = new Set(metadata ? ["request.json", "workspace.json"] : []);
@@ -125,6 +128,48 @@ async function verify(directory: string, request: FoundryWorkerDefinitionV4, met
       throw invalid();
   }
 }
+export const prepareSandboxSkills = Effect.fn("WorkerResources.prepareSandboxSkills")(
+  (cwd: string, skills: ReadonlyArray<FactoryV4Skill>) =>
+    Effect.tryPromise({
+      try: async () => {
+        const request = {
+          resources: { skills: decodeSkills(skills) },
+        };
+        const entries = fileEntries(request);
+        const parent = NodePath.join(cwd, ".agents", "skills");
+        for (const path of [NodePath.join(cwd, ".agents"), parent]) {
+          await NodeFSP.mkdir(path, { recursive: true, mode: 0o700 });
+          if (!(await NodeFSP.lstat(path)).isDirectory()) throw invalid();
+        }
+        const directory = NodePath.join(parent, "foundry-profile");
+        try {
+          await NodeFSP.lstat(directory);
+          await verify(directory, request);
+          return directory;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        const temporary = await NodeFSP.mkdtemp(NodePath.join(parent, ".foundry-profile-"));
+        try {
+          for (const { file, bytes } of entries) {
+            const path = NodePath.join(temporary, file.path);
+            await NodeFSP.mkdir(NodePath.dirname(path), { recursive: true, mode: 0o700 });
+            await NodeFSP.writeFile(path, bytes, {
+              flag: "wx",
+              mode: file.mode === "100755" ? 0o500 : 0o400,
+            });
+          }
+          await verify(temporary, request);
+          await NodeFSP.rename(temporary, directory);
+          return directory;
+        } finally {
+          await NodeFSP.rm(temporary, { recursive: true, force: true });
+        }
+      },
+      catch: () => invalid(),
+    }),
+);
+
 export const prepareResources = Effect.fn("WorkerResources.prepare")(
   (stateDir: string, threadId: string, raw: FoundryWorkerDefinitionV4) =>
     Effect.tryPromise({

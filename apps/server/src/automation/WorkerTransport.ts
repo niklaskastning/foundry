@@ -11,6 +11,7 @@ import {
   AuthOrchestrationOperateScope,
   type CommandId,
   type ProjectId,
+  type ProjectSnapshot,
   type ThreadId,
   type RuntimeRequestId,
   type ProviderUserInputAnswers,
@@ -37,6 +38,7 @@ import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Socket from "effect/socket/Socket";
+import type * as SandboxGatewayAccess from "../foundry/SandboxGatewayAccess.ts";
 import * as GatewayGrants from "../foundry/GatewayGrants.ts";
 
 export class WorkerTransportError extends Schema.TaggedError<WorkerTransportError>()(
@@ -81,6 +83,17 @@ export class WorkerTransport extends Context.Service<
     readonly authorize: (
       request: HttpServerRequest.HttpServerRequest,
       target: Target,
+    ) => Effect.Effect<WorkerIdentity, WorkerTransportError>;
+    readonly sandboxProjects: (
+      target: SandboxGatewayAccess.SandboxGatewayTarget,
+    ) => Effect.Effect<ProjectSnapshot, WorkerTransportError>;
+    readonly sandboxStatus: (
+      target: SandboxGatewayAccess.SandboxGatewayTarget,
+      projectId?: ProjectId,
+    ) => Effect.Effect<FoundryWorkerStatus, WorkerTransportError>;
+    readonly retargetSandbox: (
+      identity: WorkerIdentity,
+      target: SandboxGatewayAccess.SandboxGatewayTarget,
     ) => Effect.Effect<WorkerIdentity, WorkerTransportError>;
     readonly status: (
       identity: WorkerIdentity,
@@ -215,6 +228,20 @@ const make = Effect.gen(function* () {
     Effect.mapError(transportError),
   );
   return WorkerTransport.of({
+    sandboxProjects: Effect.fn("WorkerTransport.sandboxProjects")(
+      (target) => gateway.sandboxProjects(target),
+      Effect.mapError(transportError),
+    ),
+    sandboxStatus: Effect.fn("WorkerTransport.sandboxStatus")(function* (target, projectId) {
+      const identity = yield* gateway.sandboxProbe(target);
+      return yield* call(identity, (client) =>
+        client["foundry.workerStatus"](projectId ? { projectId } : {}),
+      );
+    }, Effect.mapError(transportError)),
+    retargetSandbox: Effect.fn("WorkerTransport.retargetSandbox")(
+      (identity, target) => gateway.retargetSandbox(identity, target),
+      Effect.mapError(transportError),
+    ),
     handoffOpen: Effect.fn("WorkerTransport.handoffOpen")((identity, input) =>
       GatewayGrants.isUnattendedIdentity(identity)
         ? Effect.fail(new WorkerTransportError({ reason: "forbidden" }))

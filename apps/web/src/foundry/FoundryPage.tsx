@@ -10,6 +10,7 @@ import { Input } from "../components/ui/input";
 import { StandalonePage } from "../components/ui/standalone-page";
 import { useAtomCommand } from "../state/use-atom-command";
 import { DeviceCatalog } from "./DeviceCatalog";
+import { useSandboxProfiles } from "./useSandboxProfiles";
 import { WorkerCapacity } from "../features/automation/WorkerCapacity";
 import {
   instanceCommand,
@@ -21,6 +22,9 @@ import {
 
 const ThreadArchiveLibrary = lazy(() =>
   import("./ThreadArchiveLibrary").then((module) => ({ default: module.ThreadArchiveLibrary })),
+);
+const SandboxPanel = lazy(() =>
+  import("../components/foundry/SandboxPanel").then((module) => ({ default: module.SandboxPanel })),
 );
 
 const ArtifactLibrary = lazy(() =>
@@ -39,6 +43,7 @@ export function FoundryPage() {
   const [origin, setOrigin] = useState(window.location.origin);
   const [state, setState] = useState<OnboardingResult>(initialState);
   const capability = useAutomationCapability(state.binding?.instanceId);
+  const sandboxes = useSandboxProfiles(state.binding?.mainEnvironmentId);
   const [message, setMessage] = useState(state.message);
   const [busy, setBusy] = useState(false);
   const run = useAtomCommand(instanceCommand, { reportFailure: false });
@@ -119,6 +124,9 @@ export function FoundryPage() {
                 </div>
                 <WorkerCapacity environmentId={state.binding.mainEnvironmentId} />
                 <DeviceCatalog readinessInDetails />
+                {sandboxes?.supported ? (
+                  <SandboxPanel environmentId={state.binding.mainEnvironmentId} />
+                ) : null}
               </div>
             ) : search.view === "inbox" ? (
               <div className="p-4 sm:p-6 lg:p-8">

@@ -1,3 +1,4 @@
+import * as ProviderConnectionTransport from "./foundry/ProviderConnectionTransport.ts";
 import * as WorkerHandoff from "./foundry/WorkerHandoff.ts";
 import * as WorkspaceGate from "./foundry/workspaces/WorkspaceGate.ts";
 import * as WorkspaceReconciler from "./foundry/workspaces/WorkspaceReconciler.ts";
@@ -1151,7 +1152,9 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(layerHttpServer),
       Layer.provide(layerApplicationObservability),
       Layer.provideMerge(
-        ArtifactPublication.layer.pipe(Layer.provide(ServerEnvironment.layerIdentity)),
+        Layer.merge(ArtifactPublication.layer, ProviderConnectionTransport.layer).pipe(
+          Layer.provide(ServerEnvironment.layerIdentity),
+        ),
       ),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(VcsProcess.layer),

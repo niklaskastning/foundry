@@ -51,6 +51,9 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     operatorId: "fixture-operator",
   };
   const worker = WorkerTransport.WorkerTransport.of({
+    sandboxProjects: Effect.fn("Fixture.sandboxProjects")(() => Effect.die("unused")),
+    sandboxStatus: Effect.fn("Fixture.sandboxStatus")(() => Effect.die("unused")),
+    retargetSandbox: Effect.fn("Fixture.retargetSandbox")(() => Effect.die("unused")),
     handoffOpen: Effect.fn("Fixture.handoffOpen")(() =>
       Effect.die("Handoff not configured in this fixture"),
     ),
@@ -73,6 +76,9 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
   const gateway = Layer.succeed(
     GatewayGrants.GatewayGrants,
     GatewayGrants.GatewayGrants.of({
+      sandboxProjects: Effect.fn("Fixture.sandboxProjects")(() => Effect.die("unused")),
+      sandboxProbe: Effect.fn("Fixture.sandboxProbe")(() => Effect.die("unused")),
+      retargetSandbox: Effect.fn("Fixture.retargetSandbox")(() => Effect.die("unused")),
       identityForRead: Effect.fn("ApplicationGate.gatewayIdentity")(function* (request) {
         if (request.headers.authorization)
           return yield* new FoundryGatewayError({ code: "forbidden" });

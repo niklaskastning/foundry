@@ -103,6 +103,9 @@ it.effect("uses one serialized RPC per explicit delivery and preserves worker no
       );
     });
     const gateway = GatewayGrants.GatewayGrants.of({
+      sandboxProjects: () => Effect.die("unused"),
+      sandboxProbe: () => Effect.die("unused"),
+      retargetSandbox: () => Effect.die("unused"),
       identityForWrite: () => Effect.succeed(identity),
       identityForRead: () => Effect.succeed(identity),
       authorizeAutomation: () => Effect.succeed(identity),

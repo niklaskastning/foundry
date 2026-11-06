@@ -1,3 +1,6 @@
+import * as Option from "effect/Option";
+import * as SandboxMachineAccess from "./sandboxes/MachineAccess.ts";
+import * as ProviderConnectionAccess from "./ProviderConnectionAccess.ts";
 import { FoundryArtifactError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -13,9 +16,17 @@ const headers = { "cache-control": "no-store", "x-content-type-options": "nosnif
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const access = yield* ArtifactAccess.ArtifactAccess;
+    const providers = yield* Effect.serviceOption(
+      ProviderConnectionAccess.ProviderConnectionAccess,
+    );
+    const sandboxes = yield* SandboxMachineAccess.MachineAccess;
     const archives = yield* ThreadArchiveAccess.ThreadArchiveAccess;
     const route = (
-      path: "/api/foundry/artifacts" | "/api/foundry/archives" | "/api/foundry/devices/channel",
+      path:
+        | "/api/foundry/artifacts"
+        | "/api/foundry/archives"
+        | "/api/foundry/devices/channel"
+        | "/api/foundry/provider-connections",
       machine: boolean,
     ) =>
       HttpRouter.add(
@@ -58,16 +69,48 @@ export const layer = Layer.unwrap(
             body !== null &&
             "protocolVersion" in body &&
             body.protocolVersion === "archive-1";
-          const result = archiveMachine
-            ? yield* archives.machine(body)
-            : path === "/api/foundry/archives"
-              ? yield* archives.client(request, body)
-              : machine
-                ? yield* access.machine(body)
-                : yield* access.client(request, body);
+          const protocol =
+            machine && typeof body === "object" && body !== null && "protocolVersion" in body
+              ? body.protocolVersion
+              : undefined;
+          if (protocol === "sandbox-1" && !sandboxes)
+            return yield* new FoundryArtifactError({ code: "forbidden" });
+          if (
+            (protocol === "provider-1" || path === "/api/foundry/provider-connections") &&
+            Option.isNone(providers)
+          )
+            return yield* new FoundryArtifactError({ code: "forbidden" });
+          const result =
+            protocol === "sandbox-1" && sandboxes
+              ? yield* sandboxes.handle(body)
+              : protocol === "provider-1"
+                ? yield* Option.getOrThrow(providers).machine(body)
+                : path === "/api/foundry/provider-connections"
+                  ? yield* Option.getOrThrow(providers).client(request, body)
+                  : archiveMachine
+                    ? yield* archives.machine(body)
+                    : path === "/api/foundry/archives"
+                      ? yield* archives.client(request, body)
+                      : machine
+                        ? yield* access.machine(body)
+                        : yield* access.client(request, body);
           return HttpServerResponse.jsonUnsafe(result ?? null, { headers });
         }).pipe(
           Effect.catchTags({
+            FoundrySandboxError: (error) =>
+              Effect.succeed(
+                HttpServerResponse.jsonUnsafe(
+                  { code: error.code, message: error.message },
+                  { headers, status: error.code === "forbidden" ? 403 : 409 },
+                ),
+              ),
+            FoundryProviderConnectionError: (error) =>
+              Effect.succeed(
+                HttpServerResponse.jsonUnsafe(
+                  { code: error.code, message: error.message },
+                  { headers, status: error.code === "forbidden" ? 403 : 409 },
+                ),
+              ),
             FoundryArchiveError: (error) =>
               Effect.succeed(
                 HttpServerResponse.jsonUnsafe(
@@ -109,6 +152,7 @@ export const layer = Layer.unwrap(
       );
     return Layer.mergeAll(
       route("/api/foundry/artifacts", false),
+      route("/api/foundry/provider-connections", false),
       route("/api/foundry/archives", false),
       route("/api/foundry/devices/channel", true),
     );

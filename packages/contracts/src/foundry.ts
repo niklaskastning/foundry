@@ -24,6 +24,7 @@ export const FoundryDescriptor = Schema.Struct({
   mainEnvironmentId: EnvironmentId,
   capabilities: Schema.Array(Schema.Literals(FOUNDRY_CAPABILITIES)),
   negotiatedCapabilities: Schema.Array(Schema.Literals(FOUNDRY_CAPABILITIES)),
+  sandboxes: Schema.optionalKey(Schema.Struct({ protocolVersion: Schema.Literal("1") })),
   automation: Schema.optionalKey(Schema.Struct({ protocolVersion: Schema.Literal("1") })),
   threadArchive: Schema.optionalKey(
     Schema.Struct({ protocolVersion: Schema.Literal("1"), pageSize: PositiveInt }),

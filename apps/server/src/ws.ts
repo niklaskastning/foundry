@@ -1,8 +1,10 @@
+import { FoundryProviderConnectionError } from "@t3tools/contracts";
 import * as WorkerHandoff from "./foundry/WorkerHandoff.ts";
 import { FoundryWorkerHandoffError } from "@t3tools/contracts";
 import {
   AutomationTriggerError,
   AutomationApplicationError,
+  FoundrySandboxError,
   AutomationControlError,
   AutomationInboxError,
 } from "@t3tools/contracts";
@@ -2872,6 +2874,14 @@ export const layerWsRpc = (
           Effect.fail(new AutomationTriggerError({ code: "unavailable" })),
         [WS_METHODS.foundryAutomationTriggerCommand]: () =>
           Effect.fail(new AutomationTriggerError({ code: "unavailable" })),
+        [WS_METHODS.foundryProviderConnectionQuery]: () =>
+          Effect.fail(new FoundryProviderConnectionError({ code: "unavailable" })),
+        [WS_METHODS.foundryProviderConnectionCommand]: () =>
+          Effect.fail(new FoundryProviderConnectionError({ code: "unavailable" })),
+        [WS_METHODS.foundrySandboxQuery]: () =>
+          Effect.fail(new FoundrySandboxError({ code: "unavailable" })),
+        [WS_METHODS.foundrySandboxCommand]: () =>
+          Effect.fail(new FoundrySandboxError({ code: "unavailable" })),
         [WS_METHODS.foundryAutomationQuery]: () =>
           Effect.fail(new AutomationApplicationError({ code: "unavailable" })),
         [WS_METHODS.foundryAutomationCommand]: () =>

@@ -1,3 +1,5 @@
+import { prepareRuntime } from "../sandboxes/bootstrap.mjs";
+import * as Schema from "effect/Schema";
 import * as ConfigProvider from "effect/ConfigProvider";
 import type { ProviderAdapterV2SessionRuntime } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as Reconciler from "./WorkspaceReconciler.ts";
@@ -21,6 +23,13 @@ import * as ServerConfig from "../../config.ts";
 import * as ReservationStore from "./ReservationStore.ts";
 import * as WriterStopVerifier from "./WriterStopVerifier.ts";
 import * as WorkspaceReservations from "./WorkspaceReservations.ts";
+
+const decodeRuntimeRoots = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
+const decodeRuntimeSettings = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({ worktreesDirectory: Schema.String, fixtureSetting: Schema.String }),
+  ),
+);
 
 const infrastructure = GitVcsDriver.layer.pipe(
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "foundry-workspaces-" })),
@@ -704,5 +713,76 @@ it.live(
         assert.equal(yield* store.handoffCommand("finish-new", "finish-input"), "result");
         assert.isFalse(yield* store.handoffAllowed("interactive", f.repositoryPath));
       }).pipe(Effect.provide(journal), Effect.scoped);
+    }).pipe(Effect.provide(infrastructure), Effect.scoped),
+);
+
+it.live(
+  "reserves real sandbox worktrees from the generated runtime roots and keeps interactive worktrees archivable",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const privateDirectory = `${f.root}/.foundry`;
+      yield* f.fs.makeDirectory(privateDirectory);
+      const identity = { environmentId: "sandbox", publicKey: "public-key" };
+      const environment = yield* Effect.tryPromise(() =>
+        prepareRuntime(
+          {
+            origin: "https://foundry.example",
+            registration: identity,
+            settings: {
+              worktreesDirectory: `${privateDirectory}/t3/worktrees`,
+              fixtureSetting: "retained",
+            },
+            providerBinding: {
+              connectionId: "connection",
+              connectionGeneration: 1,
+              providerInstanceId: "codex",
+              profileKey: "a".repeat(64),
+              allocationId: "11111111-1111-4111-8111-111111111111",
+              factoryId: null,
+            },
+          },
+          identity,
+          privateDirectory,
+          f.root,
+        ),
+      );
+      const roots = yield* decodeRuntimeRoots(environment.FOUNDRY_WORKER_WORKSPACE_ROOTS!);
+      const service = WorkspaceReservations.layer(roots).pipe(
+        Layer.provideMerge(ReservationStore.layer(`${f.temp}/sandbox.sqlite`)),
+        Layer.provide(WriterStopVerifier.layer),
+      );
+      yield* Effect.gen(function* () {
+        const reservations = yield* WorkspaceReservations.WorkspaceReservations;
+        const result = yield* reservations.reserve({
+          ...f.request("sandbox-native-worktree", "worktree"),
+          managedRoot: roots[0]!,
+        });
+        assert.strictEqual(result.state, "ready");
+        assert.strictEqual(
+          yield* f.fs.readFileString(`${result.workspacePath}/user.txt`),
+          "preserve me",
+        );
+        yield* f.fs.symlink(f.temp, `${f.root}/outside`);
+        assert.strictEqual(
+          (yield* reservations
+            .reserve({ ...f.request("outside", "worktree"), repositoryPath: `${f.root}/outside` })
+            .pipe(Effect.flip)).code,
+          "path_denied",
+        );
+      }).pipe(Effect.provide(service), Effect.scoped);
+      const settings = yield* f.fs
+        .readFileString(`${privateDirectory}/t3/userdata/settings.json`)
+        .pipe(Effect.flatMap(decodeRuntimeSettings));
+      assert.strictEqual(settings.fixtureSetting, "retained");
+      assert.strictEqual(settings.worktreesDirectory, `${f.root}/worktrees`);
+      yield* f.fs.makeDirectory(settings.worktreesDirectory, { recursive: true });
+      const interactive = `${settings.worktreesDirectory}/interactive`;
+      yield* f.git.execute({
+        cwd: f.repositoryPath,
+        operation: "test.sandbox.interactive",
+        args: ["worktree", "add", "--detach", interactive, "HEAD"],
+      });
+      assert.strictEqual(yield* f.fs.readFileString(`${interactive}/user.txt`), "preserve me");
     }).pipe(Effect.provide(infrastructure), Effect.scoped),
 );

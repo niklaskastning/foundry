@@ -1,4 +1,19 @@
 import {
+  FoundryProviderConnectionQuery,
+  FoundryProviderConnectionMutation,
+  FoundryProviderConnectionListResult,
+  FoundryProviderConnectionMutationResult,
+  FoundryProviderConnectionError,
+} from "./foundryProviderConnection.ts";
+import {
+  FoundrySandboxQuery,
+  FoundrySandboxMutation,
+  FoundrySandboxListResult,
+  FoundrySandboxDetail,
+  FoundrySandboxAllocation,
+  FoundrySandboxError,
+} from "./foundrySandbox.ts";
+import {
   FoundryWorkerHandoffOpen,
   FoundryWorkerHandoffFinish,
   FoundryWorkerHandoffReopen,
@@ -482,6 +497,10 @@ export const WS_METHODS = {
   assetsCreateUrl: "assets.createUrl",
   foundryAutomationTriggerQuery: "foundry.automationTriggerQuery",
   foundryAutomationTriggerCommand: "foundry.automationTriggerCommand",
+  foundryProviderConnectionQuery: "foundry.providerConnectionQuery",
+  foundryProviderConnectionCommand: "foundry.providerConnectionCommand",
+  foundrySandboxQuery: "foundry.sandboxQuery",
+  foundrySandboxCommand: "foundry.sandboxCommand",
   foundryAutomationQuery: "foundry.automationQuery",
   foundryAutomationCommand: "foundry.automationCommand",
   foundryAutomationControl: "foundry.automationControl",
@@ -1467,6 +1486,26 @@ const WsAutomationTriggerCommandRpc = Rpc.make(WS_METHODS.foundryAutomationTrigg
   success: AutomationTriggerResult,
   error: Schema.Union([AutomationTriggerError, EnvironmentAuthorizationError]),
 });
+const WsProviderConnectionQueryRpc = Rpc.make(WS_METHODS.foundryProviderConnectionQuery, {
+  payload: FoundryProviderConnectionQuery,
+  success: FoundryProviderConnectionListResult,
+  error: Schema.Union([FoundryProviderConnectionError, EnvironmentAuthorizationError]),
+});
+const WsProviderConnectionCommandRpc = Rpc.make(WS_METHODS.foundryProviderConnectionCommand, {
+  payload: FoundryProviderConnectionMutation,
+  success: FoundryProviderConnectionMutationResult,
+  error: Schema.Union([FoundryProviderConnectionError, EnvironmentAuthorizationError]),
+});
+const WsSandboxQueryRpc = Rpc.make(WS_METHODS.foundrySandboxQuery, {
+  payload: FoundrySandboxQuery,
+  success: Schema.Union([FoundrySandboxListResult, FoundrySandboxDetail]),
+  error: Schema.Union([FoundrySandboxError, EnvironmentAuthorizationError]),
+});
+const WsSandboxCommandRpc = Rpc.make(WS_METHODS.foundrySandboxCommand, {
+  payload: FoundrySandboxMutation,
+  success: FoundrySandboxAllocation,
+  error: Schema.Union([FoundrySandboxError, EnvironmentAuthorizationError]),
+});
 const WsAutomationQueryRpc = Rpc.make(WS_METHODS.foundryAutomationQuery, {
   payload: AutomationApplicationQuery,
   success: AutomationApplicationResult,
@@ -2275,6 +2314,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsAssetsCreateUrlRpc,
   WsAutomationTriggerQueryRpc,
   WsAutomationTriggerCommandRpc,
+  WsProviderConnectionQueryRpc,
+  WsProviderConnectionCommandRpc,
+  WsSandboxQueryRpc,
+  WsSandboxCommandRpc,
   WsAutomationQueryRpc,
   WsAutomationCommandRpc,
   WsAutomationControlRpc,

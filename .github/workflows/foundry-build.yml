@@ -11,6 +11,10 @@ on:
         description: Publish the Linux image to this fork's GHCR (no deployment)
         type: boolean
         default: false
+      build_sandbox:
+        description: Also publish the Linux Codex sandbox image (requires publish_linux)
+        type: boolean
+        default: false
       release_tag:
         description: Draft quarantine release tag (scan only)
         type: string
@@ -44,6 +48,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
+      - name: Validate sandbox build inputs
+        if: inputs.build_sandbox
+        shell: bash
+        run: test '${{ inputs.target }}' = linux && test '${{ inputs.publish_linux }}' = true
       - name: Build Linux image
         if: inputs.target == 'linux'
         run: |
@@ -61,6 +69,7 @@ jobs:
           docker tag "foundry:$REVISION" "$image"
           docker push "$image"
           digest=$(docker image inspect "$image" --format '{{index .RepoDigests 0}}')
+          echo "FOUNDRY_BASE_IMAGE=$digest" >> "$GITHUB_ENV"
           {
             echo "### Foundry VPS image"
             echo "Commit: \`$REVISION\`"
@@ -68,6 +77,19 @@ jobs:
             echo "Candidate only; not deployed. Use the reviewed update and recovery procedure for the running storage/schema."
             echo "The baseline foundry-deploy helper does not support an activated PostgreSQL/Access Main."
           } >> "$GITHUB_STEP_SUMMARY"
+          docker logout ghcr.io
+      - name: Build and publish pinned Linux Codex sandbox
+        if: inputs.target == 'linux' && inputs.publish_linux && inputs.build_sandbox && github.repository == 'niklaskastning/foundry'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          REVISION: ${{ github.sha }}
+        run: |
+          docker build -f deploy/fork/sandbox/Dockerfile --build-arg FOUNDRY_BASE_IMAGE="$FOUNDRY_BASE_IMAGE" --build-arg CODEX_VERSION=0.156.1 -t "ghcr.io/niklaskastning/foundry-sandbox:$REVISION" .
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+          docker push "ghcr.io/niklaskastning/foundry-sandbox:$REVISION"
+          digest=$(docker image inspect "ghcr.io/niklaskastning/foundry-sandbox:$REVISION" --format '{{index .RepoDigests 0}}')
+          printf 'Sandbox commit: `%s`\n\nSandbox image: `%s`\n' "$REVISION" "$digest" >> "$GITHUB_STEP_SUMMARY"
           docker logout ghcr.io
       - uses: ./.github/actions/setup-ci-deps
         if: inputs.target == 'windows'

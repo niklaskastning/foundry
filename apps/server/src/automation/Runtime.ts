@@ -1,3 +1,4 @@
+import * as SandboxTargets from "./SandboxTargets.ts";
 import * as McpBindings from "./McpBindings.ts";
 import * as MachineAccess from "./MachineAccess.ts";
 import * as Handoffs from "./Handoffs.ts";
@@ -132,6 +133,9 @@ export const layer = Layer.unwrap(
       Config.withDefault(false),
     );
     if (!enabled) return Layer.empty;
+    const sandboxes = yield* Config.Boolean("FOUNDRY_SANDBOXES_ENABLED").pipe(
+      Config.withDefault(false),
+    );
     const artifacts = yield* Config.Boolean("FOUNDRY_ARTIFACTS_ENABLED").pipe(
       Config.withDefault(false),
     );
@@ -163,15 +167,16 @@ export const layer = Layer.unwrap(
       .pipe(
         Layer.provide(Application.layer.pipe(Layer.provide(Handoffs.layer))),
         Layer.provide(DefinitionSync.layer.pipe(Layer.provideMerge(DefinitionSources.layer))),
-        Layer.provide(GitHubPolling.layer),
-        Layer.provide(ScheduleTriggers.layer),
+        Layer.provide(Layer.merge(GitHubPolling.layer, ScheduleTriggers.layer)),
         Layer.provide(Triggers.layer),
         Layer.provide(Inbox.layer),
-        Layer.provide(Control.layer),
-        Layer.provide(Definitions.layer),
+        Layer.provide(Layer.merge(Control.layer, Definitions.layer)),
         Layer.provide(Scheduler.layer),
         Layer.provide(Publish.layer),
         Layer.provide(GitHubApp.layer),
+        Layer.provide(
+          sandboxes ? SandboxTargets.layer.pipe(Layer.provide(WorkerTransport.layer)) : Layer.empty,
+        ),
         Layer.provide(WorkerTransport.layer),
         Layer.provide(Unattended.layer),
         Layer.provide(Layer.merge(DispatchStore.layer, McpBindings.layer)),

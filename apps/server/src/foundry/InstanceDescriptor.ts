@@ -31,6 +31,9 @@ export class InstanceDescriptor extends Context.Service<
 >()("t3/foundry/InstanceDescriptor") {}
 
 const make = Effect.gen(function* () {
+  const sandboxes = yield* Config.Boolean("FOUNDRY_SANDBOXES_ENABLED").pipe(
+    Config.withDefault(false),
+  );
   const automation = yield* Config.Boolean("FOUNDRY_AUTOMATION_ENABLED").pipe(
     Config.withDefault(false),
   );
@@ -78,6 +81,7 @@ const make = Effect.gen(function* () {
       instanceId: yield* identity.getOrCreate,
       mainEnvironmentId: yield* environment.getEnvironmentId,
       capabilities,
+      ...(sandboxes ? { sandboxes: { protocolVersion: "1" as const } } : {}),
       ...(automation ? { automation: { protocolVersion: "1" as const } } : {}),
       ...(artifacts
         ? {

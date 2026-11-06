@@ -1,6 +1,7 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { isDefinitiveAutomationFailure, startFailureMessage } from "./failures";
 import { randomUUID } from "../../lib/utils";
+import { useSandboxProfiles } from "../../foundry/useSandboxProfiles";
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Badge } from "../../components/ui/badge";
@@ -169,6 +170,17 @@ function StartWorkflow({
   const defaults =
     defaultsQuery.result?.kind === "executionDefaults" ? defaultsQuery.result.defaults : null;
   const target = binding.result?.kind === "workerBinding" ? binding.result : null;
+  const sandboxCatalog = useSandboxProfiles(environmentId);
+  const [sandboxOverride, setSandboxKey] = useState<string>();
+  const sandboxKey =
+    sandboxOverride ??
+    (defaults?.sandbox ? `${defaults.sandbox.profileId}:${defaults.sandbox.revision}` : "worker");
+  const sandbox =
+    active?.definition.schemaVersion === 4
+      ? sandboxCatalog?.profiles.find(
+          (profile) => `${profile.profileId}:${profile.revision}` === sandboxKey,
+        )
+      : undefined;
   const [selectedWorkflow, setWorkflowVersionId] = useState<string>();
   const workflowVersionId =
     active?.workflowVersions.find((workflow) => workflow.versionId === selectedWorkflow)
@@ -223,7 +235,9 @@ function StartWorkflow({
     automationCommands.command.permissionAtom(environmentId, { op: "configureExecutionDefaults" }),
   );
   const selectedProject = target?.projects.find((project) => project.id === projectId);
-  const configured = Boolean((workers?.length || selectedProject) && model);
+  const configured = Boolean(
+    (workers?.length || selectedProject) && model && (sandboxKey === "worker" || sandbox),
+  );
   async function submit(action: "start" | "save") {
     if (
       busy ||
@@ -242,10 +256,13 @@ function StartWorkflow({
           factoryId: item.factoryId,
           workItemId: item.id,
           workflowVersionId,
-          revision,
+          revision: sandbox?.checkout.commit ?? revision,
+          ...(sandbox
+            ? { sandbox: { profileId: sandbox.profileId, revision: sandbox.revision } }
+            : {}),
           ...(v4 ? { inputs: JSON.parse(workflowInputs) } : {}),
           projectId: workers?.[0]?.projectId ?? ProjectId.make(projectId),
-          ...(workers ? { workers } : {}),
+          ...(!sandbox && workers ? { workers } : {}),
           model,
           checks: JSON.parse(checks),
           requiredArtifacts: JSON.parse(artifacts),
@@ -261,6 +278,7 @@ function StartWorkflow({
                 expectedGeneration: defaults?.generation ?? null,
                 projectId: start.projectId,
                 ...(start.workers ? { workers: start.workers } : {}),
+                ...(start.sandbox ? { sandbox: start.sandbox } : {}),
                 model: start.model,
                 checks: start.checks,
                 requiredArtifacts: start.requiredArtifacts,
@@ -317,6 +335,40 @@ function StartWorkflow({
           </SelectContent>
         </Select>
         {!active ? <p>Activate a definition before starting work.</p> : null}
+        {v4 && sandboxCatalog?.supported ? (
+          <label className="block space-y-1">
+            <span>Execution environment</span>
+            <Select
+              value={sandboxKey}
+              onValueChange={(value) => {
+                if (value) setSandboxKey(value);
+              }}
+            >
+              <SelectTrigger aria-label="Execution environment">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="worker">Existing worker</SelectItem>
+                {sandboxCatalog.profiles.map((profile) => (
+                  <SelectItem
+                    key={`${profile.profileId}:${profile.revision}`}
+                    value={`${profile.profileId}:${profile.revision}`}
+                  >
+                    {profile.label} · {profile.revision.slice(0, 8)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {sandbox ? (
+              <span className="text-xs text-muted-foreground">
+                Fresh Linux environment · checkout {sandbox.checkout.commit.slice(0, 12)} ·{" "}
+                {sandbox.lifetimeSeconds / 60} minutes. Applies to manual starts; scheduled and
+                GitHub triggers use their configured worker.
+              </span>
+            ) : null}
+            {sandboxCatalog.error ? <span role="alert">{sandboxCatalog.error}</span> : null}
+          </label>
+        ) : null}
         {active && workflow ? (
           <details>
             <summary className="cursor-pointer text-sm">
@@ -339,7 +391,8 @@ function StartWorkflow({
             <label className="block space-y-1">
               <span>Repository commit SHA</span>
               <Input
-                value={revision}
+                value={sandbox?.checkout.commit ?? revision}
+                disabled={Boolean(sandbox)}
                 onChange={(event) => setRevision(event.target.value)}
                 placeholder="Full 40-character commit SHA"
               />
@@ -492,10 +545,10 @@ function StartWorkflow({
             busy ||
             !canStart ||
             (!pending &&
-              ((!workers?.length && !target?.status.providerReady) ||
-                (parallel && !/^[a-f0-9]{40}$/i.test(revision)) ||
+              ((!sandbox && !workers?.length && !target?.status.providerReady) ||
+                (parallel && !sandbox && !/^[a-f0-9]{40}$/i.test(revision)) ||
                 !configured ||
-                !revision ||
+                (!sandbox && !revision) ||
                 !workflowVersionId ||
                 defaultsQuery.loading ||
                 Boolean(defaultsQuery.error))) ||
