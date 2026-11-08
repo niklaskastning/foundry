@@ -102,6 +102,62 @@ it.live(
         [...paths].filter((path) => path.startsWith("repo/node_modules/file-")).length,
         0,
       );
+      yield* fs.writeFileString(`${cwd}/deleted.txt`, "remove me");
+      yield* fs.writeFileString(`${cwd}/executable.sh`, "echo setup");
+      yield* git.execute({
+        cwd,
+        operation: "snapshot.test",
+        args: ["add", "work.txt", "deleted.txt", "executable.sh"],
+      });
+      yield* git.execute({
+        cwd,
+        operation: "snapshot.test",
+        args: [
+          "-c",
+          "user.name=Snapshot",
+          "-c",
+          "user.email=snapshot@example.test",
+          "commit",
+          "-m",
+          "baseline",
+        ],
+      });
+      yield* fs.writeFileString(`${cwd}/work.txt`, "staged work");
+      yield* fs.writeFileString(`${cwd}/staged.txt`, "staged new file");
+      yield* fs.remove(`${cwd}/deleted.txt`);
+      yield* fs.chmod(`${cwd}/executable.sh`, 0o755);
+      yield* git.execute({
+        cwd,
+        operation: "snapshot.test",
+        args: [
+          "-c",
+          "core.filemode=true",
+          "add",
+          "work.txt",
+          "staged.txt",
+          "deleted.txt",
+          "executable.sh",
+        ],
+      });
+      const stagedOutput = `${root}/staged.json`;
+      yield* service.capture({ ...input, output: stagedOutput });
+      const stagedPart = yield* decodePart(yield* fs.readFileString(`${stagedOutput}.part-0`));
+      assert.include(
+        stagedPart.entries.map((entry) => entry.path),
+        "repo/staged.txt",
+      );
+      assert.include(
+        stagedPart.entries.map((entry) => entry.path),
+        "repo/work.txt",
+      );
+      assert.include(
+        stagedPart.entries.map((entry) => entry.path),
+        "repo/executable.sh",
+      );
+      assert.equal(
+        stagedPart.entries.find((entry) => entry.path === "repo/deleted.txt")?.kind,
+        "missing",
+      );
       yield* fs.link(`${root}/.foundry/private`, `${cwd}/hardlink`);
       assert.equal((yield* service.capture(input).pipe(Effect.flip)).code, "incomplete");
       const absent = {

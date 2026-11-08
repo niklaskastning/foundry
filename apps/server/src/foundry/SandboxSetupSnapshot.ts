@@ -93,7 +93,12 @@ export const layer = Layer.effect(
               operation: "sandbox.setup.select",
               args: ["ls-files", "-z", "--modified", "--others", "--exclude-standard"],
             });
-            for (const name of listed.stdout.split("\0").filter(Boolean)) {
+            const staged = yield* git.execute({
+              cwd: input.cwd,
+              operation: "sandbox.setup.selectStaged",
+              args: ["diff", "--cached", "--name-only", "--no-renames", "-z"],
+            });
+            for (const name of `${listed.stdout}\0${staged.stdout}`.split("\0").filter(Boolean)) {
               if (
                 !name
                   .split("/")
