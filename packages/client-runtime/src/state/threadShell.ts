@@ -8,6 +8,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   isListedThreadLineage,
+  isListedChatThread,
   isProviderNativeSubagentThread,
   OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
@@ -644,6 +645,7 @@ export function createEnvironmentThreadShellAtoms(input: {
       for (const thread of get(environmentThreadsAtom(environmentId))) {
         if (
           thread.archivedAt !== null ||
+          !isListedChatThread(thread) ||
           isShownUnderParent({ environmentId, threadId: thread.id }, thread.lineage, underParent)
         ) {
           continue;

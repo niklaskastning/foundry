@@ -246,6 +246,8 @@ describe("omitOlderSettledShells", () => {
     const result = omit([
       ...newest,
       sideChat,
+      row("foundry-launch:historical", 60),
+      row("foundry-launch:v4:recent", 0),
       row("old", 30),
       row("b-old", 40),
       row("unsettled", null),
@@ -253,6 +255,8 @@ describe("omitOlderSettledShells", () => {
     expect(result.threads.map((thread) => thread.id)).toEqual([
       ...newest.map((thread) => thread.id),
       "side-chat",
+      "foundry-launch:historical",
+      "foundry-launch:v4:recent",
       "unsettled",
     ]);
     expect(result.olderSettled).toEqual({

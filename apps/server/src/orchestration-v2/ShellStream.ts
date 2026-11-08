@@ -13,6 +13,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   isListedThreadLineage,
+  isListedChatThread,
   isLiveSubagentShell,
   isOlderSettledThreadShell,
   OrchestrationProjectShell as ProjectShellSchema,
@@ -100,7 +101,7 @@ function shellTrimFacts(rows: ReadonlyArray<ShellTrimRow>): ShellTrimFacts {
       subagentThreadIds.add(row.id);
       if (row.lineage.parentThreadId) subagentParentIds.add(row.lineage.parentThreadId);
     } else if (
-      isListedThreadLineage(row.lineage) &&
+      isListedChatThread(row) &&
       row.settledOverride === "settled" &&
       row.settledAt !== null
     ) {
