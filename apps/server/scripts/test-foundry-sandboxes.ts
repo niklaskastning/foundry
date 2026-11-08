@@ -302,6 +302,11 @@ try {
       const active = (yield* service.list(operatorId)).allocations.find(
         (item) => item.state === "requested",
       )!;
+      yield* service.transition(operatorId, active.allocationId, active.generation, "provisioning");
+      yield* service.transition(operatorId, active.allocationId, active.generation, "setup");
+      yield* service.transition(operatorId, active.allocationId, active.generation, "failed", {
+        failure: "setup",
+      });
       yield* queryExpiry(active.allocationId);
       NodeAssert.equal(
         (yield* service
@@ -311,6 +316,26 @@ try {
       );
       const claimed = yield* service.claim(operatorId, "62257363-5ac3-4d18-8b4e-cf17695c2ec7");
       NodeAssert.equal(new Set(claimed.map((item) => item.allocationId)).size, 2);
+      const expiredSetup = claimed.find((item) => item.allocationId === active.allocationId)!;
+      NodeAssert.equal(expiredSetup.state, "draining");
+      NodeAssert.equal(expiredSetup.generation, active.generation + 1);
+      NodeAssert.equal(expiredSetup.deleteRequested, true);
+      yield* service.transition(operatorId, first!.allocationId, first!.generation, "failed", {
+        failure: "archive",
+      });
+      yield* queryExpiry(first!.allocationId);
+      yield* service.claim(operatorId, "62257363-5ac3-4d18-8b4e-cf17695c2ec7");
+      const failedCleanup = (yield* service.get(operatorId, first!.allocationId)).allocation;
+      NodeAssert.equal(failedCleanup.state, "failed");
+      NodeAssert.equal(failedCleanup.generation, first!.generation);
+      NodeAssert.equal(failedCleanup.failure, "archive");
+      NodeAssert.deepEqual(
+        yield* service.control(operatorId, first!.allocationId, "delete"),
+        failedCleanup,
+      );
+      const retriedCleanup = yield* service.control(operatorId, first!.allocationId, "retry");
+      NodeAssert.equal(retriedCleanup.state, "archiving");
+      NodeAssert.equal(retriedCleanup.generation, first!.generation);
       const receipt = {
         archive: {
           kind: "setup" as const,

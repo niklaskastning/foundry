@@ -92,6 +92,7 @@ it.live(
         string,
         { manifest: FoundryArtifactManifest; bytes: Uint8Array }
       >();
+      const bulkSetupArtifacts = new Set<string>();
       const findArtifact = (id: string) =>
         setupArtifacts.get(id) ??
         (artifact?.manifest.reference.artifactId === id ? artifact : undefined);
@@ -156,6 +157,8 @@ it.live(
             return found ? Effect.succeed(found.manifest) : Effect.fail(unavailable());
           },
           read: (_principal, input) => {
+            if (bulkSetupArtifacts.has(input.reference.artifactId))
+              return Effect.fail(unavailable());
             const found = findArtifact(input.reference.artifactId);
             return found
               ? Effect.succeed({
@@ -170,7 +173,14 @@ it.live(
           begin: () => Effect.die("Unexpected begin"),
           status: () => Effect.die("Unexpected status"),
           write: () => Effect.die("Unexpected write"),
-          publish: () => Effect.die("Unexpected publish"),
+          publish: (_principal, input) => {
+            const found = findArtifact(input.artifactId);
+            return found &&
+              found.bytes.byteLength === found.manifest.sizeBytes &&
+              artifactSha256(found.bytes) === found.manifest.sha256
+              ? Effect.succeed(found.manifest)
+              : Effect.fail(unavailable());
+          },
           abort: () => Effect.die("Unexpected abort"),
           list: () => Effect.die("Unexpected list"),
         }),
@@ -241,6 +251,7 @@ it.live(
           sizeBytes: partBytes.byteLength,
           sha256: artifactSha256(partBytes),
         };
+        bulkSetupArtifacts.add(partManifest.reference.artifactId);
         const indexBytes = new TextEncoder().encode(
           yield* encodeSetupIndex({ format: "foundry-setup-snapshot-2", parts: [partManifest] }),
         );

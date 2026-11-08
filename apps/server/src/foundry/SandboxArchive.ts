@@ -436,12 +436,12 @@ export const layerConfirmation = Layer.effect(
             )
               return yield* new FoundrySandboxArchiveError({ code: "foreign_archive" });
             seen.add(part.reference.artifactId);
-            const confirmed = yield* downloadArtifact((request) => {
-              if (request.op === "metadata") return artifacts.metadata(principal, request.input);
-              if (request.op === "read") return artifacts.read(principal, request.input);
-              return Effect.fail(new FoundryArtifactError({ code: "invalid_request" }));
-            }, part.reference);
-            if (stableStringify(confirmed.manifest) !== stableStringify(part))
+            const published = yield* artifacts.metadata(principal, part.reference);
+            if (stableStringify(published) !== stableStringify(part))
+              return yield* new FoundrySandboxArchiveError({ code: "changed" });
+            // Idempotent publication verifies the durable blob hash without re-encoding every chunk.
+            const confirmed = yield* artifacts.publish(principal, part.reference);
+            if (stableStringify(confirmed) !== stableStringify(part))
               return yield* new FoundrySandboxArchiveError({ code: "changed" });
           }
         }

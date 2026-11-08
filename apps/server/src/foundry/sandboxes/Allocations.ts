@@ -342,6 +342,8 @@ const make = Effect.gen(function* () {
           if (action === "delete" || action === "stop") return allocation;
           return yield* new FoundrySandboxError({ code: "conflict" });
         }
+        if (action === "delete" && allocation.state === "failed" && allocation.deleteRequested)
+          return allocation;
         if (action === "extend") {
           const now = yield* Clock.currentTimeMillis;
           if (
@@ -446,7 +448,7 @@ const make = Effect.gen(function* () {
         yield* sql`UPDATE foundry_instance.sandbox_allocations SET allocation=jsonb_set(jsonb_set(jsonb_set(allocation,
         '{state}', '"draining"'::jsonb),'{deleteRequested}','true'::jsonb),'{generation}',to_jsonb((allocation->>'generation')::integer+1))
         WHERE instance_id=${instanceId} AND operator_id=${operatorId} AND (allocation->>'expiresAt')::bigint<=${now}
-        AND (allocation->>'state' IN ('requested','provisioning','setup','ready','failed') OR (allocation->>'state'='stopped' AND allocation->>'deleteRequested'='false'))`;
+        AND (allocation->>'state' IN ('requested','provisioning','setup','ready') OR (allocation->>'state' IN ('stopped','failed') AND allocation->>'deleteRequested'='false'))`;
         const rows =
           yield* sql<Row>`UPDATE foundry_instance.sandbox_allocations SET claim_owner=${leaseId},claim_until=${now + 60000}
         WHERE instance_id=${instanceId} AND operator_id=${operatorId} AND allocation->>'state'<>'deleted'
