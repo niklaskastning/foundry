@@ -206,12 +206,38 @@ try {
       );
       const competing = yield* Effect.forEach(
         ["second", "third"],
-        (commandId) => service.request(operatorId, { ...input, commandId }).pipe(Effect.result),
+        (commandId) =>
+          service
+            .request(operatorId, {
+              ...input,
+              commandId,
+              owner: { kind: "workflow", factoryId: "workflow-status", runId: commandId },
+            })
+            .pipe(Effect.result),
         { concurrency: 2 },
       );
       NodeAssert.equal(competing.filter((result) => result._tag === "Success").length, 1);
       NodeAssert.equal(competing.filter((result) => result._tag === "Failure").length, 1);
       NodeAssert.equal((yield* service.list(operatorId)).allocations.length, 2);
+      const workflowAllocation = competing.find((result) => result._tag === "Success")!;
+      if (workflowAllocation._tag === "Success") {
+        const owner = workflowAllocation.success.request.owner;
+        NodeAssert.equal(owner.kind, "workflow");
+        if (owner.kind === "workflow") {
+          NodeAssert.deepEqual(
+            (yield* service.list(operatorId, {
+              factoryId: owner.factoryId,
+              runId: owner.runId,
+            })).allocations.map((entry) => entry.allocationId),
+            [workflowAllocation.success.allocationId],
+          );
+          NodeAssert.equal(
+            (yield* service.list(operatorId, { factoryId: "another-factory", runId: owner.runId }))
+              .allocations.length,
+            0,
+          );
+        }
+      }
       const lease = "62257363-5ac3-4d18-8b4e-cf17695c2ec7";
       NodeAssert.equal((yield* service.claim(operatorId, lease)).length, 2);
       NodeAssert.equal(

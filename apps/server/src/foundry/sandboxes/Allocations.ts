@@ -99,7 +99,10 @@ export class Allocations extends Context.Service<
       operatorId: string,
       profile: FoundrySandboxProfile,
     ) => Effect.Effect<void, FoundrySandboxError>;
-    readonly list: (operatorId: string) => Effect.Effect<
+    readonly list: (
+      operatorId: string,
+      workflow?: { readonly factoryId: string; readonly runId: string },
+    ) => Effect.Effect<
       {
         profiles: ReadonlyArray<FoundrySandboxProfileSummary>;
         allocations: ReadonlyArray<FoundrySandboxAllocationSummary>;
@@ -226,14 +229,19 @@ const make = Effect.gen(function* () {
       if (!same.length) return yield* new FoundrySandboxError({ code: "conflict" });
     }
   }, Effect.mapError(failure));
-  const list = Effect.fn("SandboxAllocations.list")(function* (operatorId: string) {
+  const list = Effect.fn("SandboxAllocations.list")(function* (
+    operatorId: string,
+    workflow?: { readonly factoryId: string; readonly runId: string },
+  ) {
     const instanceId = yield* authorize(operatorId);
     const profiles = yield* sql<{
       profile: FoundrySandboxProfile;
     }>`SELECT profile FROM foundry_instance.sandbox_profiles
       WHERE instance_id=${instanceId} AND operator_id=${operatorId} ORDER BY profile_id,revision LIMIT 128`;
     const allocations = yield* sql<Row>`SELECT allocation FROM foundry_instance.sandbox_allocations
-      WHERE instance_id=${instanceId} AND operator_id=${operatorId} ORDER BY (allocation->>'createdAt')::bigint DESC LIMIT 128`;
+      WHERE instance_id=${instanceId} AND operator_id=${operatorId}
+      AND (${workflow === undefined} OR (allocation->'request'->'owner'->>'kind'='workflow' AND allocation->'request'->'owner'->>'factoryId'=${workflow?.factoryId ?? ""} AND allocation->'request'->'owner'->>'runId'=${workflow?.runId ?? ""}))
+      ORDER BY (allocation->>'createdAt')::bigint DESC LIMIT 128`;
     return {
       profiles: profiles.map(({ profile }) => ({
         ...summarizeProfile(profile),

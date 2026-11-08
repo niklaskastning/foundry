@@ -36,12 +36,10 @@ function response(message) {
   return { jsonrpc: "2.0", id: message.id, result };
 }
 if (process.argv[2] === "http") {
-  let modelInput;
+  const modelInputs = [];
   const server = NodeHttp.createServer(async (request, reply) => {
     if (request.url === "/capture") {
-      reply
-        .writeHead(200, { "content-type": "application/json" })
-        .end(JSON.stringify(modelInput ?? null));
+      reply.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(modelInputs));
       return;
     }
     if (request.method !== "POST") {
@@ -51,12 +49,62 @@ if (process.argv[2] === "http") {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     if (request.url === "/responses") {
-      modelInput = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      reply.writeHead(400, { "content-type": "application/json" }).end(
-        JSON.stringify({
-          error: { message: "Expected fixture failure", type: "invalid_request_error" },
-        }),
+      const modelInput = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      modelInputs.push(modelInput);
+      const completedCalls = modelInput.input.filter(
+        (item) => item.type === "function_call_output",
       );
+      const tools = modelInput.tools.flatMap((tool) =>
+        tool.type === "namespace" && tool.name.startsWith("mcp__foundry_")
+          ? tool.tools
+              .filter((entry) => entry.name === "allowed")
+              .map((entry) => ({ ...entry, namespace: tool.name }))
+          : [],
+      );
+      const output = completedCalls.length
+        ? [
+            {
+              id: "fixture-message",
+              type: "message",
+              status: "completed",
+              role: "assistant",
+              content: [{ type: "output_text", text: "true", annotations: [] }],
+            },
+          ]
+        : tools.map((tool, index) => ({
+            id: `fixture-tool-${index}`,
+            type: "function_call",
+            status: "completed",
+            call_id: `fixture-call-${index}`,
+            name: tool.name,
+            namespace: tool.namespace,
+            arguments: "{}",
+          }));
+      reply.writeHead(200, { "content-type": "text/event-stream" });
+      const event = (type, data) =>
+        reply.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
+      event("response.created", {
+        response: {
+          id: `fixture-response-${modelInputs.length}`,
+          object: "response",
+          status: "in_progress",
+          output: [],
+        },
+      });
+      output.forEach((item, output_index) => {
+        event("response.output_item.added", { output_index, item });
+        event("response.output_item.done", { output_index, item });
+      });
+      event("response.completed", {
+        response: {
+          id: `fixture-response-${modelInputs.length}`,
+          object: "response",
+          status: "completed",
+          output,
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        },
+      });
+      reply.end();
       return;
     }
     const result = response(JSON.parse(Buffer.concat(chunks).toString("utf8")));
