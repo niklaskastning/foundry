@@ -43,12 +43,16 @@ export function OperationsDashboardPanel({ environmentId, factoryId, runId, onOp
         <p className="text-sm">Cost coverage: {data.costCoverage === null ? "Unknown; no cost source" : `${data.costCoverage}%`}.</p>
         <p className="text-sm">Cycle time: {data.cycleTime.value ?? "Unknown"}. {data.cycleTime.reason}</p>
       </div>
+      <h3 className="font-medium">Provider cost snapshots</h3>
+      <p className="text-sm">Cumulative provider-thread amounts, measured as reported. These may span multiple runs or periods; they are unallocated and excluded from category totals and cost per PR.</p>
+      <ul>{data.costEvidence.map((cost) => <li key={`${cost.environmentId}:${cost.threadId}:${cost.providerThreadId}`} className="text-sm">{cost.amount} {cost.currency} · {cost.observedAt} · Thread {cost.threadId} · Provider thread {cost.providerThreadId} · Archive event {cost.sequence}</li>)}</ul>
+      {!data.costEvidence.length ? <p className="text-sm">No provider cost evidence loaded; amount unknown.</p> : null}
       <h3 className="font-medium">Archived usage evidence</h3>
       {!selectedRunId ? <p className="text-sm">Select a work item below to inspect its run usage evidence.</p> : null}
       <p className="text-sm"><Badge variant="outline">{data.usageStatus}</Badge> {data.usageNote}</p>
       <p className="text-sm">Coverage: partial evidence, {data.usageTruncated ? "truncated" : "no additional truncation detected"}. Limit {data.usageAttemptLimit} attempts × {data.usageEventLimit} events. These pages are not run totals.</p>
       <ul>{data.archiveCoverage.map((page) => <li key={page.commandId} className="text-xs">Attempt {page.commandId}: {page.status}, persisted cursor {page.cursor}, after {page.after}, {page.loadedEvents} loaded events, source head {page.sourceHead ?? "Unknown"}, next cursor {page.nextCursor ?? "None"}</li>)}</ul>
-      <ul>{data.usageEvidence.map((usage) => <li key={`${usage.commandId}:${usage.providerTurnId}`} className="text-sm">{usage.usedTokens} reported context tokens · {usage.updatedAt} · Turn {usage.providerTurnId} · Thread {usage.threadId} · Environment {usage.environmentId} · Archive event {usage.sequence}</li>)}</ul>
+      <ul>{data.usageEvidence.map((usage) => <li key={`${usage.commandId}:${usage.providerTurnId}`} className="text-sm">{usage.usedTokens ?? "Unknown"} reported context tokens · {usage.updatedAt} · Turn {usage.providerTurnId} · Thread {usage.threadId} · Environment {usage.environmentId} · Archive event {usage.sequence} · Main agent turn usage: {usage.turnUsage?.usageStatus ?? "unavailable"}, input {usage.turnUsage?.inputTokens ?? "Unknown"}, output {usage.turnUsage?.outputTokens ?? "Unknown"}, subagents {usage.turnUsage ? (usage.turnUsage.hasSubagents ? "excluded" : "none reported") : "unknown"}</li>)}</ul>
       <h3 className="font-medium">Run evidence and activity</h3>
       <p className="text-sm text-muted-foreground">Enrollment time is the last available activity timestamp here. Current state does not establish recent agent activity. Archive cursors count persisted events, not tokens.</p>
       <ul className="divide-y rounded-lg border">{data.items.map((item) => <li key={item.runId} className="p-4 space-y-2">
