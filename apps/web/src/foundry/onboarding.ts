@@ -1,18 +1,31 @@
-import { FoundryOnboarding, ConnectionBlockedError } from "@t3tools/client-runtime/connection";
+import { FoundryDeviceCatalog } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+import {
+  FoundryOnboarding,
+  ConnectionBlockedError,
+  authorizedDeviceRegistrations,
+} from "@t3tools/client-runtime/connection";
 import { createRuntimeCommand } from "@t3tools/client-runtime/state/runtime";
 import * as Effect from "effect/Effect";
 import { appAtomRuntime } from "../lib/runtime";
 
+const decodeCatalog = Schema.decodeUnknownSync(FoundryDeviceCatalog);
+
 export type Operation = FoundryOnboarding.Operation;
 export type OnboardingResult = FoundryOnboarding.OnboardingResult;
 
-async function request(path: string, csrf?: string) {
+async function request(
+  path: string,
+  csrf?: string,
+  credentials?: { username: string; password: string },
+) {
   const response = await fetch(path, {
     method: path.startsWith("/api/foundry/auth/") ? "POST" : "GET",
     credentials: "same-origin",
     redirect: "manual",
     cache: "no-store",
     headers: { "Content-Type": "application/json", ...(csrf ? { "X-Foundry-CSRF": csrf } : {}) },
+    ...(credentials ? { body: JSON.stringify(credentials) } : {}),
     signal: AbortSignal.timeout(15000),
   });
   return FoundryOnboarding.readResponse(response);
@@ -21,6 +34,7 @@ async function request(path: string, csrf?: string) {
 export async function executeInstanceOperation(input: {
   operation: Operation;
   candidate?: FoundryOnboarding.InstanceBinding;
+  credentials?: { username: string; password: string };
 }) {
   if (!navigator.locks) throw new FoundryOnboarding.OnboardingError("coordination");
   // Foundry cookies are shared across tabs, so a per-tab command queue cannot serialize renewal.
@@ -33,10 +47,19 @@ export async function executeInstanceOperation(input: {
         origin: window.location.origin,
         storage: localStorage,
         now: Date.now,
-        request,
-      }).execute(input.operation, input.candidate);
+        request: (path, csrf) =>
+          request(path, csrf, path.endsWith("/login") ? input.credentials : undefined),
+      })
+        .execute(input.operation, input.candidate)
+        .then((result) => {
+          sessionState = result;
+          window.dispatchEvent(new Event("foundry:session"));
+          return result;
+        });
     });
   } catch (error) {
+    sessionState = undefined;
+    window.dispatchEvent(new Event("foundry:session"));
     if (!acquired && signal.aborted)
       throw new FoundryOnboarding.OnboardingError("coordination_busy");
     throw error;
@@ -46,7 +69,11 @@ export async function executeInstanceOperation(input: {
 export const instanceCommand = createRuntimeCommand(appAtomRuntime, {
   label: "foundry:instance-onboarding",
   concurrency: { mode: "serial", key: () => "active-instance" },
-  execute: (input: { operation: Operation; candidate?: FoundryOnboarding.InstanceBinding }) =>
+  execute: (input: {
+    operation: Operation;
+    candidate?: FoundryOnboarding.InstanceBinding;
+    credentials?: { username: string; password: string };
+  }) =>
     Effect.tryPromise({
       try: () => executeInstanceOperation(input),
       catch: (error) =>
@@ -61,7 +88,16 @@ export function instanceEntry(raw: string): string {
   return `${FoundryOnboarding.normalizeOrigin(raw, import.meta.env.DEV)}/foundry`;
 }
 
+let sessionState: OnboardingResult | undefined;
 export function initialState(): OnboardingResult {
+  if (sessionState)
+    return {
+      ...sessionState,
+      session:
+        sessionState.session && sessionState.session.expiresAt > Date.now()
+          ? sessionState.session
+          : null,
+    };
   try {
     const binding = FoundryOnboarding.createInstanceClient({
       origin: window.location.origin,
@@ -95,5 +131,21 @@ export async function verifySavedInstance(): Promise<void> {
     now: Date.now,
     request,
   });
-  if (client.readBinding()) await client.execute("inspect");
+  if (client.readBinding()) {
+    const state = await executeInstanceOperation({ operation: "session" });
+    if (state.binding && state.session && state.devicesAvailable) {
+      const response = await fetch("/api/foundry/gateway/grants/catalog", {
+        method: "POST",
+        credentials: "same-origin",
+        redirect: "manual",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json", "X-Foundry-CSRF": state.session.csrfToken },
+        body: "{}",
+        signal: AbortSignal.timeout(15000),
+      });
+      const catalog = decodeCatalog(await FoundryOnboarding.readResponse(response));
+      const { writeDeviceRegistrations } = await import("./selection");
+      writeDeviceRegistrations(authorizedDeviceRegistrations(catalog, state.binding));
+    }
+  }
 }

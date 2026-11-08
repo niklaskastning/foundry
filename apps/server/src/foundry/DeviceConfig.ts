@@ -1,3 +1,4 @@
+import { isNativeOrigin } from "./AccessConfig.ts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -31,10 +32,13 @@ export const layer = Layer.effect(
   DeviceOrigin,
   Effect.gen(function* () {
     const origin = yield* Config.String("FOUNDRY_PUBLIC_ORIGIN");
+    const mode = yield* Config.String("FOUNDRY_AUTH_MODE").pipe(Config.withDefault("access"));
     const valid =
-      URL.canParse(origin) &&
-      new URL(origin).origin === origin &&
-      new URL(origin).protocol === "https:";
+      mode === "native"
+        ? isNativeOrigin(origin)
+        : URL.canParse(origin) &&
+          new URL(origin).origin === origin &&
+          new URL(origin).protocol === "https:";
     if (!valid) return yield* new FoundryDeviceError({ code: "configuration" });
     return { origin };
   }),

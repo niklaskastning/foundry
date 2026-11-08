@@ -6,6 +6,7 @@ import {
   type FoundryDeviceCatalog,
 } from "@t3tools/contracts";
 import {
+  authorizedDeviceRegistrations,
   createDeviceCatalogClient,
   restoreDeviceSelection,
   resolveDevicePlatformRegistrations,
@@ -45,11 +46,38 @@ it("rechecks catalog identity, online status and permissions before selecting a 
     scopes: ["orchestration:read", "access:write"],
     devices: [device],
   };
+  const offline = {
+    ...device,
+    online: false,
+    rpcReady: false,
+    environmentId: EnvironmentId.make("offline"),
+    deviceId: FoundryDeviceId.make("44444444-4444-4444-8444-444444444444"),
+  };
+  const discovered = authorizedDeviceRegistrations(
+    {
+      ...response,
+      devices: [
+        device,
+        offline,
+        { ...device, revoked: true },
+        { ...device, clientAccess: { enabled: false, generation: 1 } },
+      ],
+    },
+    binding,
+  );
+  expect(discovered.map((entry) => entry.target.environmentId)).toEqual(["worker", "offline"]);
+  expect(
+    restoreDeviceSelection(
+      JSON.stringify(discovered.map((entry) => entry.target)),
+      binding,
+      binding.origin,
+    )?.map((entry) => entry.target.environmentId),
+  ).toEqual(["worker", "main", "offline"]);
   const client = createDeviceCatalogClient({ binding, request: async () => response });
   const selection = JSON.stringify(await client.select(deviceId));
-  expect(restoreDeviceSelection(selection, binding, binding.origin)?.[0]?.target.deviceId).toBe(
+  expect(restoreDeviceSelection(selection, binding, binding.origin)?.[0]?.target).toMatchObject({
     deviceId,
-  );
+  });
   expect(restoreDeviceSelection(selection, binding, binding.origin)).toMatchObject([
     { _tag: "FoundryConnectionRegistration", target: { environmentId: "worker" } },
     {

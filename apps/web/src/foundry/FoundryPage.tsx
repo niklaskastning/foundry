@@ -1,4 +1,6 @@
 import { FoundryUI } from "./FoundryUI";
+import { instanceReturnPath } from "./home";
+import { useFoundrySession } from "./useFoundrySession";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { Link, useSearch, useNavigate } from "@tanstack/react-router";
 import { FactoryNavigation, useAutomationCapability } from "./FactoryNavigation";
@@ -13,13 +15,7 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { DeviceCatalog } from "./DeviceCatalog";
 import { useSandboxProfiles } from "./useSandboxProfiles";
 import { WorkerCapacity } from "../features/automation/WorkerCapacity";
-import {
-  instanceCommand,
-  instanceEntry,
-  initialState,
-  type OnboardingResult,
-  type Operation,
-} from "./onboarding";
+import { instanceCommand, instanceEntry, initialState, type Operation } from "./onboarding";
 
 const ThreadArchiveLibrary = lazy(() =>
   import("./ThreadArchiveLibrary").then((module) => ({ default: module.ThreadArchiveLibrary })),
@@ -42,22 +38,33 @@ export function FoundryPage() {
   const search = useSearch({ from: "/foundry" });
   const navigate = useNavigate({ from: "/foundry" });
   const [origin, setOrigin] = useState(window.location.origin);
-  const [state, setState] = useState<OnboardingResult>(initialState);
+  const [state, setState] = useFoundrySession();
   const capability = useAutomationCapability(state.binding?.instanceId);
   const sandboxes = useSandboxProfiles(state.binding?.mainEnvironmentId);
   const [message, setMessage] = useState(state.message);
   const [busy, setBusy] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const run = useAtomCommand(instanceCommand, { reportFailure: false });
 
   async function operate(operation: Operation) {
     setBusy(true);
     const result = await run({
       operation,
+      ...(operation === "login" ? { credentials: { username, password } } : {}),
       ...(state?.binding ? { candidate: state.binding } : {}),
     });
+    setPassword("");
     if (AsyncResult.isSuccess(result)) {
-      if (!state.confirmed && hasConfirmedAutomationView(search.view, result.value)) {
-        window.location.assign(window.location.href);
+      if (result.value.session && !state.session) {
+        window.location.assign(
+          instanceReturnPath(
+            search.returnTo ??
+              (search.view === "instance"
+                ? undefined
+                : window.location.pathname + window.location.search),
+          ),
+        );
         return;
       }
       setState(result.value);
@@ -279,9 +286,45 @@ export function FoundryPage() {
         {state?.confirmed ? (
           <div className="flex flex-wrap gap-2">
             {!state.session ? (
-              <Button disabled={busy} onClick={() => void operate("login")}>
-                Sign in to Foundry
-              </Button>
+              <form
+                className="grid w-full max-w-sm gap-4 rounded-xl border bg-card p-4 sm:p-6"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!busy) void operate("login");
+                }}
+              >
+                {state.nativeLoginAvailable ? (
+                  <fieldset disabled={busy} className="space-y-4">
+                    <legend className="sr-only">Foundry account</legend>
+                    <div className="space-y-2">
+                      <label htmlFor="foundry-username" className="text-sm font-medium">Account</label>
+                      <Input
+                        id="foundry-username"
+                        name="username"
+                        autoComplete="username"
+                        required
+                        value={username}
+                        onChange={(event) => setUsername(event.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="foundry-password" className="text-sm font-medium">Password</label>
+                      <Input
+                        id="foundry-password"
+                        name="password"
+                        type="password"
+                        autoComplete="current-password"
+                        required
+                        value={password}
+                        onChange={(event) => setPassword(event.target.value)}
+                      />
+                    </div>
+                  </fieldset>
+                ) : null}
+                <Button type="submit" disabled={busy}>
+                  {busy ? "Signing in…" : "Sign in to Foundry"}
+                </Button>
+              </form>
             ) : (
               <Button onClick={() => window.location.assign("/foundry?view=factories")}>
                 Open factories
@@ -348,9 +391,8 @@ export function FoundryPage() {
               Open connection settings
             </Button>
             <p className="text-xs text-muted-foreground">
-              A Main T3 session is still required in addition to Foundry sign-in. Device selection
-              uses the existing connection manager; a Foundry session alone does not grant device
-              access.
+              Authorized machines are loaded automatically. Interactive access and Factory execution
+              permissions are managed separately for each machine.
             </p>
           </div>
         ) : null}

@@ -1,5 +1,6 @@
 import {
   createDeviceCatalogClient,
+  authorizedDeviceRegistrations,
   ConnectionBlockedError,
   EnvironmentRegistry,
   FoundryOnboarding,
@@ -16,6 +17,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { executeInstanceOperation, initialState } from "./onboarding";
 import {
+  writeDeviceRegistrations,
   readDeviceSelection,
   writeDeviceSelection,
   devicePlatformRegistrations,
@@ -77,9 +79,7 @@ async function client() {
         response.status === 403 &&
         response.headers.get("content-type")?.includes("application/json")
       )
-        throw new Error(
-          "Access denied. A Main T3 session and the required device permissions are needed in addition to Foundry sign-in. Device pairing is not required.",
-        );
+        throw new Error("Access denied. Verify Foundry sign-in and your device permissions.");
       if (
         response.status === 503 &&
         response.headers.get("content-type")?.includes("application/json")
@@ -146,6 +146,17 @@ export const deviceCommand = createRuntimeCommand(connectionAtomRuntime, {
           break;
       }
       catalog ??= yield* run(service.load);
+      const binding = initialState().binding;
+      if (binding && input.type !== "select") {
+        const registrations = authorizedDeviceRegistrations(catalog, binding);
+        const entries = yield* SubscriptionRef.get(registry.entries);
+        const compatible = registrations.filter((entry) => {
+          const existing = entries.get(entry.target.environmentId);
+          return !existing || existing.target._tag === "FoundryConnectionTarget";
+        });
+        yield* Effect.sync(() => writeDeviceRegistrations(compatible));
+        yield* registry.reconcilePlatform(devicePlatformRegistrations([]));
+      }
       const selected = readDeviceSelection()?.[0]?.target;
       if (
         selected?._tag === "FoundryConnectionTarget" &&
