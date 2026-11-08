@@ -1,4 +1,5 @@
 import * as SandboxTargets from "./SandboxTargets.ts";
+import * as OperationsDashboard from "./OperationsDashboard.ts";
 import * as McpBindings from "./McpBindings.ts";
 import * as MachineAccess from "./MachineAccess.ts";
 import * as Handoffs from "./Handoffs.ts";
@@ -159,13 +160,14 @@ export const layer = Layer.unwrap(
           version: number;
           safe: boolean;
         }>`SELECT version, NOT (r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls OR has_schema_privilege(current_user,'foundry_automation','CREATE') OR has_database_privilege(current_user,current_database(),'CREATE')) AS safe FROM foundry_automation.schema_version,pg_roles r WHERE r.rolname=current_user`;
-        if (rows.length !== 1 || rows[0]?.version !== 11 || !rows[0].safe)
+        if (rows.length !== 1 || rows[0]?.version !== 12 || !rows[0].safe)
           return yield* new Scheduler.SchedulerError({ reason: "invalid_binding" });
       }),
     ).pipe(Layer.provide(database));
     return Layer.mergeAll(routes, AutomationHttp.layer, ApiHttp.layer, reconciliationLayer)
       .pipe(
         Layer.provide(Application.layer.pipe(Layer.provide(Handoffs.layer))),
+        Layer.provide(OperationsDashboard.layer),
         Layer.provide(DefinitionSync.layer.pipe(Layer.provideMerge(DefinitionSources.layer))),
         Layer.provide(Layer.merge(GitHubPolling.layer, ScheduleTriggers.layer)),
         Layer.provide(Triggers.layer),

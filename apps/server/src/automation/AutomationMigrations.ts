@@ -3,6 +3,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as AutomationDatabase from "./AutomationDatabase.ts";
+import { migrateDefinitionSources } from "./DefinitionSourceSchema.ts";
+import { createEvaluationSchema } from "./EvaluationSchema.ts";
 
 export class AutomationMigrationError extends Schema.TaggedError<AutomationMigrationError>()(
   "AutomationMigrationError",
@@ -58,7 +60,7 @@ const make = Effect.gen(function* () {
           }>`SELECT version FROM foundry_automation.schema_version`;
           if (
             versions.length !== 1 ||
-            ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(versions[0]?.version ?? 0)
+            ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(versions[0]?.version ?? 0)
           )
             return yield* new AutomationMigrationError({ reason: "schema_incompatible" });
           if (versions[0]?.version === 1) {
@@ -139,6 +141,11 @@ const make = Effect.gen(function* () {
             yield* sql`ALTER TABLE foundry_automation.runs ADD COLUMN IF NOT EXISTS inputs jsonb`;
             yield* sql`CREATE TABLE IF NOT EXISTS foundry_automation.mcp_bindings(factory_id text NOT NULL REFERENCES foundry_automation.factories(id),resource_id text NOT NULL,generation integer NOT NULL CHECK(generation>0),binding jsonb NOT NULL,PRIMARY KEY(factory_id,resource_id))`;
             yield* sql`UPDATE foundry_automation.schema_version SET version=11`;
+          }
+          if ((versions[0]?.version ?? 0) < 12) {
+            yield* migrateDefinitionSources;
+            yield* createEvaluationSchema(runtimeRole);
+            yield* sql`UPDATE foundry_automation.schema_version SET version=12`;
           }
           yield* sql`GRANT INSERT, UPDATE ON foundry_automation.mcp_bindings TO ${sql(runtimeRole)}`;
           yield* sql`GRANT UPDATE(v4_state) ON foundry_automation.dispatch_runs TO ${sql(runtimeRole)}`;
