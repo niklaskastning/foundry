@@ -1,4 +1,5 @@
 import { v4Gates } from "./test-automation-v4-gates.ts";
+import { evaluationGates } from "./test-automation-evaluation-gates.ts";
 import * as McpBindings from "../src/automation/McpBindings.ts";
 import { parallelGates } from "./test-automation-parallel-gates.ts";
 import { handoffGates } from "./test-automation-handoff-gates.ts";
@@ -2519,6 +2520,7 @@ try {
       "PASS v4 PostgreSQL: pinned modular snapshot, duplicate reservation, review/fix checkpoint and carry, restart, stale claim fencing and durable execution budget.",
     ),
   );
+  await run(evaluationGates(db("automation_runtime")));
   await run(applicationGates(db("automation_runtime")));
   await run(
     triggerGates(
