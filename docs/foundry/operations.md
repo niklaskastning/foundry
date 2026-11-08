@@ -1163,10 +1163,31 @@ v4-Dateirechte bleiben technisch durchgesetzt. Container teilen weiterhin den
 Hostkernel und sind keine VM-Mandantengrenze. Workspace-Volumes teilen den
 Hostspeicher; eine Dateisystem-Diskquota wird derzeit nicht zugesichert.
 
-Thread-Archive speichern vollständige Git-Bundles in bestätigten Teilen von
-höchstens 8 MiB mit einem gehashten Index (insgesamt höchstens 8 GiB). Alte
-einteilige Archive bleiben lesbar. Die Sandbox benötigt für v4 eine geprüfte
-Codex-Version ab 0.166.0; Image- oder Toolwechsel erhalten eine neue Profilrevision.
+Neue Sandbox-Archive verwenden `remoteBase.format = foundry-remote-delta-2`:
+Repository-URL und exakter Commit werden durch frischen Fetch geprüft; nur lokale
+Commits und der abschließende Arbeitsbaum kommen ins Delta. Bestätigung und Resume
+prüfen den Remote erneut. Der Remote muss den Basiscommit während der gesamten
+Aufbewahrung bereitstellen; Force-Push oder Repositoryverlust können Resume
+verhindern. Es erfolgt kein automatischer Push. `bundleSizeBytes` bezeichnet das
+Delta, nicht die Größe des Indexdokuments. Teile bleiben auf 8 MiB und insgesamt
+8 GiB begrenzt. Mehrere Threads desselben Workspace referenzieren ein Delta.
+
+Manifeste ohne `remoteBase` sind ausdrücklich Legacy-Vollbundles und bleiben
+lesbar. Zur Konvertierung zuerst in einer neuen Sandbox restaurieren, die
+Repositoryidentität prüfen und `origin` auf den zugehörigen Remote setzen, dann
+regulär erneut archivieren und das neue Receipt bestätigen. Erst nach erfolgreichem
+Resume des neuen Archivs ist das neue Delta als Ersatz nachgewiesen. Dieser Pfad
+löscht keine Altartefakte: vollständiger zentraler Threadverlauf, Anhänge und
+geteilte Referenzen bleiben erhalten. Neue Sandboxes setzen `origin` beim Setup;
+bei älteren noch laufenden Sandboxes muss es vor dem neuen Capture gesetzt werden.
+
+Setupfehler archivieren Logs und geänderte/neue Arbeitsdateien, standardmäßig ohne
+Abhängigkeiten, Builds und Caches. `capture-setup --file <relativer-Pfad>` kann
+benötigte ignorierte Dateien ausdrücklich auswählen (wiederholbar); Symlinkziele
+werden nicht verfolgt. Die Auswahl ist auf 10.000 Einträge und 128 MiB codierte
+Daten begrenzt. Reproduzierbare Ausgaben entstehen erneut durch das gepinnte Setup.
+Die Sandbox benötigt für v4 eine geprüfte Codex-Version ab 0.166.0; Image- oder
+Toolwechsel erhalten eine neue Profilrevision.
 
 ### Versionierte Factory-HTTP-API (P58a)
 
