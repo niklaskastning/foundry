@@ -33,7 +33,7 @@ class DeploymentTest(unittest.TestCase):
             for value in ["latest", "sha256:short", DIGEST + " --privileged", "/tmp/image.tar"]:
                 with self.subTest(value=value), self.assertRaises(ValueError):
                     updater.deploy(value)
-            for args in [["run", "alpine"], ["deploy", DIGEST, "extra"], ["status", "extra"]]:
+            for args in [["run", "alpine"], ["deploy", DIGEST, "extra"], ["status", "extra"], ["status", "--development"], ["deploy", DIGEST, "--development", "extra"]]:
                 with self.subTest(args=args), self.assertRaises(ValueError):
                     updater.main(args)
             docker.assert_not_called()
@@ -51,7 +51,7 @@ class DeploymentTest(unittest.TestCase):
                 updater.validate_target(existing)
 
     def test_update_preserves_identity_and_handles_failures_before_and_after_start(self):
-        for failure in [None, "source", "backup", "start", "identity"]:
+        for development, failure in [(d, f) for d in [False, True] for f in [None, "source", "backup", "start", "identity", "ready"] if not (d and f == "backup")]:
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
                 current = container()
                 actions = []
@@ -93,23 +93,27 @@ class DeploymentTest(unittest.TestCase):
                         return {"environmentId": "environment"}
                     if "well-known/foundry" in path:
                         return {"instanceId": "changed" if failure == "identity" and current["Image"] == "new-image" else "instance"}
-                    return {"ready": True}
+                    return {"ready": failure != "ready"}
 
                 with patch.object(updater, "STATE", Path(directory)), patch.object(updater, "docker", docker), \
                      patch.object(updater, "metadata", metadata), patch("sys.stdout", io.StringIO()), \
                      patch("sys.stderr", io.StringIO()):
                     if failure:
                         with self.assertRaises(RuntimeError):
-                            updater.deploy(DIGEST)
+                            updater.deploy(DIGEST, development=development)
                     else:
-                        updater.deploy(DIGEST)
-                self.assertEqual(current["State"]["Running"], failure not in ["start", "identity"])
+                        updater.deploy(DIGEST, development=development)
+                self.assertEqual(current["State"]["Running"], failure not in ["start", "identity", "ready"])
                 if failure in ["source", "backup"]:
                     self.assertEqual(current["Image"], "old-image")
                     self.assertNotIn("compose", actions)
                 else:
                     backup = next(Path(directory).iterdir())
-                    self.assertEqual((backup / "state.tar").read_bytes(), b"state archive fixture")
+                    if development:
+                        self.assertNotIn("cp", actions)
+                        self.assertFalse((backup / "state.tar").exists())
+                    else:
+                        self.assertEqual((backup / "state.tar").read_bytes(), b"state archive fixture")
                     self.assertEqual(json.loads((backup / "manifest.json").read_text())["previousImage"], "old-image")
                     self.assertEqual((backup / "success").exists(), failure is None)
                     self.assertNotIn("start", actions)
@@ -135,7 +139,7 @@ class DeploymentTest(unittest.TestCase):
                      patch.object(updater.os, "geteuid", return_value=0), \
                      patch.object(updater.os, "umask"), patch.object(updater, "docker") as docker:
                     with self.assertRaises(BlockingIOError):
-                        updater.main(["deploy", DIGEST])
+                        updater.main(["deploy", DIGEST, "--development"])
                     docker.assert_not_called()
 
 

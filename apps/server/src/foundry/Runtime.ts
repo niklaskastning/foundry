@@ -1,3 +1,12 @@
+import * as WorkerTransport from "../automation/WorkerTransport.ts";
+import * as SandboxGatewayAccess from "./SandboxGatewayAccess.ts";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as Git from "../vcs/GitVcsDriver.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as ProviderConnectionAccess from "./ProviderConnectionAccess.ts";
+import * as ProviderConnections from "./ProviderConnections.ts";
+import * as ProviderConnectionAuth from "./ProviderConnectionAuth.ts";
+import * as SandboxRuntime from "./sandboxes/Runtime.ts";
 import * as MachineCredentials from "./MachineCredentials.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Config from "effect/Config";
@@ -59,6 +68,10 @@ export const layer = Layer.unwrap(
     const automation = yield* Config.Boolean("FOUNDRY_AUTOMATION_ENABLED").pipe(
       Config.withDefault(false),
     );
+    const sandboxes = yield* Config.Boolean("FOUNDRY_SANDBOXES_ENABLED").pipe(
+      Config.withDefault(false),
+    );
+    if (sandboxes && !automation) return yield* new FoundryDeviceError({ code: "configuration" });
     if (automation && !artifacts) return yield* new FoundryDeviceError({ code: "configuration" });
     if (artifacts && !streams) return yield* new FoundryDeviceError({ code: "configuration" });
     if (streams && !gateway) return yield* new FoundryDeviceError({ code: "configuration" });
@@ -83,7 +96,29 @@ export const layer = Layer.unwrap(
             Layer.provide(DeviceChannel.layer),
           ),
         ).pipe(
+          Layer.provideMerge(
+            SandboxRuntime.layer.pipe(
+              Layer.provide(WorkerTransport.layer),
+              Layer.provide(GatewayGrants.layer),
+              Layer.provide(Git.layer.pipe(Layer.provide(VcsProcess.layer))),
+            ),
+          ),
           Layer.provide(Layer.merge(ArtifactAccess.layer, ThreadArchiveAccess.layer)),
+          Layer.provideMerge(
+            ProviderConnectionAccess.layer.pipe(
+              Layer.provideMerge(
+                ProviderConnections.layer.pipe(
+                  Layer.provide(FetchHttpClient.layer),
+                  Layer.provide(
+                    ProviderConnectionAuth.layer.pipe(Layer.provide(FetchHttpClient.layer)),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Layer.provide(DeviceGrants.layer),
+          Layer.provide(SandboxGatewayAccess.layer),
+          Layer.provide(DeviceChannel.layer),
           Layer.provide(ThreadArchive.layer),
           Layer.provide(Artifacts.layer),
           Layer.provide(
@@ -113,7 +148,12 @@ export const layer = Layer.unwrap(
                 DeviceChannelHttp.layer,
                 grants
                   ? GatewayHttp.layer.pipe(
-                      Layer.provide(GatewayGrants.layer.pipe(Layer.provide(DeviceGrants.layer))),
+                      Layer.provide(
+                        GatewayGrants.layer.pipe(
+                          Layer.provide(DeviceGrants.layer),
+                          Layer.provide(SandboxGatewayAccess.layer),
+                        ),
+                      ),
                     )
                   : Layer.empty,
               ).pipe(Layer.provide(DeviceChannel.layer))

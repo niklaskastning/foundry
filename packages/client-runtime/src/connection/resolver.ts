@@ -89,6 +89,33 @@ function primarySocketUrl(
   return url.toString();
 }
 
+function matchesPrimaryBearerTarget(
+  target: PrimaryConnectionTarget,
+  bound: Pick<PrimaryConnectionTarget, "environmentId" | "httpBaseUrl" | "wsBaseUrl">,
+) {
+  if (target.environmentId !== bound.environmentId) return false;
+  try {
+    const endpoints = [
+      [target.httpBaseUrl, bound.httpBaseUrl, ["http:", "https:"]],
+      [target.wsBaseUrl, bound.wsBaseUrl, ["ws:", "wss:"]],
+    ] as const;
+    return endpoints.every(([candidate, expected, protocols]) => {
+      const actual = new URL(candidate);
+      const configured = new URL(expected);
+      return (
+        protocols.some((protocol) => protocol === actual.protocol) &&
+        !actual.username &&
+        !actual.password &&
+        !configured.username &&
+        !configured.password &&
+        actual.origin === configured.origin
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
 const makePrimaryBroker = Effect.fn("clientRuntime.connection.broker.makePrimary")(function* () {
   const auth = yield* ClientCapabilities.PrimaryEnvironmentAuth;
   const presentation = yield* ClientCapabilities.ClientPresentation;
@@ -109,6 +136,13 @@ const makePrimaryBroker = Effect.fn("clientRuntime.connection.broker.makePrimary
       } satisfies PreparedConnection;
     }
 
+    const bearerTarget = yield* auth.bearerTarget ?? Effect.succeedNone;
+    if (Option.isNone(bearerTarget) || !matchesPrimaryBearerTarget(target, bearerTarget.value))
+      return yield* new ConnectionBlockedError({
+        reason: "authentication",
+        detail:
+          "The desktop primary credential does not belong to this environment. Use a separately authorized connection.",
+      });
     const authorized = yield* remote.authorizeBearer({
       expectedEnvironmentId: target.environmentId,
       httpBaseUrl: target.httpBaseUrl,

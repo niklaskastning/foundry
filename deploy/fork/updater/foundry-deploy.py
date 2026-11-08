@@ -78,7 +78,7 @@ def metadata(path, optional=False):
         raise
 
 
-def deploy(digest):
+def deploy(digest, *, development=False):
     if not re.fullmatch(r"sha256:[a-f0-9]{64}", digest):
         raise ValueError("Expected a sha256 image digest, not a tag, URL or command.")
     image = f"{REGISTRY}@{digest}"
@@ -103,17 +103,21 @@ def deploy(digest):
         print(f"Already running {revision} ({digest}).")
         return
     backup = Path(tempfile.mkdtemp(prefix="update-", dir=STATE))
-    manifest = {"previousImage": previous["Image"], "candidateImage": image,
+    manifest = {"backupPolicy": "development-no-data-backup" if development else "state",
+                "previousRevision": (previous["Config"].get("Labels") or {}).get("org.opencontainers.image.revision"),
+                "recovery": "Rebuild/redeploy pinned artifact; reconcile SQLite schema before resetting disposable development data; preserve credentials and provider sessions." if development else "Restore saved state before downgrade.",
+                "previousImage": previous["Image"], "candidateImage": image,
                 "revision": revision, "environmentId": before["environmentId"],
                 "instanceId": descriptor["instanceId"] if descriptor else None}
     (backup / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    print(f"Saving stopped Main state to {backup}", flush=True)
+    print(f"Update record: {backup}; development={development}", flush=True)
     docker("stop", "--time", "60", CONTAINER)
     try:
-        with (backup / "state.tar").open("xb") as output:
-            docker("cp", f"{CONTAINER}:/var/lib/foundry/.", "-", output=output)
-            output.flush()
-            os.fsync(output.fileno())
+        if not development:
+            with (backup / "state.tar").open("xb") as output:
+                docker("cp", f"{CONTAINER}:/var/lib/foundry/.", "-", output=output)
+                output.flush()
+                os.fsync(output.fileno())
     except BaseException:
         docker("start", CONTAINER)
         raise
@@ -135,13 +139,19 @@ def deploy(digest):
     except BaseException:
         # A candidate may have migrated SQLite; never restart an older binary on it blindly.
         docker("stop", "--time", "60", CONTAINER)
-        print(f"Update failed. Main is stopped; operator recovery needs {backup}.", file=sys.stderr)
+        print(f"Update failed. Main is stopped; recovery record: {backup}. " + ("Rebuild/redeploy pinned artifact; reconcile SQLite schema before resetting disposable development data. Preserve credentials and provider sessions." if development else "Restore saved state before downgrade."), file=sys.stderr)
         raise
     (backup / "success").write_text(revision + "\n")
-    print(f"Deployed {revision} ({digest}); environment {after['environmentId']}; backup {backup}")
+    print(f"Deployed {revision} ({digest}); environment {after['environmentId']}; record {backup}")
 
 
 def main(args):
+    development = bool(args and args[-1] == "--development")
+    if development:
+        args = args[:-1]
+        if not args or args[0] != "deploy":
+            raise ValueError("--development is only supported for deploy.")
+
     if args != ["status"] and not (len(args) == 2 and args[0] == "deploy"):
         raise ValueError("Usage: foundry-deploy status | foundry-deploy deploy sha256:<64 hex digits>")
     if os.geteuid() != 0:
@@ -157,7 +167,7 @@ def main(args):
                               "revision": (current["Config"].get("Labels") or {}).get(
                                   "org.opencontainers.image.revision")}))
         else:
-            deploy(args[1])
+            deploy(args[1], development=development)
 
 
 if __name__ == "__main__":

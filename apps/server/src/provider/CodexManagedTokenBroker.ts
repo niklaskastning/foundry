@@ -16,6 +16,8 @@ import * as Schema from "effect/Schema";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { makeCodexChatGptAuth } from "./CodexChatGptAuth.ts";
 import * as Protocol from "./CodexManagedTokenProtocol.ts";
+import * as ProviderConnectionTransport from "../foundry/ProviderConnectionTransport.ts";
+import * as Redacted from "effect/Redacted";
 
 const MAX_CONNECTIONS = 32;
 const MAX_JOBS = 16;
@@ -43,6 +45,7 @@ export class CodexManagedTokenBroker extends Context.Service<
 const io = <A>(f: () => Promise<A>) =>
   Effect.tryPromise({ try: f, catch: (cause) => new BrokerStartError({ cause }) });
 const acquireListener = Effect.gen(function* () {
+  const delegated = yield* ProviderConnectionTransport.ProviderConnectionTransport;
   const identity = yield* ServerEnvironment.ServerEnvironmentIdentity;
   const environmentId = yield* identity.getEnvironmentId;
   const platform = yield* HostProcess.Platform;
@@ -149,6 +152,22 @@ const acquireListener = Effect.gen(function* () {
         runJob(
           Effect.scoped(
             Effect.gen(function* () {
+              if (delegated) {
+                if (
+                  request.instanceId !== delegated.providerInstanceId ||
+                  request.profileKey !== delegated.profileKey
+                )
+                  return;
+                const credentials = yield* delegated.access.pipe(
+                  Effect.timeout(Protocol.COMMAND_TIMEOUT_MS),
+                );
+                yield* Protocol.writeFrame(
+                  socket,
+                  encodeResponse({ token: Redacted.value(credentials.accessToken) }),
+                  Protocol.RESPONSE_BYTES,
+                );
+                return;
+              }
               const auth = yield* makeCodexChatGptAuth({
                 instanceId: request.instanceId,
                 expectedProfileKey: request.profileKey,

@@ -15,6 +15,7 @@ vi.mock("./useAutomationQuery", () => ({ useAutomationQuery: mocks.query }));
 vi.mock("../../foundry/useWorkspaceNavigation", () => ({
   useWorkspaceNavigation: mocks.navigation,
 }));
+vi.mock("../../components/foundry/SandboxRunStatus", () => ({ SandboxRunStatus: () => null }));
 vi.mock("./HandoffPanel", () => ({ HandoffList: () => null, TakeOverPanel: () => null }));
 vi.mock("../../components/files/AttachmentFilePreview", () => ({
   AttachmentFilePreview: () => null,
@@ -28,6 +29,14 @@ it("keeps attempts and selected node results accessible across independent histo
     search: { nodeOffset: "100", nodePath: "earlier", attemptId: "attempt-earlier" },
     update: vi.fn(),
   });
+  const stoppingNode = {
+    path: "stopping",
+    scope: "",
+    definition: { id: "stopping", kind: "agent" },
+    status: "running",
+    cancelRequested: true,
+    reason: "cancelled",
+  };
   mocks.query.mockReset().mockImplementation((_environment, input: AutomationApplicationQuery) => ({
     error: null,
     loading: false,
@@ -54,6 +63,7 @@ it("keeps attempts and selected node results accessible across independent histo
                   status: "succeeded",
                   ordinal: 100,
                 },
+                stoppingNode,
               ],
             },
           }
@@ -112,4 +122,20 @@ it("keeps attempts and selected node results accessible across independent histo
   await expect
     .element(screen.getByRole("button", { name: "Close details", exact: true }))
     .toBeVisible();
+  const shutdownMessage = "Stop requested; waiting for confirmed writer shutdown.";
+  await expect.element(screen.getByText(shutdownMessage, { exact: true })).toBeVisible();
+  for (const status of ["failed", "cancelled", "succeeded"]) {
+    stoppingNode.status = status;
+    await screen.rerender(
+      <RunDetail
+        environmentId={EnvironmentId.make("main")}
+        factoryId="factory"
+        runId="run"
+        onBack={() => {}}
+      />,
+    );
+    await expect
+      .element(screen.getByText(shutdownMessage, { exact: true }))
+      .not.toBeInTheDocument();
+  }
 });

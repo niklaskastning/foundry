@@ -1,4 +1,5 @@
 import * as WorkerResources from "../../foundry/WorkerResources.ts";
+import * as ExecutionObserver from "../../foundry/ExecutionObserver.ts";
 import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
 import {
   makeProviderTextDeltaCoalescer,
@@ -1653,6 +1654,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           );
           if (state === "preflight-rejected")
             yield* (yield* FileSystem.FileSystem).remove(`${prepared.directory}/request.json`);
+          const rejectedStarts: number[] = [];
           const rejected = yield* harness.runtime
             .startTurn({
               ...makeCodexTestTurnInput({
@@ -1664,8 +1666,18 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               }),
               runId: RunId.make("writer-evidence-run"),
             })
-            .pipe(Effect.exit);
+            .pipe(
+              Effect.provideService(ExecutionObserver.ExecutionObserver, {
+                starting: () => Effect.succeed(true),
+                rejectedBeforeStart: (input) =>
+                  Effect.sync(() => {
+                    rejectedStarts.push(input.runOrdinal);
+                  }),
+              }),
+              Effect.exit,
+            );
           assert.equal(rejected._tag, "Failure");
+          assert.deepEqual(rejectedStarts, [1]);
         }
         assert.isDefined(harness.runtime.confirmWriterEnded);
         assert.equal(

@@ -60,6 +60,7 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
   readonly authorizeBearer?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeBearer"];
   readonly authorizeDpop?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeDpop"];
   readonly primaryBearerToken?: string;
+  readonly primaryBearerTarget?: PrimaryConnectionTarget;
   readonly prepareSsh?: ClientCapabilities.SshEnvironmentGateway["Service"]["prepare"];
   readonly descriptorProtocolVersion?: number | null | undefined;
 }) => {
@@ -152,6 +153,11 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
       ClientCapabilities.PrimaryEnvironmentAuth,
       ClientCapabilities.PrimaryEnvironmentAuth.of({
         bearerToken: Effect.succeed(Option.fromNullishOr(options?.primaryBearerToken)),
+        ...(options?.primaryBearerTarget === undefined
+          ? {}
+          : {
+              bearerTarget: Effect.succeedSome(options.primaryBearerTarget),
+            }),
       }),
     ),
     Layer.succeed(
@@ -207,6 +213,76 @@ describe("ConnectionResolver", () => {
         target,
       });
     }),
+  );
+
+  it.effect(
+    "binds desktop primary bearer credentials to both endpoint origins and the environment identity",
+    () =>
+      Effect.gen(function* () {
+        const local = new PrimaryConnectionTarget({
+          environmentId: ENVIRONMENT_ID,
+          label: "Personal desktop",
+          httpBaseUrl: "http://127.0.0.1:3777/",
+          wsBaseUrl: "ws://127.0.0.1:3777/",
+        });
+        for (const scenario of [
+          "remote-main",
+          "other-environment",
+          "other-ws-origin",
+          "unbound",
+          "invalid-binding",
+          "target-userinfo",
+          "matching",
+        ] as const) {
+          const authorized: string[] = [];
+          const target = new PrimaryConnectionTarget({
+            ...local,
+            ...(scenario === "remote-main" ? ENDPOINT : {}),
+            ...(scenario === "other-environment"
+              ? { environmentId: EnvironmentId.make("other") }
+              : {}),
+            ...(scenario === "other-ws-origin" ? { wsBaseUrl: "wss://remote-main.example/" } : {}),
+            ...(scenario === "target-userinfo"
+              ? { httpBaseUrl: "http://user:password@127.0.0.1:3777/" }
+              : {}),
+          });
+          const layerBroker = yield* makeDependencies({
+            primaryBearerToken: "personal-desktop-token",
+            ...(scenario === "unbound"
+              ? {}
+              : {
+                  primaryBearerTarget:
+                    scenario === "invalid-binding"
+                      ? new PrimaryConnectionTarget({ ...local, httpBaseUrl: "invalid" })
+                      : local,
+                }),
+            authorizeBearer: (input) =>
+              Effect.sync(() => {
+                authorized.push(input.httpBaseUrl);
+                return {
+                  environmentId: input.expectedEnvironmentId,
+                  label: "Authorized desktop",
+                  httpBaseUrl: input.httpBaseUrl,
+                  socketUrl: "ws://127.0.0.1:3777/ws?wsTicket=fixture",
+                  httpAuthorization: { _tag: "Bearer" as const, token: input.bearerToken },
+                };
+              }),
+          });
+          const broker = yield* ConnectionResolver.ConnectionResolver.pipe(
+            Effect.provide(layerBroker),
+          );
+          const result = yield* broker.prepare(catalogEntry(target)).pipe(Effect.result);
+          if (scenario === "matching") {
+            expect(result._tag).toBe("Success");
+            expect(authorized).toEqual([local.httpBaseUrl]);
+          } else {
+            expect(authorized).toEqual([]);
+            expect(result._tag).toBe("Failure");
+            if (result._tag === "Failure")
+              expect(result.failure).toMatchObject({ reason: "authentication" });
+          }
+        }
+      }),
   );
 
   it.effect("offers the saved SSH token on each connect and saves the one it gets back", () =>

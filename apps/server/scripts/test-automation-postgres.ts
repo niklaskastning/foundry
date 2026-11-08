@@ -1223,6 +1223,9 @@ try {
     Effect.die("Unexpected network-lock fixture operation"),
   );
   const networkWorker = WorkerTransport.WorkerTransport.of({
+    sandboxProjects: Effect.fn("Fixture.sandboxProjects")(() => Effect.die("unused")),
+    sandboxStatus: Effect.fn("Fixture.sandboxStatus")(() => Effect.die("unused")),
+    retargetSandbox: Effect.fn("Fixture.retargetSandbox")(() => Effect.die("unused")),
     handoffOpen: Effect.fn("Fixture.handoffOpen")(() =>
       Effect.die("Handoff not configured in this fixture"),
     ),

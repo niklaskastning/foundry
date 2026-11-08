@@ -1,3 +1,4 @@
+import { SandboxRunStatus } from "../../components/foundry/SandboxRunStatus";
 import { V4AgentConfiguration } from "./V4Configuration";
 import { V4RunProgress } from "./V4RunProgress";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -161,6 +162,14 @@ export function RunDetail({
       </div>
       {run.loading && !detail ? <p role="status">Loading run…</p> : null}
       {run.error || attempts.error ? <p role="alert">{run.error ?? attempts.error}</p> : null}
+      {detail?.executionBinding?.sandbox ? (
+        <SandboxRunStatus
+          environmentId={environmentId}
+          factoryId={factoryId}
+          runId={runId}
+          target={detail.executionBinding.sandbox}
+        />
+      ) : null}
       {detail ? (
         <>
           <div className="flex flex-wrap items-start justify-between gap-4 rounded-lg border bg-card p-4">

@@ -45,6 +45,7 @@ import * as ThreadArchive from "../foundry/ThreadArchive.ts";
 import * as DispatchStore from "./DispatchStore.ts";
 import * as Publish from "./Publish.ts";
 import * as McpBindings from "./McpBindings.ts";
+import * as SandboxTargets from "./SandboxTargets.ts";
 import * as Scheduler from "./Scheduler.ts";
 import * as WorkerTransport from "./WorkerTransport.ts";
 import { decideStep } from "./stepDecision.ts";
@@ -658,7 +659,16 @@ it.effect(
       let roleExecutionVersion: 1 | undefined = 1;
       let reasoningEfforts = ["high"];
       let projectReady = true;
+      let sandboxReady = false;
+      let sandboxDeleted = false;
+      let sandboxCancels = 0;
       const store = DispatchStore.DispatchStore.of({
+        failTarget: (_claim, failure) =>
+          Effect.sync(() => {
+            state = "failed";
+            reason = failure;
+            return true;
+          }),
         reconcileV4: () =>
           Effect.succeed({
             ...run,
@@ -765,6 +775,9 @@ it.effect(
         release: () => Effect.void,
       });
       const worker = WorkerTransport.WorkerTransport.of({
+        sandboxProjects: () => Effect.die("unused"),
+        sandboxStatus: () => Effect.die("unused"),
+        retargetSandbox: () => Effect.die("unused"),
         handoffOpen: Effect.fn("Fixture.handoffOpen")(() =>
           Effect.die("Handoff not configured in this fixture"),
         ),
@@ -1311,12 +1324,93 @@ it.effect(
         assert.equal(attempts[2]?.workerId, otherIdentity.deviceId);
         assert.equal(launches.at(-1)?.workspaceRevision, checkpoint.commitSha);
         assert.equal(launches.at(-1)?.definitionV4?.workspaceAccess, "read");
+        const sandbox = {
+          profileId: "fixture-profile",
+          revision: "73b4c050-4155-44a8-abd8-eaa8256b1e45",
+        };
+        activeBinding = {
+          ...decodeDispatchBinding(run.binding),
+          sandbox,
+          requiredArtifacts: [],
+          checks: [],
+        };
+        activeWorkflow = {
+          ...activeWorkflow,
+          steps: [activeWorkflow.steps[0]!],
+          v4: {
+            ...activeWorkflow.v4!,
+            workflow: { ...activeWorkflow.v4!.workflow, steps: [source] },
+          },
+        };
+        activeV4State = {
+          status: "running",
+          startedAgentExecutions: 0,
+          inputs: {},
+          nodes: [
+            {
+              path: "source",
+              scope: "",
+              definition: source,
+              ordinal: 0,
+              status: "ready",
+              base: "a".repeat(40),
+            },
+          ],
+        };
+        attempts.length = 0;
+        executions.clear();
+        const beforeSandbox = launches.length;
+        yield* scheduler.tick;
+        assert.equal(reason, "sandbox_setup");
+        assert.equal(launches.length, beforeSandbox);
+        sandboxReady = true;
+        yield* scheduler.tick;
+        assert.equal(launches.length, beforeSandbox + 1);
+        assert.equal(attempts[0]?.workerId, otherIdentity.deviceId);
+        assert.equal(launches.at(-1)?.projectId, ProjectId.make("sandbox-project"));
+        attempts.length = 0;
+        executions.clear();
+        sandboxReady = false;
+        mode = "cancel_requested";
+        yield* scheduler.tick;
+        assert.equal(sandboxCancels, 1);
+        mode = "active";
+        sandboxDeleted = true;
+        yield* scheduler.tick;
+        assert.equal(state, "failed");
+        assert.equal(reason, "sandbox_deleted");
+        assert.equal(launches.length, beforeSandbox + 1);
       }).pipe(
         Effect.provide(
           Scheduler.layer.pipe(
             Layer.provide(
               Layer.mergeAll(
                 Layer.succeed(DispatchStore.DispatchStore, store),
+                Layer.succeed(SandboxTargets.SandboxTargets, {
+                  validate: () => Effect.void,
+                  resolve: () =>
+                    Effect.succeed(
+                      sandboxDeleted
+                        ? { state: "failed" as const, reason: "sandbox_deleted" as const }
+                        : sandboxReady
+                          ? {
+                              state: "ready" as const,
+                              identity: {
+                                ...proof.identity,
+                                deviceId: FoundryDeviceId.make(
+                                  "99999999-9999-4999-8999-999999999999",
+                                ),
+                              },
+                              projectId: ProjectId.make("sandbox-project"),
+                            }
+                          : { state: "waiting" as const, reason: "sandbox_setup" },
+                    ),
+                  cancel: () =>
+                    Effect.sync(() => {
+                      sandboxCancels++;
+                    }),
+                  reconcileCleanup: Effect.void,
+                }),
                 Layer.mock(McpBindings.McpBindings)({ authorize: () => Effect.succeed([]) }),
                 Layer.succeed(WorkerTransport.WorkerTransport, worker),
                 Layer.succeed(ThreadArchive.ThreadArchive, archive),

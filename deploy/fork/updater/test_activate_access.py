@@ -39,7 +39,7 @@ class ActivationTest(unittest.TestCase):
             'FOUNDRY_AUTOMATION_DATABASE_URL':f'postgresql://foundry_automation_runtime:{secret}@postgres:5432/fork_automation',
             'FOUNDRY_AUTOMATION_TARGET':json.dumps({'deviceId':'a'*8+'-'+ 'a'*4+'-'+ 'a'*4+'-'+ 'a'*4+'-'+ 'a'*12,'environmentId':'b'*8+'-'+ 'b'*4+'-'+ 'b'*4+'-'+ 'b'*4+'-'+ 'b'*12,'allowedRunIds':[]}),
         }
-        for change in [None, 'database', 'role', 'partial', 'artifact', 'old-runs', 'target-field', 'pool', 'pool-duplicate', 'pool-default', 'pool-wildcard', 'pool-too-large']:
+        for change in [None, 'database', 'role', 'partial', 'artifact', 'old-runs', 'target-field', 'pool', 'pool-duplicate', 'pool-default', 'pool-wildcard', 'pool-too-large', 'sandbox', 'sandbox-partial', 'sandbox-path']:
             with self.subTest(change=change):
                 values = dict(base)
                 if change == 'database': values['FOUNDRY_AUTOMATION_DATABASE_URL'] = values['FOUNDRY_INSTANCE_DATABASE_URL']
@@ -60,10 +60,66 @@ class ActivationTest(unittest.TestCase):
                     if change == 'pool-wildcard': target['workers'][0]['deviceId'] = '*'
                     if change == 'pool-too-large': target['workers'] = [entry] * 9
                     values['FOUNDRY_AUTOMATION_TARGET'] = json.dumps(target)
+                if change and change.startswith('sandbox'):
+                    values['FOUNDRY_SANDBOXES_ENABLED'] = 'true'
+                    values['FOUNDRY_SANDBOX_CONFIGURATION_FILE'] = '/etc/foundry/sandboxes.json'
+                    if change == 'sandbox-partial': del values['FOUNDRY_SANDBOX_CONFIGURATION_FILE']
+                    if change == 'sandbox-path': values['FOUNDRY_SANDBOX_CONFIGURATION_FILE'] = '/var/run/docker.sock'
                 text = ''.join(f'{key}={value}\n' for key,value in values.items())
-                if change in [None, 'pool']: self.assertEqual(activate.parse_runtime(text),values)
+                if change in [None, 'pool', 'sandbox']: self.assertEqual(activate.parse_runtime(text),values)
                 else:
                     with self.assertRaises(RuntimeError): activate.parse_runtime(text)
+
+    def test_sandbox_policy_mount_is_fixed_and_readonly(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(activate, 'docker', return_value=json.dumps([{'Config': {'Env': []}}])):
+            root = Path(directory)
+            runtime = root / 'runtime.env'
+            runtime.write_text('FOUNDRY_SANDBOXES_ENABLED=true\n')
+            with patch.object(activate, 'CONFIG', root):
+                mount = activate.composition(activate.REGISTRY + '@' + DIGEST, runtime)['services']['main']['volumes'][-1]
+                self.assertEqual(mount, {'type': 'bind', 'source': str(root / 'sandbox-policy.json'), 'target': activate.SANDBOX_TARGET, 'read_only': True})
+                current = main_container()
+                current['Mounts'].append({'Destination': activate.SANDBOX_TARGET, 'Type': 'bind', 'Source': mount['source'], 'RW': False})
+                activate.check_main(current, baseline=False)
+                for field, value in [('RW', True), ('Source', '/var/run/docker.sock'), ('Type', 'volume')]:
+                    invalid = copy.deepcopy(current)
+                    invalid['Mounts'][-1][field] = value
+                    with self.assertRaises(RuntimeError): activate.check_main(invalid, baseline=False)
+
+    def test_sandbox_profile_failure_restores_environment_and_mount_together(self):
+        for failure in [False, True]:
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                config, state = root / 'config', root / 'state'
+                config.mkdir(); state.mkdir()
+                runtime = config / 'access-runtime.env'
+                runtime.write_text('BASE=unchanged\n')
+                compose = config / 'access-compose.json'
+                compose.write_text('previous composition')
+                calls = 0
+                def status(expected_schema=None):
+                    nonlocal calls
+                    calls += 1
+                    if failure and calls == 2: raise RuntimeError('candidate verification failed')
+                    return {'schemaVersion': 9, 'automationEnabled': True, 'automationSchemaVersion': 11,
+                            'sandboxesEnabled': 'FOUNDRY_SANDBOXES_ENABLED=true' in runtime.read_text(),
+                            'gatewayEnabled': True, 'artifactsEnabled': True,
+                            'image': activate.REGISTRY + '@' + DIGEST, 'revision': REVISION}
+                with patch.object(activate, 'CONFIG', config), patch.object(activate, 'STATE', state), \
+                     patch.object(activate, 'active_status', status), patch.object(activate, 'check_sandbox_policy'), \
+                     patch.object(activate, 'docker', return_value=''), patch('sys.stdout', new=io.StringIO()), \
+                     patch('sys.stderr', new=io.StringIO()):
+                    if failure:
+                        with self.assertRaises(RuntimeError): activate.gateway(True, sandboxes=True)
+                        self.assertEqual(runtime.read_text(), 'BASE=unchanged\n')
+                        self.assertEqual(compose.read_text(), 'previous composition')
+                        self.assertFalse(list(state.glob('*/success')))
+                    else:
+                        activate.gateway(True, sandboxes=True)
+                        self.assertEqual(json.loads(compose.read_text())['services']['main']['volumes'][-1]['read_only'], True)
+                        self.assertTrue(list(state.glob('*/success')))
+                        with patch.object(activate, 'sql', return_value='1'), self.assertRaises(RuntimeError):
+                            activate.gateway(False, sandboxes=True)
 
     def test_automation_grant_activation_and_recovery_use_the_service_at_current_generation(self):
         device_id = '22222222-2222-4222-8222-222222222222'
@@ -199,7 +255,7 @@ class ActivationTest(unittest.TestCase):
 
                 def sql(statement):
                     self.assertTrue(statement.startswith('BEGIN READ ONLY;'))
-                    return json.dumps({'version': 9 if drift == 'schema' else 8 if drift in ['gateway-v8', 'artifacts-v8'] else 7 if drift in ['gateway-v7', 'gateway-v8', 'artifacts-v7', 'artifacts-v8', 'archive-missing'] else 6 if drift in ['gateway-v6', 'gateway-v7', 'gateway-v8', 'artifacts-on', 'artifacts-v7', 'artifacts-v8', 'archive-missing', 'artifacts-missing'] else 5 if drift in ['gateway-on', 'gateway-capability', 'artifacts-schema'] else 2,
+                    return json.dumps({'version': 99 if drift == 'schema' else 8 if drift in ['gateway-v8', 'artifacts-v8'] else 7 if drift in ['gateway-v7', 'gateway-v8', 'artifacts-v7', 'artifacts-v8', 'archive-missing'] else 6 if drift in ['gateway-v6', 'gateway-v7', 'gateway-v8', 'artifacts-on', 'artifacts-v7', 'artifacts-v8', 'archive-missing', 'artifacts-missing'] else 5 if drift in ['gateway-on', 'gateway-capability', 'artifacts-schema'] else 2,
                         'instanceId': 'wrong' if drift == 'identity' else activate.INSTANCE,
                         'environmentId': activate.ENVIRONMENT, 'operatorBound': True,
                         'runtimeLogin': True, 'migratorLogin': drift == 'migrator'})
@@ -337,17 +393,19 @@ class ActivationTest(unittest.TestCase):
                 activate.gateway(enabled, artifacts=artifacts)
 
     def test_upgrade_keeps_the_current_backup_and_disables_migration_login_on_failure(self):
-        for same_schema, artifact_schema, archive_schema, automation_schema, machine_schema, current_schema, failure in (
+        for development, same_schema, artifact_schema, archive_schema, automation_schema, machine_schema, current_schema, failure in [
+            (development, *case) for development in [False, True] for case in (
             [(False, artifact, False, False, False, 5 if artifact else 2, f) for artifact in [False, True] for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
-            + [(True, False, False, False, False, schema, f) for schema in [5, 6, 7, 8] for f in [None, 'source', 'backup', 'connections', 'start', 'verify']]
+            + [(True, False, False, False, False, schema, f) for schema in [5, 6, 7, 8, 9] for f in [None, 'source', 'backup', 'connections', 'start', 'verify']]
             + [(True, False, False, version, False, 8, f) for version in [10, 11] for f in [None, 'source', 'backup', 'connections', 'start', 'verify']]
             + [(False, False, True, False, False, 6, f) for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
             + [(False, False, False, version, False, 7 if version == 8 else 8, f) for version in [8, 9, 10, 11] for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
             + [(False, False, False, False, True, 7, f) for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'schema', 'start', 'verify']]
-        ):
-            with self.subTest(same_schema=same_schema, artifact_schema=artifact_schema, machine_schema=machine_schema, failure=failure), tempfile.TemporaryDirectory() as directory:
+            + [(False, False, False, False, 'sandbox', 8, f) for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'schema', 'start', 'verify']]
+        ) if not (development and case[-1] == 'backup')]:
+            with self.subTest(development=development, same_schema=same_schema, artifact_schema=artifact_schema, machine_schema=machine_schema, failure=failure), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                target_schema = current_schema if same_schema or automation_schema else 8 if machine_schema else 7 if archive_schema else 6 if artifact_schema else 5
+                target_schema = current_schema if same_schema or automation_schema else 9 if machine_schema == 'sandbox' else 8 if machine_schema else 7 if archive_schema else 6 if artifact_schema else 5
                 config, state = root / 'config', root / 'state'
                 config.mkdir()
                 state.mkdir()
@@ -359,13 +417,13 @@ class ActivationTest(unittest.TestCase):
                 def status(expected_schema=None, expected_automation_schema=None):
                     actions.append(('status', expected_schema))
                     if machine_schema:
-                        self.assertEqual(expected_automation_schema, 8)
+                        self.assertEqual(expected_automation_schema, 11 if machine_schema == 'sandbox' else 8)
                     if automation_schema:
                         self.assertEqual(expected_automation_schema, automation_schema if len([a for a in actions if a[0] == 'status']) == 2 else None if same_schema else automation_schema - 1)
                     if len([a for a in actions if a[0] == 'status']) == 2 and failure == 'verify':
                         raise RuntimeError('verification failed')
                     candidate = len([a for a in actions if a[0] == 'status']) == 2
-                    return {'schemaVersion': target_schema if candidate else current_schema, 'automationEnabled': automation_schema or machine_schema, 'automationSchemaVersion': 8 if machine_schema else automation_schema if (candidate or same_schema) and automation_schema else automation_schema - 1 if automation_schema else None,
+                    return {'schemaVersion': target_schema if candidate else current_schema, 'automationEnabled': automation_schema or machine_schema, 'automationSchemaVersion': 11 if machine_schema == 'sandbox' else 8 if machine_schema else automation_schema if (candidate or same_schema) and automation_schema else automation_schema - 1 if automation_schema else None,
                             'image': activate.REGISTRY + '@' + (DIGEST if candidate else 'sha256:' + 'c' * 64),
                             'revision': REVISION if candidate else 'd' * 40}
 
@@ -392,7 +450,7 @@ class ActivationTest(unittest.TestCase):
                             self.assertIn('migrate', args)
                             self.assertNotIn('automation-migrate', args)
                         recovery = next(state.iterdir())
-                        self.assertTrue((recovery / 'backup-complete').is_file())
+                        self.assertEqual((recovery / 'backup-complete').is_file(), not development)
                         self.assertEqual((recovery / 'access-runtime.env').read_text(), 'original-access-runtime.env')
                         if failure == 'migrate':
                             raise RuntimeError('migration failed')
@@ -419,10 +477,10 @@ class ActivationTest(unittest.TestCase):
                      patch('sys.stderr', new=io.StringIO()):
                     if failure:
                         with self.assertRaises(RuntimeError):
-                            activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, parallel_schema=automation_schema == 10 and not same_schema, machine_schema=machine_schema, **({"definition_schema": True} if automation_schema == 11 and not same_schema else {}))
+                            activate.upgrade(DIGEST, REVISION, development=development, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, parallel_schema=automation_schema == 10 and not same_schema, machine_schema=machine_schema is True, sandbox_schema=machine_schema == 'sandbox', **({"definition_schema": True} if automation_schema == 11 and not same_schema else {}))
                     else:
-                        activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, parallel_schema=automation_schema == 10 and not same_schema, machine_schema=machine_schema, **({"definition_schema": True} if automation_schema == 11 and not same_schema else {}))
-                self.assertEqual(actions[0], ('status', None if same_schema else current_schema if automation_schema else 7 if machine_schema else None if same_schema else 6 if archive_schema else 5 if artifact_schema else 2))
+                        activate.upgrade(DIGEST, REVISION, development=development, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, parallel_schema=automation_schema == 10 and not same_schema, machine_schema=machine_schema is True, sandbox_schema=machine_schema == 'sandbox', **({"definition_schema": True} if automation_schema == 11 and not same_schema else {}))
+                self.assertEqual(actions[0], ('status', None if same_schema else current_schema if automation_schema else 8 if machine_schema == 'sandbox' else 7 if machine_schema else None if same_schema else 6 if archive_schema else 5 if artifact_schema else 2))
                 self.assertEqual(running, failure in [None, 'source', 'backup', 'connections'])
                 altered = any(a[0] == 'sql' and 'LOGIN PASSWORD' in a[1] for a in actions)
                 if failure in ['source', 'backup', 'connections']:
@@ -435,13 +493,18 @@ class ActivationTest(unittest.TestCase):
                     else:
                         self.assertIn(('sql', 'ALTER ROLE foundry_automation_migrator NOLOGIN PASSWORD NULL;' if automation_schema else 'ALTER ROLE foundry_instance_migrator NOLOGIN PASSWORD NULL;'), actions)
                     if automation_schema or machine_schema:
-                        self.assertTrue((next(state.iterdir()) / 'fork_automation.dump').exists())
+                        self.assertEqual((next(state.iterdir()) / 'fork_automation.dump').exists(), not development)
                         self.assertFalse((next(state.iterdir()) / 'migration.env').exists())
                     recovery = next(state.iterdir())
                     manifest = json.loads((recovery / 'manifest.json').read_text())
+                    self.assertEqual(manifest['backupPolicy'], 'development-no-data-backup' if development else 'coordinated')
+                    if development:
+                        self.assertFalse(any(a[0] == 'cp' or (a[0] == 'exec' and any(v in a for v in ['pg_dump', 'pg_dumpall', 'pg_restore'])) for a in actions))
+                        self.assertFalse(any(recovery.glob('*.tar')))
+                        self.assertFalse(any(recovery.glob('*.dump')))
                     self.assertEqual(manifest['targetSchema'], target_schema)
                     if machine_schema:
-                        self.assertEqual(manifest['targetAutomationSchema'], 8)
+                        self.assertEqual(manifest['targetAutomationSchema'], 11 if machine_schema == 'sandbox' else 8)
                     self.assertEqual((recovery / 'access-compose.json').read_text(), 'original-access-compose.json')
                     self.assertEqual((recovery / 'success').exists(), failure is None)
                     self.assertEqual((config / 'access-runtime.env').read_text(), 'original-access-runtime.env')
@@ -581,9 +644,22 @@ class ActivationTest(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs['env'], activate.ENV)
         self.assertEqual(run.call_args.args[0][1:3], ['--host', 'unix:///var/run/docker.sock'])
 
+    def test_development_cli_preserves_sandbox_and_same_schema_update_modes(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(activate, 'STATE', Path(directory)), \
+             patch.object(activate.os, 'geteuid', return_value=0), \
+             patch.object(activate.os, 'umask'), \
+             patch.object(activate, 'upgrade') as upgrade:
+            for command in ['upgrade-sandboxes', 'update']:
+                activate.main([command, DIGEST, REVISION, '--development'])
+                self.assertEqual(upgrade.call_args.args, (DIGEST, REVISION))
+                self.assertTrue(upgrade.call_args.kwargs['development'])
+                self.assertEqual(upgrade.call_args.kwargs['sandbox_schema'], command == 'upgrade-sandboxes')
+                self.assertEqual(upgrade.call_args.kwargs['same_schema'], command == 'update')
+
     def test_invalid_arguments_cannot_reach_docker(self):
         with patch.object(activate, 'docker') as docker:
-            for args in [['activate'], ['activate', DIGEST, REVISION, 'extra'], ['restore'], ['preflight', 'extra']]:
+            for args in [['activate'], ['activate', DIGEST, REVISION, 'extra'], ['restore'], ['preflight', 'extra'], ['status', '--development'], ['sandboxes', 'enable', '--development'], ['update', DIGEST, REVISION, '--development', 'extra']]:
                 with self.assertRaises(ValueError):
                     activate.main(args)
             for digest, revision in [('latest', REVISION), (DIGEST, 'main'), (DIGEST + '; command', REVISION)]:

@@ -17,6 +17,10 @@ import { WS_METHODS } from "./rpc.ts";
 export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.foundryAutomationTriggerQuery]: AuthOrchestrationReadScope,
   [WS_METHODS.foundryAutomationTriggerCommand]: AuthAccessWriteScope,
+  [WS_METHODS.foundryProviderConnectionQuery]: AuthOrchestrationReadScope,
+  [WS_METHODS.foundryProviderConnectionCommand]: AuthSettingsWriteScope,
+  [WS_METHODS.foundrySandboxQuery]: AuthOrchestrationReadScope,
+  [WS_METHODS.foundrySandboxCommand]: AuthOrchestrationOperateScope,
   [WS_METHODS.foundryAutomationQuery]: AuthOrchestrationReadScope,
   [WS_METHODS.foundryAutomationCommand]: AuthOrchestrationOperateScope,
   [WS_METHODS.foundryAutomationControl]: AuthOrchestrationOperateScope,

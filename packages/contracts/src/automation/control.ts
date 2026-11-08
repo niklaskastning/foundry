@@ -1,3 +1,4 @@
+import { FoundrySandboxProfile } from "../foundrySandbox.ts";
 import * as Schema from "effect/Schema";
 import { StartAutomationRun } from "./factory.ts";
 import { FoundryDeviceId } from "../foundryDevices.ts";
@@ -63,6 +64,12 @@ export const AutomationWorkerTarget = Schema.Struct({
 });
 export const ManualStart = Schema.Struct({
   ...StartAutomationRun.fields,
+  sandbox: Schema.optional(
+    Schema.Struct({
+      profileId: FoundrySandboxProfile.fields.profileId,
+      revision: FoundrySandboxProfile.fields.revision,
+    }),
+  ),
   projectId: ProjectId,
   workers: Schema.optional(
     Schema.Array(AutomationWorkerTarget).check(Schema.isMinLength(1), Schema.isMaxLength(8)),

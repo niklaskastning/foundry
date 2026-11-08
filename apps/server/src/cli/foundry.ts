@@ -1,3 +1,6 @@
+import { sandboxSupervisorCommand } from "./foundrySandboxSupervisor.ts";
+import { sandboxSkillsCommand } from "./foundrySandboxSkills.ts";
+import { sandboxArchiveCommand } from "./foundrySandboxArchive.ts";
 import * as InstanceOperator from "../foundry/InstanceOperator.ts";
 import * as InstancePostgres from "../foundry/InstancePostgres.ts";
 import * as Config from "effect/Config";
@@ -117,6 +120,9 @@ const bindOperator = Command.make("bind-operator", {
 
 export const foundryCommand = Command.make("foundry").pipe(
   Command.withSubcommands([
+    sandboxArchiveCommand,
+    sandboxSupervisorCommand,
+    sandboxSkillsCommand,
     migrate,
     migrateAutomation,
     bindOperator,

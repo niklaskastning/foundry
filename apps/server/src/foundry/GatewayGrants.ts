@@ -40,6 +40,7 @@ import * as DeviceRegistry from "./DeviceRegistry.ts";
 import * as DeviceChannel from "./DeviceChannel.ts";
 import * as DeviceConfig from "./DeviceConfig.ts";
 import * as FoundrySessions from "./FoundrySessions.ts";
+import * as SandboxGatewayAccess from "./SandboxGatewayAccess.ts";
 import * as ClientIdentity from "./ClientIdentity.ts";
 
 const decodeRequest = Schema.decodeUnknownEffect(FoundryGatewayGrantRequest, {
@@ -79,7 +80,14 @@ export const UnattendedGatewayIdentity = Schema.Struct({
 });
 export type UnattendedGatewayIdentity = typeof UnattendedGatewayIdentity.Type;
 export const isUnattendedIdentity = Schema.is(UnattendedGatewayIdentity);
+export const SandboxProbeIdentity = Schema.Struct({
+  ...AutomationIdentityFields,
+  authority: Schema.Literal("sandboxProbe"),
+  allocationId: Schema.String.check(Schema.isUUID()),
+});
+const isSandboxProbeIdentity = Schema.is(SandboxProbeIdentity);
 export const ManualAutomationGatewayIdentity = Schema.Struct({
+  sandboxAllocationId: Schema.optional(Schema.String.check(Schema.isUUID())),
   instanceId: FoundryInstanceId,
   operatorId: Schema.String,
   deviceId: FoundryDeviceId,
@@ -91,6 +99,7 @@ export const ManualAutomationGatewayIdentity = Schema.Struct({
   foundrySessionHash: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/)),
 });
 export const AutomationGatewayIdentity = Schema.Union([
+  SandboxProbeIdentity,
   ManualAutomationGatewayIdentity,
   UnattendedGatewayIdentity,
 ]);
@@ -144,6 +153,16 @@ export class GatewayGrants extends Context.Service<
       request: Request,
       target: Pick<AutomationGatewayIdentity, "deviceId" | "environmentId">,
     ) => Effect.Effect<AutomationGatewayIdentity, FoundryGatewayError>;
+    readonly sandboxProjects: (
+      target: SandboxGatewayAccess.SandboxGatewayTarget,
+    ) => Effect.Effect<ProjectSnapshot, FoundryGatewayError>;
+    readonly sandboxProbe: (
+      target: SandboxGatewayAccess.SandboxGatewayTarget,
+    ) => Effect.Effect<typeof SandboxProbeIdentity.Type, FoundryGatewayError>;
+    readonly retargetSandbox: (
+      identity: AutomationGatewayIdentity,
+      target: SandboxGatewayAccess.SandboxGatewayTarget,
+    ) => Effect.Effect<AutomationGatewayIdentity, FoundryGatewayError>;
     readonly openAutomation: (
       identity: AutomationGatewayIdentity,
       socket: Socket.Socket,
@@ -166,6 +185,7 @@ export class GatewayGrants extends Context.Service<
 >()("t3/foundry/GatewayGrants") {}
 
 const make = Effect.gen(function* () {
+  const sandboxAccess = yield* SandboxGatewayAccess.SandboxGatewayAccess;
   const sessions = yield* FoundrySessions.FoundrySessions;
   const auth = yield* EnvironmentAuth.EnvironmentAuth;
   const clientSessions = yield* SessionStore.SessionStore;
@@ -207,6 +227,11 @@ const make = Effect.gen(function* () {
       (!streamsEnabled && target.scopes.some((scope) => scope !== AuthOrchestrationReadScope))
     )
       return yield* denied();
+    yield* sandboxAccess.validateDevice({
+      ...target,
+      instanceId: identity.foundry.instanceId,
+      operatorId: identity.foundry.operatorId,
+    });
     const accessGeneration = yield* access.check(target.deviceId, identity.foundry.operatorId);
     const lease = yield* channels.current(target.deviceId).pipe(Effect.mapError(denied));
     if (
@@ -287,6 +312,7 @@ const make = Effect.gen(function* () {
       grant.environmentId !== target.environmentId
     )
       return yield* denied();
+    yield* sandboxAccess.validateDevice(grant);
     yield* access.check(grant.deviceId, grant.operatorId, grant.accessGeneration);
     const lease = yield* channels.current(grant.deviceId).pipe(Effect.mapError(denied));
     if (
@@ -316,6 +342,7 @@ const make = Effect.gen(function* () {
       .inspect(request.cookies[FoundrySessions.FOUNDRY_SESSION_COOKIE])
       .pipe(Effect.mapError(denied));
     const entry = grants.get(grant.grantId);
+    yield* sandboxAccess.validateDevice(grant);
     yield* access.check(grant.deviceId, grant.operatorId, grant.accessGeneration);
     const clients = yield* clientSessions
       .listActive()
@@ -392,6 +419,18 @@ const make = Effect.gen(function* () {
   ) {
     if (!streamsEnabled) return yield* denied();
     const credentials = yield* Effect.gen(function* () {
+      if (isSandboxProbeIdentity(identity)) {
+        const deadline = yield* sandboxAccess.validate(identity, true);
+        const expiresAt = Math.min(deadline, (yield* Clock.currentTimeMillis) + 60_000);
+        return {
+          foundry: { expiresAt },
+          client: {
+            sessionId: AuthSessionId.make(`sandbox-probe:${identity.allocationId}`),
+            subject: `sandbox-probe:${identity.allocationId}`,
+            expiresAt: DateTime.makeUnsafe(expiresAt),
+          },
+        };
+      }
       if (isUnattendedIdentity(identity)) {
         if (!unattendedAuthorization) return yield* denied();
         yield* unattendedAuthorization;
@@ -406,6 +445,11 @@ const make = Effect.gen(function* () {
           },
         };
       }
+      if (identity.sandboxAllocationId)
+        yield* sandboxAccess.validate(
+          { ...identity, allocationId: identity.sandboxAllocationId },
+          false,
+        );
       const foundry = yield* sessions
         .inspectReference(identity.foundrySessionHash)
         .pipe(Effect.mapError(denied));
@@ -423,6 +467,7 @@ const make = Effect.gen(function* () {
         return yield* denied();
       return { foundry, client };
     });
+    if (!isSandboxProbeIdentity(identity)) yield* sandboxAccess.validateDevice(identity);
     yield* access.check(identity.deviceId, identity.operatorId, identity.accessGeneration);
     yield* automationAccess(identity.deviceId, identity.operatorId, identity.automationGeneration);
     const lease = yield* channels.current(identity.deviceId).pipe(Effect.mapError(denied));
@@ -436,21 +481,61 @@ const make = Effect.gen(function* () {
       return yield* denied();
     return { ...credentials, lease };
   });
-  const openAutomation = Effect.fn("GatewayGrants.openAutomation")(function* (
-    identity: AutomationGatewayIdentity,
-    socket: Socket.Socket,
-    unattendedAuthorization?: Effect.Effect<void, FoundryGatewayError>,
+  const sandboxTarget = Effect.fn("GatewayGrants.sandboxTarget")(function* (
+    target: SandboxGatewayAccess.SandboxGatewayTarget,
+    probe: boolean,
   ) {
-    const { foundry, client, lease } = yield* validateAutomation(identity, unattendedAuthorization);
+    yield* sandboxAccess.validate(target, probe);
+    const device = yield* registry.get(target.deviceId).pipe(Effect.mapError(denied));
+    if (
+      device.revoked ||
+      device.instanceId !== target.instanceId ||
+      device.environmentId !== target.environmentId
+    )
+      return yield* denied();
+    return {
+      ...target,
+      deviceGeneration: device.generation,
+      accessGeneration: yield* access.check(target.deviceId, target.operatorId),
+      automationGeneration: yield* automationAccess(target.deviceId, target.operatorId),
+    };
+  });
+  const sandboxProbe = Effect.fn("GatewayGrants.sandboxProbe")(function* (
+    target: SandboxGatewayAccess.SandboxGatewayTarget,
+  ) {
+    return { ...(yield* sandboxTarget(target, true)), authority: "sandboxProbe" as const };
+  });
+  const retargetSandbox = Effect.fn("GatewayGrants.retargetSandbox")(function* (
+    identity: AutomationGatewayIdentity,
+    target: SandboxGatewayAccess.SandboxGatewayTarget,
+  ) {
+    if (
+      isUnattendedIdentity(identity) ||
+      isSandboxProbeIdentity(identity) ||
+      identity.instanceId !== target.instanceId ||
+      identity.operatorId !== target.operatorId
+    )
+      return yield* denied();
+    const destination = yield* sandboxTarget(target, false);
+    const result = { ...identity, ...destination, sandboxAllocationId: target.allocationId };
+    yield* validateAutomation(result);
+    return result;
+  });
+  const automationGrant = Effect.fn("GatewayGrants.automationGrant")(function* (
+    identity: AutomationGatewayIdentity,
+    { foundry, client, lease }: Effect.Success<ReturnType<typeof validateAutomation>>,
+  ) {
     const expiresAt = Math.min(
       (yield* Clock.currentTimeMillis) + 60_000,
       foundry.expiresAt,
       DateTime.toEpochMillis(client.expiresAt),
     );
-    const grant: FoundryGatewayGrant = {
+    return {
       deviceId: identity.deviceId,
       environmentId: identity.environmentId,
-      scopes: ["orchestration:read", "orchestration:operate"],
+      scopes: isSandboxProbeIdentity(identity)
+        ? ["orchestration:read"]
+        : ["orchestration:read", "orchestration:operate"],
       grantId: FoundryGatewayGrantId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie)),
       protocolVersion: "2",
       grantKind: "clientAccess",
@@ -463,7 +548,23 @@ const make = Effect.gen(function* () {
       generation: identity.deviceGeneration,
       channelGeneration: lease.channelGeneration,
       expiresAt,
-    };
+    } satisfies FoundryGatewayGrant;
+  });
+  const sandboxProjects = Effect.fn("GatewayGrants.sandboxProjects")(function* (
+    target: SandboxGatewayAccess.SandboxGatewayTarget,
+  ) {
+    const identity = yield* sandboxProbe(target);
+    const grant = yield* automationGrant(identity, yield* validateAutomation(identity));
+    const validate = validateAutomation(identity).pipe(Effect.asVoid);
+    return yield* channels.projects(grant, validate);
+  });
+  const openAutomation = Effect.fn("GatewayGrants.openAutomation")(function* (
+    identity: AutomationGatewayIdentity,
+    socket: Socket.Socket,
+    unattendedAuthorization?: Effect.Effect<void, FoundryGatewayError>,
+  ) {
+    const { foundry, client, lease } = yield* validateAutomation(identity, unattendedAuthorization);
+    const grant = yield* automationGrant(identity, { foundry, client, lease });
     // clientAccess authorizes the existing transport; Automation additionally checks its own grant.
     const check = Effect.gen(function* () {
       const current = yield* validateAutomation(identity, unattendedAuthorization);
@@ -598,6 +699,9 @@ const make = Effect.gen(function* () {
     ticket,
     stream,
     authorizeAutomation,
+    sandboxProbe,
+    sandboxProjects,
+    retargetSandbox,
     openAutomation,
     readAccess,
     updateAccess,

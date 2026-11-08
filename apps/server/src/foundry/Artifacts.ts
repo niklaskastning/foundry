@@ -62,6 +62,13 @@ export class Artifacts extends Context.Service<
       principal: ArtifactPrincipal,
       input: FoundryArtifactRead,
     ) => Effect.Effect<FoundryArtifactChunk, FoundryArtifactError>;
+    readonly readVerified?: (
+      principal: ArtifactPrincipal,
+      reference: FoundryArtifactReference,
+    ) => Effect.Effect<
+      { readonly manifest: FoundryArtifactManifest; readonly bytes: Uint8Array },
+      FoundryArtifactError
+    >;
     readonly list: (
       principal: ArtifactPrincipal,
       input: FoundryArtifactList,
@@ -299,6 +306,16 @@ const make = Effect.gen(function* () {
       data: Buffer.from(bytes).toString("base64"),
     };
   }, Effect.mapError(operationError));
+  const readVerified = Effect.fn("Artifacts.readVerified")(function* (
+    principal: ArtifactPrincipal,
+    reference: FoundryArtifactReference,
+  ) {
+    const value = yield* publish(principal, reference);
+    const bytes = yield* files.read(reference.artifactId, 0, value.sizeBytes, true);
+    if (bytes.byteLength !== value.sizeBytes || digest(bytes) !== value.sha256)
+      return yield* fail("changed");
+    return { manifest: value, bytes };
+  }, Effect.mapError(operationError));
   const list = Effect.fn("Artifacts.list")(function* (
     principal: ArtifactPrincipal,
     raw: FoundryArtifactList,
@@ -317,6 +334,6 @@ const make = Effect.gen(function* () {
       nextCursor: rows.length > 50 ? items.at(-1)!.ordinal : null,
     };
   }, Effect.mapError(operationError));
-  return Artifacts.of({ begin, status, write, publish, abort, metadata, read, list });
+  return Artifacts.of({ begin, status, write, publish, abort, metadata, read, readVerified, list });
 });
 export const layer = Layer.effect(Artifacts, make);

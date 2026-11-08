@@ -309,6 +309,24 @@ the previous image ID and candidate revision. Backups contain private state and 
 root-readable only; retention is manual. They do not include PostgreSQL or workspaces
 and are not a replacement for the complete backups described below.
 
+For the designated development VPS, use `activate-access.py update sha256:<digest>
+<source-sha> --development` (or the required `upgrade-…` command with the same
+trailing flag). The baseline helper accepts `foundry-deploy deploy sha256:<digest>
+--development`. This explicitly skips state/workspace archives and PostgreSQL/role
+dumps; it does not delete existing archives or copy old builds. Private runtime
+configuration copies remain protected in the recovery directory. The manifest
+records the backup policy, previous/target artifact and schema versions; migrations,
+connection guards, identity/readiness checks and the success record still apply.
+
+Development recovery uses a rebuild/redeployment of the pinned artifact, with schema
+reconciliation and, if necessary, a verified reset of disposable Foundry application
+data. Credentials, provider sessions, personal T3 state and unrelated services remain
+excluded from resets. A failed candidate stays stopped; never blindly downgrade its
+image against migrated data. Keep Main, workers and provisioner on the exact tested
+artifact as required by the rollout. Do not remove an existing recovery directory
+without checking its owner, purpose and whether an active rollout still needs it.
+Coordinate installation and the real update with the current rollout owner.
+
 The updater already serializes runs with `/var/lib/foundry-deploy/lock` (an exclusive, nonblocking `flock`). Manual Foundry rollouts, worker updates and migrations use the same lock through verification. Do not acquire it again around the updater or bypass a busy lock. The manifest and `success` file provide automatic evidence; briefly report previous/target revision, healthcheck result and recovery path in the PR or handoff. Manual paths report the same fields there, without a separate file or checklist.
 
 If backup creation fails, the old container restarts. If candidate startup or identity
@@ -1020,6 +1038,135 @@ deshalb dessen gesicherten Datenstand, nicht nur die alte Dienstkonfiguration.
 enthält `workers` bis zu acht zusätzliche, unterschiedliche Paare aus `deviceId`
 und `environmentId`. Diese Betriebsauswahl ersetzt weder die registrierte
 Instanz-/Betreiberzugehörigkeit noch aktuelle Device- und Automation-Freigaben.
+
+### Linux-Sandbox-Main: Schema und Betriebsprofil (P34–P40)
+
+Sandboxziele stehen für interaktive Arbeit und manuell gestartete v4-Runs zur
+Verfügung. Zeitplan- und GitHub-Trigger behalten ihre explizite Workerfreigabe;
+gespeicherte Sandbox-Startvorgaben ändern diese unbeaufsichtigten Ziele nicht.
+
+Der Sandbox-Main benötigt Instanzschema 9 und Automation-Schema 11. Der bestehende
+Updater migriert den geprüften Stand mit Schema 8/11 unter seinem eigenen
+Deployment-Lock; keinen zweiten Lock um diesen Aufruf legen:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-sandboxes sha256:<digest> <commit> --development
+```
+
+Dies aktiviert noch keine Sandboxausführung. Auf dem ausgewiesenen Entwicklungs-VPS
+überspringt `--development` die Datenbank-/State-/Workspace-Sicherungen; private
+Betriebskonfiguration, Pins, Manifest und Prüfungen bleiben erhalten. Der Aufruf
+migriert bei gestopptem Main und sperrt den Migrationslogin anschließend wieder. `manifest.json` und
+`success` im ausgegebenen Recovery-Verzeichnis enthalten vorherigen und geprüften
+Zielstand. Bei Migrationsfehlern bleibt Main gestoppt; die Rückkehr zu Schema-8-Code
+verlangt einen zur Schemaänderung passenden Restore oder das ausdrücklich erlaubte
+Zurücksetzen der betroffenen Entwicklungsdaten. Ein Code-Downgrade allein genügt
+nicht. Produktionsmigrationen benötigen weiterhin die koordinierten Sicherungen.
+Weitere Schema-9-Updates verwenden `update … --development`.
+
+Die geprüfte, **secretfreie** Profil-/Quota-Konfiguration wird als root-eigene
+`/etc/foundry-deploy/sandbox-policy.json` installiert (Modus `0644`, keine
+Symlinks). Sie benennt den registrierten Provisioner, erlaubte Repositories und
+immutable Images. Main validiert sie beim Start. Credentials gehören in den
+bestehenden Secretpfad, niemals in diese Datei. Anschließend:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py sandboxes enable
+sudo -n python3 -I deploy/fork/updater/activate-access.py status
+```
+
+Der bestehende Profilwechsel setzt beide Sandboxvariablen und bindet ausschließlich
+diese Datei readonly nach `/etc/foundry/sandboxes.json`. Er prüft die gestartete
+Konfiguration und stellt bei Fehlern Runtime-Datei und Compose-Mount gemeinsam
+wieder her. Main erhält keinen Docker-Socket. Der getrennte Linux-Provisioner
+braucht eine eigene Geräteidentität und Sandbox-Provisionierungsfreigabe;
+die Main-Aktivierung ersetzt dies nicht und ist keine OCI-Abnahme.
+Vor `sandboxes disable` müssen alle Allocations bestätigt archiviert und gelöscht
+sein. Änderungen dieser Konfigurationsdatei ebenfalls erst nach diesem Drain durchführen.
+Bei bereits aktiviertem Profil die Main Node anschließend unter dem Deployment-Lock
+kontrolliert neu starten und ihre Bereitschaft prüfen: `sandboxes enable` bleibt
+in diesem Fall idempotent und lädt die Profildatei nicht neu. Keine fremden Runs
+dafür stoppen.
+
+Den Provisioner auf dem Linux-Dockerhost aus dem geprüften Serverartefakt mit
+eigenem privaten Verzeichnis und neuen Gerätekeys installieren. Die oben
+beschriebene Geräteaufnahme liefert seine Registration; keine bestehende
+Workeridentität oder persönlichen Credentials übernehmen. Seine Device-ID muss
+auch `supervisorDeviceId` der Main-Policy entsprechen. Nur der lokale
+Betreiberbefehl erlaubt die Provisionierungsfreigabe:
+
+```sh
+sudo -n docker exec foundry-main-1 node /app/dist/bin.mjs foundry sandbox-provisioning-access --base-dir /var/lib/foundry --device-id <device-id> --environment-id <environment-id> --generation <aktuelle-grant-generation> --enabled true
+```
+
+Die zurückgegebene Grantgeneration für einen späteren Widerruf mit
+`--enabled false` verwenden. Geräte-/Environment-ID und aktuelle Generation werden
+gemeinsam geprüft; der HTTP-Geräteadapter erlaubt diese Freigabe weiterhin nicht.
+Vor einem geplanten Widerruf eigene Allocations archivieren und löschen.
+
+Die private Supervisor-Konfiguration enthält `origin`, `registrationFile`,
+`keyFile`, `networkName`, `maxCpuMillis`, `maxMemoryMiB` und `maxPids`; optional
+`accessFile` für den bestehenden Access-Maschinenzugang. Credentialdateien bleiben
+hostseitig privat. Hinter Cloudflare Access benötigt auch die Sandbox selbst einen
+erreichbaren, weiterhin authentifizierten Maschinenendpunkt. Der begrenzte
+TLS-Kontrollpfad mit `controlTls` und hostseitigem `connectOrigin` ist im folgenden
+Netzwerkleitfaden beschrieben; Access-Credentials werden nicht in Container kopiert.
+Den Netzwerkhelper aus
+[Linux sandbox networking](../../deploy/fork/sandbox/README.md) zuerst installieren
+und das geprüfte Netz angeben. Den Supervisor als separaten betreuten Hostdienst
+mit `node <server-bundle>/bin.mjs foundry sandbox-supervise --configuration
+<private-konfiguration.json>` starten. Er braucht Zugriff auf den lokalen
+Docker-Socket und den Netzwerkhelper; Sandboxcontainer bekommen beides nicht.
+Sein eingebauter Hostlock verhindert überlappende Supervisorprozesse.
+Der Dienst benötigt `/usr/sbin` im `PATH` für die Firewallprüfung. Bei
+`ProtectSystem=strict` müssen `/var/lib/foundry-sandbox` und
+`/var/lib/foundry-sandbox-networks` schreibbar bleiben: Auch die Prüfung des
+Netzwerks nimmt dessen eigene Lockdatei. Nach einem Supervisorneustart kann die
+Übernahme bis zum Ablauf der bisherigen 60-Sekunden-Lease warten. Den Betriebsdienst
+mit Wiederanlauf bei Fehlern aktivieren; eine zeitbegrenzte Abnahme-Unit anschließend
+nicht als gestoppten Provisioner zurücklassen. Ressourcen und maximale Laufzeit
+bleiben pro Allocation begrenzt. Absichtliche Fehler-/TTL-Testprofile vor Übergabe
+aus der Imagefreigabe nehmen und eine neue, geprüfte Betriebsprofilrevision anbieten.
+
+Setup-Archive ohne Thread enthalten einen zentral bestätigten JSON-Index und
+bestätigte Teile von höchstens 8 MiB; auch Abhängigkeitsverzeichnisse werden
+aufgenommen. Große Dateien behalten Teiloffsets. Maximal 1024 Teile und 64
+Verzeichnisebenen werden unterstützt; Hardlinks bleiben gesperrt, damit keine
+privaten Runtime-Dateien über Aliasnamen ins Archiv gelangen. Bei überschrittenen
+Grenzen oder unbestätigten Teilen bleibt die Allocation erhalten. Diese inert
+lesbaren Setup-Archive sind kein wiederaufnehmbarer Threadcheckpoint.
+
+Codex benötigt für eingeschränkte v4-Dateirechte seine verschachtelte Linux-Sandbox.
+Neue OCI-Allocations verlangen deshalb die versionierten Seccomp-/AppArmor-Dateien
+und den rootgeschützten Prüfer im festen Hostpfad. Unter dem gemeinsamen
+Deployment-Lock installieren und unmittelbar mit dem gepinnten Sandboximage prüfen:
+
+```sh
+sudo -n install -d -o root -g root -m 0755 /usr/local/lib/foundry/sandbox
+sudo -n install -o root -g root -m 0644 deploy/fork/sandbox/codex-seccomp-v1.json deploy/fork/sandbox/codex-apparmor-v1 deploy/fork/sandbox/codex-apparmor-v2 /usr/local/lib/foundry/sandbox/
+sudo -n install -o root -g root -m 0755 deploy/fork/sandbox/isolation-policy.py /usr/local/lib/foundry/sandbox/
+sudo -n /usr/local/lib/foundry/sandbox/isolation-policy.py install
+sudo -n python3 deploy/fork/sandbox/test-isolation-policy.py --image '<repository>@sha256:<digest>'
+```
+
+Der Prüfer bestätigt installierte Dateihashes und den enforcing Profilnamen,
+nicht den Inhalt einer zuvor unter demselben Namen geladenen Kernelpolicy; daher
+gehören Installation und reale Probe in denselben Lockabschnitt. Die Probe prüft
+ohne Modellturn Schreibrechte, Geschwisterpfade und einen Remountversuch. Kein
+privileged-Modus, zusätzliche Host-Capability oder globaler Hostschalter ist nötig.
+Neue Allocations verwenden AppArmor v2 mit einer auf den verschachtelten
+Workspace beschränkten Worktree-Remount-Regel. Bestehende Allocations und
+Archivfinalizer behalten ihre gespeicherte Policyversion; die v1-Datei und das
+geladene v1-Profil bis zu deren Löschung erhalten.
+Normale Agenten-Toolaufrufe verlangen keine interaktive Zustimmung; explizite
+v4-Dateirechte bleiben technisch durchgesetzt. Container teilen weiterhin den
+Hostkernel und sind keine VM-Mandantengrenze. Workspace-Volumes teilen den
+Hostspeicher; eine Dateisystem-Diskquota wird derzeit nicht zugesichert.
+
+Thread-Archive speichern vollständige Git-Bundles in bestätigten Teilen von
+höchstens 8 MiB mit einem gehashten Index (insgesamt höchstens 8 GiB). Alte
+einteilige Archive bleiben lesbar. Die Sandbox benötigt für v4 eine geprüfte
+Codex-Version ab 0.166.0; Image- oder Toolwechsel erhalten eine neue Profilrevision.
 
 ### Versionierte Factory-HTTP-API (P58a)
 

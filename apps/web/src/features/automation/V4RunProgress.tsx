@@ -106,7 +106,7 @@ export function V4RunProgress({
                               Condition not met; this step was skipped.
                             </p>
                           ) : null}
-                          {node.cancelRequested ? (
+                          {node.cancelRequested && node.status === "running" ? (
                             <p className="text-xs text-muted-foreground">
                               Stop requested; waiting for confirmed writer shutdown.
                             </p>

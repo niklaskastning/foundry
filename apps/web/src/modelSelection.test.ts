@@ -99,6 +99,12 @@ describe("instance-scoped model selection", () => {
         (option) => option.slug,
       ),
     ).toContain("openai/gpt-5.5");
+    expect(
+      getAppModelOptionsForInstance(settingsWithProviderInstances(), {
+        ...openrouter,
+        models: [],
+      }).map((option) => option.slug),
+    ).toEqual(["openai/gpt-5.5"]);
   });
 
   it("preserves a custom slug that collides with a provider alias", () => {

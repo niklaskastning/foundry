@@ -261,7 +261,7 @@ try {
     await query("UPDATE foundry_instance.schema_version SET version=99", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 503);
     await expectFailure(migrate());
-    await query("UPDATE foundry_instance.schema_version SET version=8", "foundry_migrate");
+    await query("UPDATE foundry_instance.schema_version SET version=9", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 200);
     await query("GRANT CREATE ON SCHEMA public TO foundry_runtime");
     NodeAssert.equal((await ready()).status, 503);
@@ -373,7 +373,7 @@ try {
     await expectFailure(bind("foreign-operator"));
     const operatorBefore = await query("SELECT * FROM foundry_instance.operator_binding");
     await query(
-      "DROP TABLE foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
+      "DROP TABLE foundry_instance.provider_connections, foundry_instance.sandbox_allocations, foundry_instance.sandbox_profiles, foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
       "foundry_migrate",
     );
     await query("DROP TABLE foundry_instance.sessions", "foundry_migrate");
@@ -600,7 +600,7 @@ try {
     "SELECT * FROM foundry_instance.sessions ORDER BY token_hash",
   );
   await query(
-    "DROP TABLE foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
+    "DROP TABLE foundry_instance.provider_connections, foundry_instance.sandbox_allocations, foundry_instance.sandbox_profiles, foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
     "foundry_migrate",
   );
   await query("UPDATE foundry_instance.schema_version SET version=2", "foundry_migrate");
@@ -706,7 +706,7 @@ try {
       "foundry_migrate",
     );
     await query(
-      "DROP TABLE foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants",
+      "DROP TABLE foundry_instance.provider_connections, foundry_instance.sandbox_allocations, foundry_instance.sandbox_profiles, foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants",
       "foundry_migrate",
     );
     await query("UPDATE foundry_instance.schema_version SET version=3", "foundry_migrate");
@@ -766,6 +766,42 @@ try {
         service.update({ ...access, kind: "sandboxProvisioning", enabled: true }, operatorId),
       ),
     );
+    const provisioning = initialGrants.find((grant) => grant.kind === "sandboxProvisioning")!;
+    const provisioningInput = {
+      deviceId: registered.deviceId,
+      environmentId: registered.environmentId,
+      generation: provisioning.generation,
+      enabled: true,
+    };
+    await NodeAssert.rejects(
+      grantCall((service) =>
+        service.updateProvisioning(provisioningInput, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+      ),
+    );
+    await NodeAssert.rejects(
+      grantCall((service) =>
+        service.updateProvisioning(
+          { ...provisioningInput, environmentId: EnvironmentId.make("other-environment") },
+          operatorId,
+        ),
+      ),
+    );
+    const provisioningEnabled = await grantCall((service) =>
+      service.updateProvisioning(provisioningInput, operatorId),
+    );
+    NodeAssert.equal(provisioningEnabled.kind, "sandboxProvisioning");
+    NodeAssert.equal(provisioningEnabled.enabled, true);
+    NodeAssert.equal(provisioningEnabled.generation, provisioning.generation + 1);
+    await NodeAssert.rejects(
+      grantCall((service) => service.updateProvisioning(provisioningInput, operatorId)),
+    );
+    const provisioningDisabled = await grantCall((service) =>
+      service.updateProvisioning(
+        { ...provisioningInput, generation: provisioningEnabled.generation, enabled: false },
+        operatorId,
+      ),
+    );
+    NodeAssert.equal(provisioningDisabled.enabled, false);
     const automation = initialGrants.find((grant) => grant.kind === "automationExecution")!;
     const automationEnabled = await grantCall((service) =>
       service.update({ ...automation, enabled: true }, operatorId),
@@ -822,7 +858,9 @@ try {
       ),
       initialGrants
         .filter((g) => g.kind !== "clientAccess")
-        .map((grant) => (grant.kind === "automationExecution" ? automationDisabled : grant)),
+        .map((grant) =>
+          grant.kind === "automationExecution" ? automationDisabled : provisioningDisabled,
+        ),
     );
     await report(
       "PASS P11 PostgreSQL: separated grant kinds, durable revoke/regrant generations, stale update rejection, operator isolation and idempotent migration",
@@ -915,6 +953,14 @@ try {
     const revoked = await deviceCall((registry) => registry.get(registered.deviceId));
     NodeAssert.equal(revoked.revoked, true);
     NodeAssert.equal(revoked.generation, 2);
+    await NodeAssert.rejects(
+      grantCall((service) =>
+        service.updateProvisioning(
+          { ...provisioningInput, generation: provisioningDisabled.generation },
+          operatorId,
+        ),
+      ),
+    );
     await NodeAssert.rejects(
       grantCall((service) => service.update({ ...automationDisabled, enabled: true }, operatorId)),
     );
@@ -1175,7 +1221,20 @@ try {
         "fork_automation",
       )
     )[0]?.version,
-    8,
+    11,
+  );
+
+  await NodeFSP.writeFile(
+    NodePath.join(root, "sandbox-policy.json"),
+    JSON.stringify({
+      supervisorDeviceId: "99999999-9999-4999-8999-999999999999",
+      maxAllocations: 2,
+      maxCpuMillis: 2000,
+      maxMemoryMiB: 2048,
+      allowedRepositories: [],
+      allowedImages: [],
+      profiles: [],
+    }),
   );
 
   for (const [
@@ -1187,16 +1246,18 @@ try {
     streamsEnabled,
     artifactsEnabled,
     automationEnabled,
+    sandboxesEnabled,
   ] of [
-    [false, false, false, false, false, false, false, false],
-    [true, false, false, false, false, false, false, false],
-    [true, true, false, false, false, false, false, false],
-    [true, true, true, false, false, false, false, false],
-    [true, true, true, true, false, false, false, false],
-    [true, true, true, true, true, false, false, false],
-    [true, true, true, true, true, true, false, false],
-    [true, true, true, true, true, true, true, false],
-    [true, true, true, true, true, true, true, true],
+    [false, false, false, false, false, false, false, false, false],
+    [true, false, false, false, false, false, false, false, false],
+    [true, true, false, false, false, false, false, false, false],
+    [true, true, true, false, false, false, false, false, false],
+    [true, true, true, true, false, false, false, false, false],
+    [true, true, true, true, true, false, false, false, false],
+    [true, true, true, true, true, true, false, false, false],
+    [true, true, true, true, true, true, true, false, false],
+    [true, true, true, true, true, true, true, true, false],
+    [true, true, true, true, true, true, true, true, true],
   ] as const) {
     const runtimeClients: EnvironmentAuth.IssuedBearerSession[] = [];
     const sessionFixture = automationEnabled
@@ -1211,7 +1272,7 @@ try {
             runtimeClients.push(
               yield* auth.issueSession({
                 subject: "runtime-management",
-                scopes: ["orchestration:read", "access:write"],
+                scopes: ["orchestration:read", "orchestration:operate", "access:write"],
               }),
             );
           }),
@@ -1241,6 +1302,8 @@ try {
             FOUNDRY_STREAM_GATEWAY_ENABLED: String(streamsEnabled),
             FOUNDRY_ARTIFACTS_ENABLED: String(artifactsEnabled),
             FOUNDRY_AUTOMATION_ENABLED: String(automationEnabled),
+            FOUNDRY_SANDBOXES_ENABLED: String(sandboxesEnabled),
+            FOUNDRY_SANDBOX_CONFIGURATION_FILE: NodePath.join(root, "sandbox-policy.json"),
             FOUNDRY_AUTOMATION_DATABASE_URL: `postgresql://automation_runtime@localhost/fork_automation?host=${encodeURIComponent(root)}`,
             FOUNDRY_AUTOMATION_TARGET: JSON.stringify({
               deviceId: "99999999-9999-4999-8999-999999999999",
@@ -1258,6 +1321,14 @@ try {
     );
     const runtimeHandler = HttpRouter.toWebHandler(runtimeRoutes, { disableLogger: true });
     try {
+      const sandboxAnonymous = await runtimeHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/sandboxes`, {
+          method: "POST",
+          headers: { origin: accessConfig.origin, "content-type": "application/json" },
+          body: JSON.stringify({ action: "list" }),
+        }),
+      );
+      NodeAssert.equal(sandboxAnonymous.status, sandboxesEnabled ? 403 : 404);
       const metadata = await runtimeHandler.handler(
         new Request(`${accessConfig.origin}/.well-known/foundry?protocolVersion=1`),
       );
@@ -1366,21 +1437,53 @@ try {
           extra: Record<string, string> = {},
         ) =>
           runtimeHandler.handler(
-            new Request(`${accessConfig.origin}/api/foundry/automation/${endpoint}`, {
-              method: "POST",
-              headers: {
-                origin: accessConfig.origin,
-                host: new URL(accessConfig.origin).host,
-                "x-forwarded-proto": "https",
-                "content-type": "application/json",
-                cookie: currentSession.cookie,
-                "x-foundry-csrf": currentSession.csrf,
-                authorization: `Bearer ${runtimeClients[clientIndex]!.token}`,
-                ...extra,
+            new Request(
+              endpoint === "sandboxes"
+                ? `${accessConfig.origin}/api/foundry/sandboxes`
+                : `${accessConfig.origin}/api/foundry/automation/${endpoint}`,
+              {
+                method: "POST",
+                headers: {
+                  origin: accessConfig.origin,
+                  host: new URL(accessConfig.origin).host,
+                  "x-forwarded-proto": "https",
+                  "content-type": "application/json",
+                  cookie: currentSession.cookie,
+                  "x-foundry-csrf": currentSession.csrf,
+                  authorization: `Bearer ${runtimeClients[clientIndex]!.token}`,
+                  ...extra,
+                },
+                body: JSON.stringify(payload),
               },
-              body: JSON.stringify(payload),
-            }),
+            ),
           );
+        if (sandboxesEnabled) {
+          const listed = await authenticated("sandboxes", { action: "list" });
+          NodeAssert.equal(listed.status, 200);
+          NodeAssert.deepEqual(await listed.json(), { profiles: [], allocations: [] });
+          const mutation = {
+            action: "request",
+            request: {
+              commandId: "sandbox-runtime",
+              profileId: "missing",
+              revision: "77777777-7777-4777-8777-777777777777",
+              owner: { kind: "interactive" },
+            },
+          };
+          NodeAssert.equal((await authenticated("sandboxes", mutation)).status, 403);
+          NodeAssert.equal((await authenticated("sandboxes", mutation, 1)).status, 409);
+          NodeAssert.equal(
+            (
+              await authenticated("sandboxes", { action: "list" }, 0, {
+                "x-foundry-csrf": "invalid",
+              })
+            ).status,
+            403,
+          );
+          await report(
+            "PASS sandbox enabled Runtime layers, session+scope+CSRF enforcement; disabled route absent; no OCI or provider execution.",
+          );
+        }
         const bindings = await authenticated("triggers/query", { op: "bindings", limit: 50 });
         NodeAssert.equal(bindings.status, 200);
         NodeAssert.deepEqual(await bindings.json(), { kind: "bindings", items: [], next: null });
@@ -1437,7 +1540,7 @@ try {
           0,
         );
         await report(
-          "PASS enabled production Automation runtime: separate schema-8 database and restricted roles; current Foundry/T3 sessions read empty bindings/factories; read scope cannot mutate, management scope reaches domain validation; invalid CSRF rejected; no GitHub App configuration, worker or provider execution.",
+          "PASS enabled production Automation runtime: separate schema-11 database and restricted roles; current Foundry/T3 sessions read empty bindings/factories; read scope cannot mutate, management scope reaches domain validation; invalid CSRF rejected; no GitHub App configuration, worker or provider execution.",
         );
       }
       const login = await runtimeHandler.handler(

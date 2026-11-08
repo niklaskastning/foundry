@@ -1662,7 +1662,6 @@ export interface CodexAdapterV2Options {
 export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   adapterOptions: CodexAdapterV2Options,
 ) {
-  const executionObserver = yield* ExecutionObserver.ExecutionObserver;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const readMcpSession = (threadId: ThreadId | null) =>
     // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
@@ -6764,12 +6763,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 if (!Exit.isFailure(exit) || requestedNativeRuns.has(turnInput.runId))
                   return Effect.void;
                 rejectedBeforeStart.add(turnInput.runId);
-                return (
-                  executionObserver.rejectedBeforeStart?.({
-                    threadId: turnInput.threadId,
-                    providerThreadId: turnInput.providerThread.id,
-                    runOrdinal: turnInput.runOrdinal,
-                  }) ?? Effect.void
+                return Effect.flatMap(
+                  ExecutionObserver.ExecutionObserver,
+                  (observer) =>
+                    observer.rejectedBeforeStart?.({
+                      threadId: turnInput.threadId,
+                      providerThreadId: turnInput.providerThread.id,
+                      runOrdinal: turnInput.runOrdinal,
+                    }) ?? Effect.void,
                 );
               }),
             );
