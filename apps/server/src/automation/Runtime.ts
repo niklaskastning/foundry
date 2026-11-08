@@ -1,3 +1,5 @@
+import * as Evaluations from "./Evaluations.ts";
+import * as EvaluationJudge from "./EvaluationJudge.ts";
 import * as SandboxTargets from "./SandboxTargets.ts";
 import * as McpBindings from "./McpBindings.ts";
 import * as MachineAccess from "./MachineAccess.ts";
@@ -107,6 +109,7 @@ const routes = Layer.unwrap(
 export const reconciliationLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const scheduler = yield* Scheduler.Scheduler;
+    const evaluations = yield* Evaluations.Evaluations;
     const triggers = yield* Triggers.Triggers;
     const polling = yield* GitHubPolling.GitHubPolling;
     const definitionSync = yield* DefinitionSync.DefinitionSync;
@@ -124,6 +127,7 @@ export const reconciliationLayer = Layer.effectDiscard(
     yield* start(schedules.tick);
     yield* start(triggers.tick);
     yield* start(scheduler.tick);
+    yield* start(evaluations.tick);
   }),
 );
 
@@ -166,6 +170,8 @@ export const layer = Layer.unwrap(
     return Layer.mergeAll(routes, AutomationHttp.layer, ApiHttp.layer, reconciliationLayer)
       .pipe(
         Layer.provide(Application.layer.pipe(Layer.provide(Handoffs.layer))),
+        Layer.provide(Evaluations.layer),
+        Layer.provide(EvaluationJudge.layer),
         Layer.provide(DefinitionSync.layer.pipe(Layer.provideMerge(DefinitionSources.layer))),
         Layer.provide(Layer.merge(GitHubPolling.layer, ScheduleTriggers.layer)),
         Layer.provide(Triggers.layer),

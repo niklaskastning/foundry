@@ -1,3 +1,4 @@
+import * as Evaluations from "./Evaluations.ts";
 import * as DefinitionSync from "./DefinitionSync.ts";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -12,15 +13,21 @@ import * as ScheduleTriggers from "./ScheduleTriggers.ts";
 import * as Triggers from "./Triggers.ts";
 
 it.effect(
-  "keeps dispatch reconciliation progressing while connector and admission I/O are blocked",
+  "keeps dispatch reconciliation progressing while connector, evaluation and admission I/O are blocked",
   () =>
     Effect.gen(function* () {
       const pollStarted = yield* Deferred.make<void>();
       const admissionStarted = yield* Deferred.make<void>();
+      const evaluationStarted = yield* Deferred.make<void>();
       const releaseInputs = yield* Deferred.make<void>();
       const dispatches = yield* Queue.unbounded<void>();
       const dependencies = Layer.mergeAll(
         Layer.mock(DefinitionSync.DefinitionSync)({ tick: Effect.void }),
+        Layer.mock(Evaluations.Evaluations)({
+          tick: Deferred.succeed(evaluationStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseInputs)),
+          ),
+        }),
         Layer.mock(GitHubPolling.GitHubPolling)({
           tick: Deferred.succeed(pollStarted, undefined).pipe(
             Effect.andThen(Deferred.await(releaseInputs)),
@@ -41,6 +48,7 @@ it.effect(
       yield* Layer.build(Runtime.reconciliationLayer.pipe(Layer.provide(dependencies)));
       yield* Deferred.await(pollStarted);
       yield* Deferred.await(admissionStarted);
+      yield* Deferred.await(evaluationStarted);
       yield* Queue.take(dispatches);
       yield* TestClock.adjust("5 seconds");
       yield* Queue.take(dispatches);
