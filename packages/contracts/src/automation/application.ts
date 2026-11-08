@@ -1,3 +1,4 @@
+import { OperationsDashboardQuery, OperationsDashboard } from "./operationsDashboard.ts";
 import { FactoryV4Workflow, FactoryV4ResolvedAgent } from "./definitionV4.ts";
 import { FactoryMcpBinding, SetFactoryMcpBinding } from "./mcpBinding.ts";
 import { FactoryV4RunState, FactoryV4NodeState } from "./executionV4.ts";
@@ -49,6 +50,7 @@ const Page = {
 };
 const FactoryFilter = { factoryId: Schema.optional(Key) };
 export const AutomationApplicationQuery = Schema.Union([
+  OperationsDashboardQuery,
   Schema.Struct({ op: Schema.Literal("mcpBindings"), factoryId: Key }),
   ...AutomationHandoffQuery.members,
   Schema.Struct({ op: Schema.Literal("executionDefaults"), factoryId: Key, repository: Key }),
@@ -166,6 +168,7 @@ export const AutomationAttemptSummary = Schema.Struct({
 export type AutomationAttemptSummary = typeof AutomationAttemptSummary.Type;
 const Next = { next: Schema.NullOr(Key) };
 export const AutomationApplicationResult = Schema.Union([
+  OperationsDashboard,
   Schema.Struct({ kind: Schema.Literal("mcpBindings"), items: Schema.Array(FactoryMcpBinding) }),
   Schema.Struct({ kind: Schema.Literal("mcpBinding"), binding: FactoryMcpBinding }),
   Schema.Struct({
