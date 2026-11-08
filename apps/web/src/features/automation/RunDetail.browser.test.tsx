@@ -15,6 +15,7 @@ vi.mock("./useAutomationQuery", () => ({ useAutomationQuery: mocks.query }));
 vi.mock("../../foundry/useWorkspaceNavigation", () => ({
   useWorkspaceNavigation: mocks.navigation,
 }));
+vi.mock("../../components/foundry/SandboxRunStatus", () => ({ SandboxRunStatus: () => null }));
 vi.mock("./HandoffPanel", () => ({ HandoffList: () => null, TakeOverPanel: () => null }));
 vi.mock("../../components/files/AttachmentFilePreview", () => ({
   AttachmentFilePreview: () => null,
