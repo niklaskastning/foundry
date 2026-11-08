@@ -256,3 +256,77 @@ it("migrates legacy resources explicitly while preserving task text, execution a
   });
   expect(parsed.success.skills[0]?.files[0]?.content).toContain("Collect evidence");
 });
+
+it("loads named definitions and Git-owned triggers while rejecting dangling trigger references", () => {
+  const files = fixture();
+  const manifest = JSON.parse(files[0]!.content);
+  const trigger = {
+    id: "nightly",
+    name: "Nightly build",
+    workflow: "build",
+    repository: "repo",
+    source: {
+      kind: "schedule",
+      config: {
+        timeZone: "UTC",
+        timeOfDay: "12:00",
+        weekdays: [1],
+        catchUp: "skip",
+        maxCatchUp: 1,
+        overlap: "wait",
+      },
+    },
+    target: {
+      deviceId: "11111111-1111-4111-8111-111111111111",
+      environmentId: "worker",
+      projectId: "project",
+      model: "replay",
+      checks: [],
+      requiredArtifacts: [],
+    },
+  };
+  files[0]!.content = JSON.stringify({ ...manifest, name: "Build factory", triggers: [trigger] });
+  const parsed = validateFactoryFiles(files);
+  expect(Result.isSuccess(parsed)).toBe(true);
+  if (Result.isFailure(parsed) || parsed.success.schemaVersion !== 4)
+    throw new Error("Invalid fixture");
+  expect(parsed.success.name).toBe("Build factory");
+  expect(parsed.success.triggers?.[0]?.name).toBe("Nightly build");
+  expect(validateFactoryFiles(exportFactoryFiles(parsed.success))).toEqual(parsed);
+  for (const triggers of [
+    [{ ...trigger, workflow: "missing" }],
+    [trigger, trigger],
+    [{ ...trigger, repository: "other" }],
+  ]) {
+    files[0]!.content = JSON.stringify({ ...manifest, triggers });
+    expect(Result.isFailure(validateFactoryFiles(files))).toBe(true);
+  }
+});
+
+it("loads scorer resources through the same bounded Git registry and preserves legacy snapshots", () => {
+  const files = fixture();
+  const manifest = JSON.parse(files[0]!.content);
+  files[0]!.content = JSON.stringify({
+    ...manifest,
+    scorers: [{ id: "quality", file: "scorers/quality.yaml" }],
+  });
+  const scorer = {
+    id: "quality",
+    name: "Quality",
+    criteria: [{ id: "proof", instructions: "Check evidence", threshold: 0.8 }],
+    judge: { provider: "codex", model: "gpt-6.1-sol", reasoningEffort: "medium" },
+    sampling: { rate: 1, automatic: false },
+  };
+  files.push({ path: "scorers/quality.yaml", content: JSON.stringify(scorer) });
+  const parsed = validateFactoryFiles(files);
+  expect(Result.isSuccess(parsed)).toBe(true);
+  if (Result.isFailure(parsed) || parsed.success.schemaVersion !== 4)
+    throw new Error("Invalid fixture");
+  expect(parsed.success.scorers).toEqual([scorer]);
+  expect(validateFactoryFiles(exportFactoryFiles(parsed.success))).toEqual(parsed);
+  files.at(-1)!.content = JSON.stringify({ ...scorer, id: "wrong" });
+  expect(Result.isFailure(validateFactoryFiles(files))).toBe(true);
+  const legacy = validateFactoryFiles(fixture());
+  if (Result.isFailure(legacy)) throw new Error("Invalid legacy fixture");
+  expect("scorers" in legacy.success).toBe(false);
+});

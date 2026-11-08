@@ -27,7 +27,7 @@ import { CodexSettings, ProviderInstanceId } from "@t3tools/contracts";
 import * as ServerConfig from "../config.ts";
 import { makeProcessProbe, processProbeSource } from "../testUtils/processProbe.ts";
 import * as TextGeneration from "./TextGeneration.ts";
-import { makeCodexTextGeneration } from "./CodexTextGeneration.ts";
+import { makeCodexTextGeneration, makeCodexStructuredGeneration } from "./CodexTextGeneration.ts";
 import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
@@ -196,6 +196,31 @@ function withFakeCodexEnv<A, E, R>(
 }
 
 it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
+  it.effect("runs structured evaluation output with the fixed judge model and medium effort", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "evaluation-judge-test-" });
+      const binaryPath = yield* makeFakeCodexBinary(directory, {
+        output: JSON.stringify({ score: 0.9 }),
+        requireArg: "--model gpt-6.1-sol",
+        requireReasoningEffort: "medium",
+        stdinMustContain: "archive-evidence",
+      });
+      const run = yield* makeCodexStructuredGeneration(decodeCodexSettings({ binaryPath }));
+      const result = yield* run({
+        operation: "generateReviewGuide",
+        cwd: directory,
+        prompt: "archive-evidence",
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-6.1-sol", [
+          { id: "reasoningEffort", value: "medium" },
+        ]),
+        outputSchema: Schema.Struct({
+          score: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+        }),
+      });
+      expect(result).toEqual({ score: 0.9 });
+    }).pipe(Effect.scoped),
+  );
   it.effect.each(["exec", "mcp list"] as const)(
     "kills a stalled %s CLI when its request is interrupted",
     (command) =>

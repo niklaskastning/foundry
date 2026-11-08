@@ -1,3 +1,4 @@
+import { AutomationTriggerTarget } from "./triggerConfiguration.ts";
 import { FoundrySandboxProfile } from "../foundrySandbox.ts";
 import * as Schema from "effect/Schema";
 import { StartAutomationRun } from "./factory.ts";
@@ -58,7 +59,6 @@ export class AutomationControlError extends Schema.TaggedError<AutomationControl
     ]),
   },
 ) {}
-const Text = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(20_000));
 export const AutomationWorkerTarget = Schema.Struct({
   deviceId: FoundryDeviceId,
   environmentId: EnvironmentId,
@@ -76,12 +76,8 @@ export const ManualStart = Schema.Struct({
   workers: Schema.optional(
     Schema.Array(AutomationWorkerTarget).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
   ),
-  model: Key,
-  checks: Schema.Array(Schema.Struct({ id: Text, prompt: Text, command: Text, cwd: Text })).check(
-    Schema.isMaxLength(100),
-  ),
-  requiredArtifacts: Schema.Array(
-    Schema.Struct({ stepId: Text, names: Schema.Array(Text).check(Schema.isMaxLength(100)) }),
-  ).check(Schema.isMaxLength(100)),
+  model: AutomationTriggerTarget.fields.model,
+  checks: AutomationTriggerTarget.fields.checks,
+  requiredArtifacts: AutomationTriggerTarget.fields.requiredArtifacts,
 });
 export type ManualStart = typeof ManualStart.Type;

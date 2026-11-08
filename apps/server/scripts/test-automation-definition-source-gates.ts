@@ -591,6 +591,90 @@ export const definitionSourceGates = Effect.fn("DefinitionSources.postgresGates"
       ),
     );
     NodeAssert.equal(imported.source.kind, "github");
+    const currentSource = (yield* call((service) => service.source("source-new")))!;
+    const moved = yield* call((service) =>
+      service.configure(
+        {
+          commandId: "source-change-branch",
+          factoryId: "source-new",
+          scopeVersionId: fresh.scopeVersionId,
+          expectedGeneration: currentSource.generation,
+          expectedVersionId: imported.id,
+          expectedContentHash: imported.contentHash,
+          location: { ...location, branch: "review" },
+        },
+        identity,
+      ),
+    );
+    yield* call((service) =>
+      Effect.all(
+        [
+          service.accept(moved, { commitSha: "a".repeat(40), files: files("source-new") }, 1000),
+          service.accept(moved, { commitSha: "a".repeat(40), files: files("source-new") }, 1000),
+        ],
+        { concurrency: 2 },
+      ),
+    );
+    const movedRevision = (yield* call((service) => service.source("source-new")))!
+      .selectedRevisionId!;
+    NodeAssert.notEqual(movedRevision, freshRevision);
+    NodeAssert.equal(
+      (yield* call((service) => service.readRevision("source-new", freshRevision))).revision
+        .location?.branch,
+      "main",
+    );
+    NodeAssert.equal(
+      (yield* call((service) => service.readRevision("source-new", movedRevision))).revision
+        .location?.branch,
+      "review",
+    );
+    const duplicates = yield* query(
+      (sql) =>
+        sql<{
+          count: number;
+        }>`SELECT count(*)::int AS count FROM foundry_automation.definition_git_revisions WHERE factory_id='source-new'`,
+    );
+    NodeAssert.equal(duplicates[0]!.count, 2);
+    NodeAssert.equal(
+      Option.getOrNull(yield* local((service) => service.active("source-new")))?.id,
+      imported.id,
+    );
+
+    let changedSource = moved;
+    for (const [name, nextLocation] of [
+      ["branch", { ...location, branch: "another" }],
+      ["path", { ...location, branch: "review", path: "elsewhere" }],
+      ["pin", { ...location, branch: "review", commitSha: "b".repeat(40) }],
+    ] as const) {
+      changedSource = yield* call((service) =>
+        service.configure(
+          {
+            commandId: `source-reject-${name}-configure`,
+            factoryId: "source-new",
+            scopeVersionId: fresh.scopeVersionId,
+            expectedGeneration: changedSource.generation,
+            expectedVersionId: imported.id,
+            expectedContentHash: imported.contentHash,
+            location: nextLocation,
+          },
+          identity,
+        ),
+      );
+      const rejected = yield* call((service) =>
+        service.activateRevision(
+          {
+            commandId: `source-reject-${name}-activate`,
+            factoryId: "source-new",
+            revisionId: movedRevision,
+            expectedGeneration: changedSource.generation,
+            expectedVersionId: imported.id,
+          },
+          identity,
+        ),
+      ).pipe(Effect.flip);
+      NodeAssert.equal(rejected.reason, "version_conflict");
+    }
+
     for (const table of [
       "definition_git_revisions",
       "definition_source_commands",

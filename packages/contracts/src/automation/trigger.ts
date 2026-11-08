@@ -1,43 +1,15 @@
+import { AutomationTriggerSource, AutomationTriggerTarget } from "./triggerConfiguration.ts";
+export {
+  AutomationScheduleConfig,
+  AutomationTriggerSource,
+  AutomationTriggerTarget,
+} from "./triggerConfiguration.ts";
 import * as Schema from "effect/Schema";
-import { EnvironmentId, ProjectId } from "../baseSchemas.ts";
-import { FoundryDeviceId } from "../foundryDevices.ts";
-import { ManualStart } from "./control.ts";
 import { AutomationFactory } from "./factory.ts";
 
 const Key = AutomationFactory.fields.id;
 const Epoch = Schema.Number.check(Schema.isGreaterThanOrEqualTo(0));
 const Generation = Schema.Int.check(Schema.isGreaterThan(0));
-export const AutomationScheduleConfig = Schema.Struct({
-  timeZone: Key,
-  timeOfDay: Schema.String.check(Schema.isPattern(/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/)),
-  weekdays: Schema.Array(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 6 }))).check(
-    Schema.isMinLength(1),
-    Schema.isMaxLength(7),
-    Schema.makeFilter((days) => new Set(days).size === days.length),
-  ),
-  catchUp: Schema.Literals(["skip", "latest", "bounded"]),
-  maxCatchUp: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 10 })),
-  overlap: Schema.Literals(["wait", "skip"]),
-});
-export type AutomationScheduleConfig = typeof AutomationScheduleConfig.Type;
-export const AutomationTriggerSource = Schema.Union([
-  Schema.Struct({
-    kind: Schema.Literal("github_issue"),
-    connectionId: Key,
-    repositoryId: Schema.Int.check(Schema.isGreaterThan(0)),
-    repository: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)),
-    label: Key,
-  }),
-  Schema.Struct({ kind: Schema.Literal("schedule"), config: AutomationScheduleConfig }),
-]);
-export const AutomationTriggerTarget = Schema.Struct({
-  deviceId: FoundryDeviceId,
-  environmentId: EnvironmentId,
-  projectId: ProjectId,
-  model: ManualStart.fields.model,
-  checks: ManualStart.fields.checks,
-  requiredArtifacts: ManualStart.fields.requiredArtifacts,
-});
 const BindingFields = {
   id: Key,
   factoryId: Key,

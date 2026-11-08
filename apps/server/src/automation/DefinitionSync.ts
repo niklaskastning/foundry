@@ -24,7 +24,11 @@ const make = Effect.gen(function* () {
       current.generation !== saved.appGeneration
     )
       return yield* new GitHubApp.GitHubAppError({ reason: "forbidden" });
-    const result = yield* github.readDefinition({ ...saved, generation: saved.appGeneration });
+    const result = yield* github.readDefinition({
+      ...saved,
+      branch: saved.commitSha ?? saved.branch,
+      generation: saved.appGeneration,
+    });
     yield* sources.accept(saved, result, yield* Clock.currentTimeMillis);
   });
   const recordFailure = Effect.fn("DefinitionSync.recordFailure")(function* (

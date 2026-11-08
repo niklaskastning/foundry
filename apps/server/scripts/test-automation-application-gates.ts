@@ -1,3 +1,6 @@
+import * as Evaluations from "../src/automation/Evaluations.ts";
+import * as EvaluationJudge from "../src/automation/EvaluationJudge.ts";
+import * as ThreadArchive from "../src/foundry/ThreadArchive.ts";
 import * as McpBindings from "../src/automation/McpBindings.ts";
 import * as DispatchStore from "../src/automation/DispatchStore.ts";
 import * as MachineAccess from "../src/automation/MachineAccess.ts";
@@ -127,6 +130,14 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     Layer.provide(database),
   );
   const layer = Application.layer.pipe(
+    Layer.provide(
+      Evaluations.layer.pipe(
+        Layer.provide(Layer.succeed(EvaluationJudge.EvaluationJudge, { judge: unused })),
+        Layer.provide(Layer.mock(ThreadArchive.ThreadArchive)({ read: unused })),
+      ),
+    ),
+    Layer.provide(Layer.mock(ThreadArchive.ThreadArchive)({ read: unused })),
+
     Layer.provide(McpBindings.layer),
     Layer.provide(DispatchStore.layer),
     Layer.provide(machineAccess),

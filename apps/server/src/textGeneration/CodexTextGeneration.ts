@@ -48,7 +48,7 @@ const codexMcpServersOff = (names: ReadonlyArray<string>): string | null =>
     ? null
     : `mcp_servers={${names.map((name) => `${JSON.stringify(name)}={enabled=false}`).join(",")}}`;
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
-export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(function* (
+export const makeCodexStructuredGeneration = Effect.fn("makeCodexStructuredGeneration")(function* (
   codexConfig: CodexSettings,
   environment?: NodeJS.ProcessEnv,
   getModels: Effect.Effect<ReadonlyArray<ServerProviderModel>> = Effect.succeed([]),
@@ -392,5 +392,12 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     }).pipe(Effect.ensuring(cleanup));
   });
 
-  return TextGenerationOperations.fromRunner("CodexTextGeneration", runCodexJson);
+  return runCodexJson;
+});
+
+export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(function* (
+  ...args: Parameters<typeof makeCodexStructuredGeneration>
+) {
+  const runner = yield* makeCodexStructuredGeneration(...args);
+  return TextGenerationOperations.fromRunner("CodexTextGeneration", runner);
 });
