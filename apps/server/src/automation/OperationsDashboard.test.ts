@@ -12,6 +12,10 @@ import {
 } from "./OperationsDashboard.ts";
 import type { OperationsRunEvidence } from "@t3tools/contracts";
 
+const unused = (): never => {
+  throw new Error("Invalid periods must not execute SQL");
+};
+
 const run = (changes: Partial<OperationsRunEvidence>): OperationsRunEvidence => ({
   runId: "run",
   workItemId: "work",
@@ -102,7 +106,25 @@ it.effect("rejects invalid or oversized periods before reading SQL or archives",
       layer.pipe(
         Layer.provide(
           Layer.mergeAll(
-            Layer.mock(Database.AutomationDatabase)({}),
+            Layer.mock(Database.AutomationDatabase)({
+              "~effect/sql/SqlClient": "~effect/sql/SqlClient",
+              "~@effect/sql-pg/PgClient": "~@effect/sql-pg/PgClient",
+              config: {},
+              literal: unused,
+              in: unused,
+              insert: unused,
+              update: unused,
+              updateValues: unused,
+              and: unused,
+              or: unused,
+              csv: unused,
+              join: unused,
+              onDialect: unused,
+              onDialectOrElse: unused,
+              json: unused,
+              listen: unused,
+              withoutTransforms: unused,
+            }),
             Layer.mock(ThreadArchive.ThreadArchive)({}),
           ),
         ),

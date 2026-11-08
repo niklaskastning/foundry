@@ -14,6 +14,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Database from "./AutomationDatabase.ts";
 
+const encodeEvidenceKey = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.String, Schema.String])),
+);
+const isApplicationError = Schema.is(AutomationApplicationError);
 const decodeArchiveOwner = Schema.decodeUnknownOption(FoundryArchiveOwner);
 
 export function summarizeOperations(
@@ -40,7 +44,7 @@ export function latestOperationsUsage(
 ) {
   const distinct = new Map<string, (typeof evidence)[number]>();
   for (const snapshot of evidence) {
-    const key = JSON.stringify([
+    const key = encodeEvidenceKey([
       snapshot.environmentId,
       snapshot.threadId,
       snapshot.providerTurnId,
@@ -160,7 +164,7 @@ const make = Effect.gen(function* () {
               event.event.payload.contextUsage?.cost
             ) {
               const cost = event.event.payload.contextUsage.cost;
-              const key = JSON.stringify([
+              const key = encodeEvidenceKey([
                 owner.value.environmentId,
                 owner.value.threadId,
                 event.event.payload.id,
@@ -239,9 +243,7 @@ const make = Effect.gen(function* () {
       };
     },
     Effect.mapError((cause) =>
-      cause instanceof AutomationApplicationError
-        ? cause
-        : new AutomationApplicationError({ code: "unavailable" }),
+      isApplicationError(cause) ? cause : new AutomationApplicationError({ code: "unavailable" }),
     ),
   );
   return OperationsDashboard.of({ query });
