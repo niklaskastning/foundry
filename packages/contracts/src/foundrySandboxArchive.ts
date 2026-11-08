@@ -4,6 +4,23 @@ import { FoundryArchiveOwner } from "./foundryArchive.ts";
 import { FoundryArtifactManifest } from "./foundryArtifact.ts";
 
 const Commit = Schema.String.check(Schema.isPattern(/^[a-f0-9]{40}$/));
+export const FOUNDRY_SANDBOX_BUNDLE_MIME_TYPE = "application/vnd.foundry.git-bundle-index+json";
+export const FOUNDRY_SANDBOX_BUNDLE_PART_BYTES = 8 * 1024 * 1024;
+export const FOUNDRY_SANDBOX_BUNDLE_MAX_PARTS = 1024;
+export const FOUNDRY_SANDBOX_BUNDLE_MAX_BYTES =
+  FOUNDRY_SANDBOX_BUNDLE_PART_BYTES * FOUNDRY_SANDBOX_BUNDLE_MAX_PARTS;
+export const FoundrySandboxBundleIndex = Schema.Struct({
+  format: Schema.Literal("foundry-git-bundle-1"),
+  sizeBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(FOUNDRY_SANDBOX_BUNDLE_MAX_BYTES)),
+  sha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+  parts: Schema.Array(
+    Schema.Struct({
+      ...FoundryArtifactManifest.fields,
+      sizeBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(FOUNDRY_SANDBOX_BUNDLE_PART_BYTES)),
+    }),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(FOUNDRY_SANDBOX_BUNDLE_MAX_PARTS)),
+});
+export type FoundrySandboxBundleIndex = typeof FoundrySandboxBundleIndex.Type;
 export const FoundrySandboxArchiveManifest = Schema.Struct({
   allocationId: Schema.String.check(Schema.isUUID()),
   fence: PositiveInt,

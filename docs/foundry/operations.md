@@ -1060,8 +1060,11 @@ wieder her. Main erhält keinen Docker-Socket. Der getrennte Linux-Provisioner
 braucht eine eigene Geräteidentität und Sandbox-Provisionierungsfreigabe;
 die Main-Aktivierung ersetzt dies nicht und ist keine OCI-Abnahme.
 Vor `sandboxes disable` müssen alle Allocations bestätigt archiviert und gelöscht
-sein. Änderungen dieser Konfigurationsdatei ebenfalls erst nach diesem Drain und
-anschließendem erneuten Aktivieren durchführen. Keine fremden Runs dafür stoppen.
+sein. Änderungen dieser Konfigurationsdatei ebenfalls erst nach diesem Drain durchführen.
+Bei bereits aktiviertem Profil die Main Node anschließend unter dem Deployment-Lock
+kontrolliert neu starten und ihre Bereitschaft prüfen: `sandboxes enable` bleibt
+in diesem Fall idempotent und lädt die Profildatei nicht neu. Keine fremden Runs
+dafür stoppen.
 
 Den Provisioner auf dem Linux-Dockerhost aus dem geprüften Serverartefakt mit
 eigenem privaten Verzeichnis und neuen Gerätekeys installieren. Die oben
@@ -1106,6 +1109,11 @@ Verzeichnisebenen werden unterstützt; Hardlinks bleiben gesperrt, damit keine
 privaten Runtime-Dateien über Aliasnamen ins Archiv gelangen. Bei überschrittenen
 Grenzen oder unbestätigten Teilen bleibt die Allocation erhalten. Diese inert
 lesbaren Setup-Archive sind kein wiederaufnehmbarer Threadcheckpoint.
+
+Thread-Archive speichern vollständige Git-Bundles in bestätigten Teilen von
+höchstens 8 MiB mit einem gehashten Index (insgesamt höchstens 8 GiB). Alte
+einteilige Archive bleiben lesbar. Die Sandbox benötigt für v4 eine geprüfte
+Codex-Version ab 0.166.0; Image- oder Toolwechsel erhalten eine neue Profilrevision.
 
 ### Versionierte Factory-HTTP-API (P58a)
 

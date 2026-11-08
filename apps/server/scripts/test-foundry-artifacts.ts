@@ -69,6 +69,7 @@ const socket = NodePath.join(root, ".s.PGSQL.5432");
 const directory = NodePath.join(root, "artifacts");
 let child: NodeChildProcess.ChildProcess | undefined;
 let failWrites = false;
+let corruptReads = false;
 async function start() {
   const server = NodeChildProcess.spawn(
     NodePath.join(bin!, "postgres"),
@@ -122,6 +123,14 @@ const faultStorage = Layer.effect(
     const original = yield* Files.ArtifactFiles;
     return Files.ArtifactFiles.of({
       ...original,
+      read: Effect.fn("ArtifactsFixture.read")((id, offset, length, published) =>
+        original.read(id, offset, length, published).pipe(
+          Effect.map((bytes) => {
+            if (corruptReads && bytes.length) bytes[0] = bytes[0]! ^ 1;
+            return bytes;
+          }),
+        ),
+      ),
       write: Effect.fn("ArtifactsFixture.write")((id, offset, bytes) =>
         failWrites
           ? Effect.fail(new FoundryArtifactError({ code: "capacity" }))
@@ -183,13 +192,23 @@ try {
     "artifact_migrator",
   );
   const bound = await query("SELECT * FROM foundry_instance.operator_binding");
-  await query("DROP TABLE foundry_instance.artifact_uploads", "artifact_migrator");
+  for (const table of [
+    "provider_connections",
+    "sandbox_allocations",
+    "sandbox_profiles",
+    "machine_credentials",
+    "archive_artifacts",
+    "archive_events",
+    "archive_threads",
+    "artifact_uploads",
+  ])
+    await query(`DROP TABLE foundry_instance.${table}`, "artifact_migrator");
   await query("UPDATE foundry_instance.schema_version SET version=5", "artifact_migrator");
   await Promise.all([run(migrate), run(migrate)]);
   NodeAssert.deepEqual(await query("SELECT * FROM foundry_instance.operator_binding"), bound);
   NodeAssert.equal(
     (await query("SELECT version FROM foundry_instance.schema_version"))[0]?.version,
-    6,
+    9,
   );
   const bytes = Buffer.alloc(FOUNDRY_ARTIFACT_CHUNK_BYTES + 17, 42);
   const input = {
@@ -276,6 +295,24 @@ try {
   const published = await call((s) => s.publish(principal, reference));
   NodeAssert.deepEqual(await call((s) => s.publish(principal, reference)), published);
   NodeAssert.deepEqual(await call((s) => s.metadata(principal, reference)), published);
+  const verified = await call((s) => s.readVerified!(principal, reference));
+  NodeAssert.deepEqual(verified.manifest, published);
+  NodeAssert.equal(digest(verified.bytes), input.sha256);
+  corruptReads = true;
+  await failure(
+    call((s) => s.readVerified!(principal, reference)),
+    "changed",
+  );
+  corruptReads = false;
+  await failure(
+    call((s) =>
+      s.readVerified!(
+        { ...principal, deviceEnvironmentId: EnvironmentId.make("foreign-worker") },
+        reference,
+      ),
+    ),
+    "forbidden",
+  );
   NodeAssert.equal((await call((s) => s.list(principal, {}))).items.length, 1);
   const read = await call((s) => s.read(principal, { reference, offset: 0 }));
   NodeAssert.equal(read.sha256, digest(first));
@@ -411,6 +448,18 @@ try {
     (await call((s) => s.read(principal, { reference: empty.reference, offset: 0 }))).data,
     "",
   );
+  const originalBlob = await NodeFSP.readFile(
+    NodePath.join(directory, "blobs", reference.artifactId),
+  );
+  await NodeFSP.writeFile(
+    NodePath.join(directory, "blobs", reference.artifactId),
+    Buffer.alloc(originalBlob.length),
+  );
+  await failure(
+    call((s) => s.readVerified!(principal, reference)),
+    "changed",
+  );
+  await NodeFSP.writeFile(NodePath.join(directory, "blobs", reference.artifactId), originalBlob);
   await stop();
   await start();
   NodeAssert.deepEqual(await call((s) => s.publish(principal, reference)), published);
@@ -709,7 +758,7 @@ try {
         for (const [body, headers, status] of [
           ["<html>Access</html>", {}, 400],
           ["{}", { "content-type": "text/html" }, 400],
-          ["x".repeat(FOUNDRY_ARTIFACT_CHUNK_BYTES * 2 + 1), {}, 507],
+          ["x".repeat(1024 * 1024 + 1), {}, 507],
         ] as const)
           NodeAssert.equal((await send(body, headers, false, true)).status, status);
         NodeAssert.equal(

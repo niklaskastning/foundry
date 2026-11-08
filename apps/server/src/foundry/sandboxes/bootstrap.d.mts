@@ -46,7 +46,7 @@ export declare function restoreDeadline(
 ): number;
 
 export declare function writeResumeChunk(
-  input: { offset: number; base64: string; receipt?: unknown },
+  input: { offset: number; base64: string; receipt?: unknown; indexBase64?: string },
   directory?: string,
 ): Promise<{ offset: number }>;
 

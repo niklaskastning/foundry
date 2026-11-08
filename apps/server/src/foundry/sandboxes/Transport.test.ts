@@ -5,6 +5,10 @@ import { verifySandboxRequest } from "./Proof.ts";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Queue from "effect/Queue";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import { HttpClient, HttpClientResponse, FetchHttpClient } from "effect/http";
@@ -176,4 +180,88 @@ it.live.each([undefined, "http://127.0.0.1:43123", "http://[::1]:43123"])(
         }
       }
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
+it.effect(
+  "bounds archive confirmation independently from ordinary calls and allows lease renewal while waiting",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const key = generateDeviceKey();
+      const allocationId = "33333333-3333-4333-8333-333333333333";
+      yield* fs.writeFileString(`${dir}/key`, JSON.stringify(key));
+      yield* fs.writeFileString(
+        `${dir}/device`,
+        JSON.stringify({
+          deviceId: "11111111-1111-4111-8111-111111111111",
+          instanceId: "22222222-2222-4222-8222-222222222222",
+          environmentId: "sandbox-test",
+          generation: 1,
+          revoked: false,
+          publicKey: key.publicKey,
+        }),
+      );
+      const started = yield* Queue.unbounded<string>();
+      const release = yield* Deferred.make<void>();
+      let releasable = true;
+      let stallClaims = false;
+      const http = HttpClient.make((request) =>
+        Effect.gen(function* () {
+          const envelope =
+            request.body._tag === "Uint8Array"
+              ? decodeEnvelope(new TextDecoder().decode(request.body.body))
+              : assert.fail("Expected body");
+          if (envelope.request.op === "setupArchive") {
+            yield* Queue.offer(started, "archive");
+            if (releasable) yield* Deferred.await(release);
+            else return yield* Effect.never;
+          } else if (stallClaims) {
+            yield* Queue.offer(started, "claim");
+            return yield* Effect.never;
+          }
+          return HttpClientResponse.fromWeb(request, new Response("null"));
+        }),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* Transport.Transport;
+        const archive = {
+          op: "setupArchive" as const,
+          leaseId: allocationId,
+          allocationId,
+          generation: 1,
+          archive: { kind: "empty" as const, allocationId, fence: 1 },
+        };
+        const claim = { op: "claim" as const, leaseId: allocationId };
+        const first = yield* Effect.forkScoped(service.send(archive).pipe(Effect.result));
+        yield* Queue.take(started);
+        yield* TestClock.adjust("21 seconds");
+        assert.isUndefined(first.pollUnsafe());
+        assert.isNull(yield* service.send(claim));
+        yield* Deferred.succeed(release, undefined);
+        assert.equal((yield* Fiber.join(first))._tag, "Success");
+        stallClaims = true;
+        const ordinary = yield* Effect.forkScoped(service.send(claim).pipe(Effect.result));
+        yield* Queue.take(started);
+        yield* TestClock.adjust("21 seconds");
+        assert.equal((yield* Fiber.join(ordinary))._tag, "Failure");
+        releasable = false;
+        const bounded = yield* Effect.forkScoped(service.send(archive).pipe(Effect.result));
+        yield* Queue.take(started);
+        yield* TestClock.adjust("121 seconds");
+        assert.equal((yield* Fiber.join(bounded))._tag, "Failure");
+      }).pipe(
+        Effect.provide(
+          Transport.layer({
+            origin: "https://example.test",
+            registrationFile: `${dir}/device`,
+            keyFile: `${dir}/key`,
+            maxCpuMillis: 1000,
+            maxMemoryMiB: 1024,
+            maxPids: 128,
+          }),
+        ),
+        Effect.provideService(HttpClient.HttpClient, http),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

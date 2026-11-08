@@ -171,6 +171,74 @@ it("resumes chunk transfer after a lost receipt without overwriting different by
   expect(await NodeFSP.readFile(`${directory}/resume.bundle`, "utf8")).toBe("first-last");
 });
 
+it("assembles a multipart resume beyond the artifact limit while rejecting changed indexes and oversized writes", async () => {
+  const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "foundry-large-resume-"));
+  await using _cleanup = {
+    [Symbol.asyncDispose]: () => NodeFSP.rm(directory, { recursive: true, force: true }),
+  };
+  const prefixBytes = 50 * 1024 * 1024 + 1;
+  const reference = { instanceId: "instance", owner: { environmentId: "old", threadId: "thread" } };
+  const index = {
+    format: "foundry-git-bundle-1",
+    sizeBytes: prefixBytes + 4,
+    sha256: "a".repeat(64),
+    parts: Array.from({ length: 7 }, (_, part) => ({
+      reference: { ...reference, artifactId: `part-${part}` },
+      name: `part-${part}`,
+      mimeType: "application/octet-stream",
+      sizeBytes: part === 6 ? prefixBytes + 4 - 6 * 8 * 1024 * 1024 : 8 * 1024 * 1024,
+      sha256: "b".repeat(64),
+    })),
+  };
+  const encoded = Buffer.from(JSON.stringify(index));
+  const receipt = {
+    digest: "pinned",
+    manifest: {
+      bundle: {
+        reference: { ...reference, artifactId: "index" },
+        mimeType: "application/vnd.foundry.git-bundle-index+json",
+        sizeBytes: encoded.length,
+        sha256: NodeCrypto.createHash("sha256").update(encoded).digest("hex"),
+      },
+    },
+  };
+  await writeResumeChunk(
+    { offset: 0, base64: "", receipt, indexBase64: encoded.toString("base64") },
+    directory,
+  );
+  const file = await NodeFSP.open(`${directory}/resume.bundle`, "r+");
+  try {
+    await file.truncate(prefixBytes);
+  } finally {
+    await file.close();
+  }
+  expect(
+    await writeResumeChunk(
+      { offset: prefixBytes, base64: Buffer.from("tail").toString("base64") },
+      directory,
+    ),
+  ).toEqual({ offset: prefixBytes + 4 });
+  await expect(
+    writeResumeChunk(
+      { offset: prefixBytes + 4, base64: Buffer.from("x").toString("base64") },
+      directory,
+    ),
+  ).rejects.toThrow("invalid_chunk");
+  await expect(
+    writeResumeChunk(
+      {
+        offset: 0,
+        base64: "",
+        receipt,
+        indexBase64: Buffer.from(JSON.stringify({ ...index, sha256: "c".repeat(64) })).toString(
+          "base64",
+        ),
+      },
+      directory,
+    ),
+  ).rejects.toThrow("bundle_index_mismatch");
+});
+
 it.each([false, true])(
   "restores before setup and preserves archived edits, dependencies and skills across restart (initial directory: %s)",
   async (initialDirectory) => {
@@ -208,6 +276,25 @@ it.each([false, true])(
     const bundlePath = NodePath.join(workspace, "source.bundle");
     await git("git", ["-C", source, "bundle", "create", bundlePath, "--all"]);
     const bundle = await NodeFSP.readFile(bundlePath);
+    const part = {
+      reference: {
+        instanceId: "instance",
+        artifactId: "part",
+        owner: { environmentId: "old", threadId: "thread" },
+      },
+      name: "bundle-part",
+      mimeType: "application/octet-stream",
+      sizeBytes: bundle.length,
+      sha256: NodeCrypto.createHash("sha256").update(bundle).digest("hex"),
+    };
+    const encodedIndex = Buffer.from(
+      JSON.stringify({
+        format: "foundry-git-bundle-1",
+        sizeBytes: bundle.length,
+        sha256: part.sha256,
+        parts: [part],
+      }),
+    );
     const receipt = {
       digest: "source-receipt",
       manifest: {
@@ -215,17 +302,28 @@ it.each([false, true])(
         headCommit: head,
         checkpointCommit: head,
         checkpointTree: "d".repeat(40),
-        bundle: {
-          sizeBytes: bundle.length,
-          sha256: NodeCrypto.createHash("sha256").update(bundle).digest("hex"),
-        },
+        bundle: initialDirectory
+          ? {
+              ...part,
+              reference: { ...part.reference, artifactId: "index" },
+              mimeType: "application/vnd.foundry.git-bundle-index+json",
+              sizeBytes: encodedIndex.length,
+              sha256: NodeCrypto.createHash("sha256").update(encodedIndex).digest("hex"),
+            }
+          : part,
       },
     };
     await writeResumeChunk(
-      { offset: 0, base64: bundle.toString("base64"), receipt },
+      {
+        offset: 0,
+        base64: bundle.toString("base64"),
+        receipt,
+        ...(initialDirectory ? { indexBase64: encodedIndex.toString("base64") } : {}),
+      },
       paths.private,
     );
     const restore = async (argv: string[]) => {
+      expect(argv.includes("--bundle-index")).toBe(initialDirectory);
       const cwd = argv[argv.indexOf("--cwd") + 1]!;
       await git("git", ["clone", "--quiet", NodePath.join(paths.private, "resume.bundle"), cwd]);
       return "";

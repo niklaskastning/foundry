@@ -85,7 +85,7 @@ jobs:
           GHCR_USER: ${{ github.actor }}
           REVISION: ${{ github.sha }}
         run: |
-          docker build -f deploy/fork/sandbox/Dockerfile --build-arg FOUNDRY_BASE_IMAGE="$FOUNDRY_BASE_IMAGE" --build-arg CODEX_VERSION=0.156.1 -t "ghcr.io/niklaskastning/foundry-sandbox:$REVISION" .
+          docker build -f deploy/fork/sandbox/Dockerfile --build-arg FOUNDRY_BASE_IMAGE="$FOUNDRY_BASE_IMAGE" --build-arg CODEX_VERSION=0.166.0 -t "ghcr.io/niklaskastning/foundry-sandbox:$REVISION" .
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
           docker push "ghcr.io/niklaskastning/foundry-sandbox:$REVISION"
           digest=$(docker image inspect "ghcr.io/niklaskastning/foundry-sandbox:$REVISION" --format '{{index .RepoDigests 0}}')

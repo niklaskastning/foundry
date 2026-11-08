@@ -235,7 +235,13 @@ const make = Effect.gen(function* () {
     const allocations = yield* sql<Row>`SELECT allocation FROM foundry_instance.sandbox_allocations
       WHERE instance_id=${instanceId} AND operator_id=${operatorId} ORDER BY (allocation->>'createdAt')::bigint DESC LIMIT 128`;
     return {
-      profiles: profiles.map((row) => summarizeProfile(row.profile)),
+      profiles: profiles.map(({ profile }) => ({
+        ...summarizeProfile(profile),
+        enabled:
+          profile.enabled &&
+          policy.allowedImages.includes(profile.image) &&
+          policy.allowedRepositories.includes(profile.checkout.repository),
+      })),
       allocations: allocations.map((row) => summarizeAllocation(row.allocation)),
     };
   }, Effect.mapError(failure));

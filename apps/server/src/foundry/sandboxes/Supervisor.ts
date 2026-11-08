@@ -1,4 +1,5 @@
 import {
+  FOUNDRY_SANDBOX_BUNDLE_MIME_TYPE,
   FoundrySandboxSetupLocalIndex,
   FoundrySandboxSetupIndex,
   FOUNDRY_SETUP_PART_BYTES,
@@ -19,6 +20,8 @@ import {
   FoundrySandboxError,
   ThreadId,
 } from "@t3tools/contracts";
+import { stableStringify } from "@t3tools/shared/relaySigning";
+import { decodeSandboxBundleIndex } from "../SandboxBundle.ts";
 import { publishArtifact, artifactSha256 } from "@t3tools/shared/foundryArtifacts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -115,21 +118,80 @@ const make = Effect.gen(function* () {
     allocation: FoundrySandboxAllocationSummary,
   ) {
     if (!allocation.request.resumeAllocationId) return;
-    let offset = 0;
-    while (true) {
-      const value = yield* send({ op: "resumeChunk", ...base(allocation), offset }).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(ResumeChunk)),
-      );
+    const first = yield* send({ op: "resumeChunk", ...base(allocation), offset: 0 }).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(ResumeChunk)),
+    );
+    const receipt = first.receipt;
+    const changed = () => new FoundryArtifactError({ code: "changed" });
+    const read = Effect.fn("SandboxSupervisor.readResumeArtifact")(function* (
+      manifest: FoundryArtifactManifest,
+      part: number | undefined,
+    ) {
+      let offset = 0;
+      const chunks: Uint8Array[] = [];
+      while (true) {
+        const value =
+          part === undefined && offset === 0
+            ? first
+            : yield* send({
+                op: "resumeChunk",
+                ...base(allocation),
+                offset,
+                ...(part === undefined ? {} : { part }),
+              }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(ResumeChunk)));
+        const chunk = value.chunk;
+        const bytes = yield* Effect.fromResult(Base64.decode(chunk.data));
+        if (
+          stableStringify(value.receipt) !== stableStringify(receipt) ||
+          chunk.offset !== offset ||
+          chunk.total !== manifest.sizeBytes ||
+          chunk.fileSha256 !== manifest.sha256 ||
+          artifactSha256(bytes) !== chunk.sha256 ||
+          offset + bytes.byteLength > manifest.sizeBytes ||
+          (bytes.byteLength === 0 && offset !== manifest.sizeBytes)
+        )
+          return yield* changed();
+        chunks.push(bytes);
+        offset += bytes.byteLength;
+        if (offset === manifest.sizeBytes) break;
+      }
+      const bytes = new Uint8Array(offset);
+      let position = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, position);
+        position += chunk.length;
+      }
+      if (artifactSha256(bytes) !== manifest.sha256) return yield* changed();
+      return bytes;
+    });
+    if (receipt.manifest.bundle.mimeType === FOUNDRY_SANDBOX_BUNDLE_MIME_TYPE) {
+      if (receipt.manifest.bundle.sizeBytes > 1024 * 1024) return yield* changed();
+      const encoded = yield* read(receipt.manifest.bundle, undefined);
+      const index = yield* decodeSandboxBundleIndex(receipt.manifest.bundle, encoded);
       yield* exec(allocation, "resume-chunk", {
-        offset,
-        base64: value.chunk.data,
-        ...(offset === 0 ? { receipt: value.receipt } : {}),
+        offset: 0,
+        base64: "",
+        receipt,
+        indexBase64: Base64.encode(encoded),
       });
-      const bytes = yield* Effect.fromResult(Base64.decode(value.chunk.data));
-      offset += bytes.byteLength;
-      if (offset === value.receipt.manifest.bundle.sizeBytes) break;
-      if (bytes.byteLength === 0 || offset > value.receipt.manifest.bundle.sizeBytes)
-        return yield* new FoundrySandboxError({ code: "conflict" });
+      let offset = 0;
+      for (let part = 0; part < index.parts.length; part++) {
+        const bytes = yield* read(index.parts[part]!, part);
+        for (let local = 0; local < bytes.byteLength; local += 256 * 1024) {
+          const chunk = bytes.subarray(local, local + 256 * 1024);
+          yield* exec(allocation, "resume-chunk", { offset, base64: Base64.encode(chunk) });
+          offset += chunk.byteLength;
+        }
+      }
+      if (offset !== index.sizeBytes) return yield* changed();
+    } else {
+      const bytes = yield* read(receipt.manifest.bundle, undefined);
+      for (let offset = 0; offset < bytes.byteLength; offset += 256 * 1024)
+        yield* exec(allocation, "resume-chunk", {
+          offset,
+          base64: Base64.encode(bytes.subarray(offset, offset + 256 * 1024)),
+          ...(offset === 0 ? { receipt } : {}),
+        });
     }
     yield* exec(allocation, "resume");
   });
@@ -506,7 +568,9 @@ const make = Effect.gen(function* () {
                     ? "provisioning"
                     : isSandboxError(error) && error.code === "credentials_required"
                       ? "credentials"
-                      : "unavailable";
+                      : isSandboxError(error) && error.code === "capabilities_required"
+                        ? "tools"
+                        : "unavailable";
               return step(allocation, "failed", failure).pipe(Effect.ignore);
             }),
           ),

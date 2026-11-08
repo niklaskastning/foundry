@@ -1,6 +1,7 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import {
+  ThreadId,
   EnvironmentId,
   FoundryDeviceId,
   FoundryInstanceId,
@@ -24,6 +25,9 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Transport from "./Transport.ts";
 import * as Oci from "./OciSupervisor.ts";
 
+const decodeResumeWrite = Schema.decodeEffect(
+  Schema.fromJsonString(Schema.Struct({ base64: Schema.String })),
+);
 const decodeSetupRead = Schema.decodeEffect(
   Schema.fromJsonString(Schema.Struct({ part: Schema.optionalKey(Schema.Int) })),
 );
@@ -78,6 +82,7 @@ it.effect("fences lost setup leases and preserves work when archive fails", () =
     let stopped = false;
     let removed = false;
     let completeSetup = false;
+    let approvalError = new FoundrySandboxError({ code: "credentials_required" });
     const oci = Oci.OciSupervisor.of({
       ensure: () => Effect.die("unexpected provision"),
       inspect: () => Effect.succeed(null),
@@ -141,7 +146,7 @@ it.effect("fences lost setup leases and preserves work when archive fails", () =
                 return allocation.profile;
               })
             : request.op === "approve"
-              ? Effect.fail(new FoundrySandboxError({ code: "credentials_required" }))
+              ? Effect.fail(approvalError)
               : request.op === "setupReport"
                 ? Effect.succeed(null)
                 : Queue.offer(events, request).pipe(Effect.as(null)),
@@ -182,6 +187,16 @@ it.effect("fences lost setup leases and preserves work when archive fails", () =
       if (credentials.op === "transition") {
         assert.equal(credentials.state, "failed");
         assert.equal(credentials.failure, "credentials");
+      }
+      assert.isFalse(removed);
+      approvalError = new FoundrySandboxError({ code: "capabilities_required" });
+      allocation = { ...allocation, generation: 4, state: "setup" };
+      yield* TestClock.adjust("2 seconds");
+      const capabilities = yield* Queue.take(events);
+      assert.equal(capabilities.op, "transition");
+      if (capabilities.op === "transition") {
+        assert.equal(capabilities.state, "failed");
+        assert.equal(capabilities.failure, "tools");
       }
       assert.isFalse(removed);
     }).pipe(
@@ -348,4 +363,176 @@ it.effect(
         Effect.provideService(Oci.OciSupervisor, oci),
       );
     }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "restores pinned multipart and raw bundles and rejects a changed receipt or corrupted part",
+  () =>
+    Effect.forEach(["multipart", "raw", "receipt", "corrupt"] as const, (mode) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let allocation = fixtureAllocation();
+          allocation = {
+            ...allocation,
+            request: {
+              ...allocation.request,
+              resumeAllocationId: "33333333-3333-4333-8333-333333333333",
+            },
+          };
+          const events = yield* Queue.unbounded<FoundrySandboxMachineOperation>();
+          const chunks: Uint8Array[] = [];
+          const parts: number[] = [];
+          let resumed = false;
+          const bytes = [new TextEncoder().encode("first"), new TextEncoder().encode("-last")];
+          const full = new TextEncoder().encode("first-last");
+          const owner = {
+            environmentId: EnvironmentId.make("source"),
+            threadId: ThreadId.make("source-thread"),
+          };
+          const manifest = (
+            data: Uint8Array,
+            index: number,
+            mimeType = "application/octet-stream",
+          ): FoundryArtifactManifest => ({
+            reference: {
+              instanceId: FoundryInstanceId.make("44444444-4444-4444-8444-444444444444"),
+              owner,
+              artifactId: FoundryArtifactId.make(
+                `55555555-5555-4555-8555-${String(index).padStart(12, "0")}`,
+              ),
+            },
+            name: `bundle-${index}`,
+            mimeType,
+            sizeBytes: data.length,
+            sha256: artifactSha256(data),
+          });
+          const index = new TextEncoder().encode(
+            JSON.stringify({
+              format: "foundry-git-bundle-1",
+              sizeBytes: full.length,
+              sha256: artifactSha256(full),
+              parts: bytes.map((data, part) => manifest(data, part)),
+            }),
+          );
+          const root =
+            mode === "raw"
+              ? manifest(full, 9)
+              : manifest(index, 9, "application/vnd.foundry.git-bundle-index+json");
+          const receipt = {
+            digest: "e".repeat(64),
+            manifest: {
+              allocationId: allocation.request.resumeAllocationId!,
+              fence: 1,
+              owner,
+              relativeWorkspacePath: "repo",
+              finalCursor: 1,
+              finalSourceSequence: 1,
+              headCommit: "b".repeat(40),
+              checkpointCommit: "c".repeat(40),
+              checkpointTree: "d".repeat(40),
+              bundle: root,
+            },
+          };
+          const oci = Oci.OciSupervisor.of({
+            ensure: () => Effect.die("unexpected provision"),
+            inspect: () => Effect.succeed(null),
+            stop: () => Effect.die("unexpected stop"),
+            remove: () => Effect.die("unexpected remove"),
+            finalize: () => Effect.die("unexpected finalizer"),
+            exec: (_, input) =>
+              Effect.gen(function* () {
+                const command = input.argv.at(-1);
+                if (command === "resume-chunk") {
+                  const inputChunk = yield* decodeResumeWrite(input.stdin!).pipe(Effect.orDie);
+                  chunks.push(
+                    yield* Effect.fromResult(Base64.decode(inputChunk.base64)).pipe(Effect.orDie),
+                  );
+                } else if (command === "resume") resumed = true;
+                else if (command === "setup")
+                  return yield* new Oci.OciError({ operation: "exec", reason: "command" });
+                return {
+                  stdout: command === "logs" ? '{"log":""}' : "null",
+                  stderr: "",
+                  exitCode: 0,
+                };
+              }),
+          });
+          const transport = Transport.Transport.of({
+            origin: "https://example.test",
+            device: {
+              deviceId: FoundryDeviceId.make("66666666-6666-4666-8666-666666666666"),
+              instanceId: root.reference.instanceId,
+              environmentId: EnvironmentId.make("provisioner"),
+              publicKey: "fixture",
+              generation: 1,
+              revoked: false,
+            },
+            artifactSend: () => Effect.die("unexpected artifact upload"),
+            send: (request) => {
+              if (request.op === "claim")
+                return Effect.succeed([
+                  {
+                    ...allocation,
+                    profile: {
+                      ...allocation.profile,
+                      setupStepCount: allocation.profile.setup.length,
+                    },
+                  },
+                ]);
+              if (request.op === "setupProfile") return Effect.succeed(allocation.profile);
+              if (request.op === "resumeChunk") {
+                if (request.part !== undefined) parts.push(request.part);
+                const expected =
+                  request.part === undefined
+                    ? mode === "raw"
+                      ? full
+                      : index
+                    : bytes[request.part]!;
+                const actual =
+                  mode === "corrupt" && request.part === 0
+                    ? new TextEncoder().encode("other")
+                    : expected;
+                return Effect.succeed({
+                  receipt:
+                    mode === "receipt" && request.part !== undefined
+                      ? { ...receipt, digest: "f".repeat(64) }
+                      : receipt,
+                  chunk: {
+                    offset: request.offset,
+                    total: expected.length,
+                    fileSha256: artifactSha256(expected),
+                    sha256: artifactSha256(actual),
+                    data: Base64.encode(actual),
+                  },
+                });
+              }
+              if (request.op === "setupReport") return Effect.succeed(null);
+              if (request.op === "transition") allocation = { ...allocation, state: request.state };
+              return Queue.offer(events, request).pipe(Effect.as(null));
+            },
+          });
+          yield* Effect.gen(function* () {
+            const service = yield* Supervisor.Supervisor;
+            yield* Effect.forkScoped(service.run);
+            const event = yield* Queue.take(events);
+            assert.equal(event.op, "transition");
+            if (event.op === "transition") assert.equal(event.state, "failed");
+            const valid = mode === "raw" || mode === "multipart";
+            assert.equal(resumed, valid);
+            if (valid)
+              assert.equal(
+                new TextDecoder().decode(
+                  Uint8Array.from(chunks.flatMap((chunk) => Array.from(chunk))),
+                ),
+                "first-last",
+              );
+            assert.deepEqual(parts, mode === "raw" ? [] : valid ? [0, 1] : [0]);
+          }).pipe(
+            Effect.provide(Supervisor.layer.pipe(Layer.provide(NodeCrypto.layer))),
+            Effect.provideService(Transport.Transport, transport),
+            Effect.provideService(Oci.OciSupervisor, oci),
+          );
+        }),
+      ),
+    ).pipe(Effect.asVoid),
 );

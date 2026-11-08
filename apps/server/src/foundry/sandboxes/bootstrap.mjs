@@ -494,11 +494,72 @@ const supervise = async (initial, maximum) => {
   await update();
 };
 
+const BUNDLE_INDEX_MIME = "application/vnd.foundry.git-bundle-index+json";
+const BUNDLE_MAX_BYTES = 8 * 1024 * 1024 * 1024;
+const BUNDLE_INDEX_MAX_BYTES = 1024 * 1024;
+const decodeBundleIndex = (manifest, bytes) => {
+  if (
+    manifest?.mimeType !== BUNDLE_INDEX_MIME ||
+    !manifest.reference?.instanceId ||
+    !manifest.reference?.owner?.environmentId ||
+    !manifest.reference?.owner?.threadId ||
+    bytes.length > BUNDLE_INDEX_MAX_BYTES ||
+    bytes.length !== manifest.sizeBytes ||
+    NodeCrypto.createHash("sha256").update(bytes).digest("hex") !== manifest.sha256
+  )
+    throw new Error("bundle_index_mismatch");
+  const index = JSON.parse(bytes.toString("utf8"));
+  if (
+    index.format !== "foundry-git-bundle-1" ||
+    !Number.isSafeInteger(index.sizeBytes) ||
+    index.sizeBytes < 1 ||
+    index.sizeBytes > BUNDLE_MAX_BYTES ||
+    typeof index.sha256 !== "string" ||
+    !/^[a-f0-9]{64}$/.test(index.sha256) ||
+    !Array.isArray(index.parts) ||
+    index.parts.length < 1 ||
+    index.parts.length > 1024
+  )
+    throw new Error("bundle_index_mismatch");
+  const ids = new Set();
+  let size = 0;
+  for (const part of index.parts) {
+    if (
+      !Number.isSafeInteger(part.sizeBytes) ||
+      part.sizeBytes < 1 ||
+      part.sizeBytes > 8 * 1024 * 1024 ||
+      typeof part.sha256 !== "string" ||
+      !/^[a-f0-9]{64}$/.test(part.sha256) ||
+      !part.reference?.artifactId ||
+      ids.has(part.reference.artifactId) ||
+      part.reference.instanceId !== manifest.reference?.instanceId ||
+      part.reference.owner?.environmentId !== manifest.reference?.owner?.environmentId ||
+      part.reference.owner?.threadId !== manifest.reference?.owner?.threadId
+    )
+      throw new Error("bundle_index_mismatch");
+    ids.add(part.reference.artifactId);
+    size += part.sizeBytes;
+  }
+  if (size !== index.sizeBytes) throw new Error("bundle_index_mismatch");
+  return index;
+};
+const readBundleIndex = async (file, manifest) => {
+  const handle = await NodeFSP.open(file, NodeFS.constants.O_RDONLY | NodeFS.constants.O_NOFOLLOW);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > BUNDLE_INDEX_MAX_BYTES)
+      throw new Error("bundle_index_mismatch");
+    const bytes = await handle.readFile();
+    return { bytes, index: decodeBundleIndex(manifest, bytes) };
+  } finally {
+    await handle.close();
+  }
+};
 export const writeResumeChunk = async (input, directory = PRIVATE) => {
   if (
     !Number.isSafeInteger(input.offset) ||
     input.offset < 0 ||
-    input.offset > 50 * 1024 * 1024 ||
+    input.offset > BUNDLE_MAX_BYTES ||
     typeof input.base64 !== "string" ||
     input.base64.length > 350000
   )
@@ -507,7 +568,7 @@ export const writeResumeChunk = async (input, directory = PRIVATE) => {
   if (
     bytes.toString("base64") !== input.base64 ||
     bytes.length > 256 * 1024 ||
-    input.offset + bytes.length > 50 * 1024 * 1024
+    input.offset + bytes.length > BUNDLE_MAX_BYTES
   )
     throw new Error("invalid_chunk");
   const receiptPath = `${directory}/resume-receipt.json`;
@@ -519,13 +580,44 @@ export const writeResumeChunk = async (input, directory = PRIVATE) => {
     } else await writeJson(receiptPath, input.receipt);
   }
   if (!(await exists(receiptPath))) throw new Error("receipt_required");
+  const receipt = await readJson(receiptPath);
+  const indexPath = `${directory}/resume-index.json`;
+  if (input.indexBase64 !== undefined) {
+    if (
+      input.offset !== 0 ||
+      typeof input.indexBase64 !== "string" ||
+      input.indexBase64.length > 4 * Math.ceil(BUNDLE_INDEX_MAX_BYTES / 3)
+    )
+      throw new Error("bundle_index_mismatch");
+    const encoded = Buffer.from(input.indexBase64, "base64");
+    if (encoded.toString("base64") !== input.indexBase64) throw new Error("bundle_index_mismatch");
+    decodeBundleIndex(receipt.manifest?.bundle, encoded);
+    if (await exists(indexPath)) {
+      if (!(await readBundleIndex(indexPath, receipt.manifest.bundle)).bytes.equals(encoded))
+        throw new Error("resume_drift");
+    } else await NodeFSP.writeFile(indexPath, encoded, { mode: 0o600, flag: "wx" });
+  }
+  const limit =
+    receipt.manifest?.bundle?.mimeType === BUNDLE_INDEX_MIME
+      ? (await readBundleIndex(indexPath, receipt.manifest.bundle)).index.sizeBytes
+      : 50 * 1024 * 1024;
+  if (input.offset + bytes.length > limit) throw new Error("invalid_chunk");
   const file = `${directory}/resume.bundle`;
   if (!(await exists(file))) await NodeFSP.writeFile(file, "", { mode: 0o600, flag: "wx" });
   const stat = await NodeFSP.lstat(file);
-  if (!stat.isFile() || stat.nlink !== 1 || input.offset > stat.size)
+  if (!stat.isFile() || stat.nlink !== 1 || stat.size > limit || input.offset > stat.size)
     throw new Error("invalid_offset");
   const handle = await NodeFSP.open(file, NodeFS.constants.O_RDWR | NodeFS.constants.O_NOFOLLOW);
   try {
+    const opened = await handle.stat();
+    if (
+      !opened.isFile() ||
+      opened.nlink !== 1 ||
+      opened.ino !== stat.ino ||
+      opened.dev !== stat.dev ||
+      opened.size !== stat.size
+    )
+      throw new Error("invalid_offset");
     if (input.offset < stat.size) {
       if (input.offset + bytes.length > stat.size) throw new Error("invalid_offset");
       const existing = Buffer.alloc(bytes.length);
@@ -559,13 +651,36 @@ export const resume = async (
     (await readJson(`${paths.private}/setup.json`)).state === "ready"
   )
     throw new Error("setup_before_resume");
-  const bundle = await NodeFSP.readFile(`${paths.private}/resume.bundle`);
-  if (
-    bundle.length > 50 * 1024 * 1024 ||
-    bundle.length !== receipt.manifest.bundle.sizeBytes ||
-    NodeCrypto.createHash("sha256").update(bundle).digest("hex") !== receipt.manifest.bundle.sha256
-  )
-    throw new Error("bundle_mismatch");
+  const multipart = receipt.manifest.bundle.mimeType === BUNDLE_INDEX_MIME;
+  const expected = multipart
+    ? (await readBundleIndex(`${paths.private}/resume-index.json`, receipt.manifest.bundle)).index
+    : receipt.manifest.bundle;
+  const handle = await NodeFSP.open(
+    `${paths.private}/resume.bundle`,
+    NodeFS.constants.O_RDONLY | NodeFS.constants.O_NOFOLLOW,
+  );
+  try {
+    const stat = await handle.stat();
+    if (
+      !stat.isFile() ||
+      stat.nlink !== 1 ||
+      stat.size !== expected.sizeBytes ||
+      stat.size > (multipart ? BUNDLE_MAX_BYTES : 50 * 1024 * 1024)
+    )
+      throw new Error("bundle_mismatch");
+    const hash = NodeCrypto.createHash("sha256");
+    for await (const bytes of handle.createReadStream({ autoClose: false })) hash.update(bytes);
+    const after = await handle.stat();
+    if (
+      after.size !== stat.size ||
+      after.mtimeMs !== stat.mtimeMs ||
+      after.ctimeMs !== stat.ctimeMs ||
+      hash.digest("hex") !== expected.sha256
+    )
+      throw new Error("bundle_mismatch");
+  } finally {
+    await handle.close();
+  }
   const stageFile = `${paths.private}/resume-stage.json`;
   const staging = `${paths.private}/resume-workspace`;
   const backup = `${paths.private}/initial-setup-repo`;
@@ -593,6 +708,7 @@ export const resume = async (
         `${paths.private}/resume-receipt.json`,
         "--bundle",
         `${paths.private}/resume.bundle`,
+        ...(multipart ? ["--bundle-index", `${paths.private}/resume-index.json`] : []),
         "--cwd",
         staging,
       ],

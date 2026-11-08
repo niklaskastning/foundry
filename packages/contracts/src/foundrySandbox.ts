@@ -132,6 +132,7 @@ export class FoundrySandboxError extends Schema.TaggedError<FoundrySandboxError>
       "unavailable",
       "archive_required",
       "credentials_required",
+      "capabilities_required",
     ]),
   },
 ) {
@@ -194,6 +195,9 @@ export const FoundrySandboxMachineOperation = Schema.Union([
     allocationId: FoundrySandboxId,
     generation: Positive,
     offset: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    part: Schema.optionalKey(
+      Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThan(1024)),
+    ),
   }),
   Schema.Struct({
     op: Schema.Literal("admitRuntime"),

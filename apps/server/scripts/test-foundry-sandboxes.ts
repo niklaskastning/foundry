@@ -96,22 +96,25 @@ const profile: FoundrySandboxProfile = {
   providerConnectionId: "fixture-codex",
   enabled: true,
 };
-const policy = Layer.succeed(Allocations.SandboxPolicy, {
+const sandboxPolicy = {
   supervisorDeviceId: FoundryDeviceId.make("6970d80d-d7d0-408f-a99d-2080362d6892"),
   maxAllocations: 2,
   maxCpuMillis: 2000,
   maxMemoryMiB: 1024,
   allowedImages: [profile.image],
   allowedRepositories: [profile.checkout.repository],
-});
-const runtime = Allocations.layer.pipe(
-  Layer.provide(InstancePostgres.layer),
-  Layer.provideMerge(db()),
-  Layer.provide(policy),
-  Layer.provide(environment),
-  Layer.provide(ServerConfig.layerTest(root, `${root}/home`)),
-  Layer.provide(NodeServices.layer),
-);
+};
+const policy = Layer.succeed(Allocations.SandboxPolicy, sandboxPolicy);
+const runtimeFor = (policyLayer: typeof policy) =>
+  Allocations.layer.pipe(
+    Layer.provide(InstancePostgres.layer),
+    Layer.provideMerge(db()),
+    Layer.provide(policyLayer),
+    Layer.provide(environment),
+    Layer.provide(ServerConfig.layerTest(root, `${root}/home`)),
+    Layer.provide(NodeServices.layer),
+  );
+const runtime = runtimeFor(policy);
 const run = <A, E>(
   effect: Effect.Effect<A, E, Allocations.Allocations | InstanceDatabase.InstanceDatabase>,
 ) => Effect.runPromise(effect.pipe(Effect.provide(runtime)));
@@ -293,6 +296,39 @@ try {
       return (yield* service.get(operatorId, allocation.allocationId)).allocation;
     }),
   );
+  for (const revoked of [{ allowedImages: [] }, { allowedRepositories: [] }]) {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* Allocations.Allocations;
+        const catalog = yield* service.list(operatorId);
+        NodeAssert.ok(catalog.profiles.every((entry) => !entry.enabled));
+        NodeAssert.deepEqual(
+          (yield* service.get(operatorId, first!.allocationId)).allocation,
+          first,
+        );
+        NodeAssert.equal(
+          catalog.allocations.find((entry) => entry.allocationId === first!.allocationId)!.profile
+            .enabled,
+          true,
+        );
+        NodeAssert.equal(
+          (yield* service
+            .request(operatorId, {
+              commandId: "revoked-resource",
+              profileId: profile.profileId,
+              revision: profile.revision,
+              owner: { kind: "interactive" },
+            })
+            .pipe(Effect.flip)).code,
+          "forbidden",
+        );
+      }).pipe(
+        Effect.provide(
+          runtimeFor(Layer.succeed(Allocations.SandboxPolicy, { ...sandboxPolicy, ...revoked })),
+        ),
+      ),
+    );
+  }
   await stop();
   await start();
   await run(

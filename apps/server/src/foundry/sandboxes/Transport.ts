@@ -129,7 +129,7 @@ const make = Effect.fn("SandboxTransport.make")(function* (configuration: Config
   if (access && access.origin !== configuration.origin)
     return yield* new FoundrySandboxError({ code: "forbidden" });
   const post = Effect.fn("SandboxTransport.post")(
-    function* (envelope: unknown) {
+    function* (envelope: unknown, _confirmation = false) {
       const call = yield* HttpClientRequest.post(
         `${configuration.connectOrigin ?? configuration.origin}/api/foundry/devices/channel`,
       ).pipe(
@@ -178,7 +178,8 @@ const make = Effect.fn("SandboxTransport.make")(function* (configuration: Config
       }
       return body;
     },
-    Effect.timeout("20 seconds"),
+    (effect, _envelope, confirmation) =>
+      effect.pipe(Effect.timeout(confirmation ? "120 seconds" : "20 seconds")),
     Effect.mapError((error) =>
       isError(error) ? error : new FoundrySandboxError({ code: "unavailable" }),
     ),
@@ -194,6 +195,7 @@ const make = Effect.fn("SandboxTransport.make")(function* (configuration: Config
         request,
         Redacted.value(key),
       ),
+      request.op === "archive" || request.op === "setupArchive",
     );
   });
   const artifactSend = Effect.fn("SandboxTransport.artifactSend")(
@@ -206,6 +208,7 @@ const make = Effect.fn("SandboxTransport.make")(function* (configuration: Config
           request,
           Redacted.value(key),
         ),
+        false,
       );
     },
     Effect.mapError(() => new FoundryArtifactError({ code: "unavailable" })),

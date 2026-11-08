@@ -1,5 +1,6 @@
 import * as WorkerTransport from "../../automation/WorkerTransport.ts";
 import {
+  FOUNDRY_SANDBOX_BUNDLE_MIME_TYPE,
   ThreadId,
   FoundrySandboxMachineRequest,
   FoundrySandboxError,
@@ -17,6 +18,9 @@ import * as DeviceGrants from "../DeviceGrants.ts";
 import * as InstanceDatabase from "../InstanceDatabase.ts";
 import * as ProviderConnections from "../ProviderConnections.ts";
 import * as SandboxArchive from "../SandboxArchive.ts";
+import { downloadArtifact } from "@t3tools/shared/foundryArtifacts";
+import { stableStringify } from "@t3tools/shared/relaySigning";
+import { decodeSandboxBundleIndex } from "../SandboxBundle.ts";
 import * as Artifacts from "../Artifacts.ts";
 import * as Allocations from "./Allocations.ts";
 import { verifySandboxRequest } from "./Proof.ts";
@@ -220,12 +224,28 @@ export const layer = Layer.effect(
                 : cleanup.threads[0]
               : undefined;
           if (!receipt) return yield* new FoundrySandboxError({ code: "archive_required" });
+          let reference = receipt.manifest.bundle.reference;
+          if (request.part !== undefined) {
+            if (
+              receipt.manifest.bundle.mimeType !== FOUNDRY_SANDBOX_BUNDLE_MIME_TYPE ||
+              receipt.manifest.bundle.sizeBytes > 1024 * 1024
+            )
+              return yield* new FoundrySandboxError({ code: "archive_required" });
+            const root = yield* downloadArtifact((operation) => {
+              if (operation.op === "metadata") return artifacts.metadata(owner, operation.input);
+              if (operation.op === "read") return artifacts.read(owner, operation.input);
+              return Effect.die("unexpected bundle index operation");
+            }, reference);
+            if (stableStringify(root.manifest) !== stableStringify(receipt.manifest.bundle))
+              return yield* new FoundrySandboxError({ code: "archive_required" });
+            const index = yield* decodeSandboxBundleIndex(receipt.manifest.bundle, root.bytes);
+            const part = index.parts[request.part];
+            if (!part) return yield* new FoundrySandboxError({ code: "invalid_request" });
+            reference = part.reference;
+          }
           return {
             receipt,
-            chunk: yield* artifacts.read(owner, {
-              reference: receipt.manifest.bundle.reference,
-              offset: request.offset,
-            }),
+            chunk: yield* artifacts.read(owner, { reference, offset: request.offset }),
           };
         }
         if (request.op === "setupArchive") {
@@ -292,12 +312,10 @@ export const layer = Layer.effect(
           );
           if (!project) return yield* new FoundrySandboxError({ code: "unavailable" });
           const status = yield* worker.sandboxStatus(target, project.id);
-          if (
-            !status.providerReady ||
-            !status.projectReady ||
-            status.definitionExecutionVersion !== 4
-          )
+          if (!status.providerReady || !status.projectReady)
             return yield* new FoundrySandboxError({ code: "unavailable" });
+          if (status.definitionExecutionVersion !== 4)
+            return yield* new FoundrySandboxError({ code: "capabilities_required" });
           projectId = project.id;
         }
         return yield* withLease(

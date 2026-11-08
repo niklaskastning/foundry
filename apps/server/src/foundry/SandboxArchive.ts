@@ -1,7 +1,14 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Stream bounded Git bundle parts and hashes without loading repository history into memory.
+import * as NodeCrypto from "node:crypto";
 import {
   ChatAttachmentId,
   ChatFileAttachment,
-  FOUNDRY_ARTIFACT_MAX_BYTES,
+  FOUNDRY_SANDBOX_BUNDLE_MIME_TYPE,
+  FOUNDRY_SANDBOX_BUNDLE_PART_BYTES,
+  FOUNDRY_SANDBOX_BUNDLE_MAX_PARTS,
+  FOUNDRY_SANDBOX_BUNDLE_MAX_BYTES,
+  FoundrySandboxBundleIndex,
+  type FoundryArtifactManifest,
   FoundryArtifactError,
   FoundrySandboxArchiveError,
   FoundrySandboxArchiveManifest,
@@ -22,12 +29,15 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
+import { decodeSandboxBundleIndex } from "./SandboxBundle.ts";
 import * as Schema from "effect/Schema";
 import * as ArtifactPublication from "./ArtifactPublication.ts";
 import * as ArchivePublication from "./ArchivePublication.ts";
 import * as Artifacts from "./Artifacts.ts";
 import * as ThreadArchive from "./ThreadArchive.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
+import * as ServerConfig from "../config.ts";
 import { makeCheckpointWorkspaceTree } from "./CheckpointWorkspace.ts";
 import { createDeterministicAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
 
@@ -53,6 +63,7 @@ export class SandboxArchive extends Context.Service<
       readonly receipt: Receipt;
       readonly cwd: string;
       readonly bundlePath?: string;
+      readonly bundleIndexPath?: string;
     }) => Effect.Effect<Restored, FoundrySandboxArchiveError>;
   }
 >()("t3/foundry/SandboxArchive") {}
@@ -103,12 +114,18 @@ const decodeManifest = Schema.decodeEffect(FoundrySandboxArchiveManifest, {
 const decodeReceipt = Schema.decodeEffect(FoundrySandboxArchiveReceipt, {
   onExcessProperty: "error",
 });
+const encodeBundleIndex = Schema.encodeEffect(Schema.fromJsonString(FoundrySandboxBundleIndex));
 const isArchiveError = Schema.is(FoundrySandboxArchiveError);
+const isArtifactError = Schema.is(FoundryArtifactError);
 const operationError = (cause: unknown) =>
   isArchiveError(cause)
     ? cause
     : new FoundrySandboxArchiveError({
-        code: Schema.isSchemaError(cause) ? "invalid_request" : "unavailable",
+        code: Schema.isSchemaError(cause)
+          ? "invalid_request"
+          : isArtifactError(cause) && cause.code === "changed"
+            ? "changed"
+            : "unavailable",
       });
 const digest = (manifest: Manifest) =>
   artifactSha256(new TextEncoder().encode(stableStringify(manifest)));
@@ -121,6 +138,20 @@ const makeBundleOperations = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const git = yield* Git.GitVcsDriver;
+  const config = yield* ServerConfig.ServerConfig;
+  const makeTemporary = Effect.fn("SandboxArchive.makeStagingDirectory")(function* () {
+    const state = yield* fs.realPath(config.stateDir);
+    const staging = path.join(state, "foundry-sandbox-staging");
+    yield* fs.makeDirectory(staging, { recursive: true, mode: 0o700 });
+    const info = yield* fs.stat(staging);
+    if (
+      info.type !== "Directory" ||
+      (info.mode & 0o077) !== 0 ||
+      (yield* fs.realPath(staging)) !== staging
+    )
+      return yield* new FoundrySandboxArchiveError({ code: "unavailable" });
+    return yield* fs.makeTempDirectoryScoped({ directory: staging, prefix: "bundle-" });
+  });
   const run = Effect.fn("SandboxArchive.git")(function* (cwd: string, args: ReadonlyArray<string>) {
     return (yield* git.execute({
       cwd,
@@ -129,28 +160,86 @@ const makeBundleOperations = Effect.gen(function* () {
       env: { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" },
     })).stdout.trim();
   });
+  const hashFile = Effect.fn("SandboxArchive.hashFile")(function* (filePath: string) {
+    const reader = yield* fs.open(filePath, { flag: "r" });
+    const hash = NodeCrypto.createHash("sha256");
+    let sizeBytes = 0;
+    while (true) {
+      const next = yield* reader.readAlloc(FOUNDRY_SANDBOX_BUNDLE_PART_BYTES);
+      if (Option.isNone(next)) break;
+      sizeBytes += next.value.byteLength;
+      if (sizeBytes > FOUNDRY_SANDBOX_BUNDLE_MAX_BYTES)
+        return yield* new FoundrySandboxArchiveError({ code: "changed" });
+      hash.update(next.value);
+    }
+    return { sizeBytes, sha256: hash.digest("hex") };
+  });
+  const readIndexFile = Effect.fn("SandboxArchive.readIndexFile")(function* (filePath: string) {
+    if ((yield* fs.stat(filePath)).size > 1024n * 1024n)
+      return yield* new FoundrySandboxArchiveError({ code: "changed" });
+    return yield* fs.readFile(filePath);
+  });
+  const assemble = Effect.fn("SandboxArchive.assembleBundle")(function* (
+    root: FoundryArtifactManifest,
+    read: (
+      reference: FoundryArtifactManifest["reference"],
+    ) => Effect.Effect<
+      { readonly manifest: FoundryArtifactManifest; readonly bytes: Uint8Array },
+      FoundryArtifactError
+    >,
+  ) {
+    if (root.mimeType === FOUNDRY_SANDBOX_BUNDLE_MIME_TYPE && root.sizeBytes > 1024 * 1024)
+      return yield* new FoundrySandboxArchiveError({ code: "changed" });
+    const downloaded = yield* read(root.reference);
+    if (stableStringify(downloaded.manifest) !== stableStringify(root))
+      return yield* new FoundrySandboxArchiveError({ code: "changed" });
+    const temporary = yield* makeTemporary();
+    const bundlePath = path.join(temporary, "source.bundle");
+    if (root.mimeType !== FOUNDRY_SANDBOX_BUNDLE_MIME_TYPE) {
+      if (
+        downloaded.bytes.byteLength !== root.sizeBytes ||
+        artifactSha256(downloaded.bytes) !== root.sha256
+      )
+        return yield* new FoundrySandboxArchiveError({ code: "changed" });
+      yield* fs.writeFile(bundlePath, downloaded.bytes);
+      return { bundlePath, expected: root };
+    }
+    const index = yield* decodeSandboxBundleIndex(root, downloaded.bytes);
+    const writer = yield* fs.open(bundlePath, { flag: "wx", mode: 0o600 });
+    for (const part of index.parts) {
+      const value = yield* read(part.reference);
+      if (
+        stableStringify(value.manifest) !== stableStringify(part) ||
+        value.bytes.byteLength !== part.sizeBytes ||
+        artifactSha256(value.bytes) !== part.sha256
+      )
+        return yield* new FoundrySandboxArchiveError({ code: "changed" });
+      yield* writer.writeAll(value.bytes);
+    }
+    yield* writer.sync;
+    return { bundlePath, expected: index };
+  });
   const verify = Effect.fn("SandboxArchive.verifyBundle")(function* (
     manifest: Manifest,
-    bytes: Uint8Array,
+    bundlePath: string,
+    expected: { readonly sizeBytes: number; readonly sha256: string },
   ) {
-    if (
-      bytes.byteLength !== manifest.bundle.sizeBytes ||
-      artifactSha256(bytes) !== manifest.bundle.sha256
-    )
+    if ((yield* fs.stat(bundlePath)).size !== BigInt(expected.sizeBytes))
       return yield* new FoundrySandboxArchiveError({ code: "changed" });
-    const temporary = yield* fs.makeTempDirectoryScoped();
-    const bundlePath = path.join(temporary, "source.bundle");
+    const actual = yield* hashFile(bundlePath);
+    if (actual.sizeBytes !== expected.sizeBytes || actual.sha256 !== expected.sha256)
+      return yield* new FoundrySandboxArchiveError({ code: "changed" });
+    const temporary = yield* makeTemporary();
     const repository = path.join(temporary, "repository");
-    yield* fs.writeFile(bundlePath, bytes);
     yield* fs.makeDirectory(repository);
     yield* run(repository, ["init"]);
     yield* run(repository, ["bundle", "verify", bundlePath]);
     const heads = (yield* run(repository, ["bundle", "list-heads", bundlePath])).split("\n").sort();
-    const expected = [
+    const expectedHeads = [
       `${manifest.headCommit} HEAD`,
       `${manifest.checkpointCommit} ${checkpointRef(manifest)}`,
     ].sort();
-    if (stableStringify(heads) !== stableStringify(expected))
+    if (stableStringify(heads) !== stableStringify(expectedHeads))
       return yield* new FoundrySandboxArchiveError({ code: "changed" });
     yield* run(repository, [
       "fetch",
@@ -168,7 +257,7 @@ const makeBundleOperations = Effect.gen(function* () {
     yield* run(repository, ["fsck", "--strict", "--no-reflogs"]);
     return { bundlePath, repository };
   });
-  return { run, verify };
+  return { run, verify, assemble, readIndexFile, makeTemporary };
 });
 
 const make = Effect.gen(function* () {
@@ -177,7 +266,7 @@ const make = Effect.gen(function* () {
   const publication = yield* ArtifactPublication.ArtifactPublication;
   const archive = yield* ArchivePublication.ArchivePublication;
   const workspaceTree = yield* makeCheckpointWorkspaceTree();
-  const { run, verify } = yield* makeBundleOperations;
+  const { run, verify, assemble, readIndexFile, makeTemporary } = yield* makeBundleOperations;
   const capture = Effect.fn("SandboxArchive.capture")(
     function* (input: Parameters<SandboxArchive["Service"]["capture"]>[0]) {
       if (!publication || !archive)
@@ -198,38 +287,75 @@ const make = Effect.gen(function* () {
       if (!status.complete) return yield* new FoundrySandboxArchiveError({ code: "incomplete" });
       const ref = checkpointRef(input);
       yield* run(input.cwd, ["update-ref", ref, checkpointCommit]);
-      const temporary = yield* fs.makeTempDirectoryScoped();
+      const temporary = yield* makeTemporary();
       const bundlePath = path.join(temporary, "sandbox.bundle");
       yield* run(input.cwd, ["bundle", "create", bundlePath, "HEAD", ref]);
-      if ((yield* fs.stat(bundlePath)).size > BigInt(FOUNDRY_ARTIFACT_MAX_BYTES))
+      if ((yield* fs.stat(bundlePath)).size > BigInt(FOUNDRY_SANDBOX_BUNDLE_MAX_BYTES))
         return yield* new FoundrySandboxArchiveError({ code: "incomplete" });
-      const bytes = yield* fs.readFile(bundlePath);
-      const id = createDeterministicAttachmentId(
-        input.threadId,
-        `sandbox:${input.allocationId}:${input.fence}`,
-      );
-      if (!id) return yield* new FoundrySandboxArchiveError({ code: "invalid_request" });
-      const attachment = yield* decodeAttachment({
-        type: "file",
-        id: ChatAttachmentId.make(id),
-        name: "foundry-sandbox.bundle",
-        mimeType: "application/octet-stream",
-        sizeBytes: bytes.byteLength,
+      const publish = Effect.fn("SandboxArchive.publishBundlePart")(function* (
+        bytes: Uint8Array,
+        suffix: string,
+        mimeType: string,
+      ) {
+        const id = createDeterministicAttachmentId(
+          input.threadId,
+          `sandbox:${input.allocationId}:${input.fence}:${suffix}`,
+        );
+        if (!id) return yield* new FoundrySandboxArchiveError({ code: "invalid_request" });
+        const attachment = yield* decodeAttachment({
+          type: "file",
+          id: ChatAttachmentId.make(id),
+          name: `foundry-sandbox-${suffix}`,
+          mimeType,
+          sizeBytes: bytes.byteLength,
+        });
+        const attachmentPath = resolveAttachmentPath({
+          attachmentsDir: input.attachmentsDir,
+          attachment,
+        });
+        if (!attachmentPath)
+          return yield* new FoundrySandboxArchiveError({ code: "invalid_request" });
+        yield* fs.writeFile(attachmentPath, bytes, { mode: 0o600 });
+        const published = yield* publication.publishAttachment(
+          input.threadId,
+          attachment,
+          `sandbox:${input.allocationId}:${input.fence}:${suffix}`,
+        );
+        if (!published.foundryArtifact)
+          return yield* new FoundrySandboxArchiveError({ code: "incomplete" });
+        return published.foundryArtifact;
       });
-      const attachmentPath = resolveAttachmentPath({
-        attachmentsDir: input.attachmentsDir,
-        attachment,
-      });
-      if (!attachmentPath)
-        return yield* new FoundrySandboxArchiveError({ code: "invalid_request" });
-      yield* fs.writeFile(attachmentPath, bytes, { mode: 0o600 });
-      const published = yield* publication.publishAttachment(
-        input.threadId,
-        attachment,
-        `sandbox:${input.allocationId}:${input.fence}`,
-      );
-      if (!published.foundryArtifact)
+      const reader = yield* fs.open(bundlePath, { flag: "r" });
+      const parts: FoundryArtifactManifest[] = [];
+      const hash = NodeCrypto.createHash("sha256");
+      let sizeBytes = 0;
+      while (true) {
+        const next = yield* reader.readAlloc(FOUNDRY_SANDBOX_BUNDLE_PART_BYTES);
+        if (Option.isNone(next)) break;
+        sizeBytes += next.value.byteLength;
+        if (sizeBytes > FOUNDRY_SANDBOX_BUNDLE_MAX_BYTES)
+          return yield* new FoundrySandboxArchiveError({ code: "incomplete" });
+        hash.update(next.value);
+        if (parts.length >= FOUNDRY_SANDBOX_BUNDLE_MAX_PARTS)
+          return yield* new FoundrySandboxArchiveError({ code: "incomplete" });
+        parts.push(
+          yield* publish(next.value, `bundle-part-${parts.length}`, "application/octet-stream"),
+        );
+      }
+      const index = {
+        format: "foundry-git-bundle-1" as const,
+        sizeBytes,
+        sha256: hash.digest("hex"),
+        parts,
+      };
+      const indexBytes = new TextEncoder().encode(yield* encodeBundleIndex(index));
+      if (indexBytes.byteLength > 1024 * 1024)
         return yield* new FoundrySandboxArchiveError({ code: "incomplete" });
+      const root = yield* publish(
+        indexBytes,
+        "bundle-index.json",
+        FOUNDRY_SANDBOX_BUNDLE_MIME_TYPE,
+      );
       const manifest = yield* decodeManifest({
         allocationId: input.allocationId,
         fence: input.fence,
@@ -240,9 +366,10 @@ const make = Effect.gen(function* () {
         headCommit,
         checkpointCommit,
         checkpointTree,
-        bundle: published.foundryArtifact,
+        bundle: root,
       });
-      yield* verify(manifest, bytes);
+      yield* decodeSandboxBundleIndex(root, indexBytes);
+      yield* verify(manifest, bundlePath, index);
       const final = yield* archive.reconcile(input.threadId);
       if (
         !final.complete ||
@@ -267,17 +394,25 @@ const make = Effect.gen(function* () {
         return yield* new FoundrySandboxArchiveError({ code: "changed" });
       if ((yield* fs.readDirectory(input.cwd)).length !== 0)
         return yield* new FoundrySandboxArchiveError({ code: "destination_not_empty" });
-      if (
-        input.bundlePath &&
-        (yield* fs.stat(input.bundlePath)).size > BigInt(FOUNDRY_ARTIFACT_MAX_BYTES)
-      )
-        return yield* new FoundrySandboxArchiveError({ code: "changed" });
-      const downloaded = input.bundlePath
-        ? { manifest: manifest.bundle, bytes: yield* fs.readFile(input.bundlePath) }
-        : yield* publication!.download(manifest.bundle.reference);
-      if (stableStringify(downloaded.manifest) !== stableStringify(manifest.bundle))
-        return yield* new FoundrySandboxArchiveError({ code: "changed" });
-      const { repository } = yield* verify(manifest, downloaded.bytes);
+      let source: {
+        bundlePath: string;
+        expected: { readonly sizeBytes: number; readonly sha256: string };
+      };
+      if (input.bundlePath) {
+        const expected =
+          manifest.bundle.mimeType === FOUNDRY_SANDBOX_BUNDLE_MIME_TYPE
+            ? yield* decodeSandboxBundleIndex(
+                manifest.bundle,
+                input.bundleIndexPath
+                  ? yield* readIndexFile(input.bundleIndexPath)
+                  : publication
+                    ? (yield* publication.download(manifest.bundle.reference)).bytes
+                    : yield* new FoundrySandboxArchiveError({ code: "invalid_request" }),
+              )
+            : manifest.bundle;
+        source = { bundlePath: input.bundlePath, expected };
+      } else source = yield* assemble(manifest.bundle, publication!.download);
+      const { repository } = yield* verify(manifest, source.bundlePath, source.expected);
       yield* run(input.cwd, ["init"]);
       yield* run(input.cwd, [
         "fetch",
@@ -311,7 +446,7 @@ export const layerConfirmation = Layer.effect(
   Effect.gen(function* () {
     const archives = yield* ThreadArchive.ThreadArchive;
     const artifacts = yield* Artifacts.Artifacts;
-    const { verify } = yield* makeBundleOperations;
+    const { verify, assemble } = yield* makeBundleOperations;
     const confirmation: SandboxArchiveConfirmation["Service"] = SandboxArchiveConfirmation.of({
       confirmEnvironment: Effect.fn("SandboxArchiveConfirmation.confirmEnvironment")(function* (
         principal,
@@ -472,14 +607,17 @@ export const layerConfirmation = Layer.effect(
             status.confirmedSourceSequence !== manifest.finalSourceSequence
           )
             return yield* new FoundrySandboxArchiveError({ code: "incomplete" });
-          const downloaded = yield* downloadArtifact((request) => {
-            if (request.op === "metadata") return artifacts.metadata(principal, request.input);
-            if (request.op === "read") return artifacts.read(principal, request.input);
-            return Effect.fail(new FoundryArtifactError({ code: "invalid_request" }));
-          }, manifest.bundle.reference);
-          if (stableStringify(downloaded.manifest) !== stableStringify(manifest.bundle))
-            return yield* new FoundrySandboxArchiveError({ code: "changed" });
-          yield* verify(manifest, downloaded.bytes);
+          const read = (reference: FoundryArtifactManifest["reference"]) =>
+            artifacts.readVerified
+              ? artifacts.readVerified(principal, reference)
+              : downloadArtifact((request) => {
+                  if (request.op === "metadata")
+                    return artifacts.metadata(principal, request.input);
+                  if (request.op === "read") return artifacts.read(principal, request.input);
+                  return Effect.fail(new FoundryArtifactError({ code: "invalid_request" }));
+                }, reference);
+          const source = yield* assemble(manifest.bundle, read);
+          yield* verify(manifest, source.bundlePath, source.expected);
           const final = yield* archives.cursor(principal, manifest.owner);
           if (
             !final.complete ||

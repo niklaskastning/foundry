@@ -145,6 +145,7 @@ const restore = Command.make("restore", {
   ...authLocationFlags,
   receipt: Flag.String("receipt"),
   bundle: Flag.String("bundle"),
+  bundleIndex: Flag.String("bundle-index").pipe(Flag.optional),
   cwd: Flag.String("cwd"),
 }).pipe(
   Command.withHandler(
@@ -159,7 +160,14 @@ const restore = Command.make("restore", {
       const receipt = yield* decodeReceipt(yield* fs.readFileString(flags.receipt));
       yield* SandboxArchive.SandboxArchive.pipe(
         Effect.flatMap((service) =>
-          service.restore({ receipt, cwd: flags.cwd, bundlePath: flags.bundle }),
+          service.restore({
+            receipt,
+            cwd: flags.cwd,
+            bundlePath: flags.bundle,
+            ...(Option.isSome(flags.bundleIndex)
+              ? { bundleIndexPath: flags.bundleIndex.value }
+              : {}),
+          }),
         ),
         Effect.provide(
           SandboxArchive.layer.pipe(

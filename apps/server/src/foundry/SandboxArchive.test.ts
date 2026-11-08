@@ -18,6 +18,8 @@ import {
   type ChatAttachment,
 } from "@t3tools/contracts";
 import { artifactSha256 } from "@t3tools/shared/foundryArtifacts";
+import { stableStringify } from "@t3tools/shared/relaySigning";
+import { decodeSandboxBundleIndex } from "./SandboxBundle.ts";
 import * as SandboxArchiveEnvironment from "./SandboxArchiveEnvironment.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
@@ -46,6 +48,7 @@ it.live(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const git = yield* Git.GitVcsDriver;
+      const config = yield* ServerConfig.ServerConfig;
       const root = yield* fs.makeTempDirectoryScoped();
       const cwd = `${root}/source`;
       const attachmentsDir = `${root}/attachments`;
@@ -85,6 +88,7 @@ it.live(
         missingAttachmentCount: 0,
       };
       let advanceDuringDownload = false;
+      let denyDownload = false;
       let unlistedThread = false;
       let lateBatchCursor = 0;
       let artifact: { manifest: FoundryArtifactManifest; bytes: Uint8Array } | undefined;
@@ -97,7 +101,19 @@ it.live(
         setupArtifacts.get(id) ??
         (artifact?.manifest.reference.artifactId === id ? artifact : undefined);
       const unavailable = () => new FoundryArtifactError({ code: "unavailable" });
+      const bundleCreates: string[] = [];
       const external = Layer.mergeAll(
+        Layer.succeed(
+          Git.GitVcsDriver,
+          Git.GitVcsDriver.of({
+            ...git,
+            execute: Effect.fn("SandboxArchiveTest.execute")(function* (input) {
+              const bundle = input.args.indexOf("bundle");
+              if (input.args[bundle + 1] === "create") bundleCreates.push(input.args[bundle + 2]!);
+              return yield* git.execute(input);
+            }),
+          }),
+        ),
         Layer.succeed(ArtifactPublication.ArtifactPublication, {
           publishAttachment: Effect.fn("SandboxArchiveTest.publish")(function* <
             Attachment extends ChatAttachment,
@@ -109,7 +125,9 @@ it.live(
               reference: {
                 instanceId,
                 owner: { ...owner, threadId: ThreadId.make(threadId) },
-                artifactId: FoundryArtifactId.make("c6cd2b62-1c23-4c55-8424-fcfdc52e0b02"),
+                artifactId: FoundryArtifactId.make(
+                  `00000000-0000-4000-8000-${artifactSha256(new TextEncoder().encode(attachment.id)).slice(0, 12)}`,
+                ),
               },
               name: attachment.name,
               mimeType: attachment.mimeType,
@@ -117,9 +135,14 @@ it.live(
               sha256: artifactSha256(bytes),
             };
             artifact = { manifest, bytes };
+            setupArtifacts.set(manifest.reference.artifactId, artifact);
             return { ...attachment, foundryArtifact: manifest };
           }, Effect.mapError(unavailable)),
-          download: () => (artifact ? Effect.succeed(artifact) : Effect.fail(unavailable())),
+          download: (reference) => {
+            if (denyDownload) return Effect.fail(unavailable());
+            const value = findArtifact(reference.artifactId);
+            return value ? Effect.succeed(value) : Effect.fail(unavailable());
+          },
         }),
         Layer.succeed(ArchivePublication.ArchivePublication, {
           reconcile: (threadId) =>
@@ -197,11 +220,102 @@ it.live(
           checkpointRef: "refs/t3/checkpoint",
         };
         const manifest = yield* service.capture(input);
+        assert.isTrue(yield* fs.exists(`${config.stateDir}/foundry-sandbox-staging`));
+        assert.equal(bundleCreates.length, 1);
+        assert.isTrue(
+          bundleCreates[0]!.startsWith(`${config.stateDir}/foundry-sandbox-staging/bundle-`),
+        );
+        assert.deepEqual(yield* fs.readDirectory(`${config.stateDir}/foundry-sandbox-staging`), []);
         assert.equal(manifest.checkpointTree, tree);
+        assert.equal(manifest.bundle.mimeType, "application/vnd.foundry.git-bundle-index+json");
         assert.deepEqual(yield* service.capture(input), manifest);
         const expected = { allocationId: input.allocationId, fence: 1, owner };
         const receipt = yield* confirmation.confirm(principal, manifest, expected);
         assert.deepEqual(yield* confirmation.confirm(principal, manifest, expected), receipt);
+        const firstIndex = yield* decodeSandboxBundleIndex(manifest.bundle, artifact!.bytes);
+        const full = setupArtifacts.get(firstIndex.parts[0]!.reference.artifactId)!;
+        const midpoint = Math.floor(full.bytes.length / 2);
+        const split = [full.bytes.slice(0, midpoint), full.bytes.slice(midpoint)];
+        const splitParts = split.map((bytes, index) => {
+          const part = {
+            ...full.manifest,
+            reference: {
+              ...full.manifest.reference,
+              artifactId: FoundryArtifactId.make(`99999999-9999-4999-8999-00000000000${index}`),
+            },
+            sizeBytes: bytes.length,
+            sha256: artifactSha256(bytes),
+          };
+          setupArtifacts.set(part.reference.artifactId, { manifest: part, bytes });
+          return part;
+        });
+        const splitIndexBytes = new TextEncoder().encode(
+          JSON.stringify({ ...firstIndex, parts: splitParts }),
+        );
+        const splitRoot = {
+          ...manifest.bundle,
+          reference: {
+            ...manifest.bundle.reference,
+            artifactId: FoundryArtifactId.make("99999999-9999-4999-8999-000000000009"),
+          },
+          sizeBytes: splitIndexBytes.length,
+          sha256: artifactSha256(splitIndexBytes),
+        };
+        setupArtifacts.set(splitRoot.reference.artifactId, {
+          manifest: splitRoot,
+          bytes: splitIndexBytes,
+        });
+        const splitManifest = { ...manifest, bundle: splitRoot };
+        const splitReceipt = yield* confirmation.confirm(principal, splitManifest, expected);
+        for (const invalidParts of [
+          [splitParts[0]!, splitParts[0]!],
+          [
+            {
+              ...full.manifest,
+              reference: {
+                ...full.manifest.reference,
+                owner: { ...owner, threadId: ThreadId.make("foreign-bundle-thread") },
+              },
+            },
+          ],
+        ]) {
+          const invalidBytes = new TextEncoder().encode(
+            JSON.stringify({ ...firstIndex, parts: invalidParts }),
+          );
+          const invalidRoot = {
+            ...splitRoot,
+            sizeBytes: invalidBytes.length,
+            sha256: artifactSha256(invalidBytes),
+          };
+          setupArtifacts.set(invalidRoot.reference.artifactId, {
+            manifest: invalidRoot,
+            bytes: invalidBytes,
+          });
+          assert.equal(
+            (yield* confirmation
+              .confirm(principal, { ...manifest, bundle: invalidRoot }, expected)
+              .pipe(Effect.flip)).code,
+            "foreign_archive",
+          );
+        }
+        setupArtifacts.set(splitRoot.reference.artifactId, {
+          manifest: splitRoot,
+          bytes: splitIndexBytes,
+        });
+
+        const missingSplit = setupArtifacts.get(splitParts[1]!.reference.artifactId)!;
+        setupArtifacts.delete(splitParts[1]!.reference.artifactId);
+        assert.equal(
+          (yield* confirmation.confirm(principal, splitManifest, expected).pipe(Effect.flip)).code,
+          "unavailable",
+        );
+        setupArtifacts.set(splitParts[1]!.reference.artifactId, missingSplit);
+        split[1]![0] = split[1]![0]! ^ 1;
+        assert.equal(
+          (yield* confirmation.confirm(principal, splitManifest, expected).pipe(Effect.flip)).code,
+          "changed",
+        );
+        split[1]![0] = split[1]![0]! ^ 1;
         const environmentExpected = {
           ...expected,
           environmentId: owner.environmentId,
@@ -374,6 +488,28 @@ it.live(
         yield* fs.writeFileString(`${cwd}/new.txt`, "late writer\n");
         assert.equal((yield* service.capture(input).pipe(Effect.flip)).code, "changed");
         yield* fs.remove(cwd, { recursive: true });
+        const offline = `${root}/offline`;
+        yield* fs.makeDirectory(offline);
+        const offlineBundle = `${root}/offline.bundle`;
+        const offlineIndex = `${root}/offline-index.json`;
+        yield* fs.writeFile(offlineBundle, full.bytes);
+        yield* fs.writeFile(
+          offlineIndex,
+          setupArtifacts.get(manifest.bundle.reference.artifactId)!.bytes,
+        );
+        denyDownload = true;
+        yield* service.restore({
+          receipt,
+          cwd: offline,
+          bundlePath: offlineBundle,
+          bundleIndexPath: offlineIndex,
+        });
+        denyDownload = false;
+        assert.equal(yield* fs.readFileString(`${offline}/new.txt`), "untracked work\n");
+        const multipartRestored = `${root}/multipart-restored`;
+        yield* fs.makeDirectory(multipartRestored);
+        yield* service.restore({ receipt: splitReceipt, cwd: multipartRestored });
+        assert.equal(yield* fs.readFileString(`${multipartRestored}/file.txt`), "changed\n");
         const restored = `${root}/restored`;
         yield* fs.makeDirectory(restored);
         const provenance = yield* service.restore({ receipt, cwd: restored });
@@ -401,6 +537,23 @@ it.live(
           "changed",
         );
         assert.isDefined(artifact);
+        const bundleIndex = yield* decodeSandboxBundleIndex(manifest.bundle, artifact!.bytes);
+        const firstPart = setupArtifacts.get(bundleIndex.parts[0]!.reference.artifactId)!;
+        firstPart.bytes[0] = firstPart.bytes[0]! ^ 1;
+        assert.equal(
+          (yield* service.restore({ receipt, cwd: empty }).pipe(Effect.flip)).code,
+          "changed",
+        );
+        firstPart.bytes[0] = firstPart.bytes[0]! ^ 1;
+        const legacyManifest = { ...manifest, bundle: firstPart.manifest };
+        const legacyReceipt = {
+          manifest: legacyManifest,
+          digest: artifactSha256(new TextEncoder().encode(stableStringify(legacyManifest))),
+        };
+        const legacy = `${root}/legacy`;
+        yield* fs.makeDirectory(legacy);
+        yield* service.restore({ receipt: legacyReceipt, cwd: legacy });
+        assert.equal(yield* fs.readFileString(`${legacy}/new.txt`), "untracked work\n");
         artifact!.bytes[0] = artifact!.bytes[0]! ^ 1;
         assert.equal(
           (yield* service.restore({ receipt, cwd: empty }).pipe(Effect.flip)).code,
@@ -466,6 +619,12 @@ it.live(
             ),
           ),
         );
+        assert.isTrue(
+          bundleCreates.every((file) =>
+            file.startsWith(`${config.stateDir}/foundry-sandbox-staging/bundle-`),
+          ),
+        );
+        assert.deepEqual(yield* fs.readDirectory(`${config.stateDir}/foundry-sandbox-staging`), []);
       }).pipe(
         Effect.provide(
           Layer.merge(SandboxArchive.layer, SandboxArchive.layerConfirmation).pipe(
