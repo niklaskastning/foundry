@@ -163,7 +163,9 @@ export class Application extends Context.Service<
 
 const make = Effect.gen(function* () {
   const sql = yield* AutomationDatabase.AutomationDatabase;
-  const operations = yield* OperationsDashboard.OperationsDashboard.pipe(Effect.provide(OperationsDashboard.layer));
+  const operations = yield* OperationsDashboard.OperationsDashboard.pipe(
+    Effect.provide(OperationsDashboard.layer),
+  );
   const evaluations = yield* Evaluations.Evaluations;
   const machineAccess = yield* MachineAccess.MachineAccess;
   const handoffs = yield* Handoffs.Handoffs;
