@@ -19,6 +19,7 @@ export const runStates = [
   "succeeded",
 ] as const;
 export type FoundrySearch = {
+  returnTo?: string | undefined;
   runReturn?: string | undefined;
   view?: string | undefined;
   factoryId?: string | undefined;
@@ -44,6 +45,7 @@ export type FoundrySearch = {
   archiveThreadId?: string | undefined;
 };
 const fields = [
+  "returnTo",
   "runReturn",
   "view",
   "factoryId",

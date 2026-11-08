@@ -1,3 +1,4 @@
+import { useFoundrySession } from "./useFoundrySession";
 import { Link, useSearch } from "@tanstack/react-router";
 import { Boxes, Inbox, Activity, Server, MessageSquare, Settings, UserRound } from "lucide-react";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -5,7 +6,7 @@ import { useState } from "react";
 import { AsyncResult } from "effect/reactivity";
 import { Button } from "../components/ui/button";
 import { useAtomCommand } from "../state/use-atom-command";
-import { instanceCommand, initialState } from "./onboarding";
+import { instanceCommand } from "./onboarding";
 import { factoryTabs } from "./workspaceSearch";
 import { useAutomationQuery } from "../features/automation/useAutomationQuery";
 import { cn } from "../lib/utils";
@@ -24,7 +25,8 @@ export function FoundrySidebar() {
   const close = () => {
     if (isMobile) setOpenMobile(false);
   };
-  const binding = initialState().binding;
+  const [session] = useFoundrySession();
+  const binding = session.session ? session.binding : null;
   const [accountMessage, setAccountMessage] = useState("");
   const [signingOut, setSigningOut] = useState(false);
   const account = useAtomCommand(instanceCommand, { reportFailure: false });
