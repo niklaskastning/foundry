@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { AutomationFactory } from "./factory.ts";
 import { FactoryDefinitionFiles, FactoryDefinitionIssue } from "./definition.ts";
@@ -12,7 +13,10 @@ export const FactoryDefinitionGitLocation = Schema.Struct({
     Schema.isMaxLength(200),
     Schema.isPattern(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
   ),
-  branch: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)),
+  branch: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)).pipe(
+    Schema.withDecodingDefault(Effect.succeed("main")),
+  ),
+  commitSha: Schema.optional(Sha),
   path: Schema.String.check(
     Schema.isMaxLength(200),
     Schema.isPattern(/^(?:[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*)?$/),
@@ -42,6 +46,7 @@ export const FactoryDefinitionGitRevision = Schema.Struct({
   id: Key,
   factoryId: Key,
   commitSha: Sha,
+  location: Schema.optional(Schema.NullOr(FactoryDefinitionGitLocation)),
   contentHash: Schema.NullOr(Hash),
   valid: Schema.Boolean,
   issues: Schema.Array(FactoryDefinitionIssue),

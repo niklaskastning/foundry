@@ -1,6 +1,10 @@
 import { expect, it } from "@effect/vitest";
-import type { FactoryDefinitionSourceBinding } from "@t3tools/contracts";
+import {
+  FactoryDefinitionGitLocation,
+  type FactoryDefinitionSourceBinding,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as DefinitionSources from "./DefinitionSources.ts";
 import * as DefinitionSync from "./DefinitionSync.ts";
@@ -142,4 +146,38 @@ it.effect(
       yield* tick;
       expect(accepted).toEqual([[saved, result, 0]]);
     }),
+);
+
+it.effect("reads an explicitly pinned commit instead of the moving branch", () =>
+  Effect.gen(function* () {
+    const pinned = { ...binding, commitSha: "b".repeat(40) };
+    let reference: string | undefined;
+    const sources = Layer.mock(DefinitionSources.DefinitionSources)({
+      due: () => Effect.succeed([pinned]),
+      accept: () => Effect.void,
+    });
+    const github = Layer.mock(GitHubApp.GitHubApp)({
+      binding: () => Effect.succeed({ ...binding, generation: 7, baseBranch: "main" }),
+      readDefinition: (input) =>
+        Effect.sync(() => {
+          reference = input.branch;
+          return result;
+        }),
+    });
+    yield* runTick.pipe(
+      Effect.provide(DefinitionSync.layer.pipe(Layer.provide(sources), Layer.provide(github))),
+    );
+    expect(reference).toBe(pinned.commitSha);
+  }),
+);
+
+it.effect("defaults source reads to main while validating explicit commit pins", () =>
+  Effect.gen(function* () {
+    const { branch: _branch, ...withoutBranch } = binding;
+    const decode = Schema.decodeUnknownEffect(FactoryDefinitionGitLocation);
+    expect((yield* decode(withoutBranch)).branch).toBe("main");
+    expect(
+      (yield* decode({ ...withoutBranch, commitSha: "not-a-sha" }).pipe(Effect.result))._tag,
+    ).toBe("Failure");
+  }),
 );

@@ -201,14 +201,8 @@ const make = Effect.gen(function* () {
         if (Option.isSome(previous)) return previous.value;
         if (
           existing &&
-          (existing.ownership !== "pending" ||
-            existing.generation !== input.expectedGeneration ||
-            existing.scopeVersionId !== input.scopeVersionId ||
-            existing.connectionId !== input.location.connectionId ||
-            existing.repositoryId !== input.location.repositoryId ||
-            existing.repository !== input.location.repository ||
-            existing.branch !== input.location.branch ||
-            existing.path !== input.location.path)
+          (existing.generation !== input.expectedGeneration ||
+            existing.scopeVersionId !== input.scopeVersionId)
         )
           return yield* new DefinitionSourceError({ reason: "version_conflict" });
         const current = Option.getOrNull(yield* definitions.active(input.factoryId));
@@ -221,7 +215,7 @@ const make = Effect.gen(function* () {
           yield* sql`SELECT id FROM foundry_automation.versions WHERE factory_id=${input.factoryId} AND id=${input.scopeVersionId}`;
         if (!scopes.length) return yield* new DefinitionSourceError({ reason: "not_found" });
         if (existing) {
-          yield* sql`UPDATE foundry_automation.definition_sources SET import_version_id=${input.expectedVersionId},import_content_hash=${input.expectedContentHash},generation=generation+1 WHERE factory_id=${input.factoryId}`;
+          yield* sql`UPDATE foundry_automation.definition_sources SET location=${sql.json(input.location)},app_generation=${generation},import_version_id=${input.expectedVersionId},import_content_hash=${input.expectedContentHash},generation=generation+1,selected_revision_id=NULL,status='pending',error=NULL,next_sync_at=0 WHERE factory_id=${input.factoryId}`;
         } else
           yield* sql`INSERT INTO foundry_automation.definition_sources(factory_id,location,scope_version_id,instance_id,operator_id,app_generation,import_version_id,import_content_hash) VALUES(${input.factoryId},${sql.json(input.location)},${input.scopeVersionId},${identity.instanceId},${identity.operatorId},${generation},${input.expectedVersionId},${input.expectedContentHash})`;
         return yield* receipt(
@@ -296,7 +290,7 @@ const make = Effect.gen(function* () {
   ) {
     const rows = yield* sql<
       FactoryDefinitionGitRevision & { files: FactoryDefinitionFiles }
-    >`SELECT id,factory_id AS "factoryId",commit_sha AS "commitSha",content_hash AS "contentHash",valid,issues,created_at::float8 AS "createdAt",files FROM foundry_automation.definition_git_revisions WHERE factory_id=${factoryId} AND id=${revisionId}`;
+    >`SELECT id,factory_id AS "factoryId",commit_sha AS "commitSha",content_hash AS "contentHash",valid,issues,created_at::float8 AS "createdAt",location,files FROM foundry_automation.definition_git_revisions WHERE factory_id=${factoryId} AND id=${revisionId}`;
     if (!rows[0]) return yield* new DefinitionSourceError({ reason: "not_found" });
     const { files, ...revision } = rows[0];
     const current = Option.getOrNull(yield* definitions.active(factoryId));
@@ -372,6 +366,8 @@ const make = Effect.gen(function* () {
         yield* grant(current, current.appGeneration);
         const files = yield* decodeFiles(result.files);
         const commitSha = yield* decodeSha(result.commitSha);
+        if (binding.commitSha && binding.commitSha !== commitSha)
+          return yield* new DefinitionSourceError({ reason: "invalid_definition" });
         const parsed = validateFactoryFiles(files);
         const issues = Result.isFailure(parsed)
           ? parsed.failure
@@ -388,8 +384,8 @@ const make = Effect.gen(function* () {
         const contentHash = Result.isSuccess(parsed)
           ? yield* hash(canonicalFactoryJson(parsed.success))
           : null;
-        const id = `git-revision:${yield* hash(`${binding.factoryId}:${commitSha}`)}`;
-        yield* sql`INSERT INTO foundry_automation.definition_git_revisions(id,factory_id,commit_sha,content_hash,valid,issues,files,created_at) VALUES(${id},${binding.factoryId},${commitSha},${contentHash},${valid},${sql.json(issues)},${sql.json(files)},${now}) ON CONFLICT(factory_id,commit_sha) DO NOTHING`;
+        const id = `git-revision:${yield* hash(`${binding.factoryId}:${binding.repositoryId}:${binding.repository}:${binding.branch}:${binding.path}:${binding.commitSha ?? ""}:${commitSha}`)}`;
+        yield* sql`INSERT INTO foundry_automation.definition_git_revisions(id,factory_id,commit_sha,content_hash,valid,issues,files,created_at,location) VALUES(${id},${binding.factoryId},${commitSha},${contentHash},${valid},${sql.json(issues)},${sql.json(files)},${now},${sql.json({ connectionId: binding.connectionId, repositoryId: binding.repositoryId, repository: binding.repository, branch: binding.branch, path: binding.path, ...(binding.commitSha ? { commitSha: binding.commitSha } : {}) })}) ON CONFLICT DO NOTHING`;
         const stored = yield* sql<{
           valid: boolean;
         }>`SELECT valid FROM foundry_automation.definition_git_revisions WHERE id=${id}`;
@@ -423,7 +419,7 @@ const make = Effect.gen(function* () {
   ) {
     const size = Math.max(1, Math.min(100, limit));
     const rows =
-      yield* sql<FactoryDefinitionGitRevision>`SELECT id,factory_id AS "factoryId",commit_sha AS "commitSha",content_hash AS "contentHash",valid,issues,created_at::float8 AS "createdAt" FROM foundry_automation.definition_git_revisions WHERE factory_id=${factoryId} AND (${after ?? null}::text IS NULL OR id>${after ?? null}) ORDER BY id LIMIT ${size + 1}`;
+      yield* sql<FactoryDefinitionGitRevision>`SELECT id,factory_id AS "factoryId",commit_sha AS "commitSha",content_hash AS "contentHash",valid,issues,created_at::float8 AS "createdAt",location FROM foundry_automation.definition_git_revisions WHERE factory_id=${factoryId} AND (${after ?? null}::text IS NULL OR id>${after ?? null}) ORDER BY id LIMIT ${size + 1}`;
     const items = rows.slice(0, size);
     return { items, next: rows.length > size ? items.at(-1)!.id : null };
   }, Effect.mapError(operationError));
