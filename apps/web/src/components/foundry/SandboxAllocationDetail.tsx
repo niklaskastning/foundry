@@ -1,3 +1,6 @@
+import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
+import type { FoundrySandboxArchiveManifest } from "@t3tools/contracts";
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { SandboxSetupArchive } from "./SandboxSetupArchive";
 import type { FoundrySandboxDetail, FoundrySandboxMutation, ThreadId } from "@t3tools/contracts";
 import { useState } from "react";
@@ -34,7 +37,7 @@ export function SandboxAllocationDetail({
   const maxExpiry = allocation.createdAt + allocation.profile.maxLifetimeSeconds * 1000;
   const extension = Math.min(maxExpiry, allocation.expiresAt + 60 * 60 * 1000);
   return (
-    <section className="space-y-3" aria-label="Sandbox details">
+    <section className="space-y-5 rounded-lg border bg-muted/10 p-4" aria-label="Sandbox details">
       <dl className="grid gap-1 text-sm">
         <div>
           <dt className="inline font-medium">Allocation: </dt>
@@ -68,11 +71,11 @@ export function SandboxAllocationDetail({
         ) : null}
       </dl>
       {allocation.failure ? (
-        <p role="alert">
+        <FoundryUI.Notice>
           {allocation.failure === "capacity"
             ? "Waiting for sandbox capacity."
             : `Sandbox failed: ${allocation.failure}.`}
-        </p>
+        </FoundryUI.Notice>
       ) : null}
       <div className="flex flex-wrap gap-2">
         <Button
@@ -133,8 +136,8 @@ export function SandboxAllocationDetail({
         </p>
       ) : null}
       <details open={allocation.state === "setup" || allocation.state === "failed"}>
-        <summary>Setup log</summary>
-        <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words text-xs">
+        <FoundryUI.Summary>Setup log</FoundryUI.Summary>
+        <pre className="mt-3 max-h-72 overflow-auto rounded-lg border bg-muted/30 p-4 font-mono text-xs leading-5 whitespace-pre-wrap break-words">
           {setupLog || "No setup output received yet."}
         </pre>
       </details>
@@ -151,8 +154,11 @@ export function SandboxAllocationDetail({
             </p>
           ) : null}
           {threads.map(({ manifest }) => (
-            <div className="flex flex-wrap items-center gap-2" key={manifest.owner.threadId}>
-              <span className="text-xs">{manifest.owner.threadId}</span>
+            <div className="space-y-3 rounded-lg border bg-card p-4" key={manifest.owner.threadId}>
+              <p className="break-all text-xs text-muted-foreground">
+                Source thread · {manifest.owner.threadId}
+              </p>
+              <ArchiveMetadata manifest={manifest} />
               <Button
                 size="sm"
                 variant="outline"
@@ -196,5 +202,50 @@ export function SandboxAllocationDetail({
         </div>
       ) : null}
     </section>
+  );
+}
+
+function ArchiveMetadata({
+  manifest,
+}: {
+  manifest: FoundrySandboxArchiveManifest & {
+    remoteBase?: { format: "foundry-remote-delta-2"; url: string; commit: string };
+    bundleSizeBytes?: number;
+  };
+}) {
+  return (
+    <dl className="grid gap-3 text-sm sm:grid-cols-2">
+      <div>
+        <dt className="text-xs text-muted-foreground">Archive format</dt>
+        <dd className="mt-1 font-medium">
+          {manifest.remoteBase ? "Remote base + local delta" : "Legacy full bundle"}
+        </dd>
+      </div>
+      <div>
+        <dt className="text-xs text-muted-foreground">
+          {manifest.remoteBase ? "Delta size" : "Bundle size"}
+        </dt>
+        <dd className="mt-1 tabular-nums">
+          {manifest.bundleSizeBytes === undefined
+            ? "Unknown · bundle index not loaded"
+            : formatAttachmentSize(manifest.bundleSizeBytes)}
+        </dd>
+      </div>
+      {manifest.remoteBase ? (
+        <div className="min-w-0 sm:col-span-2">
+          <dt className="text-xs text-muted-foreground">Required remote base commit</dt>
+          <dd className="mt-1 break-all font-mono text-xs leading-5">
+            {manifest.remoteBase.commit}
+          </dd>
+          <dd className="mt-1 text-xs leading-5 text-muted-foreground">
+            Resume requires access to the exact archived base in the source remote.
+          </dd>
+        </div>
+      ) : null}
+      <div className="min-w-0 sm:col-span-2">
+        <dt className="text-xs text-muted-foreground">Archived HEAD</dt>
+        <dd className="mt-1 break-all font-mono text-xs leading-5">{manifest.headCommit}</dd>
+      </div>
+    </dl>
   );
 }

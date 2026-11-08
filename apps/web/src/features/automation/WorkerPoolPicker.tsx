@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { useState } from "react";
 import { FoundryDeviceId, type EnvironmentId, type ManualStart } from "@t3tools/contracts";
 import { Button } from "../../components/ui/button";
@@ -63,9 +64,9 @@ export function WorkerPoolPicker({
       )}
       {query.error ? (
         <div className="space-y-2">
-          <p role="alert" className="text-sm">
+          <FoundryUI.Notice className="text-sm">
             Worker choices unavailable: {query.error}
-          </p>
+          </FoundryUI.Notice>
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="outline" onClick={query.refresh}>
               Retry worker

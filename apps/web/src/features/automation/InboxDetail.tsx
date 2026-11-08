@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import type {
@@ -127,7 +128,7 @@ export function InboxDetail({
   }
   return (
     <aside
-      className="min-w-0 space-y-4 rounded-lg border bg-card p-4"
+      className="min-w-0 space-y-5 rounded-xl border bg-card p-4 shadow-xs sm:p-6"
       aria-label="Inbox item details"
     >
       <div className="flex items-start justify-between gap-3">
@@ -139,16 +140,18 @@ export function InboxDetail({
                 : "Needs review"
               : "Resolved or superseded"}
           </Badge>
-          <h2 className="break-words text-lg font-semibold">{item.title}</h2>
+          <FoundryUI.Heading className="break-words text-lg font-semibold">
+            {item.title}
+          </FoundryUI.Heading>
           <p className="text-sm text-muted-foreground">
             {runContext?.factoryName ?? "Factory"} ·{" "}
             {runContext?.workItem?.title ??
               (context.loading ? "Loading work item context…" : "Work item context unavailable")}
           </p>
           {context.error ? (
-            <p role="alert" className="text-sm">
+            <FoundryUI.Notice className="text-sm">
               Work item context is unavailable. {context.error}
-            </p>
+            </FoundryUI.Notice>
           ) : null}
         </div>
         <Button variant="ghost" onClick={onClose}>
@@ -229,7 +232,7 @@ export function InboxDetail({
               {question.options.map((option) => (
                 <label
                   key={option.value ?? option.label}
-                  className="flex items-start gap-2 text-sm"
+                  className="flex items-start gap-3 rounded-lg border p-3 text-sm has-checked:border-primary/40 has-checked:bg-primary/5"
                 >
                   <input
                     type={question.multiSelect ? "checkbox" : "radio"}
@@ -337,9 +340,9 @@ export function InboxDetail({
         </p>
       ) : null}
       <details className="border-t pt-3">
-        <summary className="cursor-pointer text-sm text-muted-foreground">
+        <FoundryUI.Summary className="cursor-pointer text-sm text-muted-foreground">
           Personal inbox organization
-        </summary>
+        </FoundryUI.Summary>
         <div className="space-y-3 pt-3">
           <p className="text-sm text-muted-foreground">
             Hiding an item only organizes your personal inbox. Pending questions and approvals
@@ -407,7 +410,9 @@ function InboxEvidence({
       <p className="text-sm">
         Decision revision {item.expectedRevision} · Result revision {item.resultRevision}
       </p>
-      {run.error || attempts.error ? <p role="alert">{run.error ?? attempts.error}</p> : null}
+      {run.error || attempts.error ? (
+        <FoundryUI.Notice>{run.error ?? attempts.error}</FoundryUI.Notice>
+      ) : null}
       {detail ? (
         <p className="text-sm" role={matches ? "status" : "alert"}>
           {matches

@@ -1,5 +1,6 @@
+import { FoundryUI } from "./FoundryUI";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useSearch, useNavigate } from "@tanstack/react-router";
+import { Link, useSearch, useNavigate } from "@tanstack/react-router";
 import { FactoryNavigation, useAutomationCapability } from "./FactoryNavigation";
 import { hasConfirmedAutomationView } from "./pageMode";
 import { lazy, Suspense, useState } from "react";
@@ -107,12 +108,12 @@ export function FoundryPage() {
         id="foundry-content"
         aria-label="Factory workspace"
         tabIndex={-1}
-        className="h-dvh min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both bg-background text-foreground pt-12"
+        className="h-dvh min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both bg-muted/20 text-foreground pt-12"
       >
         <div className="mx-auto max-w-7xl">
           <Suspense fallback={<p>Loading…</p>}>
             {search.view === "resources" ? (
-              <div className="space-y-6 p-4 sm:p-6 lg:p-8">
+              <div className="space-y-8 p-4 sm:p-6 lg:p-8">
                 <div>
                   <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     Instance
@@ -124,6 +125,48 @@ export function FoundryPage() {
                     Factory.
                   </p>
                 </div>
+                <FoundryUI.Panel aria-label="Resource settings">
+                  <FoundryUI.Heading>Configuration by scope</FoundryUI.Heading>
+                  <div className="grid gap-5 text-sm sm:grid-cols-3">
+                    <div className="space-y-2">
+                      <h3 className="font-medium">Instance & machines</h3>
+                      <p className="leading-6 text-muted-foreground">
+                        Manage registered machines and execution capacity below.
+                      </p>
+                      <Link
+                        className="inline-flex min-h-9 items-center rounded-md underline underline-offset-4 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                        to="/settings/connections"
+                      >
+                        Interactive connections
+                      </Link>
+                    </div>
+                    <div className="space-y-2">
+                      <h3 className="font-medium">Factory</h3>
+                      <p className="leading-6 text-muted-foreground">
+                        Definitions, workflows and authorized MCP bindings belong to their Factory.
+                      </p>
+                      <Link
+                        className="inline-flex min-h-9 items-center rounded-md underline underline-offset-4 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                        to="/foundry"
+                        search={{ view: "factories" }}
+                      >
+                        Choose a Factory
+                      </Link>
+                    </div>
+                    <div className="space-y-2">
+                      <h3 className="font-medium">Interactive work</h3>
+                      <p className="leading-6 text-muted-foreground">
+                        Provider and project settings apply to the selected environment.
+                      </p>
+                      <Link
+                        className="inline-flex min-h-9 items-center rounded-md underline underline-offset-4 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                        to="/settings/providers"
+                      >
+                        Provider settings
+                      </Link>
+                    </div>
+                  </div>
+                </FoundryUI.Panel>
                 <WorkerCapacity environmentId={state.binding.mainEnvironmentId} />
                 <DeviceCatalog readinessInDetails />
                 {sandboxes?.supported ? (
@@ -178,9 +221,9 @@ export function FoundryPage() {
         </div>
         <div className="space-y-2">
           <details open={nativeTransport || undefined}>
-            <summary className="cursor-pointer text-sm">
+            <FoundryUI.Summary className="cursor-pointer text-sm">
               {nativeTransport ? "Instance URL" : "Use another instance"}
-            </summary>
+            </FoundryUI.Summary>
             <label htmlFor="foundry-origin" className="text-sm font-medium">
               Instance URL
             </label>
@@ -215,9 +258,9 @@ export function FoundryPage() {
           <div className="space-y-3 text-sm">
             <p className="break-all font-medium">{state.binding.origin}</p>
             <details className="rounded-lg border p-3">
-              <summary className="cursor-pointer text-muted-foreground">
+              <FoundryUI.Summary className="cursor-pointer text-muted-foreground">
                 Verified instance identity
-              </summary>
+              </FoundryUI.Summary>
               <div className="space-y-1 break-all pt-3 text-xs text-muted-foreground">
                 <p>Instance ID: {state.binding.instanceId}</p>
                 <p>Issuer: {state.binding.issuer}</p>
@@ -245,9 +288,9 @@ export function FoundryPage() {
               </Button>
             )}
             <details className="w-full rounded-lg border p-3">
-              <summary className="cursor-pointer text-sm text-muted-foreground">
+              <FoundryUI.Summary className="cursor-pointer text-sm text-muted-foreground">
                 Session controls
-              </summary>
+              </FoundryUI.Summary>
               <div className="flex flex-wrap gap-2 pt-3">
                 <Button variant="outline" disabled={busy} onClick={() => void operate("session")}>
                   Check session
@@ -271,7 +314,9 @@ export function FoundryPage() {
           </p>
         ) : (
           <details className="text-sm">
-            <summary className="cursor-pointer text-muted-foreground">Connection recovery</summary>
+            <FoundryUI.Summary className="cursor-pointer text-muted-foreground">
+              Connection recovery
+            </FoundryUI.Summary>
             <div className="pt-2">
               <Button
                 variant="ghost"

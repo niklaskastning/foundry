@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
@@ -64,7 +65,10 @@ export function TakeOverPanel({
   const eligible =
     control !== null && ["paused", "succeeded", "failed", "cancelled"].includes(control.state);
   return (
-    <section aria-label="Take over in T3" className="space-y-3 border-t pt-4">
+    <section
+      aria-label="Take over in T3"
+      className="space-y-4 rounded-xl border border-primary/20 bg-primary/5 p-4 sm:p-6"
+    >
       <h3 className="text-lg font-semibold">Continue interactively</h3>
       <p className="text-sm text-muted-foreground">
         Continue from a confirmed checkpoint. Pause an active run and wait for its current work to
@@ -176,7 +180,7 @@ export function HandoffList({
     <section aria-label="Interactive handoffs" className="space-y-3">
       <h3 className="text-lg font-semibold">Interactive work</h3>
       {query.loading && !query.result ? <p role="status">Loading interactive work…</p> : null}
-      {query.error ? <p role="alert">{query.error}</p> : null}
+      {query.error ? <FoundryUI.Notice>{query.error}</FoundryUI.Notice> : null}
       {query.result?.kind === "handoffs" ? (
         query.result.items.length ? (
           query.result.items.map((handoff) => (
@@ -384,9 +388,9 @@ function HandoffPanel({
             the workflow.
           </p>
           <details>
-            <summary className="cursor-pointer text-xs text-muted-foreground">
+            <FoundryUI.Summary className="cursor-pointer text-xs text-muted-foreground">
               Confirmed checkpoint and archive
-            </summary>
+            </FoundryUI.Summary>
             <div className="space-y-1 pt-2 text-xs text-muted-foreground">
               <p className="break-all">Commit: {handoff.result.commitSha}</p>
               <p className="break-all">Checkpoint: {handoff.result.checkpointRef}</p>
@@ -410,7 +414,9 @@ function HandoffPanel({
         </a>
       ) : null}
       <details className="text-xs text-muted-foreground">
-        <summary className="cursor-pointer">Workspace & revision details</summary>
+        <FoundryUI.Summary className="cursor-pointer">
+          Workspace & revision details
+        </FoundryUI.Summary>
         <div className="space-y-1 break-all pt-2">
           <p>
             Input revision: {handoff.baseRevision} · Generation {handoff.generation}

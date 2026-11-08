@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
@@ -22,10 +23,10 @@ export function WorkerCapacity({ environmentId }: { environmentId: EnvironmentId
   const workers = binding?.workers ?? (binding ? [binding] : []);
   const selectedWorker = workers.find((worker) => worker.deviceId === selected) ?? binding;
   return (
-    <section aria-label="Factory workers" className="space-y-4">
+    <FoundryUI.Panel aria-label="Factory workers">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">Factory workers</h2>
+          <FoundryUI.Heading>Factory workers</FoundryUI.Heading>
           <p className="mt-1 text-sm text-muted-foreground">
             Configured execution targets. Pausing stops new dispatch; running work continues.
           </p>
@@ -34,11 +35,7 @@ export function WorkerCapacity({ environmentId }: { environmentId: EnvironmentId
           Refresh workers
         </Button>
       </div>
-      {query.error ? (
-        <p role="alert" className="text-sm">
-          {query.error}
-        </p>
-      ) : null}
+      {query.error ? <FoundryUI.Notice className="text-sm">{query.error}</FoundryUI.Notice> : null}
       {query.loading && !binding ? (
         <p role="status" className="text-sm text-muted-foreground">
           Loading configured workers…
@@ -75,7 +72,7 @@ export function WorkerCapacity({ environmentId }: { environmentId: EnvironmentId
           />
         )
       ) : null}
-    </section>
+    </FoundryUI.Panel>
   );
 }
 
@@ -92,9 +89,7 @@ function SelectedWorker({
     <div className="space-y-3">
       {query.error ? (
         <div className="space-y-2">
-          <p role="alert" className="text-sm">
-            {query.error}
-          </p>
+          <FoundryUI.Notice className="text-sm">{query.error}</FoundryUI.Notice>
           <Button variant="outline" onClick={query.refresh}>
             Retry worker connection
           </Button>
@@ -241,7 +236,9 @@ function WorkerDetails({
         </p>
       ) : null}
       <details className="border-t pt-3 text-sm">
-        <summary className="cursor-pointer">Projects and worker details</summary>
+        <FoundryUI.Summary className="cursor-pointer">
+          Projects and worker details
+        </FoundryUI.Summary>
         <div className="space-y-3 pt-3">
           <p className="break-all text-muted-foreground">
             Environment: {binding.environmentId} · Device: {binding.deviceId} · Provider version:{" "}
