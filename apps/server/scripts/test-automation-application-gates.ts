@@ -130,9 +130,14 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     Layer.provide(database),
   );
   const layer = Application.layer.pipe(
-    Layer.provide(Evaluations.layer),
-    Layer.provide(Layer.mock(EvaluationJudge.EvaluationJudge)({ judge: unused })),
+    Layer.provide(
+      Evaluations.layer.pipe(
+        Layer.provide(Layer.succeed(EvaluationJudge.EvaluationJudge, { judge: unused })),
+        Layer.provide(Layer.mock(ThreadArchive.ThreadArchive)({ read: unused })),
+      ),
+    ),
     Layer.provide(Layer.mock(ThreadArchive.ThreadArchive)({ read: unused })),
+
     Layer.provide(McpBindings.layer),
     Layer.provide(DispatchStore.layer),
     Layer.provide(machineAccess),

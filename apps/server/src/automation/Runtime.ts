@@ -171,7 +171,6 @@ export const layer = Layer.unwrap(
     return Layer.mergeAll(routes, AutomationHttp.layer, ApiHttp.layer, reconciliationLayer)
       .pipe(
         Layer.provide(Application.layer.pipe(Layer.provide(Handoffs.layer))),
-        Layer.provide(OperationsDashboard.layer),
         Layer.provide(Evaluations.layer.pipe(Layer.provide(EvaluationJudge.layer))),
         Layer.provide(DefinitionSync.layer.pipe(Layer.provideMerge(DefinitionSources.layer))),
         Layer.provide(Layer.merge(GitHubPolling.layer, ScheduleTriggers.layer)),

@@ -25,6 +25,8 @@ export class EvaluationError extends Schema.TaggedError<EvaluationError>()("Eval
 type Identity = { readonly instanceId: string; readonly operatorId: string };
 const decodeInput = Schema.decodeUnknownEffect(EvaluationInput);
 const decodeResult = Schema.decodeUnknownEffect(EvaluationResult);
+const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const isJudgeError = Schema.is(EvaluationJudge.EvaluationJudgeError);
 const isEvaluationError = Schema.is(EvaluationError);
 const decodeRequest = Schema.decodeUnknownEffect(RequestEvaluation);
 const decodeCatalog = Schema.decodeUnknownEffect(
@@ -43,7 +45,11 @@ export class Evaluations extends Context.Service<
     ) => Effect.Effect<string, EvaluationError>;
     readonly list: (
       identity: Identity,
-      filter: { factoryId?: string; runId?: string; after?: string },
+      filter: {
+        factoryId?: string | undefined;
+        runId?: string | undefined;
+        after?: string | undefined;
+      },
     ) => Effect.Effect<readonly EvaluationSummary[], EvaluationError>;
     readonly read: (
       identity: Identity,
@@ -130,7 +136,7 @@ export const layer = Layer.effect(
           })),
         },
         scorerRevision: definition.contentHash,
-        scorerSource: JSON.stringify({
+        scorerSource: yield* encodeJson({
           factoryId: request.scorerFactoryId,
           versionId: request.scorerVersionId,
           source: definition.source,
@@ -142,7 +148,7 @@ export const layer = Layer.effect(
       const automaticKey =
         mode === "automatic"
           ? evaluationDigest(
-              JSON.stringify([input.factoryId, input.runId, scorer.id, input.scorerRevision]),
+              yield* encodeJson([input.factoryId, input.runId, scorer.id, input.scorerRevision]),
             )
           : null;
       return yield* sql.withTransaction(
@@ -160,7 +166,11 @@ export const layer = Layer.effect(
     }, Effect.mapError(mapError));
     const list = Effect.fn("Evaluations.list")(function* (
       identity: Identity,
-      filter: { factoryId?: string; runId?: string; after?: string },
+      filter: {
+        factoryId?: string | undefined;
+        runId?: string | undefined;
+        after?: string | undefined;
+      },
     ) {
       const rows = yield* sql<{ summary: unknown }>`SELECT jsonb_build_object(
       'id',r.id,'factoryId',r.factory_id,'runId',r.run_id,
@@ -211,7 +221,7 @@ export const layer = Layer.effect(
             scorerFactoryId: candidate.scorerFactoryId,
             scorerVersionId: candidate.scorerVersionId,
             scorerId: candidate.scorerId,
-            id: `auto:${evaluationDigest(JSON.stringify(candidate))}`,
+            id: `auto:${evaluationDigest(yield* encodeJson(candidate))}`,
           },
           "automatic",
         );
@@ -274,10 +284,7 @@ export const layer = Layer.effect(
             Effect.catch((error) =>
               Effect.succeed({
                 status: "failed" as const,
-                reason:
-                  error instanceof EvaluationJudge.EvaluationJudgeError
-                    ? error.reason
-                    : ("invalid_judgment" as const),
+                reason: isJudgeError(error) ? error.reason : ("invalid_judgment" as const),
                 judgment: null,
                 passed: null,
               }),

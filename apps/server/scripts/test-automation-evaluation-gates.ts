@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Assertions run only inside the isolated PostgreSQL harness.
 import * as NodeAssert from "node:assert/strict";
-import type { FactoryV4Scorer, RequestEvaluation } from "@t3tools/contracts";
+import type { EvaluationInput, FactoryV4Scorer, RequestEvaluation } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -19,7 +19,7 @@ export const evaluationGates = Effect.fn("Evaluations.postgresGates")(function* 
   const entered = yield* Deferred.make<void>();
   const release = yield* Deferred.make<void>();
   const judge = Layer.succeed(EvaluationJudge.EvaluationJudge, {
-    judge: Effect.fn("EvaluationGate.judge")(function* (input) {
+    judge: Effect.fn("EvaluationGate.judge")(function* (input: EvaluationInput) {
       judgeCalls++;
       if (blockJudge) {
         yield* Deferred.succeed(entered, undefined);
