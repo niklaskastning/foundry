@@ -18,15 +18,23 @@ export function SourceFeaturePanel({
   factoryId: string;
   runId?: string;
 }) {
+  const [after, setAfter] = useState<string>();
   const factory = useAutomationQuery(environmentId, { op: "factory", factoryId });
   const revisions = useAutomationQuery(environmentId, {
     op: "definitionRevisions",
     factoryId,
     limit: 50,
+    ...(after ? { after } : {}),
   });
   const source = useAutomationQuery(environmentId, { op: "definitionSource", factoryId });
   const detail = factory.result?.kind === "factory" ? factory.result : null;
   const binding = source.result?.kind === "definitionSource" ? source.result.binding : null;
+  const candidate = useAutomationQuery(
+    environmentId,
+    binding?.selectedRevisionId
+      ? { op: "definitionRevision", factoryId, revisionId: binding.selectedRevisionId }
+      : { op: "definitionSource", factoryId },
+  );
   const [repository, setRepository] = useState("");
   const [repositoryId, setRepositoryId] = useState("");
   const [branch, setBranch] = useState("main");
@@ -51,6 +59,7 @@ export function SourceFeaturePanel({
     factory.refresh();
     source.refresh();
     revisions.refresh();
+    candidate.refresh();
   };
   if (factory.error || source.error) return <p role="alert">{factory.error ?? source.error}</p>;
   if (!detail || source.loading) return <p role="status">Loading definition source…</p>;
@@ -236,7 +245,16 @@ export function SourceFeaturePanel({
           {revisions.error ? <p role="alert">{revisions.error}</p> : null}
           <ul className="space-y-3">
             {revisions.result?.kind === "definitionRevisions"
-              ? revisions.result.items.map((revision) => (
+              ? [
+                  ...(candidate.result?.kind === "definitionRevision"
+                    ? [candidate.result.revision]
+                    : []),
+                  ...revisions.result.items.filter(
+                    (revision) =>
+                      candidate.result?.kind !== "definitionRevision" ||
+                      revision.id !== candidate.result.revision.id,
+                  ),
+                ].map((revision) => (
                   <li key={revision.id} className="space-y-2 border-t pt-3">
                     <p className="break-all">
                       {revision.commitSha} ·{" "}
@@ -291,6 +309,21 @@ export function SourceFeaturePanel({
                 ))
               : null}
           </ul>
+          <div className="flex gap-2">
+            <Button variant="outline" disabled={!after} onClick={() => setAfter(undefined)}>
+              First revisions
+            </Button>
+            <Button
+              variant="outline"
+              disabled={revisions.result?.kind !== "definitionRevisions" || !revisions.result.next}
+              onClick={() => {
+                if (revisions.result?.kind === "definitionRevisions")
+                  setAfter(revisions.result.next ?? undefined);
+              }}
+            >
+              Next revisions
+            </Button>
+          </div>
         </>
       ) : null}
     </section>

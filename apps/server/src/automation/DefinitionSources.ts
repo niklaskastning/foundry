@@ -384,7 +384,7 @@ const make = Effect.gen(function* () {
         const contentHash = Result.isSuccess(parsed)
           ? yield* hash(canonicalFactoryJson(parsed.success))
           : null;
-        const id = `git-revision:${yield* hash(`${binding.factoryId}:${binding.repositoryId}:${binding.repository}:${binding.branch}:${binding.path}:${binding.commitSha ?? ""}:${commitSha}`)}`;
+        const id = `git-revision:${yield* hash(JSON.stringify([binding.factoryId, binding.repositoryId, binding.repository, binding.branch, binding.path, binding.commitSha ?? null, commitSha]))}`;
         yield* sql`INSERT INTO foundry_automation.definition_git_revisions(id,factory_id,commit_sha,content_hash,valid,issues,files,created_at,location) VALUES(${id},${binding.factoryId},${commitSha},${contentHash},${valid},${sql.json(issues)},${sql.json(files)},${now},${sql.json({ connectionId: binding.connectionId, repositoryId: binding.repositoryId, repository: binding.repository, branch: binding.branch, path: binding.path, ...(binding.commitSha ? { commitSha: binding.commitSha } : {}) })}) ON CONFLICT DO NOTHING`;
         const stored = yield* sql<{
           valid: boolean;
