@@ -309,6 +309,24 @@ the previous image ID and candidate revision. Backups contain private state and 
 root-readable only; retention is manual. They do not include PostgreSQL or workspaces
 and are not a replacement for the complete backups described below.
 
+For the designated development VPS, use `activate-access.py update sha256:<digest>
+<source-sha> --development` (or the required `upgrade-…` command with the same
+trailing flag). The baseline helper accepts `foundry-deploy deploy sha256:<digest>
+--development`. This explicitly skips state/workspace archives and PostgreSQL/role
+dumps; it does not delete existing archives or copy old builds. Private runtime
+configuration copies remain protected in the recovery directory. The manifest
+records the backup policy, previous/target artifact and schema versions; migrations,
+connection guards, identity/readiness checks and the success record still apply.
+
+Development recovery uses a rebuild/redeployment of the pinned artifact, with schema
+reconciliation and, if necessary, a verified reset of disposable Foundry application
+data. Credentials, provider sessions, personal T3 state and unrelated services remain
+excluded from resets. A failed candidate stays stopped; never blindly downgrade its
+image against migrated data. Keep Main, workers and provisioner on the exact tested
+artifact as required by the rollout. Do not remove an existing recovery directory
+without checking its owner, purpose and whether an active rollout still needs it.
+Coordinate installation and the real update with the current rollout owner.
+
 The updater already serializes runs with `/var/lib/foundry-deploy/lock` (an exclusive, nonblocking `flock`). Manual Foundry rollouts, worker updates and migrations use the same lock through verification. Do not acquire it again around the updater or bypass a busy lock. The manifest and `success` file provide automatic evidence; briefly report previous/target revision, healthcheck result and recovery path in the PR or handoff. Manual paths report the same fields there, without a separate file or checklist.
 
 If backup creation fails, the old container restarts. If candidate startup or identity
