@@ -1,3 +1,4 @@
+import { collectEvaluationEvidence } from "./EvaluationEvidence.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- Random claim tokens fence asynchronous judge completion.
 import { randomUUID } from "node:crypto";
 import { EvaluationInput, EvaluationJudgment, EvaluationResult, EvaluationSummary, FactoryV4Scorer, RequestEvaluation } from "@t3tools/contracts";
@@ -46,13 +47,8 @@ export const layer = Layer.effect(Evaluations, Effect.gen(function* () {
     const catalog = yield* Schema.decodeUnknownEffect(Schema.Struct({ scorers: Schema.Array(FactoryV4Scorer) }))(definition.definition).pipe(Effect.mapError(() => new EvaluationError({ reason: "invalid_input" })));
     const scorer = catalog.scorers.find((item) => item.id === request.scorerId);
     if (!scorer) return yield* new EvaluationError({ reason: "not_found" });
-    const attempts = yield* sql<{ id: string; result: unknown; request: unknown }>`SELECT command_id AS id,result,request FROM foundry_automation.step_attempts WHERE run_id=${request.runId} ORDER BY ordinal,attempt_number LIMIT 101`;
-    const evidence = attempts.length > 100 || attempts.some((item) => !item.result || JSON.stringify(item.result).length > 100_000) ? [] : attempts.flatMap((attempt) => {
-      if (!attempt.result) return [];
-      const content = JSON.stringify(attempt.result);
-      if (content.length > 100_000) return [];
-      return [{ id: attempt.id, content, sha256: evaluationDigest(content), source: `attempt:${attempt.id}` }];
-    });
+    const attempts = yield* sql<{ id: string; result: unknown; request: unknown; kind: string }>`SELECT a.command_id AS id,a.result,a.request,COALESCE((SELECT node->'definition'->>'kind' FROM jsonb_array_elements(COALESCE(d.v4_state->'nodes','[]'::jsonb)) node WHERE node->>'ordinal'=a.ordinal::text LIMIT 1),v.steps->a.ordinal->>'kind') AS kind FROM foundry_automation.step_attempts a JOIN foundry_automation.dispatch_runs d ON d.run_id=a.run_id JOIN foundry_automation.runs r ON r.id=a.run_id JOIN foundry_automation.workflow_versions v ON v.id=r.workflow_version_id WHERE a.run_id=${request.runId} ORDER BY a.ordinal,a.attempt_number LIMIT 101`;
+    const evidence = yield* collectEvaluationEvidence(identity, attempts);
     const input = decodeInput({
       id: request.id, factoryId: request.factoryId, runId: request.runId,
       definitionRevision: run.definitionRevision,
