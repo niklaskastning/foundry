@@ -69,6 +69,7 @@ export const FoundryGatewayGrantLookup = Schema.Struct({
   grantId: FoundryGatewayGrantId,
 });
 export const FoundryGatewayGrant = Schema.Struct({
+  purpose: Schema.optional(Schema.Literal("evaluation")),
   ...FoundryGatewayGrantRequest.fields,
   grantId: FoundryGatewayGrantId,
   protocolVersion: Schema.Literal("2"),

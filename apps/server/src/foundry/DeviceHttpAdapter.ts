@@ -98,6 +98,7 @@ export const make = Effect.fn("DeviceHttpAdapter.make")(function* (options: {
   ) {
     const grant = yield* decodeGrant(input).pipe(Effect.mapError(forbidden));
     const now = yield* Clock.currentTimeMillis;
+    const leaseMillis = stream && grant.purpose === "evaluation" ? 180_000 : 60_000;
     if (
       !grant.scopes.includes("orchestration:read") ||
       new Set(grant.scopes).size !== grant.scopes.length ||
@@ -109,7 +110,7 @@ export const make = Effect.fn("DeviceHttpAdapter.make")(function* (options: {
       grant.channelGeneration !== channelGeneration ||
       options.device.revoked ||
       grant.expiresAt <= now ||
-      grant.expiresAt > now + 60_000 ||
+      grant.expiresAt > now + leaseMillis ||
       (yield* options.localEnvironmentId.pipe(Effect.mapError(forbidden))) !==
         grant.environmentId ||
       (yield* environment.getEnvironmentId.pipe(Effect.mapError(forbidden))) !== grant.environmentId
@@ -133,7 +134,7 @@ export const make = Effect.fn("DeviceHttpAdapter.make")(function* (options: {
           subject: encodeSubject({ kind: "foundry-gateway-v1", ...grant }),
           method: "dpop-access-token",
           proofKeyThumbprint,
-          ttl: Duration.millis(Math.min(stream ? 60000 : 5000, remaining)),
+          ttl: Duration.millis(Math.min(stream ? leaseMillis : 5000, remaining)),
           client: { deviceType: "unknown", label: `Foundry ${grant.grantId}` },
         })
         .pipe(Effect.mapError(unavailable)),

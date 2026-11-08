@@ -225,7 +225,12 @@ const make = Effect.gen(function* () {
       return yield* operation(client).pipe(
         Effect.raceFirst(
           gateway
-            .openAutomation(identity, sockets.gateway, authorization)
+            .openAutomation(
+              identity,
+              sockets.gateway,
+              authorization,
+              evaluation ? "evaluation" : undefined,
+            )
             .pipe(Effect.andThen(Effect.fail(new FoundryGatewayError({ code: "unavailable" })))),
         ),
       );

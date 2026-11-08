@@ -32,6 +32,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import type * as RpcGroup from "effect/rpc/RpcGroup";
 
@@ -285,6 +286,15 @@ const requiredScopesForRpcCall = (
   return [requiredScopeForRpcMethod(method)];
 };
 
+const decodeEvaluationSubject = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      kind: Schema.Literal("foundry-gateway-v1"),
+      purpose: Schema.Literal("evaluation"),
+    }),
+  ),
+);
+
 /**
  * `onAuthorized` runs once after an authorized request succeeds; for a stream
  * RPC, that is when the stream completes. Every RPC passes through here, so it
@@ -293,8 +303,15 @@ const requiredScopesForRpcCall = (
 export const layer = (
   scopes: ReadonlyArray<AuthEnvironmentScope>,
   onAuthorized?: (method: string, payload: unknown) => Effect.Effect<void>,
+  subject?: string,
 ) =>
   Layer.succeed(RpcScopeAuthorization)((effect, { rpc, payload }) => {
+    if (
+      subject &&
+      Option.isSome(decodeEvaluationSubject(subject)) &&
+      rpc._tag !== WS_METHODS.foundryWorkerEvaluate
+    )
+      return Effect.fail(rpcAuthorizationError(AuthOrchestrationOperateScope));
     const requiredScopes = requiredScopesForRpcCall(rpc._tag, payload);
     const requiredScope = requiredScopes.find((scope) => !scopes.includes(scope));
     if (requiredScope !== undefined) return Effect.fail(rpcAuthorizationError(requiredScope));
