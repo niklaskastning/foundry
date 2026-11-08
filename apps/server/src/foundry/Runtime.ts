@@ -1,3 +1,4 @@
+import * as MainBrowserSession from "./MainBrowserSession.ts";
 import * as WorkerTransport from "../automation/WorkerTransport.ts";
 import * as SandboxGatewayAccess from "./SandboxGatewayAccess.ts";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
@@ -15,6 +16,7 @@ import * as Layer from "effect/Layer";
 import * as EnvironmentAuthPolicy from "../auth/EnvironmentAuthPolicy.ts";
 import * as AccessConfig from "./AccessConfig.ts";
 import * as AccessVerifier from "./AccessVerifier.ts";
+import * as NativeOperator from "./NativeOperator.ts";
 import * as FoundrySessions from "./FoundrySessions.ts";
 import * as InstanceDatabase from "./InstanceDatabase.ts";
 import * as InstanceDescriptor from "./InstanceDescriptor.ts";
@@ -162,11 +164,12 @@ export const layer = Layer.unwrap(
       : Layer.empty;
     return Layer.mergeAll(
       FoundryHttp.layer,
-      AuthHttp.layer,
+      AuthHttp.layer.pipe(Layer.provide(MainBrowserSession.layer)),
       deviceRoutes,
       artifactRoutes.pipe(Layer.provide(DeviceRegistry.layer), Layer.provide(DeviceConfig.layer)),
     ).pipe(
       Layer.provide(Layer.merge(InstanceDescriptor.layer, FoundrySessions.layer)),
+      Layer.provide(NativeOperator.layer),
       Layer.provide(AccessVerifier.layer),
       Layer.provide(AccessVerifier.layerRemoteKeys),
       Layer.provide(AccessConfig.layer),

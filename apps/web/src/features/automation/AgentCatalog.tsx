@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { V4Catalog, V4WorkflowConfiguration } from "./V4Configuration";
 import type { FactoryDefinitionVersion } from "@t3tools/contracts";
 import { resolveFactoryWorkflow } from "@t3tools/shared/factoryDefinition";
@@ -10,9 +11,9 @@ export function AgentCatalog({ active }: { active: FactoryDefinitionVersion | nu
   const definition = active.definition;
   const roles = definition.schemaVersion === 4 ? [] : (definition.roles ?? []);
   return (
-    <section className="space-y-6" aria-label="Factory agents and skills">
+    <FoundryUI.Panel className="space-y-6" aria-label="Factory agents and skills">
       <div>
-        <h2 className="text-lg font-semibold">Agents & skills</h2>
+        <FoundryUI.Heading>Agents & skills</FoundryUI.Heading>
         <p className="text-sm text-muted-foreground">
           Reusable agents for new runs. Each workflow adds its task and execution settings.
         </p>
@@ -24,9 +25,9 @@ export function AgentCatalog({ active }: { active: FactoryDefinitionVersion | nu
           available.
         </p>
       ) : null}
-      <div className="divide-y border-y">
+      <div className="space-y-3">
         {roles.map((role) => (
-          <article key={role.id} className="min-w-0 space-y-3 py-4">
+          <article key={role.id} className="min-w-0 space-y-4 rounded-lg border bg-muted/10 p-4">
             <h3 className="text-base font-semibold">{role.name}</h3>
             <p className="text-sm">{role.description}</p>
             <dl className="grid gap-3 text-sm sm:grid-cols-2">
@@ -71,9 +72,9 @@ export function AgentCatalog({ active }: { active: FactoryDefinitionVersion | nu
               </div>
             </dl>
             <details className="border-t pt-3">
-              <summary className="cursor-pointer text-sm font-medium">
+              <FoundryUI.Summary className="cursor-pointer text-sm font-medium">
                 Full role instructions
-              </summary>
+              </FoundryUI.Summary>
               <p className="whitespace-pre-wrap break-words pt-3 text-sm">{role.instructions}</p>
             </details>
           </article>
@@ -84,7 +85,7 @@ export function AgentCatalog({ active }: { active: FactoryDefinitionVersion | nu
           <h3 className="font-medium">Versioned instruction skills</h3>
           {definition.skills.map((skill) => (
             <details key={skill.id} className="rounded-lg border p-3">
-              <summary className="cursor-pointer text-sm">{skill.name}</summary>
+              <FoundryUI.Summary className="cursor-pointer text-sm">{skill.name}</FoundryUI.Summary>
               <p className="whitespace-pre-wrap pt-2 text-sm">{skill.instructions}</p>
             </details>
           ))}
@@ -111,7 +112,9 @@ export function AgentCatalog({ active }: { active: FactoryDefinitionVersion | nu
           </p>
         )}
         <details className="rounded-lg border p-3 text-sm">
-          <summary className="cursor-pointer">Revision and configuration rules</summary>
+          <FoundryUI.Summary className="cursor-pointer">
+            Revision and configuration rules
+          </FoundryUI.Summary>
           <div className="space-y-2 break-words pt-3 text-muted-foreground">
             <p>
               {definition.schemaVersion === 4
@@ -142,35 +145,35 @@ export function AgentCatalog({ active }: { active: FactoryDefinitionVersion | nu
           </div>
         </details>
       </section>
-    </section>
+    </FoundryUI.Panel>
   );
 }
 
 export function WorkflowCatalog({ active }: { active: FactoryDefinitionVersion | null }) {
   return (
-    <section className="space-y-5" aria-label="Factory workflows">
+    <FoundryUI.Panel className="space-y-5" aria-label="Factory workflows">
       <div>
-        <h2 className="text-lg font-semibold">Workflows</h2>
+        <FoundryUI.Heading>Workflows</FoundryUI.Heading>
         <p className="mt-1 text-sm text-muted-foreground">
           Follow the work from its first step to review and delivery. This is the active definition
           for new runs.
         </p>
       </div>
       {active ? (
-        <div className="divide-y border-y">
+        <div className="space-y-3">
           {active.definition.workflows.map((workflow) => (
             <details
               key={workflow.id}
               open={active.definition.workflows.length === 1}
-              className="py-4"
+              className="rounded-lg border bg-muted/10 p-4"
             >
-              <summary className="cursor-pointer font-medium">
+              <FoundryUI.Summary className="cursor-pointer font-medium">
                 {workflow.id}{" "}
                 <span className="text-xs font-normal text-muted-foreground">
                   {" "}
                   · {workflow.steps.length} top-level steps
                 </span>
-              </summary>
+              </FoundryUI.Summary>
               <WorkflowConfiguration active={active} workflowId={workflow.id} />
             </details>
           ))}
@@ -180,7 +183,7 @@ export function WorkflowCatalog({ active }: { active: FactoryDefinitionVersion |
           Activate a definition to see the workflow and its agents.
         </p>
       )}
-    </section>
+    </FoundryUI.Panel>
   );
 }
 
@@ -209,9 +212,9 @@ export function WorkflowConfiguration({
           {step.kind === "agent" ? (
             <>
               <details>
-                <summary className="cursor-pointer text-muted-foreground">
+                <FoundryUI.Summary className="cursor-pointer text-muted-foreground">
                   Task instructions
-                </summary>
+                </FoundryUI.Summary>
                 <p className="whitespace-pre-wrap break-words pt-2">{step.prompt}</p>
               </details>
               <p>
@@ -221,7 +224,7 @@ export function WorkflowConfiguration({
               <p>Skills: {step.resolved?.skills.map((skill) => skill.name).join(", ") || "None"}</p>
               {step.execution ? (
                 <details className="text-xs text-muted-foreground">
-                  <summary className="cursor-pointer">Step overrides</summary>
+                  <FoundryUI.Summary className="cursor-pointer">Step overrides</FoundryUI.Summary>
                   <pre className="overflow-x-auto pt-2">
                     {JSON.stringify(step.execution, null, 2)}
                   </pre>
@@ -229,9 +232,9 @@ export function WorkflowConfiguration({
               ) : null}
               {step.resolved?.instructions ? (
                 <details>
-                  <summary className="cursor-pointer">
+                  <FoundryUI.Summary className="cursor-pointer">
                     Effective role and skill instructions
-                  </summary>
+                  </FoundryUI.Summary>
                   <p className="whitespace-pre-wrap pt-2">{step.resolved.instructions}</p>
                 </details>
               ) : null}

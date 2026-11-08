@@ -382,9 +382,12 @@ it.layer(layerTest)("ThreadSearch", (it) => {
       const parent = ThreadId.make("thread:tokens-parent");
       const subagent = ThreadId.make("thread:tokens-subagent");
       const sideChat = ThreadId.make("thread:tokens-side-chat");
+      const execution = ThreadId.make("foundry-launch:historical");
       yield* createProject(project);
       yield* Effect.forEach(
         [
+          thread(execution, project, { title: "ThreadSearchService execution" }),
+          message(execution, "execution", "user", "ThreadSearchService execution"),
           thread(parent, project),
           message(parent, "parent", "user", "Rename ThreadSearchService before shipping"),
           thread(subagent, project, { subagentOf: parent }),
@@ -396,6 +399,12 @@ it.layer(layerTest)("ThreadSearch", (it) => {
         { discard: true },
       );
 
+      assert.deepEqual(
+        (yield* search.searchThreads({ query: "search servi" })).matches.map(
+          (match) => match.threadId,
+        ),
+        [parent],
+      );
       const result = yield* search.search({ query: "search servi" });
       assert.deepEqual(
         result.matches.map((match) => [match.threadId, match.snippet]),
@@ -816,6 +825,10 @@ it.layer(layerTest)("ThreadSearch.searchOlderSettled", (it) => {
       yield* Effect.forEach(
         [
           thread(id("old"), project, { title: "Kestrel nest", settledAt: old }),
+          thread(ThreadId.make("foundry-launch:v4:kestrel"), project, {
+            title: "Kestrel execution",
+            settledAt: old,
+          }),
           thread(id("recent"), project, { title: "Kestrel nest", settledAt: at(50) }),
           thread(id("open"), project, { title: "Kestrel nest" }),
           thread(id("child"), project, { title: "Kestrel nest", subagentOf: id("old") }),

@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { factoryDefinitionPreview } from "@t3tools/shared/factoryDefinitionPreview";
 import { useState } from "react";
 import { parseDiffFromFile } from "@pierre/diffs";
@@ -120,9 +121,9 @@ export function DefinitionSourcePanel({
     }
   }
   return (
-    <section aria-label="Git definition source" className="space-y-5">
+    <FoundryUI.Panel aria-label="Git definition source" className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-semibold">Definition source</h2>
+        <FoundryUI.Heading>Definition source</FoundryUI.Heading>
         <Button variant="outline" onClick={refresh}>
           Refresh
         </Button>
@@ -183,10 +184,10 @@ export function DefinitionSourcePanel({
             <p className="text-sm">No revision read yet.</p>
           )}
           {binding.error ? (
-            <p role="alert" className="whitespace-pre-wrap text-sm">
+            <FoundryUI.Notice className="whitespace-pre-wrap text-sm">
               Synchronization: {binding.error}. Check the repository, branch, definition files and
               GitHub App contents permission, then authorize or sync again.
-            </p>
+            </FoundryUI.Notice>
           ) : null}
           {binding.ownership === "pending" ? (
             <div className="space-y-1 rounded border p-3 text-sm">
@@ -220,7 +221,9 @@ export function DefinitionSourcePanel({
                 Use current local version as import basis
               </Button>
               <details>
-                <summary className="cursor-pointer">Import basis details</summary>
+                <FoundryUI.Summary className="cursor-pointer">
+                  Import basis details
+                </FoundryUI.Summary>
                 <div className="space-y-1 break-all pt-2 text-muted-foreground">
                   <p>Import version: {binding.importVersionId ?? "New factory"}</p>
                   <p>
@@ -231,10 +234,10 @@ export function DefinitionSourcePanel({
               {active &&
               (active.id !== binding.importVersionId ||
                 active.contentHash !== binding.importContentHash) ? (
-                <p role="alert">
+                <FoundryUI.Notice>
                   The active local definition has changed since binding. Import is blocked by drift;
                   review the local changes and explicitly update the import basis before importing.
-                </p>
+                </FoundryUI.Notice>
               ) : null}
             </div>
           ) : (
@@ -258,9 +261,9 @@ export function DefinitionSourcePanel({
               Sync now
             </Button>
             <details className="text-sm">
-              <summary className="cursor-pointer py-2 text-muted-foreground">
+              <FoundryUI.Summary className="cursor-pointer py-2 text-muted-foreground">
                 Background access
-              </summary>
+              </FoundryUI.Summary>
               <div className="flex flex-wrap gap-2 pt-2">
                 <Button
                   variant="outline"
@@ -386,7 +389,7 @@ export function DefinitionSourcePanel({
           <p className="text-sm text-muted-foreground">
             A synced revision is a candidate until you activate it.
           </p>
-          {revisions.error ? <p role="alert">{revisions.error}</p> : null}
+          {revisions.error ? <FoundryUI.Notice>{revisions.error}</FoundryUI.Notice> : null}
           {revisions.loading ? <p role="status">Loading revisions…</p> : null}
           <ul className="divide-y">
             {page?.items.map((revision) => (
@@ -454,7 +457,7 @@ export function DefinitionSourcePanel({
           ) : null}
         </>
       ) : null}
-    </section>
+    </FoundryUI.Panel>
   );
 }
 
@@ -535,7 +538,7 @@ function RevisionDetail({
   return (
     <section aria-label="Definition revision details" className="space-y-3 border-t pt-4">
       <h3 className="font-medium">Review revision</h3>
-      {error ? <p role="alert">{error}</p> : null}
+      {error ? <FoundryUI.Notice>{error}</FoundryUI.Notice> : null}
       {loading ? <p role="status">Loading revision…</p> : null}
       <Button variant="outline" onClick={refresh}>
         Refresh comparison
@@ -564,10 +567,10 @@ function RevisionDetail({
             activeVersionId={detail.activeVersionId}
           />
           {importDrift ? (
-            <p role="alert" className="text-sm">
+            <FoundryUI.Notice className="text-sm">
               Import drift: this revision or the active definition differs from the recorded import
               basis. No ownership transfer is possible until the basis matches.
-            </p>
+            </FoundryUI.Notice>
           ) : null}
           <p className="text-sm">
             Activating a previously read valid revision rolls back the definition for new runs.
@@ -661,7 +664,8 @@ function RevisionFile({
     ...input,
     side: "active",
   });
-  if (candidate.error || active.error) return <p role="alert">{candidate.error ?? active.error}</p>;
+  if (candidate.error || active.error)
+    return <FoundryUI.Notice>{candidate.error ?? active.error}</FoundryUI.Notice>;
   if (candidate.loading || active.loading) return <p role="status">Loading file comparison…</p>;
   if (
     candidate.result?.kind !== "definitionRevisionFile" ||

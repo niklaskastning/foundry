@@ -1,3 +1,4 @@
+import { FoundryUI } from "./FoundryUI";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
@@ -62,7 +63,7 @@ export function WorkerStatus({ environmentId }: { environmentId: EnvironmentId }
   return (
     <section
       aria-label="Selected worker readiness"
-      className="space-y-4 rounded-lg border bg-card p-4"
+      className="space-y-5 rounded-xl border bg-card p-4 shadow-xs sm:p-6"
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="font-medium">Selected worker</h3>
@@ -91,9 +92,9 @@ export function WorkerStatus({ environmentId }: { environmentId: EnvironmentId }
           Checking worker…
         </p>
       ) : failed ? (
-        <p role="alert" className="text-sm">
+        <FoundryUI.Notice className="text-sm">
           Worker status could not be verified. Check the device connection and retry.
-        </p>
+        </FoundryUI.Notice>
       ) : status ? (
         <>
           <div className="grid gap-4 sm:grid-cols-3">
@@ -141,7 +142,9 @@ export function WorkerStatus({ environmentId }: { environmentId: EnvironmentId }
             <p className="text-sm">{messages[status.providerState]}</p>
           ) : null}
           <details className="border-t pt-3 text-sm">
-            <summary className="cursor-pointer">Provider and configuration details</summary>
+            <FoundryUI.Summary className="cursor-pointer">
+              Provider and configuration details
+            </FoundryUI.Summary>
             <div className="space-y-2 pt-3 text-muted-foreground">
               <p>{messages[status.providerState]}</p>
               <p>Version: {status.version ?? "Unknown"}</p>

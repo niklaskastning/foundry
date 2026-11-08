@@ -1,3 +1,4 @@
+import * as ParentSessionAuthority from "./ParentSessionAuthority.ts";
 import {
   AuthSessionId,
   AuthStandardClientScopes,
@@ -491,6 +492,7 @@ function toAuthClientSession(input: Omit<AuthClientSession, "current">): AuthCli
 }
 
 const make = Effect.gen(function* () {
+  const parentAuthority = yield* ParentSessionAuthority.ParentSessionAuthority;
   const crypto = yield* Crypto.Crypto;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironmentIdentity;
@@ -833,6 +835,8 @@ const make = Effect.gen(function* () {
         });
       }
 
+      if (!(yield* parentAuthority.validate(row.value.subject)))
+        return yield* new UnknownSessionTokenError({ sessionId: claims.sid });
       return {
         sessionId: claims.sid,
         token,
@@ -852,6 +856,14 @@ const make = Effect.gen(function* () {
   const issueWebSocketToken: SessionStore["Service"]["issueWebSocketToken"] = Effect.fn(
     "SessionStore.issueWebSocketToken",
   )(function* (sessionId, input) {
+    const row = yield* authSessions
+      .getById({ sessionId })
+      .pipe(Effect.mapError((cause) => new WebSocketTokenIssueError({ sessionId, cause })));
+    if (Option.isSome(row) && !(yield* parentAuthority.validate(row.value.subject)))
+      return yield* new WebSocketTokenIssueError({
+        sessionId,
+        cause: new Error("Parent session is no longer authorized"),
+      });
     const issuedAt = yield* DateTime.now;
     const expiresAt = DateTime.add(issuedAt, {
       milliseconds: Duration.toMillis(input?.ttl ?? DEFAULT_WEBSOCKET_TOKEN_TTL),
@@ -946,6 +958,8 @@ const make = Effect.gen(function* () {
       });
     }
 
+    if (!(yield* parentAuthority.validate(row.value.subject)))
+      return yield* new UnknownWebSocketSessionError({ sessionId: claims.sid });
     return {
       sessionId: row.value.sessionId,
       token,
@@ -968,7 +982,8 @@ const make = Effect.gen(function* () {
         connectedSessionIds: Array.from(connectedSessions.keys()),
       });
 
-      return rows.map((row) =>
+      const authorized = yield* Effect.filter(rows, (row) => parentAuthority.validate(row.subject));
+      return authorized.map((row) =>
         toAuthClientSession({
           sessionId: row.sessionId,
           subject: row.subject,
@@ -1072,10 +1087,17 @@ const make = Effect.gen(function* () {
         while (true) {
           const rows = yield* Effect.forEach(chain, readRow);
           if (rows.some((row) => Option.isNone(row) || row.value.revokedAt !== null)) return;
+          if (!(yield* parentAuthority.validate(original.value.subject))) return;
           const now = yield* DateTime.now;
           const remaining = current.expiresAt.epochMilliseconds - now.epochMilliseconds;
           if (remaining > 0) {
-            yield* Effect.raceFirst(nextRemoval, Effect.sleep(Duration.millis(remaining)));
+            yield* Effect.raceFirst(
+              Effect.raceFirst(
+                nextRemoval,
+                parentAuthority.awaitInvalidation(original.value.subject),
+              ),
+              Effect.sleep(Duration.millis(remaining)),
+            );
             continue;
           }
           const successorId =

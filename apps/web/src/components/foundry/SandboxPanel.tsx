@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { SandboxProviderConnection } from "./SandboxProviderConnection";
 import { randomUUID } from "../../lib/utils";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
@@ -20,10 +21,18 @@ import { Badge } from "../ui/badge";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "../ui/select";
 import { SandboxAllocationDetail } from "./SandboxAllocationDetail";
 
-export function SandboxPanel({ environmentId }: { environmentId: EnvironmentId }) {
-  return <SandboxPanelContent key={environmentId} environmentId={environmentId} />;
+type SandboxPanelProps = { environmentId: EnvironmentId; showConnection?: boolean };
+
+export function SandboxPanel({ environmentId, showConnection = true }: SandboxPanelProps) {
+  return (
+    <SandboxPanelContent
+      key={environmentId}
+      environmentId={environmentId}
+      showConnection={showConnection}
+    />
+  );
 }
-function SandboxPanelContent({ environmentId }: { environmentId: EnvironmentId }) {
+function SandboxPanelContent({ environmentId, showConnection }: SandboxPanelProps) {
   const registry = useContext(RegistryContext);
   const canRead = useAtomValue(sandboxCommands.query.permissionAtom(environmentId));
   const canOperate = useAtomValue(sandboxCommands.command.permissionAtom(environmentId));
@@ -136,17 +145,27 @@ function SandboxPanelContent({ environmentId }: { environmentId: EnvironmentId }
     setBusy(false);
   }
   return (
-    <section className="space-y-4" aria-label="Linux sandboxes">
-      <SandboxProviderConnection
-        environmentId={environmentId}
-        {...(selectedProfile ? { connectionId: selectedProfile.providerConnectionId } : {})}
-      />
+    <FoundryUI.Panel aria-label="Linux sandboxes">
+      <FoundryUI.Heading>Linux sandboxes</FoundryUI.Heading>
+      {showConnection ? (
+        <SandboxProviderConnection
+          environmentId={environmentId}
+          {...(selectedProfile ? { connectionId: selectedProfile.providerConnectionId } : {})}
+        />
+      ) : selectedProfile ? (
+        <p className="text-sm text-muted-foreground">
+          Profile connection: {selectedProfile.providerConnectionId}. Manage authorization in
+          Central connections above.
+        </p>
+      ) : null}
       <p className="text-sm text-muted-foreground">
         Start a fresh Linux environment from a pinned profile. Interactive work and workflows use
         the same profiles.
       </p>
       {!canRead ? (
-        <p role="alert">A current Main session with read permission is required.</p>
+        <FoundryUI.Notice>
+          A current Main session with read permission is required.
+        </FoundryUI.Notice>
       ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <Select
@@ -193,7 +212,10 @@ function SandboxPanelContent({ environmentId }: { environmentId: EnvironmentId }
       ) : null}
       <div className="space-y-2">
         {(canRead ? catalog : undefined)?.allocations.map((allocation) => (
-          <div key={allocation.allocationId} className="flex flex-wrap items-center gap-2">
+          <div
+            key={allocation.allocationId}
+            className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/10 p-3"
+          >
             <Button
               variant={selectedId === allocation.allocationId ? "secondary" : "outline"}
               onClick={() => setSelectedId(allocation.allocationId)}
@@ -231,6 +253,6 @@ function SandboxPanelContent({ environmentId }: { environmentId: EnvironmentId }
           onOpen={() => void openEnvironment()}
         />
       ) : null}
-    </section>
+    </FoundryUI.Panel>
   );
 }

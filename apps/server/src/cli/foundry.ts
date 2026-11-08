@@ -1,3 +1,6 @@
+import * as NativeOperator from "../foundry/NativeOperator.ts";
+import * as AccessConfig from "../foundry/AccessConfig.ts";
+import * as FileSystem from "effect/FileSystem";
 import { sandboxSupervisorCommand } from "./foundrySandboxSupervisor.ts";
 import { sandboxSkillsCommand } from "./foundrySandboxSkills.ts";
 import { sandboxArchiveCommand } from "./foundrySandboxArchive.ts";
@@ -85,7 +88,7 @@ const migrate = Command.make("migrate", {
           ).pipe(Layer.provide(ServerConfig.layer(config))),
         ),
       );
-      yield* Console.log("Foundry instance schema 10 ready; existing instance identity preserved.");
+      yield* Console.log("Foundry instance schema 11 ready; existing instance identity preserved.");
     }),
   ),
 );
@@ -118,11 +121,43 @@ const bindOperator = Command.make("bind-operator", {
   ),
 );
 
+const bootstrapNative = Command.make("bootstrap-native", {
+  ...authLocationFlags,
+  username: Flag.String("username"),
+  passwordFile: Flag.String("password-file"),
+}).pipe(
+  Command.withDescription(
+    "Create the single native Foundry operator from a local password file; existing accounts are never replaced.",
+  ),
+  Command.withHandler(
+    Effect.fn("foundry.bootstrapNative")(function* (flags) {
+      const config = yield* resolveCliAuthConfig(flags, yield* GlobalFlag.LogLevel);
+      const url = yield* Config.Redacted("FOUNDRY_INSTANCE_DATABASE_URL");
+      const fs = yield* FileSystem.FileSystem;
+      const password = (yield* fs.readFileString(flags.passwordFile)).replace(/\r?\n$/, "");
+      yield* NativeOperator.NativeOperator.pipe(
+        Effect.flatMap((operator) => operator.bootstrap(flags.username, password)),
+        Effect.provide(
+          NativeOperator.layer.pipe(
+            Layer.provide(AccessConfig.layer),
+            Layer.provide(InstancePostgres.layer),
+            Layer.provide(InstanceDatabase.layer({ url })),
+            Layer.provide(ServerEnvironment.layerIdentity),
+            Layer.provide(ServerConfig.layer(config)),
+          ),
+        ),
+      );
+      yield* Console.log("Native Foundry operator created.");
+    }),
+  ),
+);
+
 export const foundryCommand = Command.make("foundry").pipe(
   Command.withSubcommands([
     sandboxArchiveCommand,
     sandboxSupervisorCommand,
     sandboxSkillsCommand,
+    bootstrapNative,
     migrate,
     migrateAutomation,
     bindOperator,

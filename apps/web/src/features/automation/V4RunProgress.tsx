@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { useEffect, useRef } from "react";
 import { useWorkspaceNavigation } from "../../foundry/useWorkspaceNavigation";
 import type { AutomationApplicationResult, EnvironmentId } from "@t3tools/contracts";
@@ -213,7 +214,7 @@ function NodeResult({
         </div>
       </div>
       {loading ? <p role="status">Loading pinned node data…</p> : null}
-      {error ? <p role="alert">{error}</p> : null}
+      {error ? <FoundryUI.Notice>{error}</FoundryUI.Notice> : null}
       {node ? (
         <>
           {node.output === undefined ? (
@@ -227,9 +228,9 @@ function NodeResult({
             </p>
           ) : null}
           <details>
-            <summary className="cursor-pointer text-muted-foreground">
+            <FoundryUI.Summary className="cursor-pointer text-muted-foreground">
               Inputs, carried values & provenance
-            </summary>
+            </FoundryUI.Summary>
             <dl className="space-y-2 pt-3">
               <div>
                 <dt>Node path</dt>
@@ -305,9 +306,9 @@ function NodeOutput({
         </p>
       )}
       <details>
-        <summary className="cursor-pointer text-xs text-muted-foreground">
+        <FoundryUI.Summary className="cursor-pointer text-xs text-muted-foreground">
           Structured result data
-        </summary>
+        </FoundryUI.Summary>
         <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words pt-2 text-xs">
           {JSON.stringify(value, null, 2)}
         </pre>

@@ -1,5 +1,6 @@
 import { expect, it } from "vite-plus/test";
 import {
+  isInstanceRequest,
   authorizeInstanceRequest,
   readInstanceSessionCookieName,
 } from "./AccessTransportPolicy.ts";
@@ -105,4 +106,20 @@ it("reads the cookie name from anonymous and paired T3 HTTP sessions", () => {
   expect(() =>
     readInstanceSessionCookieName({ authenticated: true, auth, expiresAt: "invalid" }),
   ).toThrow();
+});
+
+it("restricts native instance HTTP and websocket transport to the selected loopback origin", () => {
+  expect(isInstanceRequest("http://localhost:5173", "http://localhost:5173/api/auth/session")).toBe(
+    true,
+  );
+  expect(isInstanceRequest("http://localhost:5173", "ws://localhost:5173/ws")).toBe(true);
+  for (const address of [
+    "http://localhost:5174/ws",
+    "http://127.0.0.1:5173/ws",
+    "http://user@localhost:5173/ws",
+    "https://other.example/ws",
+    "http://localhost.example:5173/ws",
+  ])
+    expect(isInstanceRequest("http://localhost:5173", address)).toBe(false);
+  expect(isInstanceRequest("http://foundry.example", "http://foundry.example/ws")).toBe(false);
 });

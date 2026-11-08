@@ -122,18 +122,26 @@ const captureEnvironment = Command.make("capture-environment", {
   ),
 );
 const captureSetup = Command.make("capture-setup", {
+  ...authLocationFlags,
   allocationId: Flag.String("allocation-id"),
   cwd: Flag.String("cwd"),
   setupLog: Flag.String("setup-log"),
+  selectedPaths: Flag.String("file").pipe(Flag.atLeast(0)),
   output: Flag.String("output"),
 }).pipe(
   Command.withHandler(
     Effect.fn("foundry.sandboxArchive.captureSetup")(function* (flags) {
       if ((yield* Config.String("FOUNDRY_SANDBOX_ALLOCATION_ID")) !== flags.allocationId)
         return yield* new FoundrySandboxArchiveError({ code: "invalid_request" });
+      const config = yield* resolveCliAuthConfig(flags, yield* GlobalFlag.LogLevel);
       yield* SandboxSetupSnapshot.SandboxSetupSnapshot.pipe(
         Effect.flatMap((service) => service.capture(flags)),
-        Effect.provide(SandboxSetupSnapshot.layer),
+        Effect.provide(
+          SandboxSetupSnapshot.layer.pipe(
+            Layer.provide(Git.layer),
+            Layer.provide(ServerConfig.layer(config)),
+          ),
+        ),
       );
       yield* Console.log(
         "Setup snapshot captured; central publication and confirmation remain required.",

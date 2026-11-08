@@ -42,6 +42,11 @@ export const AutomationInboxEntry = Schema.Struct({
   resultRevision: Schema.Int,
   questions: Schema.Array(OrchestrationV2UserInputQuestion),
   answer: Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown)),
+  status: Schema.optional(
+    Schema.Literals(["pending", "answered", "resolved", "superseded", "cancelled"]),
+  ),
+  attemptCommandId: Schema.optional(Schema.NullOr(Key)),
+  questionRevision: Schema.optional(Schema.NullOr(Key)),
   active: Schema.Boolean,
   isRead: Schema.Boolean,
   isDone: Schema.Boolean,

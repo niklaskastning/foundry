@@ -40,7 +40,7 @@ export const FoundryDescriptor = Schema.Struct({
     Schema.Struct({
       publicOrigin: Schema.optionalKey(Schema.String),
       issuer: Schema.optionalKey(Schema.String),
-      bootstrapMethods: Schema.Array(Schema.Literal("cloudflare-access-jwt")),
+      bootstrapMethods: Schema.Array(Schema.Literals(["cloudflare-access-jwt", "password"])),
       sessionMethods: Schema.Array(Schema.Literal("foundry-session-cookie")),
     }),
   ),

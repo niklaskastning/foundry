@@ -8,6 +8,43 @@ This isolated Main serves the instance registry, gateway, confirmed artifacts an
 
 For this VPS, [the maintainer's standing agent instructions](../../AGENTS.md#development-vps-and-agent-autonomy) authorize deployment of tested PR heads before merge or user acceptance, task-related migrations and necessary resets of disposable Foundry test data. They override older requirements for a separate development-deployment approval in this runbook and the activation guides; production acceptance gates remain separate. User `niklas` has passwordless sudo for task-related operations; use `sudo -n`. The restricted helper below remains the preferred Main image-update path, but it is not the limit of the agent's authorized privileges on this host. Credentials, personal T3 state and unrelated services are outside the test-data reset permission.
 
+## Native operator sign-in and local development
+
+Main supports `FOUNDRY_AUTH_MODE=native` alongside the default `access` mode. Both use
+`FOUNDRY_ACCESS_ENABLED=true`, the existing instance database and operator identity.
+Migrate the instance database to schema **11** before starting this revision. A native
+account attaches to an existing operator; switching authentication modes does not
+create a second actor. Previous binaries reject schema 11, so recovery requires a
+compatible build or recreating disposable development state.
+
+Set `FOUNDRY_PUBLIC_ORIGIN` to the exact browser origin. Native mode accepts HTTPS;
+HTTP is allowed only for literal `localhost`, `127.0.0.1` or `[::1]` origins. Access mode
+continues to require HTTPS and a Cloudflare issuer/audience. Keep public Access
+policy changes and unattended machine/CI acceptance separate from local testing.
+
+Bootstrap once through the local CLI after migration, using the same isolated Main
+home and runtime database configuration:
+
+```sh
+node apps/server/src/bin.ts foundry bootstrap-native --base-dir /absolute/isolated-home --username operator --password-file /absolute/private-password-file
+```
+
+Supply a private password file containing 12–1024 characters (one trailing newline
+is removed). There are no default credentials and bootstrap refuses to replace an
+existing native account. Keep the file out of repositories and logs. Open the configured
+origin and sign in with that account. Browser entry uses its current origin; the existing
+desktop entry retains instance selection: leave the Access issuer empty for native sign-in
+in an isolated instance partition, or supply the Cloudflare issuer for the existing OAuth flow.
+Its Instance menu opens account controls or revokes and removes the selected instance.
+Native Windows runtime acceptance remains a separate check.
+
+Sessions last at most 15 minutes and active clients renew before expiry. Access renewal
+also requires a valid Access assertion and never extends beyond its expiry. Main's T3
+browser session is bound to its Foundry parent: logout, expiry and operator/instance
+generation changes invalidate HTTP, tickets and live sockets. An unavailable authority
+fails closed. Device discovery uses the existing client-access grants and does not
+grant Factory execution authority.
+
 ## Experimental device enrollment (P06)
 
 Für einen realen Device-/Gateway-Versuch zuerst den [begrenzten G2-Aktivierungsablauf](g2-activation.md)
@@ -31,7 +68,7 @@ a recovery procedure. The runtime role cannot change device keys or enrollment
 expiry. Set `FOUNDRY_DEVICE_ENROLLMENT_ENABLED=true` explicitly alongside
 `FOUNDRY_ACCESS_ENABLED=true` to expose `/api/foundry/devices/enroll` and advertise
 `foundry.device-enrollment`; the route and capability are absent by default.
-This mode does not implement native authentication.
+Device enrollment does not enable authentication by itself; configure the native or Access mode separately.
 
 The P38a artifact-store foundation is separately disabled by default. In an isolated
 Main, `FOUNDRY_ARTIFACTS_ENABLED=true` requires the complete stream-gateway profile
@@ -1163,10 +1200,31 @@ v4-Dateirechte bleiben technisch durchgesetzt. Container teilen weiterhin den
 Hostkernel und sind keine VM-Mandantengrenze. Workspace-Volumes teilen den
 Hostspeicher; eine Dateisystem-Diskquota wird derzeit nicht zugesichert.
 
-Thread-Archive speichern vollständige Git-Bundles in bestätigten Teilen von
-höchstens 8 MiB mit einem gehashten Index (insgesamt höchstens 8 GiB). Alte
-einteilige Archive bleiben lesbar. Die Sandbox benötigt für v4 eine geprüfte
-Codex-Version ab 0.166.0; Image- oder Toolwechsel erhalten eine neue Profilrevision.
+Neue Sandbox-Archive verwenden `remoteBase.format = foundry-remote-delta-2`:
+Repository-URL und exakter Commit werden durch frischen Fetch geprüft; nur lokale
+Commits und der abschließende Arbeitsbaum kommen ins Delta. Bestätigung und Resume
+prüfen den Remote erneut. Der Remote muss den Basiscommit während der gesamten
+Aufbewahrung bereitstellen; Force-Push oder Repositoryverlust können Resume
+verhindern. Es erfolgt kein automatischer Push. `bundleSizeBytes` bezeichnet das
+Delta, nicht die Größe des Indexdokuments. Teile bleiben auf 8 MiB und insgesamt
+8 GiB begrenzt. Mehrere Threads desselben Workspace referenzieren ein Delta.
+
+Manifeste ohne `remoteBase` sind ausdrücklich Legacy-Vollbundles und bleiben
+lesbar. Zur Konvertierung zuerst in einer neuen Sandbox restaurieren, die
+Repositoryidentität prüfen und `origin` auf den zugehörigen Remote setzen, dann
+regulär erneut archivieren und das neue Receipt bestätigen. Erst nach erfolgreichem
+Resume des neuen Archivs ist das neue Delta als Ersatz nachgewiesen. Dieser Pfad
+löscht keine Altartefakte: vollständiger zentraler Threadverlauf, Anhänge und
+geteilte Referenzen bleiben erhalten. Neue Sandboxes setzen `origin` beim Setup;
+bei älteren noch laufenden Sandboxes muss es vor dem neuen Capture gesetzt werden.
+
+Setupfehler archivieren Logs und geänderte/neue Arbeitsdateien, standardmäßig ohne
+Abhängigkeiten, Builds und Caches. `capture-setup --file <relativer-Pfad>` kann
+benötigte ignorierte Dateien ausdrücklich auswählen (wiederholbar); Symlinkziele
+werden nicht verfolgt. Die Auswahl ist auf 10.000 Einträge und 128 MiB codierte
+Daten begrenzt. Reproduzierbare Ausgaben entstehen erneut durch das gepinnte Setup.
+Die Sandbox benötigt für v4 eine geprüfte Codex-Version ab 0.166.0; Image- oder
+Toolwechsel erhalten eine neue Profilrevision.
 
 ### Versionierte Factory-HTTP-API (P58a)
 

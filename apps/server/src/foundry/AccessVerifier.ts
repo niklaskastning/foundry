@@ -30,6 +30,10 @@ export const layerRemoteKeys = Layer.effect(
   AccessSigningKeys,
   Effect.gen(function* () {
     const config = yield* AccessConfig.AccessConfig;
+    if (config.mode === "native")
+      return async () => {
+        throw new Error("Access authentication is disabled");
+      };
     return createRemoteJWKSet(new URL(`${config.issuer}/cdn-cgi/access/certs`), {
       timeoutDuration: 5000,
       cacheMaxAge: 300000,
