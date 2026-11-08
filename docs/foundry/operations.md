@@ -17,6 +17,16 @@ account attaches to an existing operator; switching authentication modes does no
 create a second actor. Previous binaries reject schema 11, so recovery requires a
 compatible build or recreating disposable development state.
 
+For an existing instance-10/Automation-11 development deployment, use the tested
+combined artifact with `activate-access.py upgrade-platform-quality sha256:<digest>
+<commit> --development`. The updater holds its deployment lock, stops Main and
+migrates the separate instance and Automation databases to **11/12**, disabling
+each migrator login afterward. Its manifest records both previous and target schemas;
+`success` is written only after image, revision and readiness verification. Subsequent
+same-schema deployments use `update`. Recovery requires a schema-11/12-compatible
+artifact, or a verified reset of disposable application data; the previous instance-10
+binary cannot run against the upgraded instance database.
+
 Set `FOUNDRY_PUBLIC_ORIGIN` to the exact browser origin. Native mode accepts HTTPS;
 HTTP is allowed only for literal `localhost`, `127.0.0.1` or `[::1]` origins. Access mode
 continues to require HTTPS and a Cloudflare issuer/audience. Keep public Access
