@@ -8,6 +8,7 @@ export function SandboxAllocationDetail({
   detail,
   busy,
   canOperate,
+  resumeProfile,
   onCommand,
   onResume,
   onOpen,
@@ -15,6 +16,7 @@ export function SandboxAllocationDetail({
   detail: typeof FoundrySandboxDetail.Type;
   busy: boolean;
   canOperate: boolean;
+  resumeProfile?: string | undefined;
   onCommand: (input: typeof FoundrySandboxMutation.Type) => void;
   onResume: (threadId: ThreadId) => void;
   onOpen: () => void;
@@ -43,7 +45,9 @@ export function SandboxAllocationDetail({
           <dd className="inline break-all">{allocation.profile.revision}</dd>
         </div>
         <div>
-          <dt className="inline font-medium">Checkout: </dt>
+          <dt className="inline font-medium">
+            {allocation.request.resumeAllocationId ? "Profile checkout baseline: " : "Checkout: "}
+          </dt>
           <dd className="inline break-all">{allocation.profile.checkout.commit}</dd>
         </div>
         <div>
@@ -139,6 +143,13 @@ export function SandboxAllocationDetail({
           <p className="text-sm">
             Central archive confirmed · {archiveReceipt.digest.slice(0, 12)}
           </p>
+          {threads.length ? (
+            <p className="text-sm">
+              {resumeProfile
+                ? `Resume using selected profile: ${resumeProfile}. Archived files retain their source Git state.`
+                : "Select an enabled profile before resuming."}
+            </p>
+          ) : null}
           {threads.map(({ manifest }) => (
             <div className="flex flex-wrap items-center gap-2" key={manifest.owner.threadId}>
               <span className="text-xs">{manifest.owner.threadId}</span>
@@ -151,7 +162,7 @@ export function SandboxAllocationDetail({
               </Button>
               <Button
                 size="sm"
-                disabled={busy || !canOperate}
+                disabled={busy || !canOperate || !resumeProfile}
                 onClick={() => onResume(manifest.owner.threadId)}
               >
                 Resume in new environment

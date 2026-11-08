@@ -109,7 +109,7 @@ function SandboxPanelContent({ environmentId }: { environmentId: EnvironmentId }
       resumeThreadId && detail && detail.allocation.allocationId === selectedId
         ? detail.allocation
         : null;
-    const profile = source?.profile ?? selectedProfile;
+    const profile = selectedProfile;
     if (!profile) return;
     const key = `${profile.profileId}:${profile.revision}:${source?.allocationId ?? ""}:${resumeThreadId ?? ""}`;
     if (pendingRequest.current?.key !== key)
@@ -221,6 +221,11 @@ function SandboxPanelContent({ environmentId }: { environmentId: EnvironmentId }
           detail={detail}
           busy={busy}
           canOperate={canOperate}
+          resumeProfile={
+            selectedProfile
+              ? `${selectedProfile.label} · ${selectedProfile.revision.slice(0, 8)}`
+              : undefined
+          }
           onCommand={(input) => void mutate(input)}
           onResume={request}
           onOpen={() => void openEnvironment()}
