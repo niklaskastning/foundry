@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 import { classifyJudgment, evaluationDigest, evaluationPreflight, sampleEvaluation } from "./Scorers.ts";
 
 const fixture = (): EvaluationInput => ({
-  id:"eval-1",factoryId:"factory-a",runId:"run-1",definitionRevision:"definition-1",modelConfiguration:{model:"original-model"},
+  id:"eval-1",factoryId:"factory-a",runId:"run-1",definitionRevision:"definition-1",runRevision:"a".repeat(40),definitionSource:{commitSha:"b".repeat(40)},modelConfiguration:{model:"original-model"},
   scorerRevision:"a".repeat(64),scorerSource:"git:scorers/quality.yaml@abc",mode:"automatic",
   scorer:{id:"quality",name:"Quality",criteria:[{id:"correctness",instructions:"Check acceptance evidence",threshold:0.8}],judge:{provider:"codex",model:"gpt-6.1-sol",reasoningEffort:"medium"},sampling:{rate:1,automatic:true}},
   evidence:[{id:"attempt-1",source:"attempt:1",content:"test passed",sha256:evaluationDigest("test passed")}],

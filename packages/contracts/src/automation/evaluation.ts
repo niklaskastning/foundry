@@ -15,6 +15,8 @@ export const EvaluationInput = Schema.Struct({
   factoryId: Key,
   runId: Key,
   definitionRevision: Key,
+  runRevision: Key,
+  definitionSource: Schema.Json,
   modelConfiguration: Schema.Json,
   scorerRevision: Hash,
   scorerSource: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2000)),
