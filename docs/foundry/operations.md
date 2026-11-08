@@ -724,7 +724,7 @@ Der zusätzliche Main-Schalter `FOUNDRY_STREAM_GATEWAY_ENABLED=true` setzt die P
 
 Nach einem expliziten Grant liefert POST `/api/foundry/gateway/grants/ticket` ein einmaliges Gateway-Ticket und ein vorhandenes T3-RPC-Socket-Ticket. Beide werden bei GET `/api/foundry/gateway/stream` zusammen mit der aktuellen Orchestrierungs-Protokollversion geprüft; bei schlüsselgebundener T3-Session bleibt ein frischer DPoP-Nachweis für diese öffentliche URL erforderlich. Die erlaubten Grant-Scopes sind `orchestration:read`, optional `orchestration:operate`, `terminal:read` und `terminal:operate`; sie dürfen die authentifizierte Client-Session nicht überschreiten. Der P08-Projektlistenadapter behält lokal ausschließlich Read-Rechte.
 
-Daten laufen über eigene ausgehende Worker-Sockets zu `/api/foundry/devices/stream`; der Device-Steuerkanal trägt nur die Öffnungsnachricht. Bei der späteren Access-Integration muss der separat autorisierte Machine-Zugang auch diesen Pfad erlauben; der Connector ändert keine Access-Policy. Grenzen: vier Streams pro Device, 32 insgesamt, 128 ausstehende Client-Tickets; Ticket-/Verbindungsaufbau zehn Sekunden, Grants höchstens 60 Sekunden, blockierter Schreibvorgang fünf Sekunden. Im aktivierten Main gilt für alle WebSocket-Nachrichten ein Limit von 256 KiB, auch für unabhängige direkte T3-Sockets desselben Prozesses. Die Datenstrecke begrenzt außerdem gelesene Batches und ausstehende Schreibdaten auf 256 KiB. Größere RPC-Antworten schließen die Verbindung; es gibt noch keine Fragmentierungszusage für beliebig große Snapshots.
+Daten laufen über eigene ausgehende Worker-Sockets zu `/api/foundry/devices/stream`; der Device-Steuerkanal trägt nur die Öffnungsnachricht. Bei der späteren Access-Integration muss der separat autorisierte Machine-Zugang auch diesen Pfad erlauben; der Connector ändert keine Access-Policy. Grenzen: vier Streams pro Device, 32 insgesamt, 128 ausstehende Client-Tickets; Ticket-/Verbindungsaufbau zehn Sekunden, Grants standardmäßig höchstens 60 Sekunden, blockierter Schreibvorgang fünf Sekunden. Im aktivierten Main gilt für alle WebSocket-Nachrichten ein Limit von 256 KiB, auch für unabhängige direkte T3-Sockets desselben Prozesses. Die Datenstrecke begrenzt außerdem gelesene Batches und ausstehende Schreibdaten auf 256 KiB. Größere RPC-Antworten schließen die Verbindung; es gibt noch keine Fragmentierungszusage für beliebig große Snapshots.
 
 Verlust des Steuerkanals beendet seine Datenverbindungen. Laufende Streams prüfen Grants/Sessions und Device-Generation vor jeder Weitergabe sowie spätestens beim nächsten sekündlichen Check. Abbruch, Ablauf und Überlast schließen die Strecke; transportseitig wird weder eine Mutation noch eine Terminaleingabe wiederholt. Lokale Sessions werden beim Schließen widerrufen. Ereignisgesteuerter Widerruf und Erneuerung gehören zu den folgenden Client-/P11-Arbeiten. Produktive Aktivierung und reale Windows-/Access-/Maschinenabnahme sind damit nicht freigegeben; Nachholstand siehe [Issue #13](https://github.com/niklaskastning/foundry/issues/13).
 
@@ -917,6 +917,9 @@ Automationziel, automatische die gepinnte Dispatchautorität. Widerruf, abgelauf
 Sitzungen oder ein fehlender Worker ergeben `judge_unavailable`; keine Zugangsdaten
 werden nach Main kopiert. Nach unbestätigter Zustellung wird kein zweiter Modellaufruf
 angefordert. Der feste Scorer bleibt Codex GPT-6.1 Sol mit Medium-Reasoning.
+Evaluationszugänge erlauben ausschließlich den Evaluations-RPC für höchstens drei
+Minuten, begrenzt durch die Elternsession; die laufenden Widerrufsprüfungen bleiben
+aktiv. Andere Gatewayzugänge behalten ihr 60-Sekunden-Limit.
 
 Factory Overview und Run zeigen Enrollment-Zeiträume, Runs, Aufträge, veröffentlichte PRs
 und begrenzte archivierte Nutzung. Die Vergleichszeiträume verwenden Enrollment, keine
@@ -937,8 +940,9 @@ Dieser Stand verlangt Automation-Schema 12; das Instanzschema bleibt unabhängig
 Vor Mainstart die separate Automation-Datenbank mit dem getesteten Artefakt über
 `foundry automation-migrate --database <bestätigte-datenbank> --runtime-role <automation-runtime>`
 und geschützte Migratorkonfiguration aktualisieren. Den Deployment-Lock bis zur
-Verifikation halten. Der bisherige Schema-11-Updater aktiviert Schema 12 nicht selbst;
-der gemeinsame Integrator muss seinen Migrationspfad ausdrücklich anpassen.
+Verifikation halten. Für das gemeinsame Upgrade von Instanz10/Automation11 auf11/12 den oben
+beschriebenen `upgrade-platform-quality`-Pfad verwenden; spätere Updates auf
+demselben Schemastand verwenden `update`.
 Recovery verwendet einen Schema-12-kompatiblen Build; ein Image-Downgrade ersetzt
 keine geprüfte Schemawiederherstellung.
 
@@ -1218,8 +1222,7 @@ bleiben pro Allocation begrenzt. Absichtliche Fehler-/TTL-Testprofile vor Überg
 aus der Imagefreigabe nehmen und eine neue, geprüfte Betriebsprofilrevision anbieten.
 
 Setup-Archive ohne Thread enthalten einen zentral bestätigten JSON-Index und
-bestätigte Teile von höchstens 8 MiB; auch Abhängigkeitsverzeichnisse werden
-aufgenommen. Große Dateien behalten Teiloffsets. Maximal 1024 Teile und 64
+bestätigte Teile von höchstens 8 MiB. Große Dateien behalten Teiloffsets. Maximal 1024 Teile und 64
 Verzeichnisebenen werden unterstützt; Hardlinks bleiben gesperrt, damit keine
 privaten Runtime-Dateien über Aliasnamen ins Archiv gelangen. Bei überschrittenen
 Grenzen oder unbestätigten Teilen bleibt die Allocation erhalten. Diese inert
