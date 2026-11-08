@@ -85,6 +85,27 @@ it.effect(
       expect(evidence).toHaveLength(2);
       expect(evidence[1]?.content).toContain("original-evidence");
       expect(evidence[1]?.content).not.toContain("later-foreign-evidence");
+      const wrongOwner = structuredClone(result);
+      wrongOwner.execution.lifecycle.manifest.archive.owner.threadId = "other-thread";
+      expect(
+        yield* collectEvaluationEvidence(principal, [
+          { id: "agent", kind: "agent", result: wrongOwner },
+        ]),
+      ).toEqual([]);
+      const wrongRun = structuredClone(result);
+      wrongRun.execution.lifecycle.manifest.runId = "other-run";
+      expect(
+        yield* collectEvaluationEvidence(principal, [
+          { id: "agent", kind: "agent", result: wrongRun },
+        ]),
+      ).toEqual([]);
+      const wrongSequence = structuredClone(result);
+      wrongSequence.execution.lifecycle.manifest.archive.sourceSequence = 12;
+      expect(
+        yield* collectEvaluationEvidence(principal, [
+          { id: "agent", kind: "agent", result: wrongSequence },
+        ]),
+      ).toEqual([]);
     }).pipe(
       Effect.provide(
         Layer.mock(ThreadArchive.ThreadArchive)({

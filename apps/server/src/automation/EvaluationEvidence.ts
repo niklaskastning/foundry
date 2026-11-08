@@ -41,6 +41,13 @@ export const collectEvaluationEvidence = Effect.fn("EvaluationEvidence.collect")
     const manifest = lifecycle?.manifest;
     if (!lifecycle?.writerEnded || !manifest?.archive) return [];
     const reference = manifest.archive;
+    if (
+      manifest.runId !== decoded.value.execution.run.id ||
+      manifest.generation !== lifecycle.generation ||
+      reference.instanceId !== identity.instanceId ||
+      reference.owner.threadId !== decoded.value.execution.receipt.threadId
+    )
+      return [];
     let after = 0;
     let complete = false;
     for (let pageNumber = 0; pageNumber < 10; pageNumber++) {
@@ -69,6 +76,7 @@ export const collectEvaluationEvidence = Effect.fn("EvaluationEvidence.collect")
         return [];
       const last = events.at(-1)?.sequence ?? after;
       if (last >= reference.cursor) {
+        if (events.at(-1)?.sourceSequence !== reference.sourceSequence) return [];
         complete = true;
         break;
       }
