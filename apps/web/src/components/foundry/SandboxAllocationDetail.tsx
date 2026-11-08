@@ -205,14 +205,7 @@ export function SandboxAllocationDetail({
   );
 }
 
-function ArchiveMetadata({
-  manifest,
-}: {
-  manifest: FoundrySandboxArchiveManifest & {
-    remoteBase?: { format: "foundry-remote-delta-2"; url: string; commit: string };
-    bundleSizeBytes?: number;
-  };
-}) {
+function ArchiveMetadata({ manifest }: { manifest: FoundrySandboxArchiveManifest }) {
   return (
     <dl className="grid gap-3 text-sm sm:grid-cols-2">
       <div>
