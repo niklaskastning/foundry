@@ -21,10 +21,18 @@ import { Badge } from "../ui/badge";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "../ui/select";
 import { SandboxAllocationDetail } from "./SandboxAllocationDetail";
 
-export function SandboxPanel({ environmentId }: { environmentId: EnvironmentId }) {
-  return <SandboxPanelContent key={environmentId} environmentId={environmentId} />;
+type SandboxPanelProps = { environmentId: EnvironmentId; showConnection?: boolean };
+
+export function SandboxPanel({ environmentId, showConnection = true }: SandboxPanelProps) {
+  return (
+    <SandboxPanelContent
+      key={environmentId}
+      environmentId={environmentId}
+      showConnection={showConnection}
+    />
+  );
 }
-function SandboxPanelContent({ environmentId }: { environmentId: EnvironmentId }) {
+function SandboxPanelContent({ environmentId, showConnection }: SandboxPanelProps) {
   const registry = useContext(RegistryContext);
   const canRead = useAtomValue(sandboxCommands.query.permissionAtom(environmentId));
   const canOperate = useAtomValue(sandboxCommands.command.permissionAtom(environmentId));
@@ -139,10 +147,17 @@ function SandboxPanelContent({ environmentId }: { environmentId: EnvironmentId }
   return (
     <FoundryUI.Panel aria-label="Linux sandboxes">
       <FoundryUI.Heading>Linux sandboxes</FoundryUI.Heading>
-      <SandboxProviderConnection
-        environmentId={environmentId}
-        {...(selectedProfile ? { connectionId: selectedProfile.providerConnectionId } : {})}
-      />
+      {showConnection ? (
+        <SandboxProviderConnection
+          environmentId={environmentId}
+          {...(selectedProfile ? { connectionId: selectedProfile.providerConnectionId } : {})}
+        />
+      ) : selectedProfile ? (
+        <p className="text-sm text-muted-foreground">
+          Profile connection: {selectedProfile.providerConnectionId}. Manage authorization in
+          Central connections above.
+        </p>
+      ) : null}
       <p className="text-sm text-muted-foreground">
         Start a fresh Linux environment from a pinned profile. Interactive work and workflows use
         the same profiles.

@@ -48,12 +48,30 @@ export function SandboxProviderConnection({
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const command = useAtomCommand(providerConnectionCommands.command, { reportFailure: false });
+  const refreshProvider = useAtomCommand(serverEnvironment.refreshProviders, {
+    reportFailure: false,
+  });
   const id = connectionId ?? draftId;
-  const loaded = catalog?.revision === revision;
+  const loaded = canRead && catalog?.revision === revision;
   const existing = (loaded ? catalog.connections : []).find((entry) => entry.id === id);
   const selected = providers.find(
-    (provider) => provider.instanceId === providerId && provider.driver === "codex",
+    (provider) => provider.instanceId === (providerId ?? existing?.providerInstanceId),
   );
+
+  async function checkMain() {
+    if (!selected || busy) return;
+    setBusy(true);
+    const result = await refreshProvider({
+      environmentId,
+      input: { instanceId: selected.instanceId, reloadSecrets: true },
+    });
+    setBusy(false);
+    setMessage(
+      AsyncResult.isSuccess(result)
+        ? "Main provider status updated. This does not probe a worker or change its authorization."
+        : "Unable to check the Main provider. Check your connection and retry.",
+    );
+  }
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Refresh the authorized Main connection catalog when mounted or changed by an explicit operation.
   useEffect(() => {
     if (!canRead) return;
@@ -121,18 +139,47 @@ export function SandboxProviderConnection({
         Choose a managed Codex instance on Main, sign in with ChatGPT, then explicitly authorize it
         for sandboxes. Add a dedicated managed instance in Settings → Providers if needed.
       </p>
+      {!connectionId && loaded && catalog.connections.length > 0 ? (
+        <Select
+          value={existing?.id ?? ""}
+          disabled={busy || !canRead}
+          onValueChange={(value) => {
+            if (!value) return;
+            setDraftId(value);
+            setProviderId(undefined);
+            setMessage("");
+          }}
+        >
+          <SelectTrigger aria-label="Saved central connection">
+            <SelectValue placeholder="Choose a saved connection" />
+          </SelectTrigger>
+          <SelectContent>
+            {catalog.connections.map((entry) => (
+              <SelectItem key={entry.id} value={entry.id}>
+                {entry.label} · {entry.id}
+                {entry.revoked ? " · Revoked" : ""}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : null}
       {connectionId ? (
         <p>Profile connection: {connectionId}</p>
       ) : (
         <Input
           aria-label="Sandbox connection ID"
           value={draftId}
-          onChange={(event) => setDraftId(event.target.value)}
-          disabled={!canWrite}
+          onChange={(event) => {
+            setDraftId(event.target.value);
+            setProviderId(undefined);
+            setMessage("");
+          }}
+          disabled={!canWrite || busy}
         />
       )}
       <Select
-        value={providerId ?? ""}
+        value={selected?.instanceId ?? ""}
+        disabled={!canWrite || busy}
         onValueChange={(value) =>
           setProviderId(providers.find((provider) => provider.instanceId === value)?.instanceId)
         }
@@ -150,20 +197,36 @@ export function SandboxProviderConnection({
             ))}
         </SelectContent>
       </Select>
+      {providers.length === 0 ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          No managed Codex instance is available on Main. Configure one in Settings → Providers for
+          the Main environment. CLI accounts and other providers cannot authorize this connection.
+        </p>
+      ) : null}
       {selected ? (
-        <ProviderAuthenticationSection
-          key={selected.instanceId}
-          environmentId={environmentId}
-          environmentLabel="Main"
-          instanceId={selected.instanceId}
-          provider={selected}
-          readOnly={!canWrite}
-        />
+        <div className="space-y-3">
+          <p className="text-sm">
+            Main account: {selected.auth.status} · CLI:{" "}
+            {selected.installed ? "installed" : "not installed"}. This is Main’s status, not worker
+            execution readiness.
+          </p>
+          <ProviderAuthenticationSection
+            key={selected.instanceId}
+            environmentId={environmentId}
+            environmentLabel="Main"
+            instanceId={selected.instanceId}
+            provider={selected}
+            readOnly={!canWrite || busy}
+          />
+          <Button variant="outline" disabled={!canRead || busy} onClick={() => void checkMain()}>
+            Check Main provider
+          </Button>
+        </div>
       ) : null}
       {existing ? (
         <p>
-          {existing.revoked ? "Revoked" : "Authorized"} · {existing.label} · revision{" "}
-          {existing.generation}
+          {existing.revoked ? "Sandbox access revoked" : "Sandbox access authorized"} ·{" "}
+          {existing.label} · revision {existing.generation}
         </p>
       ) : null}
       {existing && !existing.revoked ? (
@@ -171,6 +234,17 @@ export function SandboxProviderConnection({
           Replacing this connection stops and archives its existing sandboxes.
         </p>
       ) : null}
+      {existing && !selected ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          This connection’s managed Codex instance is unavailable on Main. Select an available
+          instance to replace it, or revoke access.
+        </p>
+      ) : null}
+      <p className="text-sm text-muted-foreground">
+        Tokens renew on Main when an authorized sandbox requests access. To renew sign-in, use
+        Change account or Sign in above, then authorize the connection again. Reauthorization
+        replaces its revision and stops existing bound sandboxes.
+      </p>
       <div className="flex flex-wrap gap-2">
         <Button
           disabled={!canWrite || !loaded || !selected || !id || busy}
@@ -185,7 +259,7 @@ export function SandboxProviderConnection({
         ) : null}
         <Button
           variant="outline"
-          disabled={!canRead}
+          disabled={!canRead || busy}
           onClick={() => setRevision((value) => value + 1)}
         >
           Refresh connections

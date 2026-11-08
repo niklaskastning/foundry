@@ -20,6 +20,9 @@ import { instanceCommand, instanceEntry, initialState, type Operation } from "./
 const ThreadArchiveLibrary = lazy(() =>
   import("./ThreadArchiveLibrary").then((module) => ({ default: module.ThreadArchiveLibrary })),
 );
+const CentralConnections = lazy(() =>
+  import("./CentralConnections").then((module) => ({ default: module.CentralConnections })),
+);
 const SandboxPanel = lazy(() =>
   import("../components/foundry/SandboxPanel").then((module) => ({ default: module.SandboxPanel })),
 );
@@ -174,10 +177,16 @@ export function FoundryPage() {
                     </div>
                   </div>
                 </FoundryUI.Panel>
+                {sandboxes?.supported ? (
+                  <CentralConnections environmentId={state.binding.mainEnvironmentId} />
+                ) : null}
                 <WorkerCapacity environmentId={state.binding.mainEnvironmentId} />
                 <DeviceCatalog readinessInDetails />
                 {sandboxes?.supported ? (
-                  <SandboxPanel environmentId={state.binding.mainEnvironmentId} />
+                  <SandboxPanel
+                    environmentId={state.binding.mainEnvironmentId}
+                    showConnection={false}
+                  />
                 ) : null}
               </div>
             ) : search.view === "inbox" ? (
@@ -297,7 +306,9 @@ export function FoundryPage() {
                   <fieldset disabled={busy} className="space-y-4">
                     <legend className="sr-only">Foundry account</legend>
                     <div className="space-y-2">
-                      <label htmlFor="foundry-username" className="text-sm font-medium">Account</label>
+                      <label htmlFor="foundry-username" className="text-sm font-medium">
+                        Account
+                      </label>
                       <Input
                         id="foundry-username"
                         name="username"
@@ -308,7 +319,9 @@ export function FoundryPage() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <label htmlFor="foundry-password" className="text-sm font-medium">Password</label>
+                      <label htmlFor="foundry-password" className="text-sm font-medium">
+                        Password
+                      </label>
                       <Input
                         id="foundry-password"
                         name="password"
