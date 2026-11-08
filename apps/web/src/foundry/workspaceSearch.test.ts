@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { mergeWorkspaceSearch, validateFoundrySearch } from "./workspaceSearch";
+import {
+  openWorkspaceRun,
+  workspaceRunReturn,
+  mergeWorkspaceSearch,
+  validateFoundrySearch,
+} from "./workspaceSearch";
 
 describe("factory workspace links", () => {
   it("preserves existing run and handoff links together with workspace and evidence state", () => {
@@ -78,5 +83,27 @@ it("clears execution selection when leaving or changing runs but preserves same-
   expect(mergeWorkspaceSearch(previous, { nodeOffset: "200" })).toEqual({
     ...previous,
     nodeOffset: "200",
+  });
+});
+
+it("returns runs to their global or factory list with filters after reload", () => {
+  for (const origin of [
+    { view: "runs", runState: "failed" as const, filterFactory: "f", after: "page" },
+    { view: "factories", factoryId: "f", tab: "runs" as const, runState: "waiting" as const },
+    {
+      view: "factories",
+      factoryId: "f",
+      tab: "work" as const,
+      workItemId: "w",
+      workStatus: "active" as const,
+    },
+  ]) {
+    const opened = validateFoundrySearch(openWorkspaceRun(origin, "f", "r"));
+    expect(workspaceRunReturn(opened)).toEqual({ ...origin, runReturn: undefined });
+  }
+  expect(workspaceRunReturn({ factoryId: "f", runId: "r", runReturn: "invalid" })).toEqual({
+    view: "factories",
+    factoryId: "f",
+    tab: "runs",
   });
 });

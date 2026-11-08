@@ -99,11 +99,11 @@ export function AgentCatalog({ active }: { active: FactoryDefinitionVersion | nu
         {active.source.kind === "github" ? (
           <a
             className="inline-block break-all text-sm underline underline-offset-4"
-            href={`https://github.com/${active.source.repository}/tree/${encodeURIComponent(active.source.branch)}/${active.source.path.split("/").map(encodeURIComponent).join("/")}`}
+            href={`https://github.com/${active.source.repository}/tree/${encodeURIComponent(active.source.commitSha)}/${active.source.path.split("/").map(encodeURIComponent).join("/")}`}
             target="_blank"
             rel="noreferrer"
           >
-            Edit in Git · {active.source.repository}
+            View pinned Git definition · {active.source.repository}
           </a>
         ) : (
           <p className="text-sm">

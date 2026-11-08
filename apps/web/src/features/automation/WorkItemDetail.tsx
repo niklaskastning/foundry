@@ -55,7 +55,13 @@ export function WorkItemDetail({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Link
           to="/foundry"
-          search={{ view: "factories", factoryId, tab: "work" }}
+          search={(previous) => ({
+            ...previous,
+            view: "factories",
+            factoryId,
+            tab: "work",
+            workItemId: undefined,
+          })}
           className="text-sm text-muted-foreground hover:text-foreground"
         >
           ← Work items
@@ -119,19 +125,18 @@ export function WorkItemDetail({
               </dl>
             </details>
           </div>
+          <h3 className="text-lg font-semibold">Execution & results</h3>
+          <p className="text-sm text-muted-foreground">
+            Open a run for its changes, pull request, decisions and execution history.
+          </p>
           <RunList
             environmentId={environmentId}
             factoryId={factoryId}
             workItemId={workItemId}
             onOpen={onOpenRun}
           />
-          <details
-            open={work.result.item.state === "open" ? true : undefined}
-            className="rounded-lg border p-4"
-          >
-            <summary className="cursor-pointer font-medium">
-              {work.result.item.state === "open" ? "Start work" : "Start another workflow"}
-            </summary>
+          <details className="rounded-lg border p-4">
+            <summary className="cursor-pointer font-medium">Start new workflow</summary>
             <div className="pt-4">
               <StartWorkflow
                 key={work.result.item.id}
@@ -458,7 +463,7 @@ function StartWorkflow({
             </p>
             {!parallel ? (
               <label className="block space-y-1">
-                <span className="text-sm">Input revision</span>
+                <span className="text-sm">Advanced input reference</span>
                 <Input value={revision} onChange={(event) => setRevision(event.target.value)} />
               </label>
             ) : null}
@@ -503,11 +508,7 @@ function StartWorkflow({
           }
           onClick={() => void submit("start")}
         >
-          {busy
-            ? "Saving…"
-            : pending?.op === "start"
-              ? "Retry the same start"
-              : "Authorize and start workflow"}
+          {busy ? "Saving…" : pending?.op === "start" ? "Retry the same start" : "Start workflow"}
         </Button>
         <Button
           variant="outline"
@@ -526,7 +527,7 @@ function StartWorkflow({
         >
           {pending?.op === "configureExecutionDefaults"
             ? "Retry saving defaults"
-            : "Save repository defaults"}
+            : "Use these settings for future starts"}
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">

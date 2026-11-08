@@ -1,11 +1,18 @@
 import { Link, useSearch } from "@tanstack/react-router";
-import { Boxes, ListTodo, Inbox, Activity, Server, MessageSquare, Settings } from "lucide-react";
+import { Boxes, Inbox, Activity, Server, MessageSquare, Settings, UserRound } from "lucide-react";
+import type { EnvironmentId } from "@t3tools/contracts";
+import { useState } from "react";
+import { AsyncResult } from "effect/reactivity";
+import { Button } from "../components/ui/button";
+import { useAtomCommand } from "../state/use-atom-command";
+import { instanceCommand, initialState } from "./onboarding";
+import { factoryTabs } from "./workspaceSearch";
+import { useAutomationQuery } from "../features/automation/useAutomationQuery";
 import { cn } from "../lib/utils";
 import { useSidebar } from "../components/ui/sidebar";
 
 const destinations = [
   { view: "factories", label: "Factories", icon: Boxes },
-  { view: "work", label: "Work", icon: ListTodo },
   { view: "inbox", label: "Decisions", icon: Inbox },
   { view: "runs", label: "Runs", icon: Activity },
   { view: "resources", label: "Resources", icon: Server },
@@ -17,6 +24,18 @@ export function FoundrySidebar() {
   const close = () => {
     if (isMobile) setOpenMobile(false);
   };
+  const binding = initialState().binding;
+  const [accountMessage, setAccountMessage] = useState("");
+  const [signingOut, setSigningOut] = useState(false);
+  const account = useAtomCommand(instanceCommand, { reportFailure: false });
+  async function signOut() {
+    if (signingOut || !binding) return;
+    setSigningOut(true);
+    const result = await account({ operation: "remove", candidate: binding });
+    setSigningOut(false);
+    if (AsyncResult.isSuccess(result)) window.location.assign("/foundry?view=instance");
+    else setAccountMessage("Could not sign out. Open account settings to verify your session.");
+  }
   const current = search.view ?? "factories";
   return (
     <div className="flex h-full flex-col px-3 pb-4 pt-14">
@@ -28,7 +47,7 @@ export function FoundrySidebar() {
       >
         <Boxes className="size-5" /> Foundry
       </Link>
-      <nav aria-label="Foundry workspace" className="space-y-1">
+      <nav aria-label="Foundry workspace" className="min-h-0 flex-1 space-y-1 overflow-y-auto pb-4">
         {destinations.map(({ view, label, icon: Icon }) => (
           <Link
             key={view}
@@ -47,6 +66,9 @@ export function FoundrySidebar() {
             {label}
           </Link>
         ))}
+        {binding ? (
+          <SidebarFactories environmentId={binding.mainEnvironmentId} close={close} />
+        ) : null}
       </nav>
       <div className="mt-auto space-y-1 border-t pt-4 text-sm text-muted-foreground">
         <Link
@@ -65,15 +87,114 @@ export function FoundrySidebar() {
           <Settings className="size-4" />
           Settings
         </Link>
+        <details>
+          <summary className="flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2">
+            <UserRound className="size-4" />
+            Account
+          </summary>
+          <Link
+            to="/foundry"
+            search={{ view: "instance" }}
+            onClick={close}
+            className="block rounded-lg px-3 py-2 text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          >
+            Account & session
+          </Link>
+          {binding ? (
+            <div className="space-y-2 px-3 pb-2">
+              <p className="break-all text-xs">{binding.origin}</p>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={signingOut}
+                onClick={() => void signOut()}
+              >
+                Sign out of Foundry
+              </Button>
+              {accountMessage ? (
+                <p role="alert" className="text-xs">
+                  {accountMessage}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </details>
+      </div>
+    </div>
+  );
+}
+
+function SidebarFactories({
+  environmentId,
+  close,
+}: {
+  environmentId: EnvironmentId;
+  close: () => void;
+}) {
+  const search = useSearch({ strict: false });
+  const query = useAutomationQuery(environmentId, { op: "factories", limit: 50 });
+  return (
+    <div className="mt-4 space-y-1 border-t pt-3">
+      <p className="px-3 py-1 text-xs text-muted-foreground">Factory workspaces</p>
+      {query.loading ? (
+        <p role="status" className="px-3 text-xs">
+          Loading factories…
+        </p>
+      ) : null}
+      {query.error ? (
+        <p role="status" className="px-3 text-xs">
+          {query.error}
+        </p>
+      ) : null}
+      {query.result?.kind === "factories"
+        ? query.result.items.map((factory) => (
+            <details key={factory.id} open={search.factoryId === factory.id || undefined}>
+              <summary className="cursor-pointer rounded-lg px-3 py-2 text-sm font-medium hover:bg-accent">
+                {factory.name}
+              </summary>
+              <div className="ml-4 border-l pl-2">
+                {factoryTabs.map((tab) => (
+                  <Link
+                    key={tab}
+                    to="/foundry"
+                    search={{ view: "factories", factoryId: factory.id, tab }}
+                    onClick={close}
+                    aria-current={
+                      search.factoryId === factory.id && (search.tab ?? "overview") === tab
+                        ? "page"
+                        : undefined
+                    }
+                    className="block rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent aria-[current=page]:bg-primary/10 aria-[current=page]:text-primary"
+                  >
+                    {tab === "agents"
+                      ? "Agents & skills"
+                      : tab === "work"
+                        ? "Work items"
+                        : tab.charAt(0).toUpperCase() + tab.slice(1)}
+                  </Link>
+                ))}
+                <Link
+                  to="/foundry"
+                  search={{ view: "inbox", factoryId: factory.id }}
+                  onClick={close}
+                  className="block rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent"
+                >
+                  Decisions
+                </Link>
+              </div>
+            </details>
+          ))
+        : null}
+      {query.result?.kind === "factories" && query.result.next ? (
         <Link
           to="/foundry"
-          search={{ view: "instance" }}
+          search={{ view: "factories" }}
           onClick={close}
-          className="block rounded-lg px-3 py-2 text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          className="block px-3 py-2 text-sm underline"
         >
-          Instance & sign-in
+          Find more factories
         </Link>
-      </div>
+      ) : null}
     </div>
   );
 }
