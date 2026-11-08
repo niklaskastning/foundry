@@ -34,6 +34,7 @@ import * as Unattended from "../src/automation/Unattended.ts";
 import * as WorkerTransport from "../src/automation/WorkerTransport.ts";
 import * as GatewayGrants from "../src/foundry/GatewayGrants.ts";
 
+const isTriggerError = Schema.is(AutomationTriggerError);
 const decodeExecution = Schema.decodeUnknownEffect(FoundryWorkerExecution);
 const decodeGrant = Schema.decodeUnknownEffect(GatewayGrants.UnattendedGatewayIdentity);
 export const triggerGates = Effect.fn("Triggers.postgresGates")(function <E>(
@@ -856,15 +857,15 @@ export const triggerGates = Effect.fn("Triggers.postgresGates")(function <E>(
       (sql) =>
         sql`INSERT INTO foundry_automation.definition_sources(factory_id,location,scope_version_id,instance_id,operator_id,app_generation,ownership) VALUES('trigger-factory','{}'::jsonb,${definition.scopeVersionId},${identity.instanceId},${identity.operatorId},1,'git')`,
     );
-    NodeAssert.equal(
-      (yield* create("git-competing-create", github).pipe(Effect.flip)).code,
-      "forbidden",
-    );
-    NodeAssert.equal(
-      (yield* command({ ...activate, commandId: "git-legacy-reactivation" }).pipe(Effect.flip))
-        .code,
-      "forbidden",
-    );
+    const competingCreate = yield* create("git-competing-create", github).pipe(Effect.flip);
+    NodeAssert.ok(isTriggerError(competingCreate));
+    NodeAssert.equal(competingCreate.code, "forbidden");
+    const legacyActivation = yield* command({
+      ...activate,
+      commandId: "git-legacy-reactivation",
+    }).pipe(Effect.flip);
+    NodeAssert.ok(isTriggerError(legacyActivation));
+    NodeAssert.equal(legacyActivation.code, "forbidden");
     yield* Console.log(
       "PASS P22/P24 PostgreSQL: inactive activation/baseline, cursor CAS and rollback, concurrent acceptance/admission, PostgreSQL restart after durable acceptance, binding-separated deduplication, pinned definitions, owner isolation, retain/reactivate, schedule CAS and overlap wait/skip, delegation revocation.",
     );

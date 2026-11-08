@@ -265,8 +265,8 @@ export function SourceFeaturePanel({
                         ? `${revision.location.repository} · ${revision.location.branch} · ${revision.location.path || "/"}`
                         : "Historical source provenance unknown. Sync again before activation."}
                     </p>
-                    {revision.issues.map((issue, index) => (
-                      <p key={index} role="alert">
+                    {revision.issues.map((issue) => (
+                      <p key={[issue.file, ...issue.path, issue.message].join(":")} role="alert">
                         {issue.file}: {issue.path.join(".")} · {issue.message}
                       </p>
                     ))}

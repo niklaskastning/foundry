@@ -57,7 +57,6 @@ export class AutomationControlError extends Schema.TaggedError<AutomationControl
     ]),
   },
 ) {}
-const Text = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(20_000));
 export const AutomationWorkerTarget = Schema.Struct({
   deviceId: FoundryDeviceId,
   environmentId: EnvironmentId,
