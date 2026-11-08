@@ -220,6 +220,12 @@ const make = Effect.gen(function* () {
         }>`SELECT payload=${sql.json(input)}::jsonb AND instance_id=${owner.instanceId} AND operator_id=${owner.operatorId} AS same,result FROM foundry_automation.trigger_commands WHERE id=${input.commandId}`;
         if (!commands[0]?.same) return yield* conflict();
         if (!inserted.length) return yield* decodeResult(commands[0].result);
+        const factoryId = input.op === "create" ? input.factoryId : before!.binding.factoryId;
+        yield* sql`SELECT id FROM foundry_automation.factories WHERE id=${factoryId} FOR UPDATE`;
+        const owned = yield* sql<{
+          ownership: string;
+        }>`SELECT ownership FROM foundry_automation.definition_sources WHERE factory_id=${factoryId}`;
+        if (owned[0]?.ownership === "git" && input.op === "create") return yield* forbidden();
         let id: string;
         if (input.op === "create") {
           if (
@@ -244,6 +250,15 @@ const make = Effect.gen(function* () {
             return yield* conflict();
           id = input.bindingId;
           if (input.op === "activate") {
+            if (owned[0]?.ownership === "git") {
+              const heads =
+                yield* sql`SELECT version_id FROM foundry_automation.definition_heads WHERE factory_id=${factoryId} AND version_id=${current.binding.definitionVersionId}`;
+              if (
+                !heads.length ||
+                !id.startsWith(`${current.binding.definitionVersionId}:trigger:`)
+              )
+                return yield* forbidden();
+            }
             if (
               !identity ||
               current.binding.state === "active" ||

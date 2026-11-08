@@ -852,6 +852,19 @@ export const triggerGates = Effect.fn("Triggers.postgresGates")(function <E>(
       ))[0]?.version,
       definition.workflowVersions[0]!.versionId,
     );
+    yield* query(
+      (sql) =>
+        sql`INSERT INTO foundry_automation.definition_sources(factory_id,location,scope_version_id,instance_id,operator_id,app_generation,ownership) VALUES('trigger-factory','{}'::jsonb,${definition.scopeVersionId},${identity.instanceId},${identity.operatorId},1,'git')`,
+    );
+    NodeAssert.equal(
+      (yield* create("git-competing-create", github).pipe(Effect.flip)).code,
+      "forbidden",
+    );
+    NodeAssert.equal(
+      (yield* command({ ...activate, commandId: "git-legacy-reactivation" }).pipe(Effect.flip))
+        .code,
+      "forbidden",
+    );
     yield* Console.log(
       "PASS P22/P24 PostgreSQL: inactive activation/baseline, cursor CAS and rollback, concurrent acceptance/admission, PostgreSQL restart after durable acceptance, binding-separated deduplication, pinned definitions, owner isolation, retain/reactivate, schedule CAS and overlap wait/skip, delegation revocation.",
     );

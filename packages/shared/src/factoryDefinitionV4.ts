@@ -1,6 +1,7 @@
 import { stableStringify } from "./relaySigning.ts";
 import {
   FactoryV4Manifest,
+  FactoryV4Scorer,
   FactoryV4Agent,
   FactoryV4Mcp,
   FactoryV4Workflow,
@@ -131,6 +132,12 @@ export function validateFactoryV4Files(
     registry(manifest.workflows, "workflows");
     registry(manifest.agents, "agents");
     registry(manifest.mcp, "mcp");
+    registry(manifest.scorers ?? [], "scorers");
+    const scorers = manifest.scorers?.map((entry) => {
+      const value = decode(FactoryV4Scorer, parseFactoryYaml(read(entry.file)));
+      if (value.id !== entry.id) throw new Error("Scorer ID mismatch");
+      return value;
+    });
     if (new Set(manifest.repositories).size !== manifest.repositories.length)
       throw new Error("Duplicate repository");
     const agents = manifest.agents.map((entry) => {
@@ -190,7 +197,10 @@ export function validateFactoryV4Files(
     });
     const definition: CanonicalFactoryDefinitionV4 = {
       schemaVersion: 4,
+      ...(scorers ? { scorers } : {}),
       factoryId: manifest.factoryId,
+      ...(manifest.name ? { name: manifest.name } : {}),
+      ...(manifest.triggers ? { triggers: manifest.triggers } : {}),
       repositories: [...manifest.repositories].sort(),
       agents,
       skills,
@@ -199,6 +209,23 @@ export function validateFactoryV4Files(
       files: files.sort((a, b) => a.path.localeCompare(b.path)),
       ...(manifest.defaults ? { defaults: manifest.defaults } : {}),
     };
+    if (
+      new Set(manifest.triggers?.map((trigger) => trigger.id)).size !==
+      (manifest.triggers?.length ?? 0)
+    )
+      throw new Error("Duplicate trigger ID");
+    for (const trigger of manifest.triggers ?? []) {
+      if (
+        !manifest.repositories.includes(trigger.repository) ||
+        !workflows.some((workflow) => workflow.id === trigger.workflow)
+      )
+        throw new Error("Invalid trigger reference");
+      if (
+        trigger.source.kind === "github_issue" &&
+        trigger.source.repository !== trigger.repository
+      )
+        throw new Error("Trigger repository mismatch");
+    }
     for (const agent of agents) assertResources(agent, definition);
     for (const workflow of workflows) {
       location = `workflows/${workflow.id}.yaml`;

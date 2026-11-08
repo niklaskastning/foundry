@@ -591,6 +591,55 @@ export const definitionSourceGates = Effect.fn("DefinitionSources.postgresGates"
       ),
     );
     NodeAssert.equal(imported.source.kind, "github");
+    const currentSource = (yield* call((service) => service.source("source-new")))!;
+    const moved = yield* call((service) =>
+      service.configure(
+        {
+          commandId: "source-change-branch",
+          factoryId: "source-new",
+          scopeVersionId: fresh.scopeVersionId,
+          expectedGeneration: currentSource.generation,
+          expectedVersionId: imported.id,
+          expectedContentHash: imported.contentHash,
+          location: { ...location, branch: "review" },
+        },
+        identity,
+      ),
+    );
+    yield* call((service) =>
+      Effect.all(
+        [
+          service.accept(moved, { commitSha: "a".repeat(40), files: files("source-new") }, 1000),
+          service.accept(moved, { commitSha: "a".repeat(40), files: files("source-new") }, 1000),
+        ],
+        { concurrency: 2 },
+      ),
+    );
+    const movedRevision = (yield* call((service) => service.source("source-new")))!
+      .selectedRevisionId!;
+    NodeAssert.notEqual(movedRevision, freshRevision);
+    NodeAssert.equal(
+      (yield* call((service) => service.readRevision("source-new", freshRevision))).revision
+        .location?.branch,
+      "main",
+    );
+    NodeAssert.equal(
+      (yield* call((service) => service.readRevision("source-new", movedRevision))).revision
+        .location?.branch,
+      "review",
+    );
+    const duplicates = yield* query(
+      (sql) =>
+        sql<{
+          count: number;
+        }>`SELECT count(*)::int AS count FROM foundry_automation.definition_git_revisions WHERE factory_id='source-new'`,
+    );
+    NodeAssert.equal(duplicates[0]!.count, 2);
+    NodeAssert.equal(
+      Option.getOrNull(yield* local((service) => service.active("source-new")))?.id,
+      imported.id,
+    );
+
     for (const table of [
       "definition_git_revisions",
       "definition_source_commands",
