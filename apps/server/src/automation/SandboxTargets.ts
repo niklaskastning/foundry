@@ -127,9 +127,10 @@ export const layer = Layer.effect(
         ({ operatorId, allocation }) =>
           Effect.gen(function* () {
             if (allocation.request.owner.kind !== "workflow") return;
+            // Repairable v4 attempts keep their run active; exhausted runs are terminal.
             const rows = yield* sql`SELECT 1 FROM foundry_automation.dispatch_runs d
         JOIN foundry_automation.run_controls c ON c.run_id=d.run_id
-        WHERE d.run_id=${allocation.request.owner.runId} AND (d.state='succeeded' OR c.mode='cancelled')`;
+        WHERE d.run_id=${allocation.request.owner.runId} AND (d.state IN ('succeeded','failed') OR c.mode='cancelled')`;
             if (rows.length)
               yield* allocations.control(operatorId, allocation.allocationId, "delete");
           }),

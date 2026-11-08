@@ -22,6 +22,10 @@ import * as Effect from "effect/Effect";
 import * as Console from "effect/Console";
 import * as Layer from "effect/Layer";
 import * as Allocations from "../src/foundry/sandboxes/Allocations.ts";
+import * as AutomationDatabase from "../src/automation/AutomationDatabase.ts";
+import * as SandboxTargets from "../src/automation/SandboxTargets.ts";
+import * as WorkerTransport from "../src/automation/WorkerTransport.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as InstanceDatabase from "../src/foundry/InstanceDatabase.ts";
 import * as InstanceMigrations from "../src/foundry/InstanceMigrations.ts";
 import * as InstancePostgres from "../src/foundry/InstancePostgres.ts";
@@ -296,6 +300,73 @@ try {
       return (yield* service.get(operatorId, allocation.allocationId)).allocation;
     }),
   );
+  for (const statement of [
+    "CREATE SCHEMA foundry_automation",
+    "CREATE TABLE foundry_automation.dispatch_runs(run_id text PRIMARY KEY,state text NOT NULL)",
+    "CREATE TABLE foundry_automation.run_controls(run_id text PRIMARY KEY,mode text NOT NULL)",
+  ])
+    await query(statement);
+  const cleanupRuns = [
+    { runId: "succeeded", state: "succeeded", mode: "active" },
+    { runId: "failed", state: "failed", mode: "active" },
+    { runId: "cancelled", state: "failed", mode: "cancelled" },
+    { runId: "retry-active", state: "running", mode: "active" },
+    { runId: "setup-pending", state: "waiting", mode: "active" },
+    { runId: "cancel-pending", state: "waiting", mode: "cancel_requested" },
+  ];
+  for (const { runId, state, mode } of cleanupRuns) {
+    await query(`INSERT INTO foundry_automation.dispatch_runs VALUES ('${runId}','${state}')`);
+    await query(`INSERT INTO foundry_automation.run_controls VALUES ('${runId}','${mode}')`);
+  }
+  const workflowAllocations = cleanupRuns.map(({ runId }, index) => ({
+    operatorId,
+    allocation: {
+      ...first!,
+      allocationId: `dd5ee09b-5735-4333-bfa0-${String(index).padStart(12, "0")}`,
+      request: {
+        ...first!.request,
+        owner: { kind: "workflow" as const, factoryId: "fixture", runId },
+      },
+    },
+  }));
+  const deletedRuns: string[] = [];
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const targets = yield* SandboxTargets.SandboxTargets;
+      NodeAssert.ok(targets);
+      yield* targets.reconcileCleanup;
+      NodeAssert.deepEqual(deletedRuns, ["succeeded", "failed", "cancelled"]);
+    }).pipe(
+      Effect.provide(
+        SandboxTargets.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              AutomationDatabase.layer({
+                path: NodePath.join(root, ".s.PGSQL.5432"),
+                username: "fixture_admin",
+                database: "sandbox_fixture",
+              }),
+              Layer.mock(Allocations.Allocations)({
+                activeWorkflowAllocations: Effect.succeed(workflowAllocations),
+                control: (operator, allocationId, action) =>
+                  Effect.sync(() => {
+                    NodeAssert.equal(operator, operatorId);
+                    NodeAssert.equal(action, "delete");
+                    const owned = workflowAllocations.find(
+                      ({ allocation }) => allocation.allocationId === allocationId,
+                    )!;
+                    deletedRuns.push(owned.allocation.request.owner.runId);
+                    return owned.allocation;
+                  }),
+              }),
+              Layer.mock(WorkerTransport.WorkerTransport)({}),
+              NodeCrypto.layer,
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
   for (const revoked of [{ allowedImages: [] }, { allowedRepositories: [] }]) {
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -525,7 +596,7 @@ try {
   );
   await Effect.runPromise(
     Console.log(
-      "PASS sandbox PostgreSQL: concurrent idempotency/quota, immutable profiles, setup retry, stale-generation fencing, cancellation, lifetime extension, archive-required deletion, process restart; isolated fixtures removed.",
+      "PASS sandbox PostgreSQL: concurrent idempotency/quota, immutable profiles, setup retry, stale-generation fencing, cancellation, lifetime extension, archive-required deletion, terminal workflow cleanup, process restart; isolated fixtures removed.",
     ),
   );
 } finally {
