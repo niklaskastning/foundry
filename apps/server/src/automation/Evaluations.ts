@@ -1,3 +1,4 @@
+import * as ThreadArchive from "../foundry/ThreadArchive.ts";
 import { collectEvaluationEvidence } from "./EvaluationEvidence.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- Random claim tokens fence asynchronous judge completion.
 import { randomUUID } from "node:crypto";
@@ -28,6 +29,7 @@ export class Evaluations extends Context.Service<Evaluations, {
 export const layer = Layer.effect(Evaluations, Effect.gen(function* () {
   const sql = yield* AutomationDatabase.AutomationDatabase;
   const judge = yield* EvaluationJudge.EvaluationJudge;
+  const archive = yield* ThreadArchive.ThreadArchive;
   const enqueue = Effect.fn("Evaluations.enqueue")(function* (identity: Identity, raw: RequestEvaluation, mode: "manual" | "automatic" = "manual") {
     const request = yield* Schema.decodeUnknownEffect(RequestEvaluation)(raw).pipe(Effect.mapError(() => new EvaluationError({ reason: "invalid_input" })));
     const rows = yield* sql<{ definitionRevision: string; runRevision: string; definitionSource: unknown; modelConfiguration: unknown; state: string }>`
@@ -48,7 +50,7 @@ export const layer = Layer.effect(Evaluations, Effect.gen(function* () {
     const scorer = catalog.scorers.find((item) => item.id === request.scorerId);
     if (!scorer) return yield* new EvaluationError({ reason: "not_found" });
     const attempts = yield* sql<{ id: string; result: unknown; request: unknown; kind: string }>`SELECT a.command_id AS id,a.result,a.request,COALESCE((SELECT node->'definition'->>'kind' FROM jsonb_array_elements(COALESCE(d.v4_state->'nodes','[]'::jsonb)) node WHERE node->>'ordinal'=a.ordinal::text LIMIT 1),v.steps->a.ordinal->>'kind') AS kind FROM foundry_automation.step_attempts a JOIN foundry_automation.dispatch_runs d ON d.run_id=a.run_id JOIN foundry_automation.runs r ON r.id=a.run_id JOIN foundry_automation.workflow_versions v ON v.id=r.workflow_version_id WHERE a.run_id=${request.runId} ORDER BY a.ordinal,a.attempt_number LIMIT 101`;
-    const evidence = yield* collectEvaluationEvidence(identity, attempts);
+    const evidence = yield* collectEvaluationEvidence(identity, attempts).pipe(Effect.provideService(ThreadArchive.ThreadArchive, archive));
     const input = yield* decodeInput({
       id: request.id, factoryId: request.factoryId, runId: request.runId,
       definitionRevision: run.definitionRevision,runRevision:run.runRevision,definitionSource:run.definitionSource ?? null,
