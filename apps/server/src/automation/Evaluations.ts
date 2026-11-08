@@ -52,7 +52,7 @@ export const layer = Layer.effect(Evaluations, Effect.gen(function* () {
     const input = yield* decodeInput({
       id: request.id, factoryId: request.factoryId, runId: request.runId,
       definitionRevision: run.definitionRevision,runRevision:run.runRevision,definitionSource:run.definitionSource ?? null,
-      modelConfiguration: { binding: run.modelConfiguration ?? null, attempts: attempts.map((item) => ({ id:item.id, model: typeof item.request === "object" && item.request !== null && "model" in item.request ? item.request.model : null })) },
+      modelConfiguration: { binding: run.modelConfiguration ?? null, attempts: attempts.map((item) => ({ id:item.id, model: typeof item.request === "object" && item.request !== null && "model" in item.request ? item.request.model : null, options: typeof item.request === "object" && item.request !== null && "options" in item.request ? item.request.options : null })) },
       scorerRevision: definition.contentHash,
       scorerSource: JSON.stringify({ factoryId: request.scorerFactoryId, versionId: request.scorerVersionId, source: definition.source }),
       scorer, evidence, mode,
