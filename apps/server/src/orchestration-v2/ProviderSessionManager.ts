@@ -1882,7 +1882,14 @@ export const layerWithOptions = (
                         ),
                         Effect.flatMap((allowed) =>
                           allowed
-                            ? runtime.startTurn(input)
+                            ? runtime
+                                .startTurn(input)
+                                .pipe(
+                                  Effect.provideService(
+                                    ExecutionObserver.ExecutionObserver,
+                                    executionObserver,
+                                  ),
+                                )
                             : Effect.fail(
                                 new ProviderAdapter.ProviderAdapterTurnStartError({
                                   driver: runtime.driver,

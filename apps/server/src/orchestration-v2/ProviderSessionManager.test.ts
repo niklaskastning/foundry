@@ -3827,6 +3827,7 @@ it.effect.each([false, true])(
     Effect.gen(function* () {
       const state = yield* Ref.make(emptyState);
       const invoked = yield* Ref.make(0);
+      const observerForwarded = yield* Ref.make(false);
       yield* Effect.gen(function* () {
         const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
         const ids = yield* IdAllocator.IdAllocatorV2;
@@ -3876,16 +3877,22 @@ it.effect.each([false, true])(
           .pipe(Effect.exit);
         assert.equal(Exit.isSuccess(exit), allowed);
         assert.equal(yield* Ref.get(invoked), allowed ? 1 : 0);
+        assert.equal(yield* Ref.get(observerForwarded), allowed);
       }).pipe(
         Effect.provide(
           layerTest({
             state,
             idleTimeoutMs: 60000,
-            startTurn: Ref.update(invoked, (n) => n + 1),
+            startTurn: Effect.gen(function* () {
+              yield* Ref.update(invoked, (n) => n + 1);
+              const observer = yield* ExecutionObserver.ExecutionObserver;
+              yield* Ref.set(observerForwarded, observer.rejectedBeforeStart !== undefined);
+            }),
           }).pipe(
             Layer.provide(
               Layer.succeed(ExecutionObserver.ExecutionObserver, {
                 starting: () => Effect.succeed(allowed),
+                rejectedBeforeStart: () => Effect.void,
               }),
             ),
           ),
