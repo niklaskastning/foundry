@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Generate incompressible repository history for the bundle size regression.
+import * as NodeCrypto from "node:crypto";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -55,15 +57,37 @@ it.live(
       yield* fs.makeDirectory(cwd);
       yield* fs.makeDirectory(attachmentsDir);
       const run = Effect.fn("SandboxArchiveTest.git")(function* (args: ReadonlyArray<string>) {
-        return (yield* git.execute({ cwd, operation: "sandbox.archive.test", args })).stdout.trim();
+        return (yield* git.execute({
+          cwd,
+          operation: "sandbox.archive.test",
+          args: ["-c", "core.filemode=true", ...args],
+        })).stdout.trim();
       });
       yield* run(["init"]);
+      yield* run(["config", "core.filemode", "true"]);
       yield* run(["config", "user.name", "Foundry Fixture"]);
       yield* run(["config", "user.email", "fixture@invalid.test"]);
       yield* fs.writeFileString(`${cwd}/file.txt`, "original\n");
+      yield* fs.writeFile(`${cwd}/history.bin`, NodeCrypto.randomBytes(2 * 1024 * 1024));
+      yield* fs.writeFileString(`${cwd}/deleted.txt`, "remove me");
       yield* run(["add", "."]);
       yield* run(["commit", "-m", "Original"]);
+      yield* fs.remove(`${cwd}/history.bin`);
+      yield* run(["add", "."]);
+      yield* run(["commit", "-m", "Remove historical binary"]);
+      const baseCommit = yield* run(["rev-parse", "HEAD"]);
+      const remote = `${root}/remote.git`;
+      yield* run(["clone", "--bare", cwd, remote]);
+      yield* run(["remote", "add", "origin", remote]);
+      yield* fs.writeFileString(`${cwd}/local.txt`, "unpublished commit");
+      yield* run(["add", "."]);
+      yield* run(["commit", "-m", "Local only"]);
       const head = yield* run(["rev-parse", "HEAD"]);
+      yield* fs.remove(`${cwd}/deleted.txt`);
+      yield* fs.writeFile(`${cwd}/binary.bin`, new Uint8Array([0, 255, 17, 0]));
+      yield* fs.writeFileString(`${cwd}/executable`, "#!/bin/sh\nexit 0\n");
+      yield* fs.chmod(`${cwd}/executable`, 0o755);
+      yield* fs.symlink("new.txt", `${cwd}/link`);
       yield* fs.writeFileString(`${cwd}/file.txt`, "changed\n");
       yield* fs.writeFileString(`${cwd}/new.txt`, "untracked work\n");
       yield* run(["add", "."]);
@@ -227,12 +251,57 @@ it.live(
         );
         assert.deepEqual(yield* fs.readDirectory(`${config.stateDir}/foundry-sandbox-staging`), []);
         assert.equal(manifest.checkpointTree, tree);
+        assert.equal(manifest.remoteBase?.commit, baseCommit);
         assert.equal(manifest.bundle.mimeType, "application/vnd.foundry.git-bundle-index+json");
         assert.deepEqual(yield* service.capture(input), manifest);
         const expected = { allocationId: input.allocationId, fence: 1, owner };
         const receipt = yield* confirmation.confirm(principal, manifest, expected);
         assert.deepEqual(yield* confirmation.confirm(principal, manifest, expected), receipt);
+        assert.equal(
+          (yield* confirmation
+            .confirm(
+              principal,
+              { ...manifest, bundleSizeBytes: manifest.bundleSizeBytes! + 1 },
+              expected,
+            )
+            .pipe(Effect.flip)).code,
+          "changed",
+        );
         const firstIndex = yield* decodeSandboxBundleIndex(manifest.bundle, artifact!.bytes);
+        yield* run([
+          "bundle",
+          "create",
+          `${root}/before.bundle`,
+          "HEAD",
+          `refs/foundry/sandbox-archive/${input.allocationId}/${input.fence}`,
+        ]);
+        const beforeBytes = Number((yield* fs.stat(`${root}/before.bundle`)).size);
+        assert.isAbove(beforeBytes, 2 * 1024 * 1024);
+        assert.isBelow(firstIndex.sizeBytes, 10000);
+        yield* Effect.log(`Resume bytes: full=${beforeBytes}, delta=${firstIndex.sizeBytes}`);
+        yield* fs.rename(remote, `${remote}.hidden`);
+        assert.equal(
+          (yield* confirmation.confirm(principal, manifest, expected).pipe(Effect.flip)).code,
+          "remote_base_unavailable",
+        );
+        const missingBaseDestination = `${root}/missing-base`;
+        yield* fs.makeDirectory(missingBaseDestination);
+        assert.equal(
+          (yield* service.restore({ receipt, cwd: missingBaseDestination }).pipe(Effect.flip)).code,
+          "remote_base_unavailable",
+        );
+        assert.deepEqual(yield* fs.readDirectory(missingBaseDestination), []);
+        yield* fs.rename(`${remote}.hidden`, remote);
+        assert.equal(
+          (yield* confirmation
+            .confirm(
+              principal,
+              { ...manifest, remoteBase: { ...manifest.remoteBase!, commit: "0".repeat(40) } },
+              expected,
+            )
+            .pipe(Effect.flip)).code,
+          "remote_base_unavailable",
+        );
         const full = setupArtifacts.get(firstIndex.parts[0]!.reference.artifactId)!;
         const midpoint = Math.floor(full.bytes.length / 2);
         const split = [full.bytes.slice(0, midpoint), full.bytes.slice(midpoint)];
@@ -516,6 +585,14 @@ it.live(
         assert.deepEqual(provenance.source, owner);
         assert.equal(yield* fs.readFileString(`${restored}/file.txt`), "changed\n");
         assert.equal(yield* fs.readFileString(`${restored}/new.txt`), "untracked work\n");
+        assert.equal(yield* fs.readFileString(`${restored}/local.txt`), "unpublished commit");
+        assert.isFalse(yield* fs.exists(`${restored}/deleted.txt`));
+        assert.deepEqual(
+          yield* fs.readFile(`${restored}/binary.bin`),
+          new Uint8Array([0, 255, 17, 0]),
+        );
+        assert.equal((yield* fs.stat(`${restored}/executable`)).mode & 0o111, 0o111);
+        assert.equal(yield* fs.readLink(`${restored}/link`), "new.txt");
         assert.equal(
           (yield* git.execute({
             cwd: restored,
@@ -545,7 +622,26 @@ it.live(
           "changed",
         );
         firstPart.bytes[0] = firstPart.bytes[0]! ^ 1;
-        const legacyManifest = { ...manifest, bundle: firstPart.manifest };
+        const legacyBytes = yield* fs.readFile(`${root}/before.bundle`);
+        const legacyBundle = {
+          ...firstPart.manifest,
+          reference: {
+            ...firstPart.manifest.reference,
+            artifactId: FoundryArtifactId.make("88888888-8888-4888-8888-888888888888"),
+          },
+          sizeBytes: legacyBytes.length,
+          sha256: artifactSha256(legacyBytes),
+        };
+        setupArtifacts.set(legacyBundle.reference.artifactId, {
+          manifest: legacyBundle,
+          bytes: legacyBytes,
+        });
+        const legacyManifest = {
+          ...manifest,
+          remoteBase: undefined,
+          bundleSizeBytes: legacyBytes.length,
+          bundle: legacyBundle,
+        };
         const legacyReceipt = {
           manifest: legacyManifest,
           digest: artifactSha256(new TextEncoder().encode(stableStringify(legacyManifest))),
@@ -554,7 +650,28 @@ it.live(
         yield* fs.makeDirectory(legacy);
         yield* service.restore({ receipt: legacyReceipt, cwd: legacy });
         assert.equal(yield* fs.readFileString(`${legacy}/new.txt`), "untracked work\n");
-        artifact!.bytes[0] = artifact!.bytes[0]! ^ 1;
+        yield* git.execute({
+          cwd: legacy,
+          operation: "sandbox.convert.origin",
+          args: ["remote", "add", "origin", remote],
+        });
+        const converted = yield* service.capture({
+          ...input,
+          cwd: legacy,
+          fence: 4,
+          checkpointRef: "refs/foundry/archive-checkpoint",
+        });
+        const convertedReceipt = yield* confirmation.confirm(principal, converted, {
+          ...expected,
+          fence: 4,
+        });
+        const convertedCwd = `${root}/converted`;
+        yield* fs.makeDirectory(convertedCwd);
+        yield* service.restore({ receipt: convertedReceipt, cwd: convertedCwd });
+        assert.equal(yield* fs.readFileString(`${convertedCwd}/new.txt`), "untracked work\n");
+        assert.isTrue(setupArtifacts.has(legacyBundle.reference.artifactId));
+        const originalIndex = setupArtifacts.get(manifest.bundle.reference.artifactId)!.bytes;
+        originalIndex[0] = originalIndex[0]! ^ 1;
         assert.equal(
           (yield* service.restore({ receipt, cwd: empty }).pipe(Effect.flip)).code,
           "changed",
@@ -574,8 +691,8 @@ it.live(
           yield* sql`CREATE TABLE orchestration_v2_projection_threads(thread_id text,project_id text,payload_json text)`;
           yield* sql`CREATE TABLE projection_projects(project_id text,workspace_root text)`;
           yield* sql`INSERT INTO projection_projects VALUES ('project',${restored})`;
-          yield* sql`INSERT INTO orchestration_events VALUES (${owner.threadId},'thread',2),('attempt-thread','thread',2)`;
-          yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES (${owner.threadId},'project','{}'),('attempt-thread','project',${encodeWorkspace({ worktreePath: attempt })})`;
+          yield* sql`INSERT INTO orchestration_events VALUES (${owner.threadId},'thread',2),('attempt-thread','thread',2),('shared-thread','thread',2)`;
+          yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES (${owner.threadId},'project','{}'),('attempt-thread','project',${encodeWorkspace({ worktreePath: attempt })}),('shared-thread','project','{}')`;
           const captured = yield* SandboxArchiveEnvironment.SandboxArchiveEnvironment.pipe(
             Effect.flatMap((environment) =>
               environment.capture({
@@ -586,8 +703,14 @@ it.live(
               }),
             ),
           );
-          assert.equal(captured.threadIds.length, 2);
+          assert.equal(captured.threadIds.length, 3);
+          const shared = captured.manifests.filter(
+            (value) => value.relativeWorkspacePath === "restored",
+          );
+          assert.equal(shared.length, 2);
+          assert.deepEqual(shared[0]!.bundle, shared[1]!.bundle);
           assert.deepEqual(captured.manifests.map((value) => value.relativeWorkspacePath).sort(), [
+            "restored",
             "restored",
             "worktrees/attempt",
           ]);

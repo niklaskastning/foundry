@@ -56,6 +56,7 @@ export class SandboxArchive extends Context.Service<
       readonly cwd: string;
       readonly relativeWorkspacePath?: string;
       readonly checkpointRef: string;
+      readonly sharedWorkspace?: Manifest;
       readonly threadId: ThreadId;
       readonly attachmentsDir: string;
     }) => Effect.Effect<Manifest, FoundrySandboxArchiveError>;
@@ -160,6 +161,69 @@ const makeBundleOperations = Effect.gen(function* () {
       env: { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" },
     })).stdout.trim();
   });
+  const fetchBase = Effect.fn("SandboxArchive.fetchBase")(function* (
+    repository: string,
+    base: NonNullable<Manifest["remoteBase"]>,
+  ) {
+    if (/[@?#\r\n]/.test(base.url) || base.url.startsWith("-"))
+      return yield* new FoundrySandboxArchiveError({ code: "invalid_request" });
+    yield* run(repository, ["fetch", "--no-tags", "--", base.url, base.commit]).pipe(
+      Effect.mapError(() => new FoundrySandboxArchiveError({ code: "remote_base_unavailable" })),
+    );
+    if ((yield* run(repository, ["rev-parse", "FETCH_HEAD^{commit}"])) !== base.commit)
+      return yield* new FoundrySandboxArchiveError({ code: "remote_base_unavailable" });
+  });
+  const remoteBase = Effect.fn("SandboxArchive.remoteBase")(function* (cwd: string) {
+    const url = yield* run(cwd, ["remote", "get-url", "origin"]).pipe(
+      Effect.mapError(() => new FoundrySandboxArchiveError({ code: "remote_base_unavailable" })),
+    );
+    if (/[@?#\r\n]/.test(url) || url.startsWith("-"))
+      return yield* new FoundrySandboxArchiveError({ code: "invalid_request" });
+    const temporary = yield* makeTemporary();
+    yield* run(temporary, ["init"]);
+    yield* run(temporary, [
+      "fetch",
+      "--no-tags",
+      "--",
+      url,
+      "+refs/heads/*:refs/remotes/base/*",
+    ]).pipe(
+      Effect.mapError(() => new FoundrySandboxArchiveError({ code: "remote_base_unavailable" })),
+    );
+    const refs = (yield* run(temporary, [
+      "for-each-ref",
+      "--format=%(objectname)",
+      "refs/remotes/base/",
+    ]))
+      .split("\n")
+      .filter(Boolean);
+    // Import only remote objects to find an ancestor; never publish local work.
+    yield* run(cwd, [
+      "fetch",
+      "--no-tags",
+      "--",
+      temporary,
+      "+refs/remotes/base/*:refs/foundry/remote-base/*",
+    ]);
+    let best: { commit: string; distance: number } | undefined;
+    for (const ref of refs) {
+      const commit = yield* run(cwd, ["merge-base", "HEAD", ref]).pipe(Effect.option);
+      if (Option.isSome(commit)) {
+        const distance = Number(
+          yield* run(cwd, ["rev-list", "--count", "HEAD", `^${commit.value}`]),
+        );
+        if (!best || distance < best.distance) best = { commit: commit.value, distance };
+      }
+    }
+    if (best) {
+      const base = { format: "foundry-remote-delta-2" as const, url, commit: best.commit };
+      const probe = yield* makeTemporary();
+      yield* run(probe, ["init"]);
+      yield* fetchBase(probe, base);
+      return base;
+    }
+    return yield* new FoundrySandboxArchiveError({ code: "remote_base_unavailable" });
+  });
   const hashFile = Effect.fn("SandboxArchive.hashFile")(function* (filePath: string) {
     const reader = yield* fs.open(filePath, { flag: "r" });
     const hash = NodeCrypto.createHash("sha256");
@@ -224,6 +288,8 @@ const makeBundleOperations = Effect.gen(function* () {
     bundlePath: string,
     expected: { readonly sizeBytes: number; readonly sha256: string },
   ) {
+    if (manifest.bundleSizeBytes !== undefined && manifest.bundleSizeBytes !== expected.sizeBytes)
+      return yield* new FoundrySandboxArchiveError({ code: "changed" });
     if ((yield* fs.stat(bundlePath)).size !== BigInt(expected.sizeBytes))
       return yield* new FoundrySandboxArchiveError({ code: "changed" });
     const actual = yield* hashFile(bundlePath);
@@ -233,10 +299,13 @@ const makeBundleOperations = Effect.gen(function* () {
     const repository = path.join(temporary, "repository");
     yield* fs.makeDirectory(repository);
     yield* run(repository, ["init"]);
+    if (manifest.remoteBase) yield* fetchBase(repository, manifest.remoteBase);
     yield* run(repository, ["bundle", "verify", bundlePath]);
     const heads = (yield* run(repository, ["bundle", "list-heads", bundlePath])).split("\n").sort();
     const expectedHeads = [
-      `${manifest.headCommit} HEAD`,
+      ...(manifest.remoteBase?.commit === manifest.headCommit
+        ? []
+        : [`${manifest.headCommit} HEAD`]),
       `${manifest.checkpointCommit} ${checkpointRef(manifest)}`,
     ].sort();
     if (stableStringify(heads) !== stableStringify(expectedHeads))
@@ -246,9 +315,13 @@ const makeBundleOperations = Effect.gen(function* () {
       "--no-tags",
       "--",
       bundlePath,
-      "+HEAD:refs/foundry/archive-head",
+      ...(manifest.remoteBase?.commit === manifest.headCommit
+        ? []
+        : ["+HEAD:refs/foundry/archive-head"]),
       `+${checkpointRef(manifest)}:refs/foundry/archive-checkpoint`,
     ]);
+    if (manifest.remoteBase?.commit === manifest.headCommit)
+      yield* run(repository, ["update-ref", "refs/foundry/archive-head", manifest.headCommit]);
     if (
       (yield* run(repository, ["rev-parse", "refs/foundry/archive-checkpoint^{tree}"])) !==
       manifest.checkpointTree
@@ -257,7 +330,7 @@ const makeBundleOperations = Effect.gen(function* () {
     yield* run(repository, ["fsck", "--strict", "--no-reflogs"]);
     return { bundlePath, repository };
   });
-  return { run, verify, assemble, readIndexFile, makeTemporary };
+  return { run, verify, assemble, readIndexFile, makeTemporary, remoteBase };
 });
 
 const make = Effect.gen(function* () {
@@ -266,7 +339,8 @@ const make = Effect.gen(function* () {
   const publication = yield* ArtifactPublication.ArtifactPublication;
   const archive = yield* ArchivePublication.ArchivePublication;
   const workspaceTree = yield* makeCheckpointWorkspaceTree();
-  const { run, verify, assemble, readIndexFile, makeTemporary } = yield* makeBundleOperations;
+  const { run, verify, assemble, readIndexFile, makeTemporary, remoteBase } =
+    yield* makeBundleOperations;
   const capture = Effect.fn("SandboxArchive.capture")(
     function* (input: Parameters<SandboxArchive["Service"]["capture"]>[0]) {
       if (!publication || !archive)
@@ -274,6 +348,7 @@ const make = Effect.gen(function* () {
       yield* decodeIdentity({ allocationId: input.allocationId, fence: input.fence });
       if (!input.checkpointRef.startsWith("refs/"))
         return yield* new FoundrySandboxArchiveError({ code: "invalid_request" });
+      const base = yield* remoteBase(input.cwd);
       const headCommit = yield* run(input.cwd, ["rev-parse", "--verify", "HEAD^{commit}"]);
       const checkpointCommit = yield* run(input.cwd, [
         "rev-parse",
@@ -285,11 +360,30 @@ const make = Effect.gen(function* () {
         return yield* new FoundrySandboxArchiveError({ code: "changed" });
       const status = yield* archive.reconcile(input.threadId);
       if (!status.complete) return yield* new FoundrySandboxArchiveError({ code: "incomplete" });
+      if (input.sharedWorkspace) {
+        const shared = input.sharedWorkspace;
+        if (
+          shared.allocationId !== input.allocationId ||
+          shared.fence !== input.fence ||
+          shared.owner.environmentId !== status.owner.environmentId ||
+          shared.headCommit !== headCommit ||
+          shared.checkpointCommit !== checkpointCommit ||
+          shared.checkpointTree !== checkpointTree ||
+          stableStringify(shared.remoteBase) !== stableStringify(base)
+        )
+          return yield* new FoundrySandboxArchiveError({ code: "changed" });
+        return {
+          ...shared,
+          owner: status.owner,
+          finalCursor: status.confirmedCursor,
+          finalSourceSequence: status.confirmedSourceSequence,
+        };
+      }
       const ref = checkpointRef(input);
       yield* run(input.cwd, ["update-ref", ref, checkpointCommit]);
       const temporary = yield* makeTemporary();
       const bundlePath = path.join(temporary, "sandbox.bundle");
-      yield* run(input.cwd, ["bundle", "create", bundlePath, "HEAD", ref]);
+      yield* run(input.cwd, ["bundle", "create", bundlePath, "HEAD", ref, `^${base.commit}`]);
       if ((yield* fs.stat(bundlePath)).size > BigInt(FOUNDRY_SANDBOX_BUNDLE_MAX_BYTES))
         return yield* new FoundrySandboxArchiveError({ code: "incomplete" });
       const publish = Effect.fn("SandboxArchive.publishBundlePart")(function* (
@@ -363,9 +457,11 @@ const make = Effect.gen(function* () {
         relativeWorkspacePath: input.relativeWorkspacePath ?? "repo",
         finalCursor: status.confirmedCursor,
         finalSourceSequence: status.confirmedSourceSequence,
+        remoteBase: base,
         headCommit,
         checkpointCommit,
         checkpointTree,
+        bundleSizeBytes: sizeBytes,
         bundle: root,
       });
       yield* decodeSandboxBundleIndex(root, indexBytes);
@@ -422,6 +518,8 @@ const make = Effect.gen(function* () {
         "+refs/foundry/archive-head:refs/foundry/archive-head",
         "+refs/foundry/archive-checkpoint:refs/foundry/archive-checkpoint",
       ]);
+      if (manifest.remoteBase)
+        yield* run(input.cwd, ["remote", "add", "origin", manifest.remoteBase.url]);
       yield* run(input.cwd, ["checkout", "--detach", manifest.headCommit]);
       yield* run(input.cwd, ["read-tree", "--reset", "-u", manifest.checkpointCommit]);
       yield* run(input.cwd, ["reset", "--mixed", manifest.headCommit]);
@@ -596,7 +694,7 @@ export const layerConfirmation = Layer.effect(
             manifest.allocationId !== expected.allocationId ||
             manifest.fence !== expected.fence ||
             !sameOwner(manifest.owner, expected.owner) ||
-            !sameOwner(manifest.bundle.reference.owner, manifest.owner) ||
+            manifest.bundle.reference.owner.environmentId !== manifest.owner.environmentId ||
             manifest.bundle.reference.instanceId !== principal.instanceId
           )
             return yield* new FoundrySandboxArchiveError({ code: "foreign_archive" });

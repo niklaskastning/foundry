@@ -124,6 +124,8 @@ export const setup = async (
   if (resumed) {
     const receipt = await readJson(NodePath.join(paths.private, "resume-receipt.json"));
     if (resumed.digest !== receipt.digest) throw new Error("resume_drift");
+    if (receipt.manifest.remoteBase && receipt.manifest.remoteBase.url !== input.repositoryUrl)
+      throw new Error("resume_repository_mismatch");
     if (!(await NodeFSP.lstat(NodePath.join(paths.workspace, "repo"))).isDirectory())
       throw new Error("resume_workspace_missing");
   }
@@ -149,6 +151,11 @@ export const setup = async (
     if (!resumed) {
       await NodeFSP.mkdir(repo, { recursive: true });
       await run(["git", "init", "--quiet", repo], paths.workspace, capture);
+      await run(
+        ["git", "-C", repo, "config", "remote.origin.url", input.repositoryUrl],
+        paths.workspace,
+        capture,
+      );
       await run(
         [
           "git",
