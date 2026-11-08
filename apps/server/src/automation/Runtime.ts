@@ -1,5 +1,7 @@
 import * as SandboxTargets from "./SandboxTargets.ts";
 import * as OperationsDashboard from "./OperationsDashboard.ts";
+import * as Evaluations from "./Evaluations.ts";
+import * as EvaluationJudge from "./EvaluationJudge.ts";
 import * as McpBindings from "./McpBindings.ts";
 import * as MachineAccess from "./MachineAccess.ts";
 import * as Handoffs from "./Handoffs.ts";
@@ -109,6 +111,7 @@ export const reconciliationLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const scheduler = yield* Scheduler.Scheduler;
     const triggers = yield* Triggers.Triggers;
+    const evaluations = yield* Evaluations.Evaluations;
     const polling = yield* GitHubPolling.GitHubPolling;
     const definitionSync = yield* DefinitionSync.DefinitionSync;
     const schedules = yield* ScheduleTriggers.ScheduleTriggers;
@@ -125,6 +128,7 @@ export const reconciliationLayer = Layer.effectDiscard(
     yield* start(schedules.tick);
     yield* start(triggers.tick);
     yield* start(scheduler.tick);
+    yield* start(evaluations.tick);
   }),
 );
 
@@ -168,6 +172,8 @@ export const layer = Layer.unwrap(
       .pipe(
         Layer.provide(Application.layer.pipe(Layer.provide(Handoffs.layer))),
         Layer.provide(OperationsDashboard.layer),
+        Layer.provide(Evaluations.layer),
+        Layer.provide(EvaluationJudge.layer),
         Layer.provide(DefinitionSync.layer.pipe(Layer.provideMerge(DefinitionSources.layer))),
         Layer.provide(Layer.merge(GitHubPolling.layer, ScheduleTriggers.layer)),
         Layer.provide(Triggers.layer),
