@@ -1,5 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import {
+  EvaluationInput,
+  EvaluationJudgment,
   AuthSessionId,
   CommandId,
   ProjectId,
@@ -42,7 +44,28 @@ it.effect("uses one serialized RPC per explicit delivery and preserves worker no
       clientSessionId: AuthSessionId.make("client"),
       foundrySessionHash: "h".repeat(43),
     };
+    const evaluation: EvaluationInput = {
+      id: "evaluation-1",
+      factoryId: "factory-1",
+      runId: "run-1",
+      definitionRevision: "version-1",
+      runRevision: "revision-1",
+      definitionSource: null,
+      modelConfiguration: null,
+      scorerRevision: "a".repeat(64),
+      scorerSource: "fixture",
+      mode: "manual",
+      scorer: {
+        id: "quality",
+        name: "Quality",
+        criteria: [{ id: "correctness", instructions: "Check", threshold: 0.8 }],
+        judge: { provider: "codex", model: "gpt-6.1-sol", reasoningEffort: "medium" },
+        sampling: { rate: 1, automatic: true },
+      },
+      evidence: [],
+    };
     const worker = RpcGroup.make(
+      Rpc.make("foundry.workerEvaluate", { payload: EvaluationInput, success: EvaluationJudgment }),
       Rpc.make("foundry.workerStatus", {
         payload: Schema.Struct({ projectId: Schema.optional(ProjectId) }),
         success: FoundryWorkerStatus,
@@ -70,6 +93,12 @@ it.effect("uses one serialized RPC per explicit delivery and preserves worker no
         Effect.provide(
           Layer.mergeAll(
             worker.toLayer({
+              "foundry.workerEvaluate": (input) =>
+                Effect.sync(() => {
+                  calls++;
+                  expect(input).toEqual(evaluation);
+                  return { modelRevision: "gpt-6.1-sol", criteria: [] };
+                }),
               "foundry.workerLaunch": () =>
                 Effect.fail(new FoundryWorkerLaunchError({ code: "handoff_changed" })),
               "foundry.workerStatus": ({ projectId }) =>
@@ -147,11 +176,16 @@ it.effect("uses one serialized RPC per explicit delivery and preserves worker no
     ).toBeNull();
     expect(calls).toBe(2);
     expect(opens).toBe(2);
+    expect(yield* transport.evaluate(identity, evaluation)).toEqual({
+      modelRevision: "gpt-6.1-sol",
+      criteria: [],
+    });
+    expect(calls).toBe(3);
     authorized = false;
-    const denied = yield* transport.status(identity).pipe(Effect.result);
+    const denied = yield* transport.evaluate(identity, evaluation).pipe(Effect.result);
     expect(denied).toMatchObject({ _tag: "Failure", failure: { reason: "forbidden" } });
-    expect(calls).toBe(2);
-    expect(opens).toBe(3);
+    expect(calls).toBe(3);
+    expect(opens).toBe(4);
     authorized = true;
     const rejected = yield* transport
       .launch(identity, {

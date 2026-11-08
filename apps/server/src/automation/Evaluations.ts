@@ -1,3 +1,4 @@
+import * as WorkerTransport from "./WorkerTransport.ts";
 import * as ThreadArchive from "../foundry/ThreadArchive.ts";
 import { collectEvaluationEvidence } from "./EvaluationEvidence.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- Random claim tokens fence asynchronous judge completion.
@@ -23,6 +24,8 @@ export class EvaluationError extends Schema.TaggedError<EvaluationError>()("Eval
   reason: Schema.Literals(["invalid_input", "not_found", "conflict", "forbidden", "unavailable"]),
 }) {}
 type Identity = { readonly instanceId: string; readonly operatorId: string };
+const decodeAuthority = Schema.decodeEffect(WorkerTransport.WorkerIdentity);
+const decodeUnknownAuthority = Schema.decodeUnknownEffect(WorkerTransport.WorkerIdentity);
 const decodeInput = Schema.decodeUnknownEffect(EvaluationInput);
 const decodeResult = Schema.decodeUnknownEffect(EvaluationResult);
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
@@ -42,6 +45,7 @@ export class Evaluations extends Context.Service<
       identity: Identity,
       input: RequestEvaluation,
       mode?: "manual" | "automatic",
+      authority?: WorkerTransport.WorkerIdentity,
     ) => Effect.Effect<string, EvaluationError>;
     readonly list: (
       identity: Identity,
@@ -70,18 +74,20 @@ export const layer = Layer.effect(
       identity: Identity,
       raw: RequestEvaluation,
       mode: "manual" | "automatic" = "manual",
+      authority?: WorkerTransport.WorkerIdentity,
     ) {
       const request = yield* decodeRequest(raw).pipe(
         Effect.mapError(() => new EvaluationError({ reason: "invalid_input" })),
       );
       const rows = yield* sql<{
+        authority: unknown;
         definitionRevision: string;
         runRevision: string;
         definitionSource: unknown;
         modelConfiguration: unknown;
         state: string;
       }>`
-      SELECT r.factory_version_id AS "definitionRevision", r.revision AS "runRevision", (SELECT jsonb_build_object('contentHash',v.content_hash,'source',v.source) FROM foundry_automation.definition_versions v WHERE v.factory_id=r.factory_id AND v.factory_version_id=r.factory_version_id LIMIT 1) AS "definitionSource", d.binding->'model' AS "modelConfiguration", d.state
+      SELECT d.binding->'identity' AS authority, r.factory_version_id AS "definitionRevision", r.revision AS "runRevision", (SELECT jsonb_build_object('contentHash',v.content_hash,'source',v.source) FROM foundry_automation.definition_versions v WHERE v.factory_id=r.factory_id AND v.factory_version_id=r.factory_version_id LIMIT 1) AS "definitionSource", d.binding->'model' AS "modelConfiguration", d.state
       FROM foundry_automation.runs r JOIN foundry_automation.dispatch_runs d ON d.run_id=r.id
       WHERE r.id=${request.runId} AND r.factory_id=${request.factoryId}
       AND d.binding->'identity'->>'instanceId'=${identity.instanceId}
@@ -145,6 +151,19 @@ export const layer = Layer.effect(
         evidence,
         mode,
       });
+      const workerAuthority = authority
+        ? yield* decodeAuthority(authority).pipe(
+            Effect.mapError(() => new EvaluationError({ reason: "forbidden" })),
+          )
+        : mode === "automatic"
+          ? yield* decodeUnknownAuthority(run.authority).pipe(Effect.orElseSucceed(() => null))
+          : null;
+      if (
+        workerAuthority &&
+        (workerAuthority.instanceId !== identity.instanceId ||
+          workerAuthority.operatorId !== identity.operatorId)
+      )
+        return yield* new EvaluationError({ reason: "forbidden" });
       const automaticKey =
         mode === "automatic"
           ? evaluationDigest(
@@ -153,7 +172,7 @@ export const layer = Layer.effect(
           : null;
       return yield* sql.withTransaction(
         Effect.gen(function* () {
-          yield* sql`INSERT INTO foundry_automation.evaluation_queue(id,factory_id,run_id,instance_id,operator_id,input,automatic_key) VALUES(${input.id},${input.factoryId},${input.runId},${identity.instanceId},${identity.operatorId},${sql.json(input)},${automaticKey}) ON CONFLICT DO NOTHING`;
+          yield* sql`INSERT INTO foundry_automation.evaluation_queue(id,factory_id,run_id,instance_id,operator_id,input,automatic_key,worker_authority) VALUES(${input.id},${input.factoryId},${input.runId},${identity.instanceId},${identity.operatorId},${sql.json(input)},${automaticKey},${sql.json(workerAuthority)}) ON CONFLICT DO NOTHING`;
           const prior = yield* sql<{
             id: string;
             same: boolean;
@@ -256,7 +275,8 @@ export const layer = Layer.effect(
           const rows = yield* sql<{
             id: string;
             input: unknown;
-          }>`SELECT id,input FROM foundry_automation.evaluation_queue WHERE state='pending' ORDER BY created_at,id LIMIT 1 FOR UPDATE SKIP LOCKED`;
+            authority: unknown;
+          }>`SELECT id,input,worker_authority AS authority FROM foundry_automation.evaluation_queue WHERE state='pending' ORDER BY created_at,id LIMIT 1 FOR UPDATE SKIP LOCKED`;
           const row = rows[0];
           if (!row) return null;
           yield* sql`UPDATE foundry_automation.evaluation_queue SET state='running',claim_token=${token},claimed_at=now() WHERE id=${row.id}`;
@@ -268,28 +288,35 @@ export const layer = Layer.effect(
       const preflight = evaluationPreflight(input);
       const outcome = preflight
         ? { ...preflight, judgment: null, passed: null }
-        : yield* judge.judge(input).pipe(
-            Effect.flatMap(Schema.decodeUnknownEffect(EvaluationJudgment)),
-            Effect.map((judgment) => {
-              const passed = classifyJudgment(input, judgment);
-              return passed === null
-                ? {
-                    status: "incomplete" as const,
-                    reason: "invalid_judgment" as const,
-                    judgment: null,
-                    passed: null,
-                  }
-                : { status: "completed" as const, reason: null, judgment, passed };
-            }),
-            Effect.catch((error) =>
-              Effect.succeed({
-                status: "failed" as const,
-                reason: isJudgeError(error) ? error.reason : ("invalid_judgment" as const),
-                judgment: null,
-                passed: null,
+        : yield* judge
+            .judge(
+              input,
+              yield* decodeUnknownAuthority(claimed.authority).pipe(
+                Effect.orElseSucceed(() => undefined),
+              ),
+            )
+            .pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(EvaluationJudgment)),
+              Effect.map((judgment) => {
+                const passed = classifyJudgment(input, judgment);
+                return passed === null
+                  ? {
+                      status: "incomplete" as const,
+                      reason: "invalid_judgment" as const,
+                      judgment: null,
+                      passed: null,
+                    }
+                  : { status: "completed" as const, reason: null, judgment, passed };
               }),
-            ),
-          );
+              Effect.catch((error) =>
+                Effect.succeed({
+                  status: "failed" as const,
+                  reason: isJudgeError(error) ? error.reason : ("invalid_judgment" as const),
+                  judgment: null,
+                  passed: null,
+                }),
+              ),
+            );
       const result = yield* decodeResult({
         input,
         ...outcome,

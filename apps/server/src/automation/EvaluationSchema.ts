@@ -10,7 +10,7 @@ export const createEvaluationSchema = Effect.fn("EvaluationSchema.create")(funct
     id text PRIMARY KEY, factory_id text NOT NULL REFERENCES foundry_automation.factories(id),
     run_id text NOT NULL,
     instance_id text NOT NULL, operator_id text NOT NULL,
-    input jsonb NOT NULL, state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','running','finished')),
+    worker_authority jsonb, input jsonb NOT NULL, state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','running','finished')),
     claim_token text, claimed_at timestamptz,
     automatic_key text UNIQUE, created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE(id,factory_id,run_id), FOREIGN KEY(factory_id,run_id) REFERENCES foundry_automation.runs(factory_id,id))`;

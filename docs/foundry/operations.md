@@ -906,6 +906,18 @@ ihre getrennte Betriebsautorisierung startet erst nach ausdrücklicher Freigabe.
 
 ### Operative Evidence und Evaluationen
 
+Modellgestützte Evaluationen laufen auf dem ausdrücklich gebundenen Worker, nicht
+im Main-Container. Main und Worker benötigen denselben getesteten Stand; der Worker
+benötigt `FOUNDRY_WORKER_ENABLED=true` und eine über
+`FOUNDRY_WORKER_PROVIDER_INSTANCE_ID` gebundene, autorisierte Codex-Instanz. Bestehende dedizierte CLI-Installationen
+verwenden ihre konfigurierte Binary-/Home-Bindung; verwaltete Instanzen verwenden
+die vorhandene geschützte Laufzeitauflösung.
+Manuelle Evaluationen verwenden die aktuelle Benutzerautorisierung für das konfigurierte
+Automationziel, automatische die gepinnte Dispatchautorität. Widerruf, abgelaufene
+Sitzungen oder ein fehlender Worker ergeben `judge_unavailable`; keine Zugangsdaten
+werden nach Main kopiert. Nach unbestätigter Zustellung wird kein zweiter Modellaufruf
+angefordert. Der feste Scorer bleibt Codex GPT-6.1 Sol mit Medium-Reasoning.
+
 Factory Overview und Run zeigen Enrollment-Zeiträume, Runs, Aufträge, veröffentlichte PRs
 und begrenzte archivierte Nutzung. Die Vergleichszeiträume verwenden Enrollment, keine
 nicht gespeicherten Abschlusszeiten. Threadkumulative Geldbelege bleiben unzugeordnet;

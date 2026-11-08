@@ -918,6 +918,7 @@ try {
     "UPDATE foundry_automation.evaluation_results SET result='{}'",
     "DELETE FROM foundry_automation.evaluation_results",
     "UPDATE foundry_automation.evaluation_queue SET input='{}'",
+    "UPDATE foundry_automation.evaluation_queue SET worker_authority='{}'",
     "UPDATE foundry_automation.evaluation_queue SET factory_id='b'",
     "UPDATE foundry_automation.evaluation_queue SET run_id=run_id",
     "DELETE FROM foundry_automation.evaluation_queue",
@@ -1299,6 +1300,7 @@ try {
     Effect.die("Unexpected network-lock fixture operation"),
   );
   const networkWorker = WorkerTransport.WorkerTransport.of({
+    evaluate: Effect.fn("Fixture.evaluate")(() => Effect.die("unused")),
     sandboxProjects: Effect.fn("Fixture.sandboxProjects")(() => Effect.die("unused")),
     sandboxStatus: Effect.fn("Fixture.sandboxStatus")(() => Effect.die("unused")),
     retargetSandbox: Effect.fn("Fixture.retargetSandbox")(() => Effect.die("unused")),

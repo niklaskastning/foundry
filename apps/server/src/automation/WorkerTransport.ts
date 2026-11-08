@@ -1,3 +1,4 @@
+import type { EvaluationInput, EvaluationJudgment } from "@t3tools/contracts";
 import {
   FoundryWorkerHandoffError,
   type FoundryWorkerHandoffOpen,
@@ -62,6 +63,10 @@ type Target = Pick<WorkerIdentity, "deviceId" | "environmentId">;
 export class WorkerTransport extends Context.Service<
   WorkerTransport,
   {
+    readonly evaluate: (
+      identity: WorkerIdentity,
+      input: EvaluationInput,
+    ) => Effect.Effect<EvaluationJudgment, WorkerTransportError>;
     readonly handoffOpen: (
       identity: WorkerIdentity,
       input: FoundryWorkerHandoffOpen,
@@ -189,12 +194,13 @@ const make = Effect.gen(function* () {
       gateway.authorizeAutomation(request, target),
     Effect.mapError(transportError),
   );
-  const call = Effect.fn("WorkerTransport.call")(
-    function* <A, E>(
-      identity: WorkerIdentity,
-      operation: (client: Client) => Effect.Effect<A, E>,
-      scope?: { commandId: string; projectId?: string; previousCommandId?: string },
-    ) {
+  const call = Effect.fn("WorkerTransport.call")(function* <A, E>(
+    identity: WorkerIdentity,
+    operation: (client: Client) => Effect.Effect<A, E>,
+    scope?: { commandId: string; projectId?: string; previousCommandId?: string },
+    evaluation = false,
+  ) {
+    return yield* Effect.gen(function* () {
       const authorization = GatewayGrants.isUnattendedIdentity(identity)
         ? Option.isSome(unattended)
           ? unattended.value.validate(identity, scope)
@@ -222,12 +228,12 @@ const make = Effect.gen(function* () {
             .pipe(Effect.andThen(Effect.fail(new FoundryGatewayError({ code: "unavailable" })))),
         ),
       );
-    },
-    Effect.scoped,
-    Effect.timeout("20 seconds"),
-    Effect.mapError(transportError),
-  );
+    }).pipe(Effect.scoped, Effect.timeout(evaluation ? "3 minutes" : "20 seconds"));
+  }, Effect.mapError(transportError));
   return WorkerTransport.of({
+    evaluate: Effect.fn("WorkerTransport.evaluate")((identity, input) =>
+      call(identity, (client) => client["foundry.workerEvaluate"](input), undefined, true),
+    ),
     sandboxProjects: Effect.fn("WorkerTransport.sandboxProjects")(
       (target) => gateway.sandboxProjects(target),
       Effect.mapError(transportError),

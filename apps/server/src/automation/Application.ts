@@ -593,7 +593,12 @@ const make = Effect.gen(function* () {
       case "evaluateRun":
         return {
           kind: "evaluationQueued" as const,
-          id: yield* evaluations.enqueue(identity, input.input),
+          id: yield* evaluations.enqueue(
+            identity,
+            input.input,
+            "manual",
+            yield* worker.authorize(request, target),
+          ),
         };
       case "setWorkerPaused": {
         const selected = [target, ...(target.workers ?? [])].find(

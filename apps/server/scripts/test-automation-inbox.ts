@@ -65,6 +65,7 @@ const transport = (operatorId: string) =>
   Layer.succeed(
     WorkerTransport.WorkerTransport,
     WorkerTransport.WorkerTransport.of({
+      evaluate: Effect.fn("Fixture.evaluate")(() => Effect.die("unused")),
       sandboxProjects: Effect.fn("Fixture.sandboxProjects")(() => Effect.die("unused")),
       sandboxStatus: Effect.fn("Fixture.sandboxStatus")(() => Effect.die("unused")),
       retargetSandbox: Effect.fn("Fixture.retargetSandbox")(() => Effect.die("unused")),

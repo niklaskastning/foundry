@@ -1,4 +1,5 @@
 import {
+  type EvaluationInput,
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   ProviderDriverKind,
   type ModelSelection,
@@ -27,7 +28,7 @@ import { CodexSettings, ProviderInstanceId } from "@t3tools/contracts";
 import * as ServerConfig from "../config.ts";
 import { makeProcessProbe, processProbeSource } from "../testUtils/processProbe.ts";
 import * as TextGeneration from "./TextGeneration.ts";
-import { makeCodexTextGeneration, makeCodexStructuredGeneration } from "./CodexTextGeneration.ts";
+import { makeCodexTextGeneration, makeCodexEvaluation } from "./CodexTextGeneration.ts";
 import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
@@ -196,30 +197,74 @@ function withFakeCodexEnv<A, E, R>(
 }
 
 it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
-  it.effect("runs structured evaluation output with the fixed judge model and medium effort", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "evaluation-judge-test-" });
-      const binaryPath = yield* makeFakeCodexBinary(directory, {
-        output: JSON.stringify({ score: 0.9 }),
-        requireArg: "--model gpt-6.1-sol",
-        requireReasoningEffort: "medium",
-        stdinMustContain: "archive-evidence",
-      });
-      const run = yield* makeCodexStructuredGeneration(decodeCodexSettings({ binaryPath }));
-      const result = yield* run({
-        operation: "generateReviewGuide",
-        cwd: directory,
-        prompt: "archive-evidence",
-        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-6.1-sol", [
-          { id: "reasoningEffort", value: "medium" },
-        ]),
-        outputSchema: Schema.Struct({
-          score: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
-        }),
-      });
-      expect(result).toEqual({ score: 0.9 });
-    }).pipe(Effect.scoped),
+  it.effect.each(["existing", "managed"] as const)(
+    "runs the bound %s evaluation runtime with the fixed judge model and medium effort",
+    (setupMode) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "evaluation-judge-test-" });
+        const judgment = {
+          modelRevision: "gpt-6.1-sol",
+          criteria: [
+            {
+              id: "correctness",
+              score: 0.9,
+              rationale: "Tests passed",
+              evidenceIds: ["evidence-1"],
+            },
+          ],
+        };
+        const binaryPath = yield* makeFakeCodexBinary(directory, {
+          output: JSON.stringify(judgment),
+          requireArg: "--model gpt-6.1-sol",
+          requireReasoningEffort: "medium",
+          stdinMustContain: "archive-evidence",
+        });
+        const effectiveConfig = decodeCodexSettings({ binaryPath, homePath: directory });
+        const run = yield* makeCodexEvaluation(
+          ProviderInstanceId.make("bound-worker-codex"),
+          setupMode === "existing"
+            ? effectiveConfig
+            : decodeCodexSettings({ binaryPath: "missing-main-codex" }),
+          undefined,
+          Effect.succeed([]),
+          setupMode === "managed"
+            ? Effect.succeed({
+                config: effectiveConfig,
+                environment: process.env,
+                revision: "worker-managed-runtime",
+              })
+            : undefined,
+        );
+        const evaluation: EvaluationInput = {
+          id: "eval-1",
+          factoryId: "factory-1",
+          runId: "run-1",
+          definitionRevision: "version-1",
+          runRevision: "revision-1",
+          definitionSource: null,
+          modelConfiguration: null,
+          scorerRevision: "a".repeat(64),
+          scorerSource: "fixture",
+          mode: "manual",
+          scorer: {
+            id: "quality",
+            name: "Quality",
+            criteria: [{ id: "correctness", instructions: "Check", threshold: 0.8 }],
+            judge: { provider: "codex", model: "gpt-6.1-sol", reasoningEffort: "medium" },
+            sampling: { rate: 1, automatic: true },
+          },
+          evidence: [
+            {
+              id: "evidence-1",
+              sha256: "b".repeat(64),
+              source: "archive",
+              content: "archive-evidence",
+            },
+          ],
+        };
+        expect(yield* run({ cwd: directory, evaluation })).toEqual(judgment);
+      }).pipe(Effect.scoped),
   );
   it.effect.each(["exec", "mcp list"] as const)(
     "kills a stalled %s CLI when its request is interrupted",

@@ -179,6 +179,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.foundryWorkerFollow]: "foundry",
   [WS_METHODS.foundryWorkerRead]: "foundry",
   [WS_METHODS.foundryWorkerStatus]: "foundry",
+  [WS_METHODS.foundryWorkerEvaluate]: "foundry",
   [WS_METHODS.assetsReadChunk]: "assets",
   [WS_METHODS.attachmentsWriteChunk]: "assets",
   [WS_METHODS.attachmentsChunkStatus]: "assets",

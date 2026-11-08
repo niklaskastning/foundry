@@ -1,3 +1,4 @@
+import * as WorkerEvaluation from "./foundry/WorkerEvaluation.ts";
 import * as MainSessionAuthority from "./foundry/MainSessionAuthority.ts";
 import * as ProviderConnectionTransport from "./foundry/ProviderConnectionTransport.ts";
 import * as WorkerHandoff from "./foundry/WorkerHandoff.ts";
@@ -623,6 +624,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.provide(layerExecutionStore),
   ),
   layerWorkerLaunch,
+  WorkerEvaluation.layer,
   WorkerHandoff.layerConfigured.pipe(
     Layer.provide(layerWorkerLaunch),
     Layer.provide(layerWorkspaceGate),
