@@ -1,4 +1,5 @@
 import * as OperationsDashboard from "./OperationsDashboard.ts";
+import * as Evaluations from "./Evaluations.ts";
 import { machineBearerToken } from "../foundry/MachineCredentials.ts";
 import { factoryDefinitionPreview } from "@t3tools/shared/factoryDefinitionPreview";
 import * as McpBindings from "./McpBindings.ts";
@@ -163,6 +164,7 @@ export class Application extends Context.Service<
 const make = Effect.gen(function* () {
   const sql = yield* AutomationDatabase.AutomationDatabase;
   const operations = yield* OperationsDashboard.OperationsDashboard.pipe(Effect.provide(OperationsDashboard.layer));
+  const evaluations = yield* Evaluations.Evaluations;
   const machineAccess = yield* MachineAccess.MachineAccess;
   const handoffs = yield* Handoffs.Handoffs;
   const factories = yield* Factories.Factories;
@@ -325,6 +327,8 @@ const make = Effect.gen(function* () {
         case "operationsDashboard":
           yield* factories.readFactory(input.factoryId);
           return yield* operations.query(input, identity);
+        case "evaluation": return { kind: "evaluation" as const, result: yield* evaluations.read(identity, input.factoryId, input.id) };
+        case "evaluations": return { kind: "evaluations" as const, items: yield* evaluations.list(identity, input) };
         case "mcpBindings":
           yield* factories.readFactory(input.factoryId);
           return { kind: "mcpBindings" as const, items: yield* mcpBindings.list(input.factoryId) };
@@ -578,6 +582,7 @@ const make = Effect.gen(function* () {
         ? yield* machineAccess.write(request, input.input.factoryId, "automation:start")
         : yield* gateway.identityForWrite(request, scope);
     switch (input.op) {
+      case "evaluateRun": return { kind: "evaluationQueued" as const, id: yield* evaluations.enqueue(identity, input.input) };
       case "setWorkerPaused": {
         const selected = [target, ...(target.workers ?? [])].find(
           (entry) => entry.deviceId === input.deviceId,

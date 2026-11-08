@@ -1,4 +1,5 @@
 import { OperationsDashboardQuery, OperationsDashboard } from "./operationsDashboard.ts";
+import { RequestEvaluation, EvaluationResult, EvaluationSummary } from "./evaluation.ts";
 import { FactoryV4Workflow, FactoryV4ResolvedAgent } from "./definitionV4.ts";
 import { FactoryMcpBinding, SetFactoryMcpBinding } from "./mcpBinding.ts";
 import { FactoryV4RunState, FactoryV4NodeState } from "./executionV4.ts";
@@ -51,6 +52,8 @@ const Page = {
 const FactoryFilter = { factoryId: Schema.optional(Key) };
 export const AutomationApplicationQuery = Schema.Union([
   OperationsDashboardQuery,
+  Schema.Struct({ op: Schema.Literal("evaluation"), factoryId: Key, id: Key }),
+  Schema.Struct({ op: Schema.Literal("evaluations"), factoryId: Schema.optional(Key), runId: Schema.optional(Key), after: Schema.optional(Key) }),
   Schema.Struct({ op: Schema.Literal("mcpBindings"), factoryId: Key }),
   ...AutomationHandoffQuery.members,
   Schema.Struct({ op: Schema.Literal("executionDefaults"), factoryId: Key, repository: Key }),
@@ -107,6 +110,7 @@ export const AutomationApplicationQuery = Schema.Union([
 ]);
 export type AutomationApplicationQuery = typeof AutomationApplicationQuery.Type;
 export const AutomationApplicationCommand = Schema.Union([
+  Schema.Struct({ op: Schema.Literal("evaluateRun"), input: RequestEvaluation }),
   Schema.Struct({ op: Schema.Literal("setMcpBinding"), input: SetFactoryMcpBinding }),
   Schema.Struct({
     op: Schema.Literal("setWorkerPaused"),
@@ -169,6 +173,9 @@ export type AutomationAttemptSummary = typeof AutomationAttemptSummary.Type;
 const Next = { next: Schema.NullOr(Key) };
 export const AutomationApplicationResult = Schema.Union([
   OperationsDashboard,
+  Schema.Struct({ kind: Schema.Literal("evaluations"), items: Schema.Array(EvaluationSummary) }),
+  Schema.Struct({ kind: Schema.Literal("evaluation"), result: EvaluationResult }),
+  Schema.Struct({ kind: Schema.Literal("evaluationQueued"), id: Key }),
   Schema.Struct({ kind: Schema.Literal("mcpBindings"), items: Schema.Array(FactoryMcpBinding) }),
   Schema.Struct({ kind: Schema.Literal("mcpBinding"), binding: FactoryMcpBinding }),
   Schema.Struct({
