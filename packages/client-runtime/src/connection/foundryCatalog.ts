@@ -8,9 +8,13 @@ import {
   type FoundryDeviceId,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { type InstanceBinding, OnboardingError } from "./foundry.ts";
+import { type InstanceBinding, OnboardingError, normalizeOrigin } from "./foundry.ts";
 import { FoundryConnectionTarget, PrimaryConnectionTarget } from "./model.ts";
-import { FoundryConnectionRegistration, PrimaryConnectionRegistration } from "./catalog.ts";
+import {
+  FoundryConnectionRegistration,
+  PrimaryConnectionRegistration,
+  type PlatformConnectionRegistration,
+} from "./catalog.ts";
 
 const decodeCatalog = Schema.decodeUnknownSync(FoundryDeviceCatalog);
 const decodeTarget = Schema.decodeUnknownSync(FoundryGatewayGrantRequest);
@@ -40,20 +44,8 @@ export function restoreDeviceSelection(
       target.environmentId === binding.mainEnvironmentId
     )
       return [];
-    const mainUrl = new URL(binding.origin);
-    const httpBaseUrl = mainUrl.toString();
-    mainUrl.protocol = mainUrl.protocol === "https:" ? "wss:" : "ws:";
-    return [
-      new FoundryConnectionRegistration({ target }),
-      new PrimaryConnectionRegistration({
-        target: new PrimaryConnectionTarget({
-          environmentId: binding.mainEnvironmentId,
-          label: "Foundry Main",
-          httpBaseUrl,
-          wsBaseUrl: mainUrl.toString(),
-        }),
-      }),
-    ] as const;
+    const main = confirmedMainRegistration(binding, origin);
+    return main ? ([new FoundryConnectionRegistration({ target }), main] as const) : [];
   } catch {
     return [];
   }
@@ -114,4 +106,51 @@ export function createDeviceCatalogClient(options: {
       return decodeGrant(await options.request("updateAccess", decodeUpdate(input)));
     },
   };
+}
+
+export function resolveDevicePlatformRegistrations(
+  selection: ReadonlyArray<PlatformConnectionRegistration> | undefined,
+  available: ReadonlyArray<PlatformConnectionRegistration>,
+  binding: InstanceBinding | null,
+  origin: string,
+): ReadonlyArray<PlatformConnectionRegistration> {
+  if (selection === undefined) return available;
+  const main = confirmedMainRegistration(binding, origin);
+  if (!binding || !main) return [];
+  const selected = selection.filter((registration) => {
+    if (registration._tag !== "FoundryConnectionRegistration") return false;
+    const target = registration.target;
+    return (
+      target.environmentId !== binding.mainEnvironmentId &&
+      target.binding.origin === binding.origin &&
+      target.binding.issuer === binding.issuer &&
+      target.binding.instanceId === binding.instanceId &&
+      target.binding.mainEnvironmentId === binding.mainEnvironmentId
+    );
+  });
+  return [...selected, main];
+}
+
+function confirmedMainRegistration(binding: InstanceBinding | null, origin: string) {
+  if (!binding || binding.origin !== origin) return undefined;
+  try {
+    if (
+      normalizeOrigin(binding.origin, true) !== origin ||
+      normalizeOrigin(binding.issuer) !== binding.issuer
+    )
+      return undefined;
+    const url = new URL(binding.origin);
+    const httpBaseUrl = url.toString();
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return new PrimaryConnectionRegistration({
+      target: new PrimaryConnectionTarget({
+        environmentId: binding.mainEnvironmentId,
+        label: "Foundry Main",
+        httpBaseUrl,
+        wsBaseUrl: url.toString(),
+      }),
+    });
+  } catch {
+    return undefined;
+  }
 }

@@ -8,7 +8,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
 
-import type { ConnectionAttemptError } from "../connection/model.ts";
+import type { ConnectionAttemptError, PrimaryConnectionTarget } from "../connection/model.ts";
 
 export interface PreparedSshEnvironment {
   readonly bootstrap: DesktopSshEnvironmentBootstrap;
@@ -62,6 +62,11 @@ export class PrimaryEnvironmentAuth extends Context.Service<
   PrimaryEnvironmentAuth,
   {
     readonly bearerToken: Effect.Effect<Option.Option<string>, ConnectionAttemptError>;
+    // Some bearer tokens require this endpoint and environment binding; None-only hosts may omit it.
+    readonly bearerTarget?: Effect.Effect<
+      Option.Option<Pick<PrimaryConnectionTarget, "environmentId" | "httpBaseUrl" | "wsBaseUrl">>,
+      ConnectionAttemptError
+    >;
   }
 >()("@t3tools/client-runtime/platform/capabilities/PrimaryEnvironmentAuth") {}
 

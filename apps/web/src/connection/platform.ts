@@ -43,7 +43,7 @@ import * as Stream from "effect/Stream";
 import { FetchHttpClient } from "effect/http";
 
 import { layerFoundryInstanceSession } from "../foundry/instanceSession";
-import { readDeviceSelection } from "../foundry/selection";
+import { readDeviceSelection, devicePlatformRegistrations } from "../foundry/selection";
 import { APP_VERSION } from "../branding";
 import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
 import * as PrimaryEnvironmentHttpLayer from "../environments/primary/httpLayer";
@@ -363,6 +363,19 @@ const layerCapabilities = Layer.effectContext(
       deviceId: Effect.succeedNone,
     });
     const primaryAuth = ClientCapabilities.PrimaryEnvironmentAuth.of({
+      bearerTarget: Effect.gen(function* () {
+        const resolved = yield* Effect.try({
+          try: readPrimaryEnvironmentTarget,
+          catch: () =>
+            new ConnectionBlockedError({
+              reason: "configuration",
+              detail: "The desktop primary endpoint could not be identified.",
+            }),
+        });
+        if (resolved?.source !== "desktop-managed") return Option.none();
+        const registration = yield* loadPrimaryConnectionRegistration(resolved);
+        return Option.some(registration.target);
+      }),
       bearerToken: Effect.tryPromise({
         try: readDesktopPrimaryBearerToken,
         catch: (cause) =>
@@ -636,7 +649,7 @@ const layerPlatformConnectionSource = Layer.effect(
 
     const buildPlatformRegistrations = Effect.gen(function* () {
       const selected = readDeviceSelection();
-      if (selected !== undefined) return selected;
+      if (selected !== undefined) return devicePlatformRegistrations([]);
       const previous = yield* Ref.get(cacheRef);
       const nowEpochMs = yield* Clock.currentTimeMillis;
       const next = new Map<string, CachedPlatformRegistration>();
@@ -781,9 +794,7 @@ const layerPlatformConnectionSource = Layer.effect(
       }
 
       yield* Ref.set(cacheRef, next);
-      return (
-        readDeviceSelection() ?? (registrations as ReadonlyArray<PlatformConnectionRegistration>)
-      );
+      return devicePlatformRegistrations(registrations);
     }).pipe(Effect.provide(FetchHttpClient.layer));
 
     return PlatformConnectionSource.PlatformConnectionSource.of({

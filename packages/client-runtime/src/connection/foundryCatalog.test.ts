@@ -5,7 +5,23 @@ import {
   FoundryInstanceId,
   type FoundryDeviceCatalog,
 } from "@t3tools/contracts";
-import { createDeviceCatalogClient, restoreDeviceSelection } from "./foundryCatalog.ts";
+import {
+  createDeviceCatalogClient,
+  restoreDeviceSelection,
+  resolveDevicePlatformRegistrations,
+} from "./foundryCatalog.ts";
+import {
+  PrimaryConnectionRegistration,
+  FoundryConnectionRegistration,
+  BearerConnectionRegistration,
+  BearerConnectionProfile,
+  BearerConnectionCredential,
+} from "./catalog.ts";
+import {
+  PrimaryConnectionTarget,
+  FoundryConnectionTarget,
+  BearerConnectionTarget,
+} from "./model.ts";
 
 it("rechecks catalog identity, online status and permissions before selecting a gateway target", async () => {
   const binding = {
@@ -83,4 +99,115 @@ it("rechecks catalog identity, online status and permissions before selecting a 
     instanceId: FoundryInstanceId.make("33333333-3333-4333-8333-333333333333"),
   };
   await expect(client.load()).rejects.toThrow("identity");
+});
+
+it("keeps only the confirmed Main control connection when a selected sandbox is disconnected or restored", () => {
+  const binding = {
+    origin: "https://main.example",
+    issuer: "https://team.cloudflareaccess.com",
+    instanceId: FoundryInstanceId.make("11111111-1111-4111-8111-111111111111"),
+    mainEnvironmentId: EnvironmentId.make("main"),
+  };
+  const main = new PrimaryConnectionRegistration({
+    target: new PrimaryConnectionTarget({
+      environmentId: binding.mainEnvironmentId,
+      label: "Foundry Main",
+      httpBaseUrl: binding.origin + "/",
+      wsBaseUrl: "wss://main.example/",
+    }),
+  });
+  const personal = new PrimaryConnectionRegistration({
+    target: new PrimaryConnectionTarget({
+      environmentId: EnvironmentId.make("personal"),
+      label: "Desktop",
+      httpBaseUrl: "http://localhost:3000/",
+      wsBaseUrl: "ws://localhost:3000/",
+    }),
+  });
+  const secondary = new BearerConnectionRegistration({
+    target: new BearerConnectionTarget({
+      environmentId: EnvironmentId.make("secondary"),
+      label: "Other local",
+      connectionId: "secondary",
+    }),
+    profile: new BearerConnectionProfile({
+      environmentId: EnvironmentId.make("secondary"),
+      label: "Other local",
+      connectionId: "secondary",
+      httpBaseUrl: "http://localhost:3001/",
+      wsBaseUrl: "ws://localhost:3001/",
+    }),
+    credential: new BearerConnectionCredential({ token: "fixture" }),
+  });
+  const sandbox = new FoundryConnectionRegistration({
+    target: new FoundryConnectionTarget({
+      binding,
+      deviceId: FoundryDeviceId.make("22222222-2222-4222-8222-222222222222"),
+      environmentId: EnvironmentId.make("sandbox"),
+      label: "Sandbox",
+      scopes: ["orchestration:read"],
+    }),
+  });
+  const available = [personal, secondary, main];
+  const selected = restoreDeviceSelection(JSON.stringify(sandbox.target), binding, binding.origin);
+  const disconnected = restoreDeviceSelection("null", binding, binding.origin);
+  expect(
+    resolveDevicePlatformRegistrations(disconnected, available, binding, binding.origin),
+  ).toEqual([main]);
+  expect(resolveDevicePlatformRegistrations(selected, available, binding, binding.origin)).toEqual([
+    sandbox,
+    main,
+  ]);
+  expect(resolveDevicePlatformRegistrations([], available, binding, binding.origin)).toEqual([
+    main,
+  ]);
+  expect(resolveDevicePlatformRegistrations(undefined, available, binding, binding.origin)).toBe(
+    available,
+  );
+  expect(
+    resolveDevicePlatformRegistrations(selected, [personal, secondary], binding, binding.origin),
+  ).toEqual([sandbox, main]);
+  expect(resolveDevicePlatformRegistrations(selected, available, null, binding.origin)).toEqual([]);
+  expect(
+    resolveDevicePlatformRegistrations(selected, available, binding, "https://other.example"),
+  ).toEqual([]);
+  for (const wrong of [
+    { ...main.target, environmentId: personal.target.environmentId },
+    { ...main.target, httpBaseUrl: "https://other.example/" },
+    { ...main.target, wsBaseUrl: "wss://other.example/" },
+    { ...main.target, httpBaseUrl: "https://user:password@main.example/" },
+  ]) {
+    expect(
+      resolveDevicePlatformRegistrations(
+        [],
+        [new PrimaryConnectionRegistration({ target: new PrimaryConnectionTarget(wrong) })],
+        binding,
+        binding.origin,
+      ),
+    ).toEqual([main]);
+  }
+  expect(
+    resolveDevicePlatformRegistrations(
+      [sandbox],
+      available,
+      { ...binding, issuer: "https://other.cloudflareaccess.com" },
+      binding.origin,
+    ),
+  ).toEqual([main]);
+  expect(
+    resolveDevicePlatformRegistrations(
+      [],
+      [],
+      { ...binding, origin: "https://main.example/path" },
+      "https://main.example/path",
+    ),
+  ).toEqual([]);
+  expect(
+    resolveDevicePlatformRegistrations(
+      [],
+      available,
+      { ...binding, issuer: "broken" },
+      binding.origin,
+    ),
+  ).toEqual([]);
 });

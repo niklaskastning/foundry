@@ -1,5 +1,6 @@
 import {
   restoreDeviceSelection,
+  resolveDevicePlatformRegistrations,
   type FoundryConnectionTarget,
   type PlatformConnectionRegistration,
 } from "@t3tools/client-runtime/connection";
@@ -22,4 +23,15 @@ export function readDeviceSelection(): ReadonlyArray<PlatformConnectionRegistrat
 export function writeDeviceSelection(target: FoundryConnectionTarget | null) {
   if (target === null && sessionStorage.getItem(key) === null) return;
   sessionStorage.setItem(key, JSON.stringify(target));
+}
+
+export function devicePlatformRegistrations(
+  available: ReadonlyArray<PlatformConnectionRegistration>,
+) {
+  return resolveDevicePlatformRegistrations(
+    readDeviceSelection(),
+    available,
+    initialState().binding,
+    window.location.origin,
+  );
 }

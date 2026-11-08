@@ -12,7 +12,11 @@ export * as ConnectionOnboarding from "./onboarding.ts";
 export { FoundryInstanceSession } from "./foundryMain.ts";
 export * as FoundryOnboarding from "./foundry.ts";
 export * as FoundryArtifacts from "./foundryArtifacts.ts";
-export { createDeviceCatalogClient, restoreDeviceSelection } from "./foundryCatalog.ts";
+export {
+  createDeviceCatalogClient,
+  restoreDeviceSelection,
+  resolveDevicePlatformRegistrations,
+} from "./foundryCatalog.ts";
 export * from "./presentation.ts";
 export * as ProfileStore from "./profileStore.ts";
 export * from "./routes.ts";

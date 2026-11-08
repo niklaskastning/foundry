@@ -15,7 +15,11 @@ import * as Effect from "effect/Effect";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { executeInstanceOperation, initialState } from "./onboarding";
-import { readDeviceSelection, writeDeviceSelection } from "./selection";
+import {
+  readDeviceSelection,
+  writeDeviceSelection,
+  devicePlatformRegistrations,
+} from "./selection";
 
 type Operation =
   | { type: "load" }
@@ -169,8 +173,8 @@ export const deviceCommand = createRuntimeCommand(connectionAtomRuntime, {
             detail: "Device selection could not be saved.",
           }),
       });
-      const selection = readDeviceSelection();
-      if (selection !== undefined) yield* registry.reconcilePlatform(selection);
+      if (readDeviceSelection() !== undefined)
+        yield* registry.reconcilePlatform(devicePlatformRegistrations([]));
       if (target) {
         const installed = (yield* SubscriptionRef.get(registry.entries)).get(
           target.environmentId,
@@ -180,7 +184,7 @@ export const deviceCommand = createRuntimeCommand(connectionAtomRuntime, {
           installed.deviceId !== target.deviceId
         ) {
           yield* Effect.sync(() => writeDeviceSelection(null));
-          yield* registry.reconcilePlatform([]);
+          yield* registry.reconcilePlatform(devicePlatformRegistrations([]));
           return yield* new ConnectionBlockedError({
             reason: "configuration",
             detail:
