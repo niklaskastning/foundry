@@ -1,3 +1,4 @@
+import { DefinitionRevisionComparison } from "./DefinitionSourcePanel";
 import { useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
@@ -13,10 +14,12 @@ export function SourceFeaturePanel({
   environmentId,
   factoryId,
   runId,
+  onChanged,
 }: {
   environmentId: EnvironmentId;
   factoryId: string;
   runId?: string;
+  onChanged?: () => void;
 }) {
   const [after, setAfter] = useState<string>();
   const factory = useAutomationQuery(environmentId, { op: "factory", factoryId });
@@ -35,11 +38,19 @@ export function SourceFeaturePanel({
       ? { op: "definitionRevision", factoryId, revisionId: binding.selectedRevisionId }
       : { op: "definitionSource", factoryId },
   );
-  const [repository, setRepository] = useState("");
-  const [repositoryId, setRepositoryId] = useState("");
-  const [branch, setBranch] = useState("main");
-  const [commitSha, setCommitSha] = useState("");
-  const [path, setPath] = useState(factoryId);
+  const [repository, setRepository] = useState<string>();
+  const [repositoryId, setRepositoryId] = useState<string>();
+  const [branch, setBranch] = useState<string>();
+  const [commitSha, setCommitSha] = useState<string>();
+  const [path, setPath] = useState<string>();
+  const [reviewId, setReviewId] = useState<string>();
+  const reviewedRevisionId = reviewId ?? binding?.selectedRevisionId;
+  const review = useAutomationQuery(
+    environmentId,
+    reviewedRevisionId
+      ? { op: "definitionRevision", factoryId, revisionId: reviewedRevisionId }
+      : { op: "definitionSource", factoryId },
+  );
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const command = useAtomCommand(automationCommands.command, { reportFailure: false });
@@ -60,6 +71,8 @@ export function SourceFeaturePanel({
     source.refresh();
     revisions.refresh();
     candidate.refresh();
+    review.refresh();
+    onChanged?.();
   };
   if (factory.error || source.error) return <p role="alert">{factory.error ?? source.error}</p>;
   if (!detail || source.loading) return <p role="status">Loading definition source…</p>;
@@ -98,11 +111,13 @@ export function SourceFeaturePanel({
               expectedContentHash: detail.active?.contentHash ?? null,
               location: {
                 connectionId: "github-app",
-                repository: repository || binding?.repository || "",
-                repositoryId: Number(repositoryId || binding?.repositoryId),
-                branch: branch.trim() || "main",
-                path: path.trim(),
-                ...(commitSha ? { commitSha: commitSha.trim() } : {}),
+                repository: repository ?? binding?.repository ?? "",
+                repositoryId: Number(repositoryId ?? binding?.repositoryId),
+                branch: (branch ?? binding?.branch ?? "main").trim(),
+                path: (path ?? binding?.path ?? factoryId).trim(),
+                ...((commitSha ?? binding?.commitSha)
+                  ? { commitSha: (commitSha ?? binding?.commitSha ?? "").trim() }
+                  : {}),
               },
             },
           });
@@ -120,7 +135,7 @@ export function SourceFeaturePanel({
             Repository
             <Input
               placeholder={binding?.repository ?? "owner/repository"}
-              value={repository}
+              value={repository ?? binding?.repository ?? ""}
               onChange={(e) => setRepository(e.target.value)}
             />
           </label>
@@ -130,25 +145,31 @@ export function SourceFeaturePanel({
               type="number"
               min="1"
               placeholder={String(binding?.repositoryId ?? "")}
-              value={repositoryId}
+              value={repositoryId ?? String(binding?.repositoryId ?? "")}
               onChange={(e) => setRepositoryId(e.target.value)}
             />
           </label>
           <label>
             Branch
-            <Input value={branch} onChange={(e) => setBranch(e.target.value)} />
+            <Input
+              value={branch ?? binding?.branch ?? "main"}
+              onChange={(e) => setBranch(e.target.value)}
+            />
           </label>
           <label>
             Exact commit (optional)
             <Input
               pattern="[a-f0-9]{40}"
-              value={commitSha}
+              value={commitSha ?? binding?.commitSha ?? ""}
               onChange={(e) => setCommitSha(e.target.value)}
             />
           </label>
           <label>
             Definition directory
-            <Input value={path} onChange={(e) => setPath(e.target.value)} />
+            <Input
+              value={path ?? binding?.path ?? factoryId}
+              onChange={(e) => setPath(e.target.value)}
+            />
           </label>
         </fieldset>
         <Button type="submit" disabled={busy || !allowed || !scopeVersionId}>
@@ -225,6 +246,18 @@ export function SourceFeaturePanel({
           >
             {binding.enabled ? "Pause background reads" : "Authorize background reads"}
           </Button>
+          {review.error ? <p role="alert">{review.error}</p> : null}
+          {review.result?.kind === "definitionRevision" ? (
+            <DefinitionRevisionComparison
+              key={review.result.revision.id}
+              environmentId={environmentId}
+              factoryId={factoryId}
+              revisionId={review.result.revision.id}
+              files={review.result.files}
+              activeFiles={review.result.activeFiles}
+              activeVersionId={review.result.activeVersionId}
+            />
+          ) : null}
           {detail.active?.definition.schemaVersion === 4 &&
           detail.active.definition.triggers?.length ? (
             <div>
@@ -270,6 +303,9 @@ export function SourceFeaturePanel({
                         {issue.file}: {issue.path.join(".")} · {issue.message}
                       </p>
                     ))}
+                    <Button variant="outline" onClick={() => setReviewId(revision.id)}>
+                      Review revision {revision.commitSha.slice(0, 8)}
+                    </Button>
                     <Button
                       variant="outline"
                       disabled={
@@ -278,6 +314,8 @@ export function SourceFeaturePanel({
                         !binding.enabled ||
                         !revision.valid ||
                         !revision.location ||
+                        review.result?.kind !== "definitionRevision" ||
+                        review.result.revision.id !== revision.id ||
                         (detail.active?.source.kind === "github" &&
                           detail.active.source.reference === revision.id)
                       }

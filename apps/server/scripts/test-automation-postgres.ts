@@ -178,9 +178,13 @@ try {
     "DROP INDEX foundry_automation.definition_git_revision_location_commit",
     "ALTER TABLE foundry_automation.definition_git_revisions DROP COLUMN location, ADD CONSTRAINT definition_git_revisions_factory_id_commit_sha_key UNIQUE(factory_id,commit_sha)",
     "UPDATE foundry_automation.schema_version SET version=11",
-  ]) await query(statement, "automation_migrator");
+  ])
+    await query(statement, "automation_migrator");
   await run(Effect.all([migration, migration], { concurrency: "unbounded" }));
-  NodeAssert.equal((await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version, 12);
+  NodeAssert.equal(
+    (await query("SELECT version FROM foundry_automation.schema_version"))[0]?.version,
+    12,
+  );
   const factory = { commandId: "create-a", id: "a", name: "Factory A" };
   const factories = await Promise.all(
     Array.from({ length: 8 }, () => call((s) => s.createFactory(factory))),
@@ -869,12 +873,47 @@ try {
     (await query("SELECT * FROM foundry_automation.commands WHERE id='rolled-back'")).length,
     0,
   );
-  await NodeAssert.rejects(query("INSERT INTO foundry_automation.evaluation_queue(id,factory_id,run_id,instance_id,operator_id,input) SELECT 'evaluation-wrong-factory','b',id,'fixture','fixture','{}'::jsonb FROM foundry_automation.runs WHERE factory_id='a' LIMIT 1", "automation_runtime"));
-  await query("INSERT INTO foundry_automation.evaluation_queue(id,factory_id,run_id,instance_id,operator_id,input) SELECT 'evaluation-fixture',factory_id,id,'fixture','fixture','{}'::jsonb FROM foundry_automation.runs WHERE factory_id='a' LIMIT 1", "automation_runtime");
-  NodeAssert.equal((await query("SELECT id FROM foundry_automation.evaluation_queue WHERE id='evaluation-fixture'")).length, 1);
-  await NodeAssert.rejects(query("INSERT INTO foundry_automation.evaluation_results(id,factory_id,run_id,result) SELECT id,'b',run_id,'{}'::jsonb FROM foundry_automation.evaluation_queue WHERE id='evaluation-fixture'", "automation_runtime"));
-  await query("INSERT INTO foundry_automation.evaluation_results(id,factory_id,run_id,result) SELECT id,factory_id,run_id,'{}'::jsonb FROM foundry_automation.evaluation_queue WHERE id='evaluation-fixture'", "automation_runtime");
-  await query("UPDATE foundry_automation.evaluation_queue SET state='running',claim_token='fixture',claimed_at=now() WHERE id='evaluation-fixture'", "automation_runtime");
+  await NodeAssert.rejects(
+    query(
+      "INSERT INTO foundry_automation.evaluation_queue(id,factory_id,run_id,instance_id,operator_id,input) SELECT 'evaluation-wrong-factory','b',id,'fixture','fixture','{}'::jsonb FROM foundry_automation.runs WHERE factory_id='a' LIMIT 1",
+      "automation_runtime",
+    ),
+  );
+  await query(
+    "REVOKE INSERT ON foundry_automation.evaluation_queue,foundry_automation.evaluation_results FROM automation_runtime",
+    "automation_migrator",
+  );
+  await query(
+    "REVOKE UPDATE(state,claim_token,claimed_at) ON foundry_automation.evaluation_queue FROM automation_runtime",
+    "automation_migrator",
+  );
+  await run(migration);
+  await query(
+    "INSERT INTO foundry_automation.evaluation_queue(id,factory_id,run_id,instance_id,operator_id,input) SELECT 'evaluation-fixture',factory_id,id,'fixture','fixture','{}'::jsonb FROM foundry_automation.runs WHERE factory_id='a' LIMIT 1",
+    "automation_runtime",
+  );
+  NodeAssert.equal(
+    (
+      await query(
+        "SELECT id FROM foundry_automation.evaluation_queue WHERE id='evaluation-fixture'",
+      )
+    ).length,
+    1,
+  );
+  await NodeAssert.rejects(
+    query(
+      "INSERT INTO foundry_automation.evaluation_results(id,factory_id,run_id,result) SELECT id,'b',run_id,'{}'::jsonb FROM foundry_automation.evaluation_queue WHERE id='evaluation-fixture'",
+      "automation_runtime",
+    ),
+  );
+  await query(
+    "INSERT INTO foundry_automation.evaluation_results(id,factory_id,run_id,result) SELECT id,factory_id,run_id,'{}'::jsonb FROM foundry_automation.evaluation_queue WHERE id='evaluation-fixture'",
+    "automation_runtime",
+  );
+  await query(
+    "UPDATE foundry_automation.evaluation_queue SET state='running',claim_token='fixture',claimed_at=now() WHERE id='evaluation-fixture'",
+    "automation_runtime",
+  );
   for (const statement of [
     "UPDATE foundry_automation.evaluation_results SET result='{}'",
     "DELETE FROM foundry_automation.evaluation_results",
@@ -882,7 +921,8 @@ try {
     "UPDATE foundry_automation.evaluation_queue SET factory_id='b'",
     "UPDATE foundry_automation.evaluation_queue SET run_id=run_id",
     "DELETE FROM foundry_automation.evaluation_queue",
-  ]) await NodeAssert.rejects(query(statement, "automation_runtime"));
+  ])
+    await NodeAssert.rejects(query(statement, "automation_runtime"));
   for (const statement of [
     "UPDATE foundry_automation.versions SET repositories=ARRAY['evil']",
     "UPDATE foundry_automation.work_items SET version_id='a2'",
@@ -923,8 +963,14 @@ try {
   ];
   const schema3Data = await Promise.all(preservedQueries.map((statement) => query(statement)));
   NodeAssert.ok(schema3Data.every((rows) => rows.length > 0));
-  await query("DROP TABLE foundry_automation.evaluation_results,foundry_automation.evaluation_queue", "automation_migrator");
-  await query("ALTER TABLE foundry_automation.runs DROP CONSTRAINT runs_factory_id_unique", "automation_migrator");
+  await query(
+    "DROP TABLE foundry_automation.evaluation_results,foundry_automation.evaluation_queue",
+    "automation_migrator",
+  );
+  await query(
+    "ALTER TABLE foundry_automation.runs DROP CONSTRAINT runs_factory_id_unique",
+    "automation_migrator",
+  );
   await query(
     "DROP TABLE foundry_automation.dispatch_capacity,foundry_automation.handoff_commands,foundry_automation.work_item_handoffs,foundry_automation.definition_sources,foundry_automation.definition_git_revisions,foundry_automation.definition_source_commands",
     "automation_migrator",

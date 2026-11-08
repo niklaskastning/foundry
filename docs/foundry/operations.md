@@ -839,7 +839,8 @@ muss das Repository ebenfalls freigeben. Änderungen erhöhen die Konfigurations
 bestehende Quellbindungen verlangen anschließend ausdrückliche Reautorisierung.
 
 Unter Factory → Definition das Definitionsrepository, seine numerische ID, Branch
-und Verzeichnis binden. Bei bestehenden lokalen Definitionen wird die aktuelle
+(standardmäßig `main`) und Verzeichnis binden; ein optionaler exakter Commit hat
+beim Lesen Vorrang. Bei bestehenden lokalen Definitionen wird die aktuelle
 Version samt Inhaltshash als Importbasis festgehalten. Die erste Git-Aktivierung
 verlangt gleiche Inhalte und unveränderte Basis. Bei Drift die Dateien im Repository
 angleichen oder ausdrücklich die aktuelle lokale Version als neue Importbasis wählen.
@@ -850,8 +851,37 @@ Synchronisierung liest und validiert einen konkreten Commit, aktiviert ihn aber 
 Quelle und Revisionen zeigen Fehler, Dateien und Diff zur aktiven Version. Erst die
 explizite Aktivierung übernimmt die geprüfte Revision für neue Runs. Ein Rollback
 aktiviert eine frühere gültige Git-Revision mit aktuellen Rechten; bestehende Runs
-behalten ihren Snapshot. Hintergrundlesen lässt sich auch nach einem Rechtewiderruf
-pausieren. Betriebsbindungen und Trigger bleiben unabhängig in der App bedienbar.
+behalten ihren Snapshot. Die Revision muss zur aktuellen Quelle einschließlich Branch,
+Verzeichnis und optionalem Commitpin gehören; historische Revisionen ohne Quellnachweis
+verlangen erneute Synchronisierung. Hintergrundlesen lässt sich pausieren.
+Git-eigene Trigger werden mit der Definition übernommen und bleiben fachlich schreibgeschützt;
+ihre getrennte Betriebsautorisierung startet erst nach ausdrücklicher Freigabe.
+
+### Operative Evidence und Evaluationen
+
+Factory Overview und Run zeigen Enrollment-Zeiträume, Runs, Aufträge, veröffentlichte PRs
+und begrenzte archivierte Nutzung. Die Vergleichszeiträume verwenden Enrollment, keine
+nicht gespeicherten Abschlusszeiten. Threadkumulative Geldbelege bleiben unzugeordnet;
+fehlende Kosten oder Cycle Time bedeuten unbekannt, nicht null. Der Drilldown nennt
+Archivcursor und Teilabdeckung; Attempt-Nutzung verlangt den passenden Provider-Turn.
+
+Scorers werden im v4-Manifest über `scorers: [{id, file}]` registriert und aus
+`scorers/<id>.yaml` geladen. Kriterien enthalten `id`, `instructions` und `threshold`
+zwischen 0 und 1; `judge` verlangt Codex, `gpt-6.1-sol` und `reasoningEffort: medium`.
+`sampling` enthält `automatic` und `rate` zwischen 0 und 1. Automatische Evaluationen
+verwenden ausschließlich den aktivierten Runpin. Manuelle Neubewertungen wählen
+Scorerfactory, Definitionsversion und Scorer ausdrücklich und ersetzen keine Historie.
+Fehlende oder unvollständige Archive verhindern einen Judgeaufruf; ein verlorener Claim
+wird als Fehler dokumentiert und startet keinen zweiten bezahlten Turn.
+
+Dieser Stand verlangt Automation-Schema 12; das Instanzschema bleibt unabhängig.
+Vor Mainstart die separate Automation-Datenbank mit dem getesteten Artefakt über
+`foundry automation-migrate --database <bestätigte-datenbank> --runtime-role <automation-runtime>`
+und geschützte Migratorkonfiguration aktualisieren. Den Deployment-Lock bis zur
+Verifikation halten. Der bisherige Schema-11-Updater aktiviert Schema 12 nicht selbst;
+der gemeinsame Integrator muss seinen Migrationspfad ausdrücklich anpassen.
+Recovery verwendet einen Schema-12-kompatiblen Build; ein Image-Downgrade ersetzt
+keine geprüfte Schemawiederherstellung.
 
 Der isolierte Nachweis verwendet ausschließlich einen temporären PostgreSQL-Cluster,
 keine vorhandenen Datenbanken oder persönlichen Provider-Zugänge:

@@ -640,6 +640,41 @@ export const definitionSourceGates = Effect.fn("DefinitionSources.postgresGates"
       imported.id,
     );
 
+    let changedSource = moved;
+    for (const [name, nextLocation] of [
+      ["branch", { ...location, branch: "another" }],
+      ["path", { ...location, branch: "review", path: "elsewhere" }],
+      ["pin", { ...location, branch: "review", commitSha: "b".repeat(40) }],
+    ] as const) {
+      changedSource = yield* call((service) =>
+        service.configure(
+          {
+            commandId: `source-reject-${name}-configure`,
+            factoryId: "source-new",
+            scopeVersionId: fresh.scopeVersionId,
+            expectedGeneration: changedSource.generation,
+            expectedVersionId: imported.id,
+            expectedContentHash: imported.contentHash,
+            location: nextLocation,
+          },
+          identity,
+        ),
+      );
+      const rejected = yield* call((service) =>
+        service.activateRevision(
+          {
+            commandId: `source-reject-${name}-activate`,
+            factoryId: "source-new",
+            revisionId: movedRevision,
+            expectedGeneration: changedSource.generation,
+            expectedVersionId: imported.id,
+          },
+          identity,
+        ),
+      ).pipe(Effect.flip);
+      NodeAssert.equal(rejected.reason, "version_conflict");
+    }
+
     for (const table of [
       "definition_git_revisions",
       "definition_source_commands",

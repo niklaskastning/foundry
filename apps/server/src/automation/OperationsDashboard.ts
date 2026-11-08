@@ -41,9 +41,19 @@ export function summarizeOperations(
 }
 export function latestOperationsUsage(
   evidence: readonly import("@t3tools/contracts").OperationsDashboard["usageEvidence"][number][],
+  boundaries?: ReadonlyMap<string, { cursor: number; providerTurnId: string | null }>,
 ) {
   const distinct = new Map<string, (typeof evidence)[number]>();
   for (const snapshot of evidence) {
+    if (boundaries) {
+      const boundary = boundaries.get(snapshot.commandId);
+      if (
+        !boundary ||
+        boundary.providerTurnId !== snapshot.providerTurnId ||
+        snapshot.sequence > boundary.cursor
+      )
+        continue;
+    }
     const key = encodeEvidenceKey([
       snapshot.environmentId,
       snapshot.threadId,
@@ -107,15 +117,21 @@ const make = Effect.gen(function* () {
         string,
         import("@t3tools/contracts").OperationsDashboard["costEvidence"][number]
       >();
+      const usageBoundaries = new Map<string, { cursor: number; providerTurnId: string | null }>();
       let usageTruncated = false;
       if (input.runId && rows.length) {
         const attempts = yield* sql<{
           commandId: string;
           owner: unknown;
           cursor: number;
-        }>`SELECT a.command_id AS "commandId",jsonb_build_object('threadId',a.receipt->'receipt'->>'threadId','environmentId',COALESCE(a.worker_binding->'identity'->>'environmentId',d.binding->'identity'->>'environmentId')) AS owner,a.archive_cursor AS cursor FROM foundry_automation.step_attempts a JOIN foundry_automation.dispatch_runs d ON d.run_id=a.run_id WHERE a.run_id=${input.runId} AND a.receipt IS NOT NULL ORDER BY a.ordinal DESC,a.attempt_number DESC LIMIT 6`;
+          providerTurnId: string | null;
+        }>`SELECT a.command_id AS "commandId",jsonb_build_object('threadId',a.receipt->'receipt'->>'threadId','environmentId',COALESCE(a.worker_binding->'identity'->>'environmentId',d.binding->'identity'->>'environmentId')) AS owner,a.archive_cursor AS cursor,a.result->'execution'->'run'->>'id' AS "providerTurnId" FROM foundry_automation.step_attempts a JOIN foundry_automation.dispatch_runs d ON d.run_id=a.run_id WHERE a.run_id=${input.runId} AND a.receipt IS NOT NULL ORDER BY a.ordinal DESC,a.attempt_number DESC LIMIT 6`;
         usageTruncated = attempts.length > 5;
         for (const attempt of attempts.slice(0, 5)) {
+          usageBoundaries.set(attempt.commandId, {
+            cursor: attempt.cursor,
+            providerTurnId: attempt.providerTurnId,
+          });
           const owner = decodeArchiveOwner(attempt.owner);
           const after = Math.max(0, attempt.cursor - 50);
           if (Option.isNone(owner)) {
@@ -226,7 +242,7 @@ const make = Effect.gen(function* () {
           "Requires complete, currency-compatible cost evidence for every selected run, including retries, failed work and work without a PR. Denominator: distinct published PR URLs in the enrollment cohort. Shared infrastructure has no allocation evidence.",
         ),
         costCoverage: null,
-        usageEvidence: latestOperationsUsage(usageEvidence),
+        usageEvidence: latestOperationsUsage(usageEvidence, usageBoundaries),
         costEvidence: [...costs.values()],
         usagePartial: true,
         usageTruncated,

@@ -240,7 +240,13 @@ const make = Effect.gen(function* () {
           !revision ||
           !revision.location ||
           revision.location.repositoryId !== binding.location.repositoryId ||
-          revision.location.repository !== binding.location.repository
+          revision.location.repository !== binding.location.repository ||
+          revision.location.connectionId !== binding.location.connectionId ||
+          revision.location.branch !== binding.location.branch ||
+          revision.location.path !== binding.location.path ||
+          revision.location.commitSha !== binding.location.commitSha ||
+          (binding.location.commitSha !== undefined &&
+            revision.commitSha !== binding.location.commitSha)
         )
           return yield* new DefinitionError({ reason: "version_conflict" });
         const current = yield* active(input.factoryId);

@@ -1,3 +1,5 @@
+import { EvaluationsPanel } from "./EvaluationsPanel";
+import { OperationsDashboardPanel } from "./OperationsDashboardPanel";
 import { SandboxRunStatus } from "../../components/foundry/SandboxRunStatus";
 import { V4AgentConfiguration } from "./V4Configuration";
 import { V4RunProgress } from "./V4RunProgress";
@@ -350,6 +352,16 @@ export function RunDetail({
             aggregate of all attempts.
           </p>
         </section>
+      ) : null}
+      {detail ? (
+        <>
+          <OperationsDashboardPanel
+            environmentId={environmentId}
+            factoryId={factoryId}
+            runId={runId}
+          />
+          <EvaluationsPanel environmentId={environmentId} factoryId={factoryId} runId={runId} />
+        </>
       ) : null}
       {detail?.runtimeWorkflow ? (
         <V4RunProgress

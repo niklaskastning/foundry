@@ -143,10 +143,16 @@ const make = Effect.gen(function* () {
             yield* sql`UPDATE foundry_automation.schema_version SET version=11`;
           }
           if ((versions[0]?.version ?? 0) < 12) {
-            yield* migrateDefinitionSources;
-            yield* createEvaluationSchema(runtimeRole);
+            yield* migrateDefinitionSources.pipe(
+              Effect.provideService(AutomationDatabase.AutomationDatabase, sql),
+            );
+            yield* createEvaluationSchema(runtimeRole).pipe(
+              Effect.provideService(AutomationDatabase.AutomationDatabase, sql),
+            );
             yield* sql`UPDATE foundry_automation.schema_version SET version=12`;
           }
+          yield* sql`GRANT SELECT, INSERT ON foundry_automation.evaluation_queue, foundry_automation.evaluation_results TO ${sql(runtimeRole)}`;
+          yield* sql`GRANT UPDATE(state,claim_token,claimed_at) ON foundry_automation.evaluation_queue TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT, UPDATE ON foundry_automation.mcp_bindings TO ${sql(runtimeRole)}`;
           yield* sql`GRANT UPDATE(v4_state) ON foundry_automation.dispatch_runs TO ${sql(runtimeRole)}`;
           yield* sql`GRANT INSERT, UPDATE ON foundry_automation.dispatch_capacity TO ${sql(runtimeRole)}`;

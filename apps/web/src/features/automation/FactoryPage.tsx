@@ -22,7 +22,9 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { automationCommands } from "./commands";
 import { useAutomationQuery } from "./useAutomationQuery";
 import { TriggerPanel } from "./TriggerPanel";
-import { DefinitionSourcePanel } from "./DefinitionSourcePanel";
+import { SourceFeaturePanel } from "./SourceFeaturePanel";
+import { OperationsDashboardPanel } from "./OperationsDashboardPanel";
+import { EvaluationsPanel } from "./EvaluationsPanel";
 import { DefinitionEditor } from "./DefinitionEditor";
 import { RunDetail } from "./RunDetail";
 import { RunList } from "./RunList";
@@ -549,6 +551,12 @@ function FactoryDetail({
             </section>
           </div>
           <RunList environmentId={environmentId} factoryId={factoryId} onOpen={onOpenRun} compact />
+          <OperationsDashboardPanel
+            environmentId={environmentId}
+            factoryId={factoryId}
+            onOpenRun={onOpenRun}
+          />
+          <EvaluationsPanel environmentId={environmentId} factoryId={factoryId} />
         </div>
       ) : null}
       {tab === "workflows" ? <WorkflowCatalog active={detail?.active ?? null} /> : null}
@@ -577,12 +585,9 @@ function FactoryDetail({
           {source.loading ? <p role="status">Loading definition ownership…</p> : null}
           {source.result?.kind === "definitionSource" && !source.error ? (
             <>
-              <DefinitionSourcePanel
+              <SourceFeaturePanel
                 environmentId={environmentId}
                 factoryId={factoryId}
-                scopeVersionId={detail.active?.scopeVersionId ?? detail.versions[0]?.id ?? ""}
-                active={detail.active}
-                binding={source.result.binding}
                 onChanged={() => {
                   source.refresh();
                   refresh();

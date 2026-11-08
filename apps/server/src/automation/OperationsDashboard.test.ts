@@ -78,6 +78,16 @@ it("deduplicates reused threads and keeps latest snapshots instead of summing cu
   expect(latestOperationsUsage([base, latest, base])).toEqual([latest]);
   expect(latestOperationsUsage([base, { ...base, environmentId: "other" }])).toHaveLength(2);
   expect(latestOperationsUsage([])).toEqual([]);
+  const boundaries = new Map([["first", { cursor: 2, providerTurnId: "turn" }]]);
+  expect(
+    latestOperationsUsage(
+      [base, { ...base, sequence: 4, usedTokens: 900 }, { ...base, providerTurnId: "later-turn" }],
+      boundaries,
+    ),
+  ).toEqual([base]);
+  expect(
+    latestOperationsUsage([base], new Map([["first", { cursor: 2, providerTurnId: null }]])),
+  ).toEqual([]);
 });
 
 it.effect("rejects invalid or oversized periods before reading SQL or archives", () =>
