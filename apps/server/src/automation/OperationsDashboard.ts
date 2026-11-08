@@ -81,7 +81,7 @@ const make = Effect.gen(function* () {
           if (event.event.type === "provider-thread.updated" && event.event.payload.contextUsage?.cost) {
             const cost = event.event.payload.contextUsage.cost;
             const key = JSON.stringify([owner.value.environmentId, owner.value.threadId, event.event.payload.id]);
-            if (!costs.has(key) || costs.get(key)!.sequence < event.sequence) costs.set(key, { threadId: owner.value.threadId, environmentId: owner.value.environmentId, providerThreadId: event.event.payload.id, sequence: event.sequence, amount: cost.amount, currency: cost.currency, observedAt: DateTime.formatIso(event.event.occurredAt), attribution: "thread_cumulative_unallocated" });
+            if (!costs.has(key) || costs.get(key)!.sequence < event.sequence) costs.set(key, { threadId: owner.value.threadId, environmentId: owner.value.environmentId, providerThreadId: event.event.payload.id, sequence: event.sequence, amount: cost.amount, currency: cost.currency, observedAt: DateTime.formatIso(event.event.occurredAt), attribution: "thread_cumulative_unallocated", status: page.value.complete ? "measured" : "stale" });
           }
         }
         for (const event of turns.values()) {

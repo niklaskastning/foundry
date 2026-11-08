@@ -72,6 +72,7 @@ export const OperationsDashboard = Schema.Struct({
     currency: Schema.String,
     observedAt: Schema.String,
     attribution: Schema.Literal("thread_cumulative_unallocated"),
+    status: Schema.Literals(["measured", "stale"]),
   })),
   usagePartial: Schema.Boolean,
   usageTruncated: Schema.Boolean,

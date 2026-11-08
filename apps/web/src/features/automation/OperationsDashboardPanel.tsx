@@ -45,7 +45,7 @@ export function OperationsDashboardPanel({ environmentId, factoryId, runId, onOp
       </div>
       <h3 className="font-medium">Provider cost snapshots</h3>
       <p className="text-sm">Cumulative provider-thread amounts, measured as reported. These may span multiple runs or periods; they are unallocated and excluded from category totals and cost per PR.</p>
-      <ul>{data.costEvidence.map((cost) => <li key={`${cost.environmentId}:${cost.threadId}:${cost.providerThreadId}`} className="text-sm">{cost.amount} {cost.currency} · {cost.observedAt} · Thread {cost.threadId} · Provider thread {cost.providerThreadId} · Archive event {cost.sequence}</li>)}</ul>
+      <ul>{data.costEvidence.map((cost) => <li key={`${cost.environmentId}:${cost.threadId}:${cost.providerThreadId}`} className="text-sm">{cost.amount} {cost.currency} · {cost.status} · {cost.observedAt} · Thread {cost.threadId} · Provider thread {cost.providerThreadId} · Archive event {cost.sequence}</li>)}</ul>
       {!data.costEvidence.length ? <p className="text-sm">No provider cost evidence loaded; amount unknown.</p> : null}
       <h3 className="font-medium">Archived usage evidence</h3>
       {!selectedRunId ? <p className="text-sm">Select a work item below to inspect its run usage evidence.</p> : null}
