@@ -63,7 +63,11 @@ Writer voraus. Nach abgelaufener oder entzogener Anmeldung verlangt Resume aktue
 Autorisierung.
 
 Die persönliche Inbox zeigt vorhandene Fragen, Freigaben, Blocker und Fehler.
-**Done** und **Undo** organisieren die Inbox; sie genehmigen keine Arbeit. Eine
+**Hide from my inbox** und **Return to my inbox** organisieren nur die persönliche
+Inbox; sie genehmigen keine Arbeit und beantworten keine Frage. Beantwortete Fragen
+werden automatisch erledigt; beantwortet, überholt und abgebrochen bleiben getrennt
+sichtbar. **Close details** schließt nur die Ansicht. **Cancel workflow** fordert
+hingegen den Abbruch des gesamten Runs an und wartet auf das bestätigte Writer-Ende. Eine
 Freigabe gilt für den angezeigten Eingabe- und Ergebnisstand. Bei geändertem Ergebnis
 neu laden und erneut entscheiden. Antworten werden ausdrücklich an die aktuell
 zuständige Frage gesendet; eine alte Frage kann keinen neuen Versuch steuern.

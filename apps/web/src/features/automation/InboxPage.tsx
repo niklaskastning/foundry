@@ -269,15 +269,23 @@ export function InboxPage({
                         : item.detail}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      {item.isDone
-                        ? "Done in your inbox"
-                        : item.active
-                          ? item.kind === "approval"
-                            ? "Approval required"
-                            : item.kind === "question"
-                              ? "Answer required"
-                              : "Needs attention"
-                          : "Resolved"}
+                      {item.status === "answered"
+                        ? "Answered"
+                        : item.status === "resolved"
+                          ? "Resolved"
+                          : item.status === "cancelled"
+                            ? "Cancelled"
+                            : item.status === "superseded"
+                              ? "Superseded"
+                              : item.isDone
+                                ? "Hidden from your inbox · still pending"
+                                : item.active
+                                  ? item.kind === "approval"
+                                    ? "Approval required"
+                                    : item.kind === "question"
+                                      ? "Answer required"
+                                      : "Needs attention"
+                                  : "Superseded"}
                       {item.stepId ? ` · Step ${item.stepId}` : ""}
                     </p>
                   </div>
