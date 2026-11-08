@@ -475,6 +475,9 @@ export function codexResourceConfig(
       enabled: resource.allowedTools.length > 0,
       required: resource.allowedTools.length > 0,
       enabled_tools: [...resource.allowedTools],
+      tools: Object.fromEntries(
+        resource.allowedTools.map((tool) => [tool, { approval_mode: "approve" }]),
+      ),
       startup_timeout_sec: 20,
     };
     config[`mcp_servers.foundry-${resource.id}`] =

@@ -40,6 +40,23 @@ const decodeThread = Schema.decodeUnknownSync(CodexSchema.V2ThreadStartResponse)
 const decodeInventory = Schema.decodeUnknownSync(CodexSchema.V2ListMcpServerStatusResponse);
 const decodeCommand = Schema.decodeUnknownSync(CodexSchema.V2CommandExecResponse);
 const decodeSkills = Schema.decodeUnknownSync(CodexSchema.V2SkillsListResponse);
+const decodeModelRequests = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Array(
+      Schema.Struct({
+        tools: Schema.Array(
+          Schema.Struct({
+            name: Schema.optional(Schema.String),
+            tools: Schema.optional(Schema.Array(Schema.Struct({ name: Schema.String }))),
+          }),
+        ),
+        input: Schema.Array(
+          Schema.Struct({ type: Schema.String, output: Schema.optional(Schema.Json) }),
+        ),
+      }),
+    ),
+  ),
+);
 const codexBinary = process.env.FOUNDRY_TEST_CODEX_BINARY ?? "codex";
 const marker = "FOUNDRY_DETERMINISTIC_SECRET_SENTINEL_482031";
 const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "foundry-v4-codex-"));
@@ -295,41 +312,43 @@ try {
       ),
       "Native skill catalog omitted pinned resource",
     );
-    const sandbox = decodeCommand(
-      await request("command/exec", codexSandboxProbe("write", workspace)),
-    );
-    NodeAssert.equal(sandbox.exitCode, 0, `Native sandbox failed: ${sandbox.stderr}`);
-    NodeAssert.equal(sandbox.stdout, "foundry-sandbox-ready");
-    const written = decodeCommand(
-      await request("command/exec", {
-        ...codexSandboxProbe("write", workspace),
-        command: ["/bin/sh", "-c", "printf sandbox-file > sandbox-proof.txt"],
-      }),
-    );
-    NodeAssert.equal(written.exitCode, 0, written.stderr);
-    NodeAssert.equal(
-      await NodeFSP.readFile(NodePath.join(workspace, "sandbox-proof.txt"), "utf8"),
-      "sandbox-file",
-    );
-    const read = decodeCommand(
-      await request("command/exec", {
-        ...codexSandboxProbe("read", workspace),
-        command: ["/bin/sh", "-c", "cat sandbox-proof.txt"],
-      }),
-    );
-    NodeAssert.equal(read.exitCode, 0, read.stderr);
-    NodeAssert.equal(read.stdout, "sandbox-file");
-    const denied = decodeCommand(
-      await request("command/exec", {
-        ...codexSandboxProbe("read", workspace),
-        command: ["/bin/sh", "-c", "printf forbidden > sandbox-denied.txt"],
-      }),
-    );
-    NodeAssert.notEqual(denied.exitCode, 0);
-    await NodeAssert.rejects(NodeFSP.stat(NodePath.join(workspace, "sandbox-denied.txt")), {
-      code: "ENOENT",
-    });
-    await NodeFSP.unlink(NodePath.join(workspace, "sandbox-proof.txt"));
+    if (process.env.FOUNDRY_TEST_MCP_ONLY !== "1") {
+      const sandbox = decodeCommand(
+        await request("command/exec", codexSandboxProbe("write", workspace)),
+      );
+      NodeAssert.equal(sandbox.exitCode, 0, `Native sandbox failed: ${sandbox.stderr}`);
+      NodeAssert.equal(sandbox.stdout, "foundry-sandbox-ready");
+      const written = decodeCommand(
+        await request("command/exec", {
+          ...codexSandboxProbe("write", workspace),
+          command: ["/bin/sh", "-c", "printf sandbox-file > sandbox-proof.txt"],
+        }),
+      );
+      NodeAssert.equal(written.exitCode, 0, written.stderr);
+      NodeAssert.equal(
+        await NodeFSP.readFile(NodePath.join(workspace, "sandbox-proof.txt"), "utf8"),
+        "sandbox-file",
+      );
+      const read = decodeCommand(
+        await request("command/exec", {
+          ...codexSandboxProbe("read", workspace),
+          command: ["/bin/sh", "-c", "cat sandbox-proof.txt"],
+        }),
+      );
+      NodeAssert.equal(read.exitCode, 0, read.stderr);
+      NodeAssert.equal(read.stdout, "sandbox-file");
+      const denied = decodeCommand(
+        await request("command/exec", {
+          ...codexSandboxProbe("read", workspace),
+          command: ["/bin/sh", "-c", "printf forbidden > sandbox-denied.txt"],
+        }),
+      );
+      NodeAssert.notEqual(denied.exitCode, 0);
+      await NodeAssert.rejects(NodeFSP.stat(NodePath.join(workspace, "sandbox-denied.txt")), {
+        code: "ENOENT",
+      });
+      await NodeFSP.unlink(NodePath.join(workspace, "sandbox-proof.txt"));
+    }
 
     const inventory = decodeInventory(
       await request("mcpServerStatus/list", {
@@ -381,6 +400,35 @@ try {
     await completed;
     // @effect-diagnostics-next-line globalFetch:off -- Read only the loopback fixture's captured request after the native completion event.
     const captured = await (await fetch(new URL("/capture", url))).text();
+    const modelRequests = decodeModelRequests(captured);
+    NodeAssert.equal(
+      modelRequests.length,
+      2,
+      "The native turn must execute MCP calls before requesting its final response",
+    );
+    const toolOutputs = modelRequests[1]!.input.filter(
+      (item) => item.type === "function_call_output",
+    );
+    NodeAssert.equal(toolOutputs.length, 2);
+    for (const item of toolOutputs) {
+      const result = JSON.stringify(item.output);
+      NodeAssert.ok(
+        result.includes('"text":"allowed"'),
+        `Authorized model-requested MCP tool was not executed: ${result}`,
+      );
+      NodeAssert.ok(!result.includes("requires approval"));
+    }
+    for (const input of modelRequests) {
+      const mcpTools = input.tools.flatMap((tool) =>
+        tool.name?.startsWith("mcp__")
+          ? (tool.tools ?? []).map((entry) => `${tool.name}.${entry.name}`)
+          : [],
+      );
+      NodeAssert.deepEqual(mcpTools.sort(), [
+        "mcp__foundry_http.allowed",
+        "mcp__foundry_stdio.allowed",
+      ]);
+    }
     NodeAssert.ok(
       captured.includes("FOUNDRY_SKILL_INJECTION_PROOF_71932"),
       "Explicit private skill path was not loaded into the native model request",
@@ -417,7 +465,10 @@ try {
     }
     NodeAssert.deepEqual(await scan(root), [], "Native Codex persisted secret config values");
     process.stdout.write(
-      "PASS native Codex: stdio + Streamable HTTP, exact allowed tool, forbidden calls rejected, empty allowlist disabled, private native skill injection, no inherited host/plugin MCP startup, no persisted secret marker; loopback model only.\n",
+      "PASS native Codex: model-requested stdio + Streamable HTTP calls with no per-tool prompts, exact allowed tools, forbidden calls rejected, empty allowlist disabled, private native skill injection, no inherited host/plugin MCP startup, no persisted secret marker; loopback model only." +
+        (process.env.FOUNDRY_TEST_MCP_ONLY === "1"
+          ? " Command sandbox probes excluded by FOUNDRY_TEST_MCP_ONLY.\n"
+          : "\n"),
     );
   } finally {
     clearTimeout(deadline);
