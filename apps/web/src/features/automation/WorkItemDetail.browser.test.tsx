@@ -125,18 +125,17 @@ it.each([false, true])(
         onOpenRun={vi.fn()}
       />,
     );
+    await screen.getByText("Start new workflow", { exact: true }).click();
     if (parallel) {
       await expect
         .element(screen.getByRole("textbox", { name: "Repository commit SHA", exact: true }))
         .toHaveValue("");
-      await expect
-        .element(screen.getByRole("button", { name: "Authorize and start workflow" }))
-        .toBeDisabled();
+      await expect.element(screen.getByRole("button", { name: "Start workflow" })).toBeDisabled();
       await screen
         .getByRole("textbox", { name: "Repository commit SHA", exact: true })
         .fill("a".repeat(40));
     }
-    await screen.getByRole("button", { name: "Authorize and start workflow" }).click();
+    await screen.getByRole("button", { name: "Start workflow" }).click();
     await expect
       .element(screen.getByRole("button", { name: "Retry the same start" }))
       .toBeEnabled();

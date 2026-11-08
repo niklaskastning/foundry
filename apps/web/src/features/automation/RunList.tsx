@@ -1,3 +1,5 @@
+import { Link } from "@tanstack/react-router";
+import { openWorkspaceRun } from "../../foundry/workspaceSearch";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useWorkspaceNavigation } from "../../foundry/useWorkspaceNavigation";
 import { runStates } from "../../foundry/workspaceSearch";
@@ -75,12 +77,18 @@ export function RunList({
             {result.items.map((run) => (
               <li
                 key={run.id}
-                className="flex flex-wrap items-center justify-between gap-2 px-3 py-3 sm:px-4"
+                className="relative flex flex-wrap items-center justify-between gap-2 px-3 py-3 hover:bg-accent/40 sm:px-4"
               >
                 <div className="min-w-0 flex-1 space-y-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="break-words text-sm font-medium">
-                      {run.workItemTitle ?? "Work item"}
+                      <Link
+                        to="/foundry"
+                        search={openWorkspaceRun(navigation.search, run.factoryId, run.id)}
+                        className="after:absolute after:inset-0 focus-visible:underline"
+                      >
+                        {run.workItemTitle ?? "Work item"}
+                      </Link>
                     </p>
                     <Badge variant={runStatusVariant(run.state)}>
                       {run.state.replaceAll("_", " ")}

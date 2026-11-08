@@ -394,6 +394,24 @@ export function RunDetail({
           </ol>
         </section>
       ) : null}
+      {detail ? (
+        <details className="rounded-lg border p-4" open>
+          <summary className="cursor-pointer font-medium">Take over this run in Chats</summary>
+          <div className="pt-4">
+            <TakeOverPanel
+              environmentId={environmentId}
+              factoryId={factoryId}
+              runId={runId}
+              control={detail.control}
+              attempts={attempts.result?.kind === "attempts" ? attempts.result.items : []}
+              refresh={() => {
+                run.refresh();
+                attempts.refresh();
+              }}
+            />
+          </div>
+        </details>
+      ) : null}
       {detail && attempts.result?.kind === "attempts" ? (
         <section className="space-y-3" aria-label="Execution history">
           <div>
@@ -631,24 +649,7 @@ export function RunDetail({
               )}
             </section>
           </details>
-          <details className="rounded-lg border p-4">
-            <summary className="cursor-pointer font-medium">
-              Continue this work interactively in T3
-            </summary>
-            <div className="pt-4">
-              <TakeOverPanel
-                environmentId={environmentId}
-                factoryId={factoryId}
-                runId={runId}
-                control={detail.control}
-                attempts={attempts.result?.kind === "attempts" ? attempts.result.items : []}
-                refresh={() => {
-                  run.refresh();
-                  attempts.refresh();
-                }}
-              />
-            </div>
-          </details>
+
           <HandoffList
             environmentId={environmentId}
             factoryId={factoryId}

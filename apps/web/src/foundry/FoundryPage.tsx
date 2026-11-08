@@ -119,7 +119,9 @@ export function FoundryPage() {
                   </p>
                   <h1 className="mt-1 text-2xl font-semibold">Resources</h1>
                   <p className="mt-2 text-sm text-muted-foreground">
-                    Workers and their authorized access to factory work.
+                    Instance-wide worker inventory and execution capacity. Configure interactive
+                    connections in Settings → Connections; configure workflow access in each
+                    Factory.
                   </p>
                 </div>
                 <WorkerCapacity environmentId={state.binding.mainEnvironmentId} />
@@ -175,24 +177,31 @@ export function FoundryPage() {
           </p>
         </div>
         <div className="space-y-2">
-          <label htmlFor="foundry-origin" className="text-sm font-medium">
-            Instance URL
-          </label>
-          <Input
-            id="foundry-origin"
-            value={origin}
-            onChange={(event) => setOrigin(event.target.value)}
-            disabled={busy || state.confirmed || nativeTransport}
-            placeholder="https://foundry.example.com"
-          />
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              onClick={openOrigin}
+          <details open={nativeTransport || undefined}>
+            <summary className="cursor-pointer text-sm">
+              {nativeTransport ? "Instance URL" : "Use another instance"}
+            </summary>
+            <label htmlFor="foundry-origin" className="text-sm font-medium">
+              Instance URL
+            </label>
+            <Input
+              id="foundry-origin"
+              value={origin}
+              onChange={(event) => setOrigin(event.target.value)}
               disabled={busy || state.confirmed || nativeTransport}
-            >
-              Open URL
-            </Button>
+              placeholder="https://foundry.example.com"
+            />
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                onClick={openOrigin}
+                disabled={busy || state.confirmed || nativeTransport}
+              >
+                Open URL
+              </Button>
+            </div>
+          </details>
+          <div className="flex flex-wrap gap-2">
             <Button onClick={() => void operate("inspect")} disabled={busy}>
               Verify current origin
             </Button>

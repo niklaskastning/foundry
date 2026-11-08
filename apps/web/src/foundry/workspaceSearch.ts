@@ -19,6 +19,7 @@ export const runStates = [
   "succeeded",
 ] as const;
 export type FoundrySearch = {
+  runReturn?: string | undefined;
   view?: string | undefined;
   factoryId?: string | undefined;
   runId?: string | undefined;
@@ -43,6 +44,7 @@ export type FoundrySearch = {
   archiveThreadId?: string | undefined;
 };
 const fields = [
+  "runReturn",
   "view",
   "factoryId",
   "runId",
@@ -108,4 +110,32 @@ export function mergeWorkspaceSearch(
       : {}),
     ...patch,
   };
+}
+
+export function openWorkspaceRun(
+  previous: FoundrySearch,
+  factoryId: string,
+  runId: string,
+): FoundrySearch {
+  const { runReturn: _, ...origin } = previous;
+  return mergeWorkspaceSearch(previous, {
+    factoryId,
+    runId,
+    runReturn: JSON.stringify(origin),
+  });
+}
+
+export function workspaceRunReturn(search: FoundrySearch): FoundrySearch {
+  if (search.runReturn) {
+    try {
+      const origin: unknown = JSON.parse(search.runReturn);
+      if (origin && typeof origin === "object" && !Array.isArray(origin)) {
+        const restored = validateFoundrySearch(origin as Record<string, unknown>);
+        if (!restored.runId) return { ...restored, runReturn: undefined };
+      }
+    } catch {
+      /* Invalid external context falls back to the factory run list. */
+    }
+  }
+  return { view: "factories", factoryId: search.factoryId, tab: "runs" };
 }
