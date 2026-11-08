@@ -9,6 +9,7 @@ import * as Schema from "effect/Schema";
 import * as ThreadArchive from "../foundry/ThreadArchive.ts";
 import { evaluationDigest } from "./Scorers.ts";
 
+const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeExecution = Schema.decodeUnknownOption(
   Schema.Struct({ execution: FoundryWorkerExecution }),
 );
@@ -29,7 +30,7 @@ export const collectEvaluationEvidence = Effect.fn("EvaluationEvidence.collect")
   for (const attempt of attempts) {
     if (
       !attempt.result ||
-      !append(attempt.id, `attempt:${attempt.id}`, JSON.stringify(attempt.result))
+      !append(attempt.id, `attempt:${attempt.id}`, yield* encodeJson(attempt.result))
     )
       return [];
     const decoded = decodeExecution(attempt.result);
@@ -69,8 +70,8 @@ export const collectEvaluationEvidence = Effect.fn("EvaluationEvidence.collect")
         events.length &&
         !append(
           `${attempt.id}:page-${pageNumber}`,
-          JSON.stringify({ owner: reference.owner, after, through: reference.cursor }),
-          JSON.stringify(events),
+          yield* encodeJson({ owner: reference.owner, after, through: reference.cursor }),
+          yield* encodeJson(events),
         )
       )
         return [];
