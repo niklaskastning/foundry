@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Fixture Docker responses preserve the real policy bytes and legacy SHA-256 labels.
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
 import { TEST_SANDBOX_CA } from "./tls.fixture.ts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -18,6 +21,21 @@ const input = {
   command: ["node", "/app/sandbox.mjs"],
 };
 
+const seccompPolicy = JSON.stringify(
+  JSON.parse(
+    NodeFS.readFileSync(
+      new URL("../../../../../deploy/fork/sandbox/codex-seccomp-v1.json", import.meta.url),
+      "utf8",
+    ),
+  ),
+);
+
+const isolationPolicy = {
+  version: "1",
+  seccompSha256: "3c8cf53ee38d309e4bd3691b306184c5226e48d60ed593d1d94d00104e534c44",
+  apparmorSha256: "0c874446ada466bcdc6e01dec906d61a4261788bfa50127cb36da21947fd7e3e",
+};
+
 const fixture = (controlTls?: { hostname: string; bridgeAddress: string; publicCaPem: string }) => {
   const resources = new Map<
     string,
@@ -26,12 +44,14 @@ const fixture = (controlTls?: { hostname: string; bridgeAddress: string; publicC
       Name: string;
       Labels: Record<string, string>;
       Config: { Labels: Record<string, string> };
+      HostConfig: { SecurityOpt: string[] };
       State: { Running: boolean };
     }
   >();
   const invocations: string[][] = [];
   let loseStartResponse = false;
   let policyValid = true;
+  let isolationValid = true;
   let policyControl: string | null = controlTls ? `${controlTls.bridgeAddress}:443` : null;
   const runner = ProcessRunner.ProcessRunner.of({
     run: (command) =>
@@ -42,7 +62,12 @@ const fixture = (controlTls?: { hostname: string; bridgeAddress: string; publicC
         const name = args.at(-1)!;
         let stdout = "";
         let code = 0;
-        if (command.command === "/usr/bin/python3") {
+        if (command.args[0]?.endsWith("/isolation-policy.py")) {
+          stdout = JSON.stringify({
+            ...isolationPolicy,
+            ...(isolationValid ? {} : { seccompSha256: "tampered" }),
+          });
+        } else if (command.command === "/usr/bin/python3") {
           code = policyValid ? 0 : 1;
           stdout = JSON.stringify({
             name: "foundry-sandbox-test",
@@ -76,6 +101,15 @@ const fixture = (controlTls?: { hostname: string; bridgeAddress: string; publicC
               Name: resourceName,
               Labels: labels,
               Config: { Labels: labels },
+              HostConfig: {
+                SecurityOpt: args
+                  .filter((a) => a.startsWith("--security-opt="))
+                  .map((a) =>
+                    a.startsWith("--security-opt=seccomp=")
+                      ? `seccomp=${seccompPolicy}`
+                      : a.slice("--security-opt=".length),
+                  ),
+              },
               State: { Running: false },
             };
             resources.set(`${kind}:${resourceName}`, resource);
@@ -108,6 +142,9 @@ const fixture = (controlTls?: { hostname: string; bridgeAddress: string; publicC
     invocations,
     changeControl: () => {
       policyControl = "172.30.240.1:444";
+    },
+    invalidateIsolation: () => {
+      isolationValid = false;
     },
     invalidatePolicy: () => {
       policyValid = false;
@@ -243,6 +280,7 @@ it.effect(
           Name: name,
           Labels: labels,
           Config: { Labels: labels },
+          HostConfig: parent.HostConfig,
           State: { Running: true },
         });
         expect(yield* supervisor.finalize(input, command)).toEqual({ state: "running" });
@@ -306,6 +344,70 @@ it.effect("pins the verified control endpoint and CA for runtime and archive hel
       expect(
         (yield* oci.ensure({ ...input, network: "configured" }).pipe(Effect.flip)).reason,
       ).toBe("network-policy");
+    }).pipe(Effect.provide(f.layer));
+  }),
+);
+
+it.effect(
+  "rejects changed isolation files before allocation and changed container security options",
+  () =>
+    Effect.gen(function* () {
+      const rejected = fixture();
+      rejected.invalidateIsolation();
+      yield* Effect.gen(function* () {
+        const supervisor = yield* OciSupervisor.OciSupervisor;
+        expect((yield* supervisor.ensure(input).pipe(Effect.result))._tag).toBe("Failure");
+        expect(rejected.resources.size).toBe(0);
+      }).pipe(Effect.provide(rejected.layer));
+      const f = fixture();
+      yield* Effect.gen(function* () {
+        const supervisor = yield* OciSupervisor.OciSupervisor;
+        const started = yield* supervisor.ensure(input);
+        const resource = f.resources.get(`container:${started.containerName}`)!;
+        expect(resource.HostConfig.SecurityOpt).toContain("apparmor=foundry-sandbox-codex-v1");
+        const originalOptions = resource.HostConfig.SecurityOpt;
+        resource.HostConfig.SecurityOpt = originalOptions.map((option) =>
+          option.startsWith("seccomp=") ? 'seccomp={"defaultAction":"SCMP_ACT_ALLOW"}' : option,
+        );
+        expect((yield* supervisor.inspect(input).pipe(Effect.result))._tag).toBe("Failure");
+        resource.HostConfig.SecurityOpt = ["no-new-privileges:true", "apparmor=unconfined"];
+        expect((yield* supervisor.inspect(input).pipe(Effect.result))._tag).toBe("Failure");
+        expect((yield* supervisor.stop(input).pipe(Effect.result))._tag).toBe("Failure");
+      }).pipe(Effect.provide(f.layer));
+    }),
+);
+
+it.effect("preserves legacy policy for inspection, restart and archive finalization", () =>
+  Effect.gen(function* () {
+    const f = fixture();
+    yield* Effect.gen(function* () {
+      const supervisor = yield* OciSupervisor.OciSupervisor;
+      const started = yield* supervisor.ensure(input);
+      const resource = f.resources.get(`container:${started.containerName}`)!;
+      const stored = JSON.parse(resource.Labels["com.foundry.provision"]!);
+      delete stored.isolationPolicy;
+      const legacy = JSON.stringify(stored);
+      const fingerprint = NodeCrypto.createHash("sha256").update(legacy).digest("hex");
+      for (const item of f.resources.values()) {
+        item.Labels["com.foundry.provision"] = legacy;
+        item.Labels["com.foundry.spec"] = fingerprint;
+      }
+      resource.HostConfig.SecurityOpt = ["no-new-privileges:true"];
+      f.invalidateIsolation();
+      yield* supervisor.stop(input);
+      yield* supervisor.ensure(input);
+      yield* supervisor.stop(input);
+      expect(
+        (yield* supervisor.finalize(input, {
+          argv: ["node", "/app/foundry-sandbox-bootstrap.mjs", "read-archive"],
+        })).state,
+      ).toBe("completed");
+      const create = f.invocations
+        .filter((args) => args[0] === "container" && args[1] === "create")
+        .at(-1)!;
+      expect(create).not.toContain("--security-opt=apparmor=foundry-sandbox-codex-v1");
+      yield* supervisor.remove(input);
+      expect(f.resources.size).toBe(0);
     }).pipe(Effect.provide(f.layer));
   }),
 );

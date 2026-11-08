@@ -35,12 +35,28 @@ const Provision = Schema.Struct({
     Schema.isMaxLength(64),
   ),
 });
+const IsolationPolicy = Schema.Struct({
+  version: Schema.Literal("1"),
+  seccompSha256: Schema.Literal("3c8cf53ee38d309e4bd3691b306184c5226e48d60ed593d1d94d00104e534c44"),
+  apparmorSha256: Schema.Literal(
+    "0c874446ada466bcdc6e01dec906d61a4261788bfa50127cb36da21947fd7e3e",
+  ),
+});
+const decodeIsolationPolicy = Schema.decodeEffect(Schema.fromJsonString(IsolationPolicy));
+const isolationOptions = [
+  "no-new-privileges:true",
+  "seccomp=/usr/local/lib/foundry/sandbox/codex-seccomp-v1.json",
+  "apparmor=foundry-sandbox-codex-v1",
+];
 const Container = Schema.Struct({
   Id: Schema.String,
   Config: Schema.Struct({
     Image: Schema.optional(Schema.String),
     Labels: Schema.NullOr(Schema.Record(Schema.String, Schema.String)),
   }),
+  HostConfig: Schema.optionalKey(
+    Schema.Struct({ SecurityOpt: Schema.NullOr(Schema.Array(Schema.String)) }),
+  ),
   State: Schema.Struct({
     Running: Schema.Boolean,
     Status: Schema.optional(Schema.String),
@@ -82,6 +98,7 @@ export class OciError extends Schema.TaggedError<OciError>()("OciError", {
     "running",
     "missing",
     "network-policy",
+    "isolation-policy",
   ]),
   cause: Schema.optional(Schema.Defect()),
 }) {
@@ -171,6 +188,7 @@ const StoredProvision = Schema.fromJsonString(
     resolvedNetwork: Schema.String,
     resolvedDns: Schema.NullOr(Schema.String),
     controlTls: Schema.optionalKey(Schema.NullOr(ControlTls)),
+    isolationPolicy: Schema.optionalKey(IsolationPolicy),
   }),
 );
 const encodeProvision = Schema.encodeSync(StoredProvision);
@@ -271,6 +289,27 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
     if (!container || decoded.length !== 1)
       return yield* new OciError({ operation: "inspect", reason: "response" });
     yield* verifyOwner(identity, container.Config.Labels, fingerprint);
+    const stored = container.Config.Labels?.["com.foundry.provision"];
+    if (stored) {
+      const provision = yield* decodeStoredProvision(stored).pipe(
+        Effect.mapError(
+          (cause) => new OciError({ operation: "inspect", reason: "response", cause }),
+        ),
+      );
+      if (provision.isolationPolicy) {
+        const actual = container.HostConfig?.SecurityOpt ?? [];
+        const seccomp = actual.find((option) => option.startsWith("seccomp="))?.slice(8);
+        if (
+          actual.length !== 3 ||
+          !actual.includes(isolationOptions[0]!) ||
+          !actual.includes(isolationOptions[2]!) ||
+          !seccomp ||
+          NodeCrypto.createHash("sha256").update(seccomp).digest("hex") !==
+            "66afc99a69034d14dde94501463451ef45efe7b678c40653ca067fe2c291d93c"
+        )
+          return yield* new OciError({ operation: "inspect", reason: "isolation-policy" });
+      }
+    }
     if (finalizer && container.Config.Labels?.["com.foundry.role"] !== "finalizer")
       return yield* new OciError({ operation: "inspect", reason: "ownership" });
     return {
@@ -344,6 +383,28 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
       return yield* new OciError({ operation: "network", reason: "network-policy" });
     return policy.dns;
   });
+  const verifyIsolation = Effect.fn("OciSupervisor.verifyIsolation")(function* () {
+    const result = yield* runner
+      .run({
+        command: "/usr/bin/python3",
+        args: ["/usr/local/lib/foundry/sandbox/isolation-policy.py", "inspect"],
+        cwd: "/",
+        timeout: 10000,
+        maxOutputBytes: 4096,
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) => new OciError({ operation: "validate", reason: "isolation-policy", cause }),
+        ),
+      );
+    if (result.code !== 0 || result.timedOut || result.stdoutTruncated)
+      return yield* new OciError({ operation: "validate", reason: "isolation-policy" });
+    return yield* decodeIsolationPolicy(result.stdout).pipe(
+      Effect.mapError(
+        (cause) => new OciError({ operation: "validate", reason: "isolation-policy", cause }),
+      ),
+    );
+  });
   const containerArguments = (
     spec: typeof Provision.Type,
     network: string,
@@ -353,6 +414,7 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
     interactive = false,
     dns: string | null = null,
     control: typeof ControlTls.Type | null = null,
+    isolationPolicy?: typeof IsolationPolicy.Type,
   ) => [
     "container",
     "create",
@@ -363,7 +425,9 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
     "--user=1000:1000",
     "--read-only",
     "--cap-drop=ALL",
-    "--security-opt=no-new-privileges:true",
+    ...(isolationPolicy ? isolationOptions : ["no-new-privileges:true"]).map(
+      (option) => `--security-opt=${option}`,
+    ),
     "--init",
     "--restart=no",
     `--cpus=${spec.cpuMillis / 1000}`,
@@ -443,6 +507,16 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
               new OciError({ operation: "network", reason: "network-policy", cause }),
           })
         : null;
+    const existing = yield* inspectContainer(spec);
+    const previous = existing?.provisioning
+      ? yield* decodeStoredProvision(existing.provisioning).pipe(
+          Effect.mapError(
+            (cause) => new OciError({ operation: "inspect", reason: "response", cause }),
+          ),
+        )
+      : null;
+    const isolationPolicy =
+      previous && !previous.isolationPolicy ? undefined : yield* verifyIsolation();
     const dns = yield* verifyNetwork(network, controlTls);
     const fingerprint = NodeCrypto.createHash("sha256")
       .update(
@@ -451,6 +525,7 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
           resolvedNetwork: network,
           resolvedDns: dns,
           ...(controlTls ? { controlTls } : {}),
+          ...(isolationPolicy ? { isolationPolicy } : {}),
         }),
       )
       .digest("hex");
@@ -462,6 +537,7 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
         resolvedNetwork: network,
         resolvedDns: dns,
         ...(controlTls ? { controlTls } : {}),
+        ...(isolationPolicy ? { isolationPolicy } : {}),
       }),
     }).flatMap(([key, value]) => ["--label", `${key}=${value}`]);
     const resourceNames = names(spec);
@@ -485,6 +561,7 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
           false,
           dns,
           controlTls,
+          isolationPolicy,
         ),
       );
       current = yield* inspectContainer(spec, fingerprint);
@@ -598,6 +675,7 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
         (current.image !== undefined && current.image !== spec.image)
       )
         return yield* new OciError({ operation: "inspect", reason: "ownership" });
+      if (spec.isolationPolicy) yield* verifyIsolation();
       const verifiedDns = yield* verifyNetwork(spec.resolvedNetwork, spec.controlTls);
       if (verifiedDns !== spec.resolvedDns)
         return yield* new OciError({ operation: "network", reason: "network-policy" });
@@ -624,6 +702,7 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
         ...ownerLabels(identity),
         "com.foundry.spec": fingerprint,
         "com.foundry.role": "finalizer",
+        "com.foundry.provision": encodeProvision(spec),
         "com.foundry.finalizer-deadline": String(now + 600000),
       }).flatMap(([key, value]) => ["--label", `${key}=${value}`]);
       yield* requireSuccess(
@@ -637,6 +716,7 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
           true,
           spec.resolvedDns,
           spec.controlTls,
+          spec.isolationPolicy,
         ),
       );
       const helper = yield* inspectContainer(identity, fingerprint, true);

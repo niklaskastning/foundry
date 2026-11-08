@@ -1,0 +1,16 @@
+Foundry Codex isolation policy
+
+codex-seccomp-v1.json and codex-apparmor-v1 derive from Moby profiles:
+https://github.com/moby/profiles/tree/4b8214fc4971e06172938a1f1554ccff6647ee80
+  seccomp/default.json
+  apparmor/template.go
+Copyright The Moby Authors. Licensed under Apache License 2.0; see MOBY-LICENSE.
+The source revision contains no upstream NOTICE file.
+
+Foundry modifications:
+- Seccomp retains default-deny and adds constrained unshare/clone rules plus
+  mount, umount2 and pivot_root for Codex's unprivileged bubblewrap sandbox.
+- AppArmor renders the Docker template for foundry-sandbox-codex-v1 with base
+  abstractions and ptrace/signal rules, and admits the listed namespace mounts
+  and two exact pivot roots. Other Docker path/network denials remain.
+- No host capability, privileged container or unconfined policy is added.

@@ -1110,6 +1110,29 @@ privaten Runtime-Dateien über Aliasnamen ins Archiv gelangen. Bei überschritte
 Grenzen oder unbestätigten Teilen bleibt die Allocation erhalten. Diese inert
 lesbaren Setup-Archive sind kein wiederaufnehmbarer Threadcheckpoint.
 
+Codex benötigt für eingeschränkte v4-Dateirechte seine verschachtelte Linux-Sandbox.
+Neue OCI-Allocations verlangen deshalb die versionierten Seccomp-/AppArmor-Dateien
+und den rootgeschützten Prüfer im festen Hostpfad. Unter dem gemeinsamen
+Deployment-Lock installieren und unmittelbar mit dem gepinnten Sandboximage prüfen:
+
+```sh
+sudo -n install -d -o root -g root -m 0755 /usr/local/lib/foundry/sandbox
+sudo -n install -o root -g root -m 0644 deploy/fork/sandbox/codex-seccomp-v1.json deploy/fork/sandbox/codex-apparmor-v1 /usr/local/lib/foundry/sandbox/
+sudo -n install -o root -g root -m 0755 deploy/fork/sandbox/isolation-policy.py /usr/local/lib/foundry/sandbox/
+sudo -n /usr/local/lib/foundry/sandbox/isolation-policy.py install
+sudo -n python3 deploy/fork/sandbox/test-isolation-policy.py --image '<repository>@sha256:<digest>'
+```
+
+Der Prüfer bestätigt installierte Dateihashes und den enforcing Profilnamen,
+nicht den Inhalt einer zuvor unter demselben Namen geladenen Kernelpolicy; daher
+gehören Installation und reale Probe in denselben Lockabschnitt. Die Probe prüft
+ohne Modellturn Schreibrechte, Geschwisterpfade und einen Remountversuch. Kein
+privileged-Modus, zusätzliche Host-Capability oder globaler Hostschalter ist nötig.
+Bestehende Allocations behalten ihre gespeicherte OCI-Policy bis zum Löschen.
+Normale Agenten-Toolaufrufe verlangen keine interaktive Zustimmung; explizite
+v4-Dateirechte bleiben technisch durchgesetzt. Container teilen weiterhin den
+Hostkernel und sind keine VM-Mandantengrenze.
+
 Thread-Archive speichern vollständige Git-Bundles in bestätigten Teilen von
 höchstens 8 MiB mit einem gehashten Index (insgesamt höchstens 8 GiB). Alte
 einteilige Archive bleiben lesbar. Die Sandbox benötigt für v4 eine geprüfte
