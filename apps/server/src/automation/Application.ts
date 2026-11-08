@@ -329,8 +329,14 @@ const make = Effect.gen(function* () {
         case "operationsDashboard":
           yield* factories.readFactory(input.factoryId);
           return yield* operations.query(input, identity);
-        case "evaluation": return { kind: "evaluation" as const, result: yield* evaluations.read(identity, input.factoryId, input.id) };
-        case "evaluations": return { kind: "evaluations" as const, items: yield* evaluations.list(identity, input) };
+        case "evaluation":
+          return {
+            kind: "evaluation" as const,
+            result: yield* evaluations.read(identity, input.factoryId, input.id),
+          };
+        case "evaluations":
+          return { kind: "evaluations" as const, items: yield* evaluations.list(identity, input) };
+
         case "mcpBindings":
           yield* factories.readFactory(input.factoryId);
           return { kind: "mcpBindings" as const, items: yield* mcpBindings.list(input.factoryId) };
@@ -584,7 +590,11 @@ const make = Effect.gen(function* () {
         ? yield* machineAccess.write(request, input.input.factoryId, "automation:start")
         : yield* gateway.identityForWrite(request, scope);
     switch (input.op) {
-      case "evaluateRun": return { kind: "evaluationQueued" as const, id: yield* evaluations.enqueue(identity, input.input) };
+      case "evaluateRun":
+        return {
+          kind: "evaluationQueued" as const,
+          id: yield* evaluations.enqueue(identity, input.input),
+        };
       case "setWorkerPaused": {
         const selected = [target, ...(target.workers ?? [])].find(
           (entry) => entry.deviceId === input.deviceId,

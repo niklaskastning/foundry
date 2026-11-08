@@ -208,11 +208,17 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
       });
       const run = yield* makeCodexStructuredGeneration(decodeCodexSettings({ binaryPath }));
       const result = yield* run({
-        operation: "generateReviewGuide", cwd: directory, prompt: "archive-evidence",
-        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-6.1-sol", [{id:"reasoningEffort",value:"medium"}]),
-        outputSchema: Schema.Struct({score:Schema.Number.check(Schema.isBetween({minimum:0,maximum:1}))}),
+        operation: "generateReviewGuide",
+        cwd: directory,
+        prompt: "archive-evidence",
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-6.1-sol", [
+          { id: "reasoningEffort", value: "medium" },
+        ]),
+        outputSchema: Schema.Struct({
+          score: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+        }),
       });
-      expect(result).toEqual({score:0.9});
+      expect(result).toEqual({ score: 0.9 });
     }).pipe(Effect.scoped),
   );
   it.effect.each(["exec", "mcp list"] as const)(

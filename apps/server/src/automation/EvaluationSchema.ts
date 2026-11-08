@@ -1,7 +1,9 @@
 import * as Effect from "effect/Effect";
 import * as AutomationDatabase from "./AutomationDatabase.ts";
 
-export const createEvaluationSchema = Effect.fn("EvaluationSchema.create")(function* (runtimeRole: string) {
+export const createEvaluationSchema = Effect.fn("EvaluationSchema.create")(function* (
+  runtimeRole: string,
+) {
   const sql = yield* AutomationDatabase.AutomationDatabase;
   yield* sql`ALTER TABLE foundry_automation.runs ADD CONSTRAINT runs_factory_id_unique UNIQUE(factory_id,id)`;
   yield* sql`CREATE TABLE foundry_automation.evaluation_queue (
