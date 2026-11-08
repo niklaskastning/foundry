@@ -285,8 +285,8 @@ platform:
   linux:
     dockerImage: node:22-bookworm
 setupCommands:
-  - 'export PAGER=cat'
-  - 'corepack install'
+  - "export PAGER=cat"
+  - "corepack install"
 ```
 
 The firm requirement is Factory-local runner definitions used for agent execution. The image supplies context for resource requirements, platform/architecture, a container image and setup commands; its Warp hosting text, exact schema, numeric sizes, image and commands are reference examples, not separately confirmed Foundry defaults.
@@ -369,6 +369,33 @@ The intended interaction is that a chat or coding agent can work with the releva
 
 **Open details:** the concrete MCP tool inventory, authentication, exposure of plan creation versus work-item/workflow operations, swarm configuration/selection, and supported control/cancellation operations remain to be designed. Do not infer that MCP currently supports these operations from this request or the Warp screenshot.
 
+## Main status audit of the seven Factory building blocks — 8 November 2026
+
+**Source: explicit maintainer follow-up; repository audit of local `main` at `dfeb62c511533eef46fb411d22c36c18d7d34b8a`.** This supplements the recording with implementation evidence. It does not establish the deployed revision, repeat runtime acceptance, or verify Warp's current product. The supplied “Warp documented” column is reference context only. Existing tests were inspected, not executed for this audit. Plans are not treated as shipped features.
+
+| Building block                          | Foundry on audited main                                                                                                                                                                                            | Remaining gap / feedback connection                                                                                                                                                                                                                                                                                                               |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sequential Factory, Git, Inbox, Handoff | **Present.** Durable runs, versioned Git definitions, GitHub polling/PR publishing, decisions and T3 takeover/return exist.                                                                                        | The usability and collaboration requests F15–F17/F20–F24 still apply; existing capability does not establish acceptance of the recorded behavior.                                                                                                                                                                                                 |
+| Factory agents and resources            | **Partially present; the original blanket “central integration missing” is too broad.** V4 has reusable Git-versioned agents, complete pinned skill bundles and explicit Factory-scoped Codex MCP/secret bindings. | Central provider/source-control account setup and distribution, additional provider/OAuth paths and automatic model routing remain open (P14Z/P52; F05/F12). Agent access to external MCP servers is distinct from exposing Foundry itself through MCP (F34).                                                                                     |
+| Parallel Factory execution              | **Present for Linux/Codex.** DAG execution, worker pools/capacity, persistent swarms, joins and business review/fix loops exist.                                                                                   | Do not reimplement basic parallelism. Dynamic workflow dispatch, durable multi-workflow planning and optional outcome/integration coordination are separate requests (F25/F27/F28). Further real-machine and native Windows acceptance remains open. No Foreman is requested.                                                                     |
+| Runners and sandboxes                   | **Partially present infrastructure; reproducible runner/sandbox product missing.** Persistent host workers, workspace reservation, capacity and central archives exist. A worktree is not a sandbox.               | Factory-local, Git-owned runner definitions and their actual execution binding (F29), versioned profiles, OCI provisioning, setup/enrollment, sandbox credentials, archive/delete/TTL/resume, client controls and workflow lifecycle integration remain open (P34–P40). Sandbox work described as underway in docs is not delivered on this main. |
+| Scorers, benchmarks, improvement        | **Missing as Factory product capabilities.** Existing tests, checkpoints, artifacts and review/fix loops do not supply versioned scoring history or comparable benchmark trials.                                   | Deliver run/PR usage attribution and honest cost/quality metrics, versioned scorers with run/history results, reproducible task/configuration trials and evidence-backed definition-improvement proposals with re-evaluation (P54–P57; F14/F22/F30–F32).                                                                                          |
+| External Factory access                 | **Partial.** Versioned HTTP API for user sessions plus Factory-scoped machine read credentials with expiry/revocation exist.                                                                                       | Machine-authenticated start/control, Factory MCP for external planning/coding agents (including configured swarm starts), and an accepted public Access/CI path remain open (P58; F34). HTTP availability alone does not establish unattended CI write access.                                                                                    |
+| Factory workspace                       | **Beyond basic views.** Factories-first navigation and contextual overview, work, agents/skills/MCP, workflows, definitions, triggers, runs and Inbox views exist after PRs #67/#72/#74.                           | Human design acceptance remains open; preserve the concrete navigation, task/result, decision and reporting feedback (F08–F21). Quality dashboards and scorer/benchmark/improvement pages need the missing product capabilities above. Do not equate existing tabs or automated UI checks with accepted UX or complete Warp parity.               |
+
+### Remaining scope to carry forward
+
+Use the existing feedback items rather than opening duplicate requests: **central connections/resources** (F05/F12), **Factory-owned runners and full sandbox lifecycle** (F29), **metrics/scorers/benchmarks/evidence-backed improvement** (F14/F22/F30–F32), **external Foundry MCP and unattended machine/CI control** (F34), and **workspace usability/design acceptance** (F08–F21). Keep dynamic dispatch and multi-workflow planning (F25/F27/F28) separate from the already shipped static parallel/swarm execution. Native Windows Factory execution/operation and public authentication/access retain their own acceptance gates; mobile remains deferred.
+
+**Code evidence on the audited main** (paths relative to the repository root):
+
+- Core execution and collaboration: `apps/server/src/automation/{Definitions,DefinitionSync,GitHubPolling,Publish,Control,Inbox,Handoffs}.ts`.
+- Resources and actual worker boundary: `packages/contracts/src/automation/definitionV4.ts`, `apps/server/src/automation/{McpBindings,executionConfiguration}.ts`, `apps/server/src/foundry/WorkerResources.ts`. The resolved v4 agent execution contract explicitly selects Codex; upstream T3 providers do not establish Factory adapter parity.
+- Parallelism: `apps/server/src/automation/{Scheduler,V4Execution}.ts` and their existing tests; `Scheduler.test.ts` asserts two branch launches before their joined successor and checks capacity gating. `V4Execution.test.ts` covers persisted swarm/iteration semantics.
+- External access: `apps/server/src/automation/{ApiHttp,MachineAccess,Application}.ts`, `apps/server/src/foundry/MachineCredentials.ts`, `packages/contracts/src/automation/{api,machineCredential}.ts`. HTTP command routes exist, but their existence does not grant machine callers write authorization.
+- UI: `apps/web/src/features/automation/{FactoryPage,AgentCatalog,V4Configuration,V4RunProgress,InboxPage,HandoffPanel}.tsx` and `apps/web/src/foundry/FoundrySidebar.tsx`.
+- Remaining scope and acceptance boundaries: `docs/foundry/{README,implementation-plan,warp-comparison}.md`, specifically P14Z/P34–P40/P49b/P52/P54–P58. No delivered runner/sandbox lifecycle or Factory scorer/benchmark service was found in the Automation implementation/contracts inspected.
+
 ## Repository context for an implementing agent
 
 Read the repository's current `AGENTS.md`, then `docs/foundry/README.md`, `architecture.md`, `deployment.md` and `implementation-plan.md`. Design documents describe planned functionality; use the current implementation and operations runbook to establish what actually ships. This recording is fresh feedback, not proof that earlier implementation or acceptance gates passed.
@@ -385,16 +412,16 @@ Relevant existing constraints and boundaries:
 
 Useful starting points, established by repository file discovery rather than a root-cause audit:
 
-| Topics | Likely starting files/directories |
-| --- | --- |
-| Login, instance access and Resources | `apps/web/src/foundry/FoundryPage.tsx`, `instanceSession.ts`, `onboarding.ts`, `home.ts`, `routes/foundry.tsx` |
-| Sidebar, Factory context, device inventory | `apps/web/src/foundry/FoundrySidebar.tsx`, `FactoryNavigation.tsx`, `DeviceCatalog.tsx`, `devices.ts`, `useWorkspaceNavigation.ts` |
-| Factory index, definition source, agents/workflows | `apps/web/src/features/automation/FactoryPage.tsx`, `DefinitionSourcePanel.tsx`, `DefinitionEditor.tsx`, `AgentCatalog.tsx`, `V4Configuration.tsx`, `TriggerPanel.tsx` |
-| Work items, runs and takeover | `apps/web/src/features/automation/WorkItemDetail.tsx`, `RunList.tsx`, `RunDetail.tsx`, `V4RunProgress.tsx`, `HandoffPanel.tsx`; `apps/web/src/foundry/FactoryThreadAccess.tsx` |
-| Decisions and mutations | `apps/web/src/features/automation/InboxPage.tsx`, `InboxDetail.tsx`, `commands.ts` |
-| Automation services | `apps/server/src/automation/`: `Factories.ts`, `Definitions.ts`, `DefinitionSources.ts`, `DefinitionSync.ts`, `Control.ts`, `Inbox.ts`, `Handoffs.ts`, `Runtime.ts`, `V4Execution.ts`, `Workflows.ts` |
-| GitHub and trigger execution | `apps/server/src/automation/GitHubApp.ts`, `GitHubPolling.ts`, `Triggers.ts`, `Publish.ts` |
-| Shared schema/contracts | `packages/contracts/src/automation/`, `packages/contracts/src/foundry*.ts`, `packages/shared/src/factoryDefinition*.ts` |
+| Topics                                             | Likely starting files/directories                                                                                                                                                                     |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Login, instance access and Resources               | `apps/web/src/foundry/FoundryPage.tsx`, `instanceSession.ts`, `onboarding.ts`, `home.ts`, `routes/foundry.tsx`                                                                                        |
+| Sidebar, Factory context, device inventory         | `apps/web/src/foundry/FoundrySidebar.tsx`, `FactoryNavigation.tsx`, `DeviceCatalog.tsx`, `devices.ts`, `useWorkspaceNavigation.ts`                                                                    |
+| Factory index, definition source, agents/workflows | `apps/web/src/features/automation/FactoryPage.tsx`, `DefinitionSourcePanel.tsx`, `DefinitionEditor.tsx`, `AgentCatalog.tsx`, `V4Configuration.tsx`, `TriggerPanel.tsx`                                |
+| Work items, runs and takeover                      | `apps/web/src/features/automation/WorkItemDetail.tsx`, `RunList.tsx`, `RunDetail.tsx`, `V4RunProgress.tsx`, `HandoffPanel.tsx`; `apps/web/src/foundry/FactoryThreadAccess.tsx`                        |
+| Decisions and mutations                            | `apps/web/src/features/automation/InboxPage.tsx`, `InboxDetail.tsx`, `commands.ts`                                                                                                                    |
+| Automation services                                | `apps/server/src/automation/`: `Factories.ts`, `Definitions.ts`, `DefinitionSources.ts`, `DefinitionSync.ts`, `Control.ts`, `Inbox.ts`, `Handoffs.ts`, `Runtime.ts`, `V4Execution.ts`, `Workflows.ts` |
+| GitHub and trigger execution                       | `apps/server/src/automation/GitHubApp.ts`, `GitHubPolling.ts`, `Triggers.ts`, `Publish.ts`                                                                                                            |
+| Shared schema/contracts                            | `packages/contracts/src/automation/`, `packages/contracts/src/foundry*.ts`, `packages/shared/src/factoryDefinition*.ts`                                                                               |
 
 Do not infer that a named file already implements a requested capability. Inspect existing tests and service boundaries before assigning root causes or proposing schema changes.
 
