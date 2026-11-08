@@ -13,6 +13,9 @@ import {
   FoundrySandboxArchiveManifest,
   FoundrySandboxArchiveReceipt,
   FoundryArtifactChunk,
+  FoundryArtifactStatus,
+  FoundryArtifactError,
+  FoundryArtifactManifest,
   FoundrySandboxError,
   ThreadId,
 } from "@t3tools/contracts";
@@ -267,7 +270,7 @@ const make = Effect.gen(function* () {
           part.sizeBytes < 1 ||
           (expectedSize !== undefined && part.sizeBytes !== expectedSize)
         )
-          return yield* new FoundrySandboxError({ code: "conflict" });
+          return yield* new FoundryArtifactError({ code: "changed" });
         expectedSize = part.sizeBytes;
         const bytes = yield* Effect.fromResult(Base64.decode(part.base64));
         if (offset === 0) expectedHash = part.sha256;
@@ -275,7 +278,7 @@ const make = Effect.gen(function* () {
         offset += bytes.length;
         if (offset === part.sizeBytes) break;
         if (!bytes.length || offset > part.sizeBytes)
-          return yield* new FoundrySandboxError({ code: "conflict" });
+          return yield* new FoundryArtifactError({ code: "changed" });
       }
       const content = new Uint8Array(offset);
       let position = 0;
@@ -284,41 +287,74 @@ const make = Effect.gen(function* () {
         position += chunk.length;
       }
       if (expectedHash !== artifactSha256(content))
-        return yield* new FoundrySandboxError({ code: "conflict" });
+        return yield* new FoundryArtifactError({ code: "changed" });
       return content;
     });
     const local = yield* decodeSetupIndex(new TextDecoder().decode(yield* readSnapshot()));
+    const artifactInput = (sizeBytes: number, sha256: string, suffix: string) => ({
+      instanceId: transport.device.instanceId,
+      commandId: CommandId.make(
+        `sandbox-setup-${allocation.allocationId}-${allocation.generation}-${suffix}`,
+      ),
+      owner: {
+        environmentId: transport.device.environmentId,
+        threadId: ThreadId.make(allocation.allocationId),
+      },
+      name: `sandbox-setup-${suffix}.json`,
+      mimeType: "application/json",
+      sizeBytes,
+      sha256,
+    });
     const publish = Effect.fn("SandboxSupervisor.publishSetupSnapshot")(function* (
       content: Uint8Array,
       suffix: string,
     ) {
       return yield* publishArtifact(
         transport.artifactSend,
-        {
-          instanceId: transport.device.instanceId,
-          commandId: CommandId.make(
-            `sandbox-setup-${allocation.allocationId}-${allocation.generation}-${suffix}`,
-          ),
-          owner: {
-            environmentId: transport.device.environmentId,
-            threadId: ThreadId.make(allocation.allocationId),
-          },
-          name: `sandbox-setup-${suffix}.json`,
-          mimeType: "application/json",
-          sizeBytes: content.byteLength,
-          sha256: artifactSha256(content),
-        },
+        artifactInput(content.byteLength, artifactSha256(content), suffix),
         content,
       );
     });
     const parts = yield* Effect.forEach(local.parts, (expected, index) =>
       Effect.gen(function* () {
+        const input = artifactInput(expected.sizeBytes, expected.sha256, `part-${index}`);
+        const status = yield* transport
+          .artifactSend({ op: "begin", input })
+          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(FoundryArtifactStatus)));
+        if (
+          status.reference.instanceId !== input.instanceId ||
+          status.reference.owner.environmentId !== input.owner.environmentId ||
+          status.reference.owner.threadId !== input.owner.threadId ||
+          status.sha256 !== input.sha256 ||
+          status.sizeBytes !== input.sizeBytes ||
+          status.offset > input.sizeBytes ||
+          status.state === "aborted" ||
+          (status.state === "published" && status.offset !== input.sizeBytes)
+        )
+          return yield* new FoundryArtifactError({ code: "changed" });
+        if (status.offset === input.sizeBytes) {
+          const manifest = yield* transport
+            .artifactSend({ op: "publish", input: status.reference })
+            .pipe(Effect.flatMap(Schema.decodeUnknownEffect(FoundryArtifactManifest)));
+          if (
+            manifest.reference.artifactId !== status.reference.artifactId ||
+            manifest.reference.instanceId !== input.instanceId ||
+            manifest.reference.owner.environmentId !== input.owner.environmentId ||
+            manifest.reference.owner.threadId !== input.owner.threadId ||
+            manifest.name !== input.name ||
+            manifest.mimeType !== input.mimeType ||
+            manifest.sha256 !== input.sha256 ||
+            manifest.sizeBytes !== input.sizeBytes
+          )
+            return yield* new FoundryArtifactError({ code: "changed" });
+          return manifest;
+        }
         const content = yield* readSnapshot(index);
         if (
           content.byteLength !== expected.sizeBytes ||
           artifactSha256(content) !== expected.sha256
         )
-          return yield* new FoundrySandboxError({ code: "conflict" });
+          return yield* new FoundryArtifactError({ code: "changed" });
         return yield* publish(content, `part-${index}`);
       }),
     );
