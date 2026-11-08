@@ -6,6 +6,7 @@ import {
   ProviderInstanceId,
   type FoundryInstanceId,
 } from "@t3tools/contracts";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -26,6 +27,24 @@ export const verifyProviderConnections = Effect.fn("verifyProviderConnections")(
   const refreshing = yield* Deferred.make<void>();
   const resumeRefresh = yield* Deferred.make<void>();
   let blockRefresh = false;
+  let emptyCatalog = false;
+  const http = HttpClient.make((request) =>
+    Effect.sync(() => {
+      NodeAssert.equal(request.url, "https://api.openai.com/v1/models");
+      NodeAssert.equal(request.headers.authorization, "Bearer fixture-central-access");
+      return HttpClientResponse.fromWeb(
+        request,
+        Response.json({
+          models: emptyCatalog
+            ? []
+            : [
+                { slug: "confirmed-luna", display_name: "Confirmed Luna", visibility: "list" },
+                { slug: "hidden-unavailable", display_name: "Must not leak", visibility: "hidden" },
+              ],
+        }),
+      );
+    }),
+  );
   const auth = Layer.succeed(ProviderConnectionAuth.ProviderConnectionAuth, {
     currentProfile: Effect.fn("FixtureProviderConnectionAuth.currentProfile")(() =>
       Effect.succeed({ profileKey: "a".repeat(64) }),
@@ -136,7 +155,18 @@ export const verifyProviderConnections = Effect.fn("verifyProviderConnections")(
       granted.map((value) => value.generation),
       [1, 1],
     );
+    NodeAssert.deepEqual(granted[0]?.modelCatalog, {
+      protocolVersion: "1",
+      models: [{ slug: "confirmed-luna", name: "Confirmed Luna" }],
+      defaultModel: "confirmed-luna",
+    });
     NodeAssert.equal((yield* service.authorizeAllocation(owner, grant(0))).grants.length, 2);
+    emptyCatalog = true;
+    NodeAssert.equal(
+      (yield* service.authorizeAllocation(owner, grant(0)).pipe(Effect.flip)).code,
+      "unavailable",
+    );
+    emptyCatalog = false;
     for (const index of [0, 1]) {
       const issued = yield* issue(index);
       NodeAssert.equal(issued.expiresAt, expiresAt);
@@ -226,7 +256,14 @@ export const verifyProviderConnections = Effect.fn("verifyProviderConnections")(
       }>`SELECT allocation->>'state' AS state,(allocation->>'generation')::integer AS generation FROM foundry_instance.sandbox_allocations WHERE allocation_id=${allocations[1]!}`;
       NodeAssert.deepEqual(cleanup[0], { state: expected, generation: 5 });
     }
-  }).pipe(Effect.provide(ProviderConnections.layer.pipe(Layer.provide(auth))));
+  }).pipe(
+    Effect.provide(
+      ProviderConnections.layer.pipe(
+        Layer.provide(auth),
+        Layer.provide(Layer.succeed(HttpClient.HttpClient, http)),
+      ),
+    ),
+  );
   yield* sql`DELETE FROM foundry_instance.provider_connections WHERE id=${connection.id}`;
   yield* Effect.forEach(
     allocations,

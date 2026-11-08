@@ -265,12 +265,23 @@ const make = Effect.gen(function* () {
           allocation.request.owner.kind === "workflow" ? allocation.request.owner.factoryId : null,
       },
       settings: {
+        ...(connection.modelCatalog
+          ? {
+              defaultModelSelection: {
+                instanceId: connection.providerInstanceId,
+                model: connection.modelCatalog.defaultModel,
+              },
+            }
+          : {}),
         providerInstances: {
           [connection.providerInstanceId]: {
             driver: "codex",
             displayName: "Sandbox Codex",
             enabled: true,
-            config: { setupMode: "managed" },
+            config: {
+              setupMode: "managed",
+              ...(connection.modelCatalog ? { customModels: connection.modelCatalog.models } : {}),
+            },
           },
         },
       },

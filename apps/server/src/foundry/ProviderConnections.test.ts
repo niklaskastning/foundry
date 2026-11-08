@@ -1,7 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
+import { EnvironmentId, ProviderInstanceId, FoundryProviderModelCatalog } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
@@ -78,3 +79,20 @@ it.effect("delegates only the selected profile's access token and actual upstrea
     }).pipe(Effect.provide(ProviderConnectionAuth.layer.pipe(Layer.provideMerge(dependencies))));
   }).pipe(Effect.scoped),
 );
+
+it("rejects empty or unconfirmed model catalog defaults", () => {
+  const decode = Schema.decodeUnknownOption(FoundryProviderModelCatalog);
+  const catalog = {
+    protocolVersion: "1",
+    models: [{ slug: "confirmed-luna", name: "Confirmed Luna" }],
+    defaultModel: "confirmed-luna",
+  };
+  assert.isTrue(Option.isSome(decode(catalog)));
+  for (const invalid of [
+    { ...catalog, models: [] },
+    { ...catalog, defaultModel: "not-offered" },
+    { ...catalog, protocolVersion: "2" },
+    { ...catalog, models: [{ slug: "confirmed-luna", name: "unsafe\nname" }] },
+  ])
+    assert.isTrue(Option.isNone(decode(invalid)));
+});

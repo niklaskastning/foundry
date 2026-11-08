@@ -108,6 +108,7 @@ export const layer = Layer.unwrap(
             ProviderConnectionAccess.layer.pipe(
               Layer.provideMerge(
                 ProviderConnections.layer.pipe(
+                  Layer.provide(FetchHttpClient.layer),
                   Layer.provide(
                     ProviderConnectionAuth.layer.pipe(Layer.provide(FetchHttpClient.layer)),
                   ),

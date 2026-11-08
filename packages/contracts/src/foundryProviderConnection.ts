@@ -27,10 +27,27 @@ const ConnectionConfiguration = Schema.Struct({
   grants: Schema.Array(FoundryProviderGrant).check(Schema.isMaxLength(256)),
 });
 
+export const FoundryProviderModelCatalog = Schema.Struct({
+  protocolVersion: Schema.Literal("1"),
+  models: Schema.Array(
+    Schema.Struct({
+      slug: Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,255}$/)),
+      name: Schema.String.check(Schema.isPattern(/^[^\u0000-\u001f\u007f]{1,256}$/)),
+    }),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+  defaultModel: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
+}).check(
+  Schema.makeFilter((catalog) =>
+    catalog.models.some((model) => model.slug === catalog.defaultModel),
+  ),
+);
+export type FoundryProviderModelCatalog = typeof FoundryProviderModelCatalog.Type;
+
 export const FoundryProviderConnection = Schema.Struct({
   ...ConnectionConfiguration.fields,
   revoked: Schema.Boolean,
   lastIssuedExpiresAt: Schema.Finite,
+  modelCatalog: Schema.optionalKey(FoundryProviderModelCatalog),
 });
 export type FoundryProviderConnection = typeof FoundryProviderConnection.Type;
 

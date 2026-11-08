@@ -82,6 +82,13 @@ it.effect("fences lost setup leases and preserves work when archive fails", () =
     let stopped = false;
     let removed = false;
     let completeSetup = false;
+    let approved = false;
+    const runtimeReady = yield* Deferred.make<{
+      settings: {
+        providerInstances: Record<string, { config: { customModels?: unknown } }>;
+        defaultModelSelection?: unknown;
+      };
+    }>();
     let approvalError = new FoundrySandboxError({ code: "credentials_required" });
     const oci = Oci.OciSupervisor.of({
       ensure: () => Effect.die("unexpected provision"),
@@ -96,22 +103,26 @@ it.effect("fences lost setup leases and preserves work when archive fails", () =
           removed = true;
         }),
       exec: (_, input) =>
-        input.argv.at(-1) === "logs"
-          ? Effect.succeed({ stdout: '{"log":""}', stderr: "", exitCode: 0 })
-          : completeSetup
-            ? Effect.succeed({
-                stdout: JSON.stringify(
-                  input.argv.at(-1) === "identity"
-                    ? { environmentId: "sandbox", publicKey: "fixture" }
-                    : null,
+        input.argv.at(-1) === "runtime"
+          ? Deferred.succeed(runtimeReady, JSON.parse(input.stdin!)).pipe(
+              Effect.as({ stdout: "null", stderr: "", exitCode: 0 }),
+            )
+          : input.argv.at(-1) === "logs"
+            ? Effect.succeed({ stdout: '{"log":""}', stderr: "", exitCode: 0 })
+            : completeSetup
+              ? Effect.succeed({
+                  stdout: JSON.stringify(
+                    input.argv.at(-1) === "identity"
+                      ? { environmentId: "sandbox", publicKey: "fixture" }
+                      : null,
+                  ),
+                  stderr: "",
+                  exitCode: 0,
+                })
+              : Deferred.succeed(started, undefined).pipe(
+                  Effect.andThen(Effect.never),
+                  Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
                 ),
-                stderr: "",
-                exitCode: 0,
-              })
-            : Deferred.succeed(started, undefined).pipe(
-                Effect.andThen(Effect.never),
-                Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
-              ),
       finalize: () => Effect.fail(new Oci.OciError({ operation: "exec", reason: "command" })),
     });
     const transport = Transport.Transport.of({
@@ -146,7 +157,30 @@ it.effect("fences lost setup leases and preserves work when archive fails", () =
                 return allocation.profile;
               })
             : request.op === "approve"
-              ? Effect.fail(approvalError)
+              ? approved
+                ? Effect.succeed({
+                    device: {
+                      ...transport.device,
+                      environmentId: EnvironmentId.make("sandbox"),
+                      publicKey: "a".repeat(43),
+                    },
+                    connection: {
+                      id: "fixture",
+                      label: "Selected central connection",
+                      providerInstanceId: "authorized-codex",
+                      profileKey: "a".repeat(64),
+                      generation: 1,
+                      grants: [],
+                      revoked: false,
+                      lastIssuedExpiresAt: 0,
+                      modelCatalog: {
+                        protocolVersion: "1",
+                        models: [{ slug: "confirmed-luna", name: "Confirmed Luna" }],
+                        defaultModel: "confirmed-luna",
+                      },
+                    },
+                  })
+                : Effect.fail(approvalError)
               : request.op === "setupReport"
                 ? Effect.succeed(null)
                 : Queue.offer(events, request).pipe(Effect.as(null)),
@@ -199,6 +233,18 @@ it.effect("fences lost setup leases and preserves work when archive fails", () =
         assert.equal(capabilities.failure, "tools");
       }
       assert.isFalse(removed);
+      approved = true;
+      allocation = { ...allocation, generation: 5, state: "setup" };
+      yield* TestClock.adjust("2 seconds");
+      const runtime = yield* Deferred.await(runtimeReady);
+      assert.deepStrictEqual(
+        runtime.settings.providerInstances["authorized-codex"]?.config.customModels,
+        [{ slug: "confirmed-luna", name: "Confirmed Luna" }],
+      );
+      assert.deepStrictEqual(runtime.settings.defaultModelSelection, {
+        instanceId: "authorized-codex",
+        model: "confirmed-luna",
+      });
     }).pipe(
       Effect.provide(Supervisor.layer.pipe(Layer.provide(NodeCrypto.layer))),
       Effect.provideService(Transport.Transport, transport),

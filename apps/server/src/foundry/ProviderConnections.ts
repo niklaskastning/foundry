@@ -1,6 +1,7 @@
 import { withSandboxAllocationLock } from "./sandboxes/Allocations.ts";
 import {
   FoundryProviderConnection,
+  FoundryProviderModelCatalog,
   FoundryProviderConnectionError,
   SetFoundryProviderConnection,
   ConnectFoundryProviderConnection,
@@ -8,6 +9,9 @@ import {
   type FoundryProviderGrant,
   type FoundryDevice,
 } from "@t3tools/contracts";
+import { chatGptModels } from "../provider/CodexChatGptModels.ts";
+import * as Redacted from "effect/Redacted";
+import { HttpClient } from "effect/http";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -27,6 +31,7 @@ type AllocationGrant = {
 type Issue = Owner &
   FoundryProviderGrant & { readonly connectionId: string; readonly generation: number };
 const decode = Schema.decodeUnknownEffect(FoundryProviderConnection);
+const decodeModelCatalog = Schema.decodeUnknownEffect(FoundryProviderModelCatalog);
 const decodeConnect = Schema.decodeEffect(ConnectFoundryProviderConnection);
 const decodeSet = Schema.decodeUnknownEffect(SetFoundryProviderConnection, {
   onExcessProperty: "error",
@@ -75,6 +80,7 @@ const make = Effect.gen(function* () {
   const sql = yield* InstanceDatabase.InstanceDatabase;
   const identity = yield* InstancePostgres.InstancePostgres;
   const auth = yield* ProviderConnectionAuth.ProviderConnectionAuth;
+  const http = yield* HttpClient.HttpClient;
   const checkOwner = Effect.fn("ProviderConnections.checkOwner")(function* (owner: Owner) {
     if ((yield* identity.readIdentity) !== owner.instanceId) return yield* forbidden();
     const rows =
@@ -196,7 +202,7 @@ const make = Effect.gen(function* () {
   ) {
     yield* checkOwner(owner);
     const now = yield* Clock.currentTimeMillis;
-    return yield* sql.withTransaction(
+    const connection = yield* sql.withTransaction(
       Effect.gen(function* () {
         const rows = yield* sql<{
           connection: unknown;
@@ -249,6 +255,18 @@ const make = Effect.gen(function* () {
         return updated;
       }),
     );
+    const token = yield* auth.access(connection);
+    const models = yield* chatGptModels(Redacted.value(token.accessToken), []).pipe(
+      Effect.provideService(HttpClient.HttpClient, http),
+      Effect.mapError(() => new FoundryProviderConnectionError({ code: "unavailable" })),
+    );
+    const unique = [...new Map(models.map((model) => [model.slug, model])).values()].slice(0, 256);
+    const modelCatalog = yield* decodeModelCatalog({
+      protocolVersion: "1",
+      models: unique.map((model) => ({ slug: model.slug, name: model.name })),
+      defaultModel: unique[0]?.slug,
+    }).pipe(Effect.mapError(() => new FoundryProviderConnectionError({ code: "unavailable" })));
+    return { ...connection, modelCatalog };
   }, Effect.catchTags(failures));
   const releaseAllocation = Effect.fn("ProviderConnections.releaseAllocation")(
     function* (
