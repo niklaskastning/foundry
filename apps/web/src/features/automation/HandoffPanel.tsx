@@ -248,7 +248,7 @@ function HandoffPanel({
               className="underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               href={`/${encodeURIComponent(handoff.environmentId)}/${encodeURIComponent(receipt.threadId)}?factoryId=${encodeURIComponent(handoff.factoryId)}&runId=${encodeURIComponent(handoff.runId)}`}
             >
-              Open T3 thread
+              Open interactive chat
             </a>
             <a
               className="underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
@@ -256,7 +256,17 @@ function HandoffPanel({
             >
               Read central archive
             </a>
+            <a
+              className="underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              href={`/${encodeURIComponent(handoff.environmentId)}/${encodeURIComponent(receipt.sourceThreadId)}?factoryId=${encodeURIComponent(handoff.factoryId)}&runId=${encodeURIComponent(handoff.runId)}`}
+            >
+              Source execution thread
+            </a>
           </div>
+          <p className="text-sm text-muted-foreground">
+            This interactive chat remains in Chats after return. Automated execution stays in the
+            factory run history.
+          </p>
         </>
       ) : (
         <p className="text-sm">Workspace opening is not yet confirmed.</p>
