@@ -64,7 +64,7 @@ export function parseFactoryYaml(content: string): unknown {
   bound(value, 0);
   return value;
 }
-const decode = <A>(schema: Schema.Codec<A>, value: unknown) =>
+const decode = <A, I>(schema: Schema.Codec<A, I>, value: unknown) =>
   Schema.decodeUnknownSync(schema, { onExcessProperty: "error" })(value);
 const text = (file: FactoryV4File) =>
   new TextDecoder("utf-8", { fatal: true }).decode(factoryFileBytes(file));
