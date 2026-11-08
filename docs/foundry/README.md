@@ -1,6 +1,6 @@
 # Foundry-Entwicklung
 
-Einstieg für die Weiterentwicklung unseres dauerhaften T3-Code-Forks. Foundry ist als selbst gehostete Single-User-Software-Factory auf T3 Code ausgerichtet. Factories sind Home und Hauptanwendung; Chats bleiben als Arbeitsdetails eines Auftrags und als sekundärer interaktiver Einstieg erreichbar: mit einer Hauptdomain, registrierten Devices, produktbezogenen Factories, Factory as Code und später Sandboxes. Warp Factories dient als Referenz für Funktionsumfang und Seitenaufteilung; Gestaltung und interaktive Agentenarbeit kommen aus T3 Code. Die Main Node steuert; ein eigener Host-Worker führt zunächst Agenten aus.
+Einstieg für die Weiterentwicklung unseres dauerhaften T3-Code-Forks. Foundry ist als selbst gehostete Single-User-Software-Factory auf T3 Code ausgerichtet. Factories sind Home und Hauptanwendung; Chats bleiben als Arbeitsdetails eines Auftrags und als sekundärer interaktiver Einstieg erreichbar: mit einer Hauptdomain, registrierten Devices, produktbezogenen Factories, Factory as Code und Linux-Sandboxes. Warp Factories dient als Referenz für Funktionsumfang und Seitenaufteilung; Gestaltung und interaktive Agentenarbeit kommen aus T3 Code. Die Main Node steuert; ein eigener Host-Worker führt zunächst Agenten aus.
 
 ## Wo anfangen?
 
@@ -26,7 +26,7 @@ Main, Instanz-PostgreSQL/Access, Gateway und dauerhafter Linux-Worker sind integ
 
 Der [Warp-Vergleich](warp-comparison.md) trennt funktionale Lieferung und Gestaltungsqualität. Der Factories-first-Arbeitsplatz aus [PR #67](https://github.com/niklaskastning/foundry/pull/67) ist funktional abgeschlossen. [PR #72](https://github.com/niklaskastning/foundry/pull/72) ergänzt abgenommene v4-Ausführung für Linux/Codex und Web: vollständige Skill-Bundles, explizite MCP-Bindings, parallele Swarms und fachliche Review/Fix-Runden. Diese Nachweise sind **keine Nutzer-Designabnahme**. Auf ausdrücklichen Nutzerauftrag ist die erneute Überarbeitung aller zentralen Ansichten aktuelle Produktarbeit unter P49b: klare Aufgaben, Ergebnisse und nächste Aktionen, verständliche Workflows sowie kompakte Listen und zugängliche Konfigurationsdetails. Die Überarbeitung ist in [PR #74](https://github.com/niklaskastning/foundry/pull/74) implementiert und durch automatisierte Prüfungen, einen integrierten Browserpass mit realen VPS-Daten und unabhängiges Review geprüft. Der PR führt Screenshots, finale Artefakt-/CI-Prüfungen und den Deploymentnachweis; die menschliche Designabnahme bleibt offen.
 
-P34–P40 werden parallel als eigenständige Sandbox-Lieferung bearbeitet; sie sind noch keine ausgelieferte Fähigkeit und blockieren die eigenständig nutzbare UI nicht. Danach folgen messbare Qualität und repositoryübergreifende Arbeit. Der [Umsetzungsplan](implementation-plan.md#nächste-produktlieferungen) besitzt Reihenfolge und funktionale Abnahme; technische Nachweise stehen in [Basic-Leitplanken](basic-leitplanken.md). Native Windows-Bedienung, öffentliches SSO, native Anmeldung, zusätzliche Provider-/Kontoverbindungen und der Einstieg ohne getrenntes Main-T3-Pairing behalten eigene offene Gates. Die Definitionen liegen im separaten privaten Repository [foundry-definitions](https://github.com/niklaskastning/foundry-definitions).
+P34–P40 sind in [PR #75](https://github.com/niklaskastning/foundry/pull/75) für Linux/Codex und Web implementiert und funktional auf der Entwicklungs-VPS abgenommen. Versionierte Profile liefern echte OCI-Container für interaktive Arbeit und manuelle v4-Starts über denselben Allocation-Service. Bestätigte zentrale Archive erlauben Löschen und Fortsetzen auf einer frischen Umgebung. Der PR bleibt bis zum Abschluss von Betriebsbereinigung, Checks und Review die Lieferungsgrenze. Danach folgen messbare Qualität und repositoryübergreifende Arbeit. Der [Umsetzungsplan](implementation-plan.md#nächste-produktlieferungen) besitzt Reihenfolge und funktionale Abnahme; technische Nachweise stehen in [Basic-Leitplanken](basic-leitplanken.md). Native Windows-Bedienung, öffentliches SSO, native Anmeldung, zusätzliche Provider-/Kontoverbindungen und der Einstieg ohne getrenntes Main-T3-Pairing behalten eigene offene Gates. Die Definitionen liegen im separaten privaten Repository [foundry-definitions](https://github.com/niklaskastning/foundry-definitions).
 
 ## Arbeitsweise
 
@@ -67,3 +67,18 @@ Die persönliche Inbox zeigt vorhandene Fragen, Freigaben, Blocker und Fehler.
 Freigabe gilt für den angezeigten Eingabe- und Ergebnisstand. Bei geändertem Ergebnis
 neu laden und erneut entscheiden. Antworten werden ausdrücklich an die aktuell
 zuständige Frage gesendet; eine alte Frage kann keinen neuen Versuch steuern.
+
+## Mit Linux-Sandboxes arbeiten
+
+Unter **Resources** ein freigegebenes Profil wählen und eine Umgebung anfordern.
+Setupstatus und Logs zeigen, wann Checkout, Tools und Skills bereit sind. Danach
+das Environment für einen interaktiven Thread öffnen. Lebensdauer lässt sich
+innerhalb des Profillimits verlängern; Stop beendet die Arbeit, Archivieren und
+Löschen wartet auf das bestätigte zentrale Archiv. Im Archiv kann die Arbeit mit
+erhaltener Threadherkunft auf einer neuen Umgebung fortgesetzt werden.
+
+Beim manuellen v4-Start optional dieselbe Profilrevision als Sandboxziel wählen.
+Der Run zeigt Setup, Kapazitätswartezeit, Fehler und Abbruch; abgeschlossene
+Ressourcen werden freigegeben. Vorhandene dauerhafte Worker und ältere Workflows
+bleiben nutzbar. Codex verwendet eine zentral autorisierte Verbindung; andere
+Provider werden für diesen Sandboxpfad noch nicht angeboten.

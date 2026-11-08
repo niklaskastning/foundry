@@ -1050,15 +1050,19 @@ Updater migriert den geprüften Stand mit Schema 8/11 unter seinem eigenen
 Deployment-Lock; keinen zweiten Lock um diesen Aufruf legen:
 
 ```sh
-sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-sandboxes sha256:<digest> <commit>
+sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-sandboxes sha256:<digest> <commit> --development
 ```
 
-Dies aktiviert noch keine Sandboxausführung. Der Aufruf sichert Instanz- und
-Automation-Datenbank sowie Main-State/Workspaces gemeinsam, migriert bei gestopptem
-Main und sperrt den Migrationslogin anschließend wieder. `manifest.json` und
+Dies aktiviert noch keine Sandboxausführung. Auf dem ausgewiesenen Entwicklungs-VPS
+überspringt `--development` die Datenbank-/State-/Workspace-Sicherungen; private
+Betriebskonfiguration, Pins, Manifest und Prüfungen bleiben erhalten. Der Aufruf
+migriert bei gestopptem Main und sperrt den Migrationslogin anschließend wieder. `manifest.json` und
 `success` im ausgegebenen Recovery-Verzeichnis enthalten vorherigen und geprüften
 Zielstand. Bei Migrationsfehlern bleibt Main gestoppt; die Rückkehr zu Schema-8-Code
-verlangt diesen koordinierten Restore. Weitere Schema-9-Updates verwenden `update`.
+verlangt einen zur Schemaänderung passenden Restore oder das ausdrücklich erlaubte
+Zurücksetzen der betroffenen Entwicklungsdaten. Ein Code-Downgrade allein genügt
+nicht. Produktionsmigrationen benötigen weiterhin die koordinierten Sicherungen.
+Weitere Schema-9-Updates verwenden `update … --development`.
 
 Die geprüfte, **secretfreie** Profil-/Quota-Konfiguration wird als root-eigene
 `/etc/foundry-deploy/sandbox-policy.json` installiert (Modus `0644`, keine
@@ -1118,7 +1122,11 @@ Der Dienst benötigt `/usr/sbin` im `PATH` für die Firewallprüfung. Bei
 `ProtectSystem=strict` müssen `/var/lib/foundry-sandbox` und
 `/var/lib/foundry-sandbox-networks` schreibbar bleiben: Auch die Prüfung des
 Netzwerks nimmt dessen eigene Lockdatei. Nach einem Supervisorneustart kann die
-Übernahme bis zum Ablauf der bisherigen 60-Sekunden-Lease warten.
+Übernahme bis zum Ablauf der bisherigen 60-Sekunden-Lease warten. Den Betriebsdienst
+mit Wiederanlauf bei Fehlern aktivieren; eine zeitbegrenzte Abnahme-Unit anschließend
+nicht als gestoppten Provisioner zurücklassen. Ressourcen und maximale Laufzeit
+bleiben pro Allocation begrenzt. Absichtliche Fehler-/TTL-Testprofile vor Übergabe
+aus der Imagefreigabe nehmen und eine neue, geprüfte Betriebsprofilrevision anbieten.
 
 Setup-Archive ohne Thread enthalten einen zentral bestätigten JSON-Index und
 bestätigte Teile von höchstens 8 MiB; auch Abhängigkeitsverzeichnisse werden
@@ -1152,7 +1160,8 @@ Archivfinalizer behalten ihre gespeicherte Policyversion; die v1-Datei und das
 geladene v1-Profil bis zu deren Löschung erhalten.
 Normale Agenten-Toolaufrufe verlangen keine interaktive Zustimmung; explizite
 v4-Dateirechte bleiben technisch durchgesetzt. Container teilen weiterhin den
-Hostkernel und sind keine VM-Mandantengrenze.
+Hostkernel und sind keine VM-Mandantengrenze. Workspace-Volumes teilen den
+Hostspeicher; eine Dateisystem-Diskquota wird derzeit nicht zugesichert.
 
 Thread-Archive speichern vollständige Git-Bundles in bestätigten Teilen von
 höchstens 8 MiB mit einem gehashten Index (insgesamt höchstens 8 GiB). Alte
