@@ -66,7 +66,7 @@ const make = Effect.gen(function* () {
           }>`SELECT version FROM foundry_instance.schema_version`;
           if (
             versions.length !== 1 ||
-            ![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(versions[0]?.version ?? 0)
+            ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(versions[0]?.version ?? 0)
           ) {
             return yield* new InstanceDatabase.InstanceDatabaseError({
               reason: "schema_incompatible",
@@ -206,6 +206,10 @@ const make = Effect.gen(function* () {
               generation integer NOT NULL CHECK(generation > 0), connection jsonb NOT NULL,
               revoked boolean NOT NULL DEFAULT false, last_issued_expires_at bigint NOT NULL DEFAULT 0)`;
             yield* sql`UPDATE foundry_instance.schema_version SET version=9`;
+          }
+          if ((versions[0]?.version ?? 0) < 10) {
+            yield* sql`ALTER TABLE foundry_instance.machine_credentials ADD COLUMN scope text NOT NULL DEFAULT 'automation:read' CHECK (scope IN ('automation:read','automation:start','automation:control'))`;
+            yield* sql`UPDATE foundry_instance.schema_version SET version=10`;
           }
           yield* InstanceDatabase.checkSchema();
           const identities = yield* sql<{

@@ -1,3 +1,4 @@
+import { machineBearerToken } from "../foundry/MachineCredentials.ts";
 import { factoryDefinitionPreview } from "@t3tools/shared/factoryDefinitionPreview";
 import * as McpBindings from "./McpBindings.ts";
 import * as MachineAccess from "./MachineAccess.ts";
@@ -547,6 +548,12 @@ const make = Effect.gen(function* () {
     const input = yield* decodeCommand(raw).pipe(
       Effect.mapError(() => new AutomationApplicationError({ code: "invalid_input" })),
     );
+    if (
+      machineBearerToken(request.headers.authorization) !== undefined &&
+      input.op !== "start" &&
+      input.op !== "createWorkItem"
+    )
+      return yield* new AutomationApplicationError({ code: "forbidden" });
     const scope = [
       "setWorkerPaused",
       "createFactory",
@@ -560,7 +567,10 @@ const make = Effect.gen(function* () {
     ].includes(input.op)
       ? "access:write"
       : "orchestration:operate";
-    const identity = yield* gateway.identityForWrite(request, scope);
+    const identity =
+      input.op === "start" || input.op === "createWorkItem"
+        ? yield* machineAccess.write(request, input.input.factoryId, "automation:start")
+        : yield* gateway.identityForWrite(request, scope);
     switch (input.op) {
       case "setWorkerPaused": {
         const selected = [target, ...(target.workers ?? [])].find(
@@ -641,7 +651,7 @@ const make = Effect.gen(function* () {
           workflow: publicWorkflow(
             yield* workflows.readVersion(input.input.factoryId, run.workflowVersionId),
           ),
-          control: yield* control.read(request, input.input.factoryId, input.input.id),
+          control: yield* control.readAuthorized(identity, input.input.factoryId, input.input.id),
         };
       }
     }

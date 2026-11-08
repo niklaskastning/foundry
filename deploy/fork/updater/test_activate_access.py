@@ -395,16 +395,17 @@ class ActivationTest(unittest.TestCase):
     def test_upgrade_keeps_the_current_backup_and_disables_migration_login_on_failure(self):
         for same_schema, artifact_schema, archive_schema, automation_schema, machine_schema, current_schema, failure in (
             [(False, artifact, False, False, False, 5 if artifact else 2, f) for artifact in [False, True] for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
-            + [(True, False, False, False, False, schema, f) for schema in [5, 6, 7, 8, 9] for f in [None, 'source', 'backup', 'connections', 'start', 'verify']]
+            + [(True, False, False, False, False, schema, f) for schema in [5, 6, 7, 8, 9, 10] for f in [None, 'source', 'backup', 'connections', 'start', 'verify']]
             + [(True, False, False, version, False, 8, f) for version in [10, 11] for f in [None, 'source', 'backup', 'connections', 'start', 'verify']]
             + [(False, False, True, False, False, 6, f) for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
             + [(False, False, False, version, False, 7 if version == 8 else 8, f) for version in [8, 9, 10, 11] for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
             + [(False, False, False, False, True, 7, f) for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'schema', 'start', 'verify']]
             + [(False, False, False, False, 'sandbox', 8, f) for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'schema', 'start', 'verify']]
+            + [(False, False, False, False, "control", 9, f) for f in [None, "source", "backup", "connections", "migrate", "disable", "schema", "start", "verify"]]
         ):
             with self.subTest(same_schema=same_schema, artifact_schema=artifact_schema, machine_schema=machine_schema, failure=failure), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                target_schema = current_schema if same_schema or automation_schema else 9 if machine_schema == 'sandbox' else 8 if machine_schema else 7 if archive_schema else 6 if artifact_schema else 5
+                target_schema = current_schema if same_schema or automation_schema else 10 if machine_schema == 'control' else 9 if machine_schema == 'sandbox' else 8 if machine_schema else 7 if archive_schema else 6 if artifact_schema else 5
                 config, state = root / 'config', root / 'state'
                 config.mkdir()
                 state.mkdir()
@@ -416,13 +417,13 @@ class ActivationTest(unittest.TestCase):
                 def status(expected_schema=None, expected_automation_schema=None):
                     actions.append(('status', expected_schema))
                     if machine_schema:
-                        self.assertEqual(expected_automation_schema, 11 if machine_schema == 'sandbox' else 8)
+                        self.assertEqual(expected_automation_schema, 11 if machine_schema in ['sandbox', 'control'] else 8)
                     if automation_schema:
                         self.assertEqual(expected_automation_schema, automation_schema if len([a for a in actions if a[0] == 'status']) == 2 else None if same_schema else automation_schema - 1)
                     if len([a for a in actions if a[0] == 'status']) == 2 and failure == 'verify':
                         raise RuntimeError('verification failed')
                     candidate = len([a for a in actions if a[0] == 'status']) == 2
-                    return {'schemaVersion': target_schema if candidate else current_schema, 'automationEnabled': automation_schema or machine_schema, 'automationSchemaVersion': 11 if machine_schema == 'sandbox' else 8 if machine_schema else automation_schema if (candidate or same_schema) and automation_schema else automation_schema - 1 if automation_schema else None,
+                    return {'schemaVersion': target_schema if candidate else current_schema, 'automationEnabled': automation_schema or machine_schema, 'automationSchemaVersion': 11 if machine_schema in ['sandbox', 'control'] else 8 if machine_schema else automation_schema if (candidate or same_schema) and automation_schema else automation_schema - 1 if automation_schema else None,
                             'image': activate.REGISTRY + '@' + (DIGEST if candidate else 'sha256:' + 'c' * 64),
                             'revision': REVISION if candidate else 'd' * 40}
 
@@ -476,10 +477,10 @@ class ActivationTest(unittest.TestCase):
                      patch('sys.stderr', new=io.StringIO()):
                     if failure:
                         with self.assertRaises(RuntimeError):
-                            activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, parallel_schema=automation_schema == 10 and not same_schema, machine_schema=machine_schema is True, sandbox_schema=machine_schema == 'sandbox', **({"definition_schema": True} if automation_schema == 11 and not same_schema else {}))
+                            activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, parallel_schema=automation_schema == 10 and not same_schema, machine_schema=machine_schema is True, sandbox_schema=machine_schema == 'sandbox', machine_control_schema=machine_schema == 'control', **({"definition_schema": True} if automation_schema == 11 and not same_schema else {}))
                     else:
-                        activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, parallel_schema=automation_schema == 10 and not same_schema, machine_schema=machine_schema is True, sandbox_schema=machine_schema == 'sandbox', **({"definition_schema": True} if automation_schema == 11 and not same_schema else {}))
-                self.assertEqual(actions[0], ('status', None if same_schema else current_schema if automation_schema else 8 if machine_schema == 'sandbox' else 7 if machine_schema else None if same_schema else 6 if archive_schema else 5 if artifact_schema else 2))
+                        activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, parallel_schema=automation_schema == 10 and not same_schema, machine_schema=machine_schema is True, sandbox_schema=machine_schema == 'sandbox', machine_control_schema=machine_schema == 'control', **({"definition_schema": True} if automation_schema == 11 and not same_schema else {}))
+                self.assertEqual(actions[0], ('status', None if same_schema else current_schema if automation_schema else 9 if machine_schema == 'control' else 8 if machine_schema == 'sandbox' else 7 if machine_schema else None if same_schema else 6 if archive_schema else 5 if artifact_schema else 2))
                 self.assertEqual(running, failure in [None, 'source', 'backup', 'connections'])
                 altered = any(a[0] == 'sql' and 'LOGIN PASSWORD' in a[1] for a in actions)
                 if failure in ['source', 'backup', 'connections']:
@@ -498,7 +499,7 @@ class ActivationTest(unittest.TestCase):
                     manifest = json.loads((recovery / 'manifest.json').read_text())
                     self.assertEqual(manifest['targetSchema'], target_schema)
                     if machine_schema:
-                        self.assertEqual(manifest['targetAutomationSchema'], 11 if machine_schema == 'sandbox' else 8)
+                        self.assertEqual(manifest['targetAutomationSchema'], 11 if machine_schema in ['sandbox', 'control'] else 8)
                     self.assertEqual((recovery / 'access-compose.json').read_text(), 'original-access-compose.json')
                     self.assertEqual((recovery / 'success').exists(), failure is None)
                     self.assertEqual((config / 'access-runtime.env').read_text(), 'original-access-runtime.env')

@@ -40,6 +40,7 @@ import * as DeviceRegistry from "./DeviceRegistry.ts";
 import * as DeviceChannel from "./DeviceChannel.ts";
 import * as DeviceConfig from "./DeviceConfig.ts";
 import * as FoundrySessions from "./FoundrySessions.ts";
+import * as MachineCredentials from "./MachineCredentials.ts";
 import * as SandboxGatewayAccess from "./SandboxGatewayAccess.ts";
 import * as ClientIdentity from "./ClientIdentity.ts";
 
@@ -98,7 +99,13 @@ export const ManualAutomationGatewayIdentity = Schema.Struct({
   clientSessionId: AuthSessionId,
   foundrySessionHash: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/)),
 });
+const MachineAutomationIdentity = Schema.Struct({
+  ...AutomationIdentityFields,
+  authority: Schema.Literal("machine"),
+  credentialId: Schema.String,
+});
 export const AutomationGatewayIdentity = Schema.Union([
+  MachineAutomationIdentity,
   SandboxProbeIdentity,
   ManualAutomationGatewayIdentity,
   UnattendedGatewayIdentity,
@@ -186,6 +193,26 @@ export class GatewayGrants extends Context.Service<
 
 const make = Effect.gen(function* () {
   const sandboxAccess = yield* SandboxGatewayAccess.SandboxGatewayAccess;
+  const machineCredentials = yield* Effect.serviceOption(MachineCredentials.MachineCredentials);
+  const machineIdentity = Effect.fn("GatewayGrants.machineIdentity")(function* (request: Request) {
+    const token = MachineCredentials.machineBearerToken(request.headers.authorization);
+    if (token === undefined) return undefined;
+    if (
+      Option.isNone(machineCredentials) ||
+      request.method !== "POST" ||
+      ![
+        "/api/foundry/v1/automation/command",
+        "/api/foundry/v1/automation/control",
+        "/api/foundry/v1/automation/mcp",
+      ].includes(request.url.split("?", 1)[0] ?? "")
+    )
+      return yield* denied();
+    const identity = yield* machineCredentials.value
+      .authenticate(token)
+      .pipe(Effect.mapError(denied));
+    if (identity.scope === "automation:read") return yield* denied();
+    return identity;
+  });
   const sessions = yield* FoundrySessions.FoundrySessions;
   const auth = yield* EnvironmentAuth.EnvironmentAuth;
   const clientSessions = yield* SessionStore.SessionStore;
@@ -272,11 +299,18 @@ const make = Effect.gen(function* () {
     request: Request,
     scope: AuthEnvironmentScope,
   ) {
+    const machine = yield* machineIdentity(request);
+    if (machine) {
+      if (scope !== "orchestration:operate") return yield* denied();
+      return machine;
+    }
     const identity = yield* authenticate(request);
     if (!identity.client.scopes.includes(scope)) return yield* denied();
     return { instanceId: identity.foundry.instanceId, operatorId: identity.foundry.operatorId };
   });
   const identityForRead = Effect.fn("GatewayGrants.identityForRead")(function* (request: Request) {
+    const machine = yield* machineIdentity(request);
+    if (machine) return machine;
     const identity = yield* authenticate(request);
     if (!identity.client.scopes.includes(AuthOrchestrationReadScope)) return yield* denied();
     return { instanceId: identity.foundry.instanceId, operatorId: identity.foundry.operatorId };
@@ -384,6 +418,29 @@ const make = Effect.gen(function* () {
     request: Request,
     target: Pick<AutomationGatewayIdentity, "deviceId" | "environmentId">,
   ) {
+    const machine = yield* machineIdentity(request);
+    if (machine) {
+      if (!streamsEnabled) return yield* denied();
+      const accessGeneration = yield* access.check(target.deviceId, machine.operatorId);
+      const automationGeneration = yield* automationAccess(target.deviceId, machine.operatorId);
+      const lease = yield* channels.current(target.deviceId).pipe(Effect.mapError(denied));
+      if (
+        lease.device.revoked ||
+        lease.device.instanceId !== machine.instanceId ||
+        lease.device.environmentId !== target.environmentId
+      )
+        return yield* denied();
+      return {
+        instanceId: machine.instanceId,
+        operatorId: machine.operatorId,
+        ...target,
+        deviceGeneration: lease.device.generation,
+        accessGeneration,
+        automationGeneration,
+        authority: "machine" as const,
+        credentialId: machine.credentialId,
+      };
+    }
     const grant = yield* create(request, {
       deviceId: target.deviceId,
       environmentId: target.environmentId,
@@ -427,6 +484,27 @@ const make = Effect.gen(function* () {
           client: {
             sessionId: AuthSessionId.make(`sandbox-probe:${identity.allocationId}`),
             subject: `sandbox-probe:${identity.allocationId}`,
+            expiresAt: DateTime.makeUnsafe(expiresAt),
+          },
+        };
+      }
+      if ("authority" in identity && identity.authority === "machine") {
+        if (Option.isNone(machineCredentials)) return yield* denied();
+        const machine = yield* machineCredentials.value
+          .authenticateId(identity.credentialId)
+          .pipe(Effect.mapError(denied));
+        if (
+          machine.scope === "automation:read" ||
+          machine.instanceId !== identity.instanceId ||
+          machine.operatorId !== identity.operatorId
+        )
+          return yield* denied();
+        const expiresAt = (yield* Clock.currentTimeMillis) + 60_000;
+        return {
+          foundry: { expiresAt },
+          client: {
+            sessionId: AuthSessionId.make(`machine:${identity.credentialId}`),
+            subject: `machine:${identity.credentialId}`,
             expiresAt: DateTime.makeUnsafe(expiresAt),
           },
         };

@@ -108,12 +108,16 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
     Layer.provide(
       Layer.mock(MachineCredentials.MachineCredentials)({
         authenticate: Effect.fn("ApplicationGate.machineIdentity")(function* (token) {
-          if (token !== "fmc_fixture_a" && token !== "fmc_fixture_b")
+          if (token !== "fmc_fixture_a" && token !== "fmc_fixture_b" && token !== "fmc_start_a")
             return yield* new AutomationMachineCredentialError({ code: "forbidden" });
           return {
             ...identity,
             credentialId: token,
-            factoryIds: [token === "fmc_fixture_a" ? "p21-a" : "p21-b"],
+            scope:
+              token === "fmc_start_a"
+                ? ("automation:start" as const)
+                : ("automation:read" as const),
+            factoryIds: [token !== "fmc_fixture_b" ? "p21-a" : "p21-b"],
           };
         }),
       }),
@@ -268,6 +272,19 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
           headers: { authorization: `Bearer ${token}`, "x-fixture-scope": "access:write" },
         }),
       );
+    const machineStart = machineRequest("fmc_start_a", "/api/foundry/v1/automation/command");
+    const machineWork = {
+      op: "createWorkItem" as const,
+      input: {
+        commandId: "n06-work",
+        id: "n06-work",
+        factoryId: "p21-a",
+        versionId: "p21-scope",
+        repository: "fixture-repo",
+        title: "Machine work",
+        source: { kind: "manual" as const, reference: "ci-42" },
+      },
+    };
     const machineA = machineRequest("fmc_fixture_a");
     const machineB = machineRequest("fmc_fixture_b");
     const machinePage = yield* app.query(machineB, { op: "factories", search: "P21", limit: 1 });
@@ -727,5 +744,24 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
       limit: 20,
     });
     if (openWork.kind === "workItems") NodeAssert.deepEqual(openWork.items, []);
+    const createdMachineWork = yield* app.command(machineStart, machineWork);
+    NodeAssert.deepEqual(yield* app.command(machineStart, machineWork), createdMachineWork);
+    NodeAssert.equal(
+      (yield* sql`SELECT id FROM foundry_automation.work_items WHERE id='n06-work'`).length,
+      1,
+    );
+    NodeAssert.equal(
+      (yield* app
+        .command(machineStart, {
+          ...machineWork,
+          input: { ...machineWork.input, factoryId: "p21-b" },
+        })
+        .pipe(Effect.flip)).code,
+      "forbidden",
+    );
+    NodeAssert.equal(
+      (yield* app.command(machineStart, create).pipe(Effect.flip)).code,
+      "forbidden",
+    );
   }).pipe(Effect.provide(Layer.merge(layer, database)), Effect.scoped);
 });
