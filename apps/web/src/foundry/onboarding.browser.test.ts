@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vite-plus/test";
 import { FoundryOnboarding } from "@t3tools/client-runtime/connection";
-import { executeInstanceOperation } from "./onboarding";
+import { executeInstanceOperation, initialState } from "./onboarding";
 import { readDeviceSelection, writeDeviceSelection } from "./selection";
 import { hasConfirmedAutomationView } from "./pageMode";
 
@@ -131,4 +131,48 @@ it("bounds waiting for another tab without stealing its session lock", async () 
   const locks = await navigator.locks.query();
   expect(locks.held?.some((lock) => lock.name === "foundry:instance-session:v1")).toBe(true);
   expect(locks.pending?.some((lock) => lock.name === "foundry:instance-session:v1")).toBe(false);
+});
+
+it("retains verified native sign-in after rejected credentials so the user can retry", async () => {
+  const key = "foundry:instance-binding:v1";
+  const previous = localStorage.getItem(key);
+  using _storage = {
+    [Symbol.dispose]: () => {
+      if (previous === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, previous);
+    },
+  };
+  const descriptor = {
+    protocolVersion: "1",
+    instanceId: "11111111-1111-4111-8111-111111111111",
+    mainEnvironmentId: "22222222-2222-4222-8222-222222222222",
+    capabilities: ["foundry.instance-descriptor", "foundry.access-sessions"],
+    negotiatedCapabilities: ["foundry.access-sessions"],
+    instanceAuth: {
+      publicOrigin: window.location.origin,
+      issuer: window.location.origin,
+      bootstrapMethods: ["password"],
+      sessionMethods: ["foundry-session-cookie"],
+    },
+    auth: { bootstrapMethods: ["one-time-token"], sessionMethods: ["browser-session-cookie"] },
+  };
+  const binding = FoundryOnboarding.verifyDescriptor(descriptor, window.location.origin).binding;
+  localStorage.setItem(key, JSON.stringify(binding));
+  using _fetch = vi
+    .spyOn(window, "fetch")
+    .mockImplementation(async (input) =>
+      String(input).startsWith("/.well-known/")
+        ? Response.json(descriptor)
+        : Response.json({ code: "invalid_access" }, { status: 401 }),
+    );
+  await executeInstanceOperation({ operation: "inspect" });
+  await expect(
+    executeInstanceOperation({
+      operation: "login",
+      credentials: { username: "operator", password: "incorrect-password" },
+    }),
+  ).rejects.toMatchObject({ code: "invalid_access" });
+  expect(initialState().nativeLoginAvailable).toBe(true);
+  expect(initialState().session).toBeNull();
+  expect(initialState().binding).toEqual(binding);
 });

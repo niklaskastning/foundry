@@ -1,4 +1,4 @@
-import { FoundryDeviceCatalog } from "@t3tools/contracts";
+import { FoundryAuthError, FoundryDeviceCatalog } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import {
   FoundryOnboarding,
@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import { appAtomRuntime } from "../lib/runtime";
 
 const decodeCatalog = Schema.decodeUnknownSync(FoundryDeviceCatalog);
+const isAuthError = Schema.is(FoundryAuthError);
 
 export type Operation = FoundryOnboarding.Operation;
 export type OnboardingResult = FoundryOnboarding.OnboardingResult;
@@ -58,7 +59,13 @@ export async function executeInstanceOperation(input: {
         });
     });
   } catch (error) {
-    sessionState = undefined;
+    sessionState =
+      input.operation === "login" &&
+      isAuthError(error) &&
+      error.code === "invalid_access" &&
+      sessionState
+        ? { ...sessionState, session: null }
+        : undefined;
     window.dispatchEvent(new Event("foundry:session"));
     if (!acquired && signal.aborted)
       throw new FoundryOnboarding.OnboardingError("coordination_busy");
