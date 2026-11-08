@@ -1,3 +1,4 @@
+import * as OperationsDashboard from "./OperationsDashboard.ts";
 import { machineBearerToken } from "../foundry/MachineCredentials.ts";
 import { factoryDefinitionPreview } from "@t3tools/shared/factoryDefinitionPreview";
 import * as McpBindings from "./McpBindings.ts";
@@ -161,6 +162,7 @@ export class Application extends Context.Service<
 
 const make = Effect.gen(function* () {
   const sql = yield* AutomationDatabase.AutomationDatabase;
+  const operations = yield* OperationsDashboard.OperationsDashboard.pipe(Effect.provide(OperationsDashboard.layer));
   const machineAccess = yield* MachineAccess.MachineAccess;
   const handoffs = yield* Handoffs.Handoffs;
   const factories = yield* Factories.Factories;
@@ -298,6 +300,7 @@ const make = Effect.gen(function* () {
             "attempts",
             "attempt",
             "runtimeNode",
+            "operationsDashboard",
           ] as ReadonlyArray<string>
         ).includes(input.op)
       )
@@ -319,6 +322,9 @@ const make = Effect.gen(function* () {
     });
     const result = yield* Effect.gen(function* () {
       switch (input.op) {
+        case "operationsDashboard":
+          yield* factories.readFactory(input.factoryId);
+          return yield* operations.query(input, identity);
         case "mcpBindings":
           yield* factories.readFactory(input.factoryId);
           return { kind: "mcpBindings" as const, items: yield* mcpBindings.list(input.factoryId) };
