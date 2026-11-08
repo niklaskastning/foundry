@@ -1173,7 +1173,7 @@ Origin/CSRF-Nachweis und eine gültige Main-T3-Sitzung mit den jeweiligen Scopes
 Der bestehende authentifizierte Clienttransport muss diese Nachweise liefern;
 ein gewöhnlicher unauthentifizierter `fetch` genügt nicht. DPoP wird für die
 tatsächlich aufgerufene URL erstellt. Der unten beschriebene Maschinen-Lesezugang
-ist davon getrennt; ein Factory-MCP-Endpunkt besteht noch nicht. Interaktive Cookies
+ist davon getrennt; Factory-MCP nutzt dieselben begrenzten Credentials. Interaktive Cookies
 nicht in CI übernehmen; T3-MCP- und Worker-Credentials werden nicht in Benutzerrechte
 übersetzt.
 
@@ -1200,15 +1200,16 @@ nicht verfügbarem Service und 409 bei fachlichen Konflikten oder Sperren.
 Unbekannte API-Versionen führen keine Operation aus. Die API begrenzt JSON-Körper
 auf 3 MiB; die engeren fachlichen Größenlimits bleiben zusätzlich wirksam.
 
-### Begrenzter Maschinen-Lesezugang
+### Begrenzter Maschinenzugang und Foundry-MCP
 
 Unter demselben API-Präfix verwalten `credentials/issue`, `credentials/list` und
 `credentials/revoke` eigenständige Credentials. Verwaltung verlangt eine gültige
 Foundry-/T3-Benutzersitzung mit `access:write`, Ausgabe zusätzlich
 `orchestration:read`. `issue` nimmt eine vor dem Senden gespeicherte UUID `id`,
 `label`, eine explizite Liste vorhandener `factoryIds` (1–32) und `expiresAt`
-(Unix-Millisekunden, höchstens 30 Tage in der Zukunft) an. Der einzige Scope ist
-`automation:read`; Wildcards und Schreibscopes werden nicht angenommen.
+(Unix-Millisekunden, höchstens 30 Tage in der Zukunft) an. Optionales `scope` ist
+`automation:read` (Default), `automation:start` oder `automation:control`. Jeder Scope
+erlaubt die unten genannten Leseabfragen; Start und Control werden getrennt vergeben.
 
 Die erste Antwort enthält `credential` und `token`. Das Token sicher speichern;
 PostgreSQL hält nur seinen Hash. Exakte Wiederholung derselben ID und Eingabe
@@ -1226,29 +1227,46 @@ Maschinen senden das Token als `Authorization: Bearer <token>` an `contract` ode
 freigegebenen Factories; Run-/Attempt-Zugriffe prüfen zusätzlich den Betreiber.
 Jeder Aufruf prüft Ablauf, Widerruf und Instanz-/Betreibergeneration erneut.
 Benutzer-Logout beendet diese eigenständigen Credentials nicht. Ein Maschinen-Token
-wird auch bei zusätzlich vorhandenen Benutzer-Cookies nicht zum Schreibzugang.
+erhält auch bei zusätzlich vorhandenen Benutzer-Cookies keine zusätzlichen Rechte.
 
-Der Zugang umfasst weder Start/Steuerung noch Handoff, Inbox, Trigger, einzelne
-Definitionsdateien oder Live-Worker-/Archivzugriff. Vorhandene T3-MCP-Tokens werden
-nicht zu Foundry-Credentials. Factory-MCP und seine Instruktionsevals folgen separat.
+`automation:start` erlaubt `command` mit `createWorkItem` und `start` ausschließlich
+für die freigegebenen Factories. Workflowversion, Repositoryrevision und Workerbindung
+werden wie bei Benutzerstarts geprüft und gepinnt; konfigurierte v4-Swarms verwenden
+denselben Scheduler. Command-ID, Run-ID und Eingabe vor dem Senden speichern und bei
+verlorener Antwort unverändert wiederholen. `automation:control` erlaubt `control`
+mit den bestehenden Pause-/Resume-/Cancel-/Retry-/Antwort-/Reviewaktionen und aktueller
+`expectedRevision`. Worker benötigen weiterhin aktuelle Geräte- und Automationfreigaben.
+Ablauf/Widerruf wird auch bei Workerkommunikation erneut geprüft; Logout einer
+Benutzersitzung beendet diese unabhängige Maschinenautorität nicht.
+
+Der stateless Streamable-HTTP-MCP-Endpunkt ist
+`POST /api/foundry/v1/automation/mcp`. Im MCP-Client diese URL und den Bearer-Header
+konfigurieren, bei vorgeschaltetem Access zusätzlich dessen Maschinenheader.
+`initialize`, `tools/list` und `tools/call` liefern JSON; es gibt keine Server-Push-
+Verbindung oder dauerhafte MCP-Sitzung. Die Tools `foundry_query`, `foundry_start`
+und `foundry_control` verwenden dieselben Verträge und Services wie HTTP. Zuerst
+Factories/Factory lesen, dann Auftrag und gepinnten Run starten; Run und Attempts
+liefern Status/Ergebnisse. Keine zweite Orchestrierung und kein impliziter Foreman.
+Handoff-Schreibzugriff, Inbox, Triggerverwaltung und Planoperationen sind nicht
+freigegeben. T3-MCP-Tokens werden nicht zu Foundry-Credentials.
+
+Instanzmigration 10 ergänzt die Credential-Scope-Spalte mit Lesedefault für vorhandene
+Credentials. Dieses Paket hängt von PR75/Instanzschema 9 ab; dessen Sandbox-/Provider-
+Migration und Runtimekomposition bleiben erhalten. Automation bleibt Schema 11.
+Zum ersten Upgrade von 9 auf 10 den getesteten integrierten Build über
+`upgrade-machine-control sha256:<digest> <commit>` aktivieren. Der Updater verlangt
+Schema 9/11, stoppt Main unter seiner Deploymentsperre, migriert mit dem neuen Image
+und prüft Schema 10 vor dem Neustart. Danach verwendet `update` denselben Schemastand.
+Neuer Code lehnt Schema 9 über den bestehenden Readiness-Check ab. Ein Image-Rollback
+auf Schema-9-Code ist damit kein kompatibler Wiederherstellungsweg; in dieser
+Entwicklungsumgebung einen Schema-10-Build erneut ausliefern oder gezielt neu aufbauen.
+Keine Foundry-Anwendungsdaten oder alten Builds müssen dafür gesichert werden;
+Credentials und persönliche T3-Daten bleiben davon ausgenommen.
 
 Ein vorgeschaltetes Access muss den nicht interaktiven API-Zugang zusätzlich erlauben.
 Der bestehende Device-Service-Zugang gilt nicht automatisch für diese API-Pfade.
 Dieses Upgrade verändert keine Access-/Domainregeln; eine Loopback-Probe belegt
 keinen öffentlichen CI-Zugang.
-
-Main benötigt Instanzschema 8; Automation bleibt bei Schema 8. Den getesteten
-unveränderlichen Build mit dem bestehenden Updater aktivieren:
-
-```sh
-sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-machine-credentials sha256:<digest> <commit>
-```
-
-Der Helfer hält die bestehende Deploymentsperre, sichert den bisherigen Stand und
-migriert bei gestopptem Main. `manifest.json` und `success` im ausgegebenen
-Recovery-Verzeichnis festhalten. Ein Downgrade auf Schema-7-Code benötigt den
-koordinierten Daten-/State-Restore bei gestopptem Main; kein reiner Image-Rollback.
-Nachfolgende Updates desselben Schemas verwenden wieder `update`.
 
 ### Auftrag interaktiv übernehmen und zurückgeben (P51)
 

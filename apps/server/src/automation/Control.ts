@@ -1,3 +1,5 @@
+import { machineBearerToken } from "../foundry/MachineCredentials.ts";
+import * as MachineAccess from "./MachineAccess.ts";
 import type { ReadIdentity } from "./MachineAccess.ts";
 import { CommandId, OrchestrationV2UserInputQuestion } from "@t3tools/contracts";
 import {
@@ -7,6 +9,7 @@ import {
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Hex from "effect/encoding/Hex";
+import * as Option from "effect/Option";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -54,6 +57,7 @@ export class Control extends Context.Service<
 >()("t3/automation/Control") {}
 
 const make = Effect.gen(function* () {
+  const machineAccess = yield* Effect.serviceOption(MachineAccess.MachineAccess);
   const sql = yield* AutomationDatabase.AutomationDatabase;
   const store = yield* DispatchStore.DispatchStore;
   const worker = yield* WorkerTransport.WorkerTransport;
@@ -104,12 +108,15 @@ const make = Effect.gen(function* () {
     raw: AutomationControlCommand,
   ) {
     const input = yield* decodeCommand(raw);
-    const { binding } = yield* owned(
-      yield* worker.identityForRead(request),
-      input.factoryId,
-      input.runId,
-    );
-    const writer = yield* worker.identityForWrite(request);
+    if (
+      Option.isNone(machineAccess) &&
+      machineBearerToken(request.headers.authorization) !== undefined
+    )
+      return yield* fail("forbidden");
+    const writer = yield* Option.isSome(machineAccess)
+      ? machineAccess.value.write(request, input.factoryId, "automation:control")
+      : worker.identityForWrite(request);
+    const { binding } = yield* owned(writer, input.factoryId, input.runId);
     if (
       writer.instanceId !== binding.identity.instanceId ||
       writer.operatorId !== binding.identity.operatorId

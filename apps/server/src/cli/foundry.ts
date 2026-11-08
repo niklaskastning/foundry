@@ -85,7 +85,7 @@ const migrate = Command.make("migrate", {
           ).pipe(Layer.provide(ServerConfig.layer(config))),
         ),
       );
-      yield* Console.log("Foundry instance schema 4 ready; existing instance identity preserved.");
+      yield* Console.log("Foundry instance schema 10 ready; existing instance identity preserved.");
     }),
   ),
 );

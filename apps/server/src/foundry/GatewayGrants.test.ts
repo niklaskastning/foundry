@@ -4,6 +4,7 @@ import * as Factories from "../automation/Factories.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Signing real DPoP proofs exercises the existing HTTP authenticator.
 import * as NodeCrypto from "node:crypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { AutomationMachineCredentialError } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import {
   ORCHESTRATION_PROTOCOL_VERSION,
@@ -67,6 +68,7 @@ const fixture = Effect.gen(function* () {
   let online = true;
   let revoked = false;
   let foundryActive = true;
+  let machineRevoked = false;
   let accessGeneration = 1;
   let accessEnabled = true;
   let automationEnabled = false;
@@ -79,6 +81,29 @@ const fixture = Effect.gen(function* () {
   const finish = yield* Deferred.make<void>();
   const services = yield* Layer.build(
     GatewayGrants.layer.pipe(
+      Layer.provide(
+        Layer.mock(MachineCredentials.MachineCredentials)({
+          authenticate: () =>
+            Effect.succeed({
+              instanceId: device.instanceId,
+              operatorId: "operator",
+              credentialId: "machine",
+              factoryIds: ["factory"],
+              scope: "automation:start" as const,
+            }),
+          authenticateId: () =>
+            machineRevoked
+              ? Effect.fail(new AutomationMachineCredentialError({ code: "forbidden" }))
+              : Effect.succeed({
+                  instanceId: device.instanceId,
+                  operatorId: "operator",
+                  credentialId: "machine",
+                  factoryIds: ["factory"],
+                  scope: "automation:start" as const,
+                }),
+        }),
+      ),
+
       Layer.provide(
         Layer.succeed(SandboxGatewayAccess.SandboxGatewayAccess, {
           validateDevice: () =>
@@ -244,6 +269,9 @@ const fixture = Effect.gen(function* () {
   });
   return {
     grants,
+    revokeMachine: () => {
+      machineRevoked = true;
+    },
     setStream: (value: typeof stream) => {
       stream = value;
     },
@@ -1117,5 +1145,34 @@ it.effect("limits allocation readiness probes to reads and revalidates their liv
       "Failure",
     );
     expect(opens).toBe(1);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("reauthenticates machine authority on later worker frames after user logout", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    f.setAutomation(true);
+    const request = HttpServerRequest.fromWeb(
+      new Request(`${origin}/api/foundry/v1/automation/command`, {
+        method: "POST",
+        headers: { authorization: "Bearer fmc_fixture" },
+      }),
+    );
+    const identity = yield* f.grants.authorizeAutomation(request, f.target);
+    expect(identity).toMatchObject({ authority: "machine", credentialId: "machine" });
+    let validate: Effect.Effect<void, FoundryGatewayError> = Effect.die("not opened");
+    f.setStream((_, check) => {
+      validate = check;
+      return check;
+    });
+    const socket = Socket.make({ reader: Effect.die("unused"), writer: Effect.die("unused") });
+    yield* f.grants.openAutomation(identity, socket);
+    f.logout();
+    yield* validate;
+    f.revokeMachine();
+    expect((yield* validate.pipe(Effect.result))._tag).toBe("Failure");
+    expect((yield* f.grants.openAutomation(identity, socket).pipe(Effect.result))._tag).toBe(
+      "Failure",
+    );
   }).pipe(Effect.scoped),
 );

@@ -7,6 +7,7 @@ Write or run an eval when a change affects what a model sees or does: agent inst
 | Eval                            | Measures                                                                                             |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | [mcp-tool-use](mcp-tool-use/)   | Whether agents use T3's MCP tools correctly, including device routing and recovery, in fake threads. |
+| [foundry-mcp](foundry-mcp/)     | Whether external callers discover allowed workflows and preserve idempotency/revision checks.        |
 | [thread-titles](thread-titles/) | Whether generated thread titles name the right subject.                                              |
 | [test-signal](test-signal/)     | Whether a cheap model running the test-signal check flags low-signal tests.                          |
 

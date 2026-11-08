@@ -254,3 +254,50 @@ it.live("returns safe domain errors and protects the complete machine-readable c
     expect(yield* Effect.promise(() => forbidden.json())).toEqual({ code: "forbidden" });
   }).pipe(Effect.scoped),
 );
+
+it.live(
+  "serves stateless Foundry MCP discovery and query using the caller identity and denies revoked requests",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const call = (method: string, params?: unknown) =>
+        f.send(
+          `${AUTOMATION_API_V1}/mcp`,
+          json({ jsonrpc: "2.0", id: 1, method, ...(params === undefined ? {} : { params }) }),
+        );
+      expect((yield* f.send(`${AUTOMATION_API_V1}/mcp`, "", "GET")).status).toBe(405);
+      expect((yield* f.send(`${AUTOMATION_API_V1}/mcp`, "{")).status).toBe(400);
+      const initialized = yield* call("initialize");
+      expect(yield* Effect.promise(() => initialized.json())).toMatchObject({
+        result: { serverInfo: { name: "foundry" }, capabilities: { tools: {} } },
+      });
+      const listed = yield* call("tools/list");
+      const discovery = yield* Effect.promise(() => listed.json());
+      expect(discovery).toMatchObject({
+        result: {
+          tools: expect.arrayContaining([
+            {
+              name: "foundry_start",
+              description: expect.any(String),
+              inputSchema: expect.objectContaining({ type: "object" }),
+            },
+          ]),
+        },
+      });
+      const queried = yield* call("tools/call", {
+        name: "foundry_query",
+        arguments: { op: "factories", limit: 10 },
+      });
+      expect(JSON.stringify(yield* Effect.promise(() => queried.json()))).toContain("factories");
+      expect(f.requests.at(-1)?.authorization).toBe("Bearer fixture-only");
+      const unsupported = yield* call("tools/call", {
+        name: "foundry_start",
+        arguments: { op: "takeOver" },
+      });
+      expect(yield* Effect.promise(() => unsupported.json())).toMatchObject({
+        result: { isError: true },
+      });
+      f.deny();
+      expect((yield* call("tools/list")).status).toBe(403);
+    }).pipe(Effect.scoped),
+);

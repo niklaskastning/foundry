@@ -261,7 +261,7 @@ try {
     await query("UPDATE foundry_instance.schema_version SET version=99", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 503);
     await expectFailure(migrate());
-    await query("UPDATE foundry_instance.schema_version SET version=9", "foundry_migrate");
+    await query("UPDATE foundry_instance.schema_version SET version=10", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 200);
     await query("GRANT CREATE ON SCHEMA public TO foundry_runtime");
     NodeAssert.equal((await ready()).status, 503);
@@ -1014,6 +1014,29 @@ try {
     factoryIds: ["machine-factory-a", "machine-factory-b"],
     expiresAt: now + 60_000,
   };
+  for (const scope of ["automation:start", "automation:control"] as const) {
+    const id =
+      scope === "automation:start"
+        ? "58000000-0000-4000-8000-000000000011"
+        : "58000000-0000-4000-8000-000000000012";
+    const issued = await machineCall((service) =>
+      service.issue(machineOwner, { ...machineInput, id, scope }),
+    );
+    NodeAssert.equal(
+      (await machineCall((service) => service.authenticate(issued.token!))).scope,
+      scope,
+    );
+    NodeAssert.equal((await machineCall((service) => service.authenticateId(id))).scope, scope);
+    await NodeAssert.rejects(
+      machineCall((service) =>
+        service.issue(machineOwner, { ...machineInput, id, scope: "automation:read" }),
+      ),
+    );
+    await machineCall((service) => service.revoke(machineOwner, id));
+    await NodeAssert.rejects(machineCall((service) => service.authenticateId(id)));
+    await NodeAssert.rejects(machineCall((service) => service.authenticate(issued.token!)));
+  }
+  await query("DELETE FROM foundry_instance.machine_credentials");
   const issuedMachines = await Promise.all(
     Array.from({ length: 4 }, () =>
       machineCall((service) => service.issue(machineOwner, machineInput)),
@@ -1022,6 +1045,25 @@ try {
   NodeAssert.equal(issuedMachines.filter((result) => result.token !== null).length, 1);
   const machineToken = issuedMachines.find((result) => result.token !== null)!.token!;
   NodeAssert.match(machineToken, /^fmc_[A-Za-z0-9_-]{43}$/);
+  await query(
+    "ALTER TABLE foundry_instance.machine_credentials DROP COLUMN scope",
+    "foundry_migrate",
+  );
+  await query("UPDATE foundry_instance.schema_version SET version=9", "foundry_migrate");
+  await expectFailure(readIdentity);
+  await run(migrate());
+  await run(migrate());
+  NodeAssert.equal(
+    (await query("SELECT version FROM foundry_instance.schema_version"))[0]?.version,
+    10,
+  );
+  NodeAssert.equal(
+    (await machineCall((service) => service.authenticate(machineToken))).scope,
+    "automation:read",
+  );
+  await report(
+    "PASS N06 schema9 without scope rejects readiness; schema10 migration and repeat preserve an existing hashed read credential",
+  );
   const persistedMachines = await query(
     "SELECT row_to_json(c)::text AS serialized,token_hash FROM foundry_instance.machine_credentials c",
   );
@@ -1032,6 +1074,7 @@ try {
     ...machineOwner,
     factoryIds: machineInput.factoryIds,
     credentialId: machineInput.id,
+    scope: "automation:read",
   });
   NodeAssert.deepEqual(await machineCall((service) => service.list(machineOwner)), [
     { ...machineInput, scope: "automation:read", revoked: false },

@@ -26,8 +26,9 @@ Die ausführlichen bisherigen Prüf- und Deploymentnachweise sind nach [Basic-Le
 **P58a – erster Schnitt:** Die versionierte HTTP-API und ihr maschinenlesbarer
 Vertrag verwenden die vorhandenen Benutzersitzungen und zentralen Services.
 Funktionale HTTP-/PostgreSQL-Nachweise bestätigen UI/API-Gleichheit,
-Command-Wiederholung und Rechteabweisung. Maschinen-Ausführung, P58b/MCP und
-vollständiges G12 bleiben offen; der Schnitt erteilt keine neue Provider-Freigabe.
+Command-Wiederholung und Rechteabweisung. N06 ergänzt scoped Maschinenstarts/-steuerung
+und den Foundry-MCP-Basispfad. Öffentlicher CI-Zugang, Modell-Eval, integrierte
+Runtimeabnahme und vollständiges G12 bleiben offen; keine neue Provider-Freigabe.
 
 ## Nächste Produktlieferungen
 
@@ -42,7 +43,7 @@ Priorität haben große nutzbare Fähigkeiten. P17/G3, der sequenzielle Factory-
 
 Koordinierte Parallelität mit Poolmapping und Kapazitätssteuerung ist aus PR #66/#70/#71 vorhanden; v4 aus PR #72 ergänzt persistente Swarm-/Loop-Zustände. Diese Funktionen werden für die aktuelle UI wiederverwendet, nicht als noch ausstehender Grundlagenbau geführt.
 
-**Begleitende Produktpfade:** P58a bietet inzwischen Factory-begrenzte Maschinen-Leseabfragen mit Ausgabe, Ablauf und Widerruf eigener Credentials. Maschinen-Start/-Steuerung und P58b erschließen künftig weitere Services für CI und Agenten; sie müssen die Rollenlieferung nicht blockieren. P03N/P05/P12 schließen native Anmeldung und vollständigen Instanzeinstieg; der bestehende Access-Modus erlaubt vorherige Featurearbeit. P14Z/P52 bauen zentrale Ressourcen passend zu den jeweils benötigten Workern und Rollen aus. P50 bleibt ein optionaler Koordinator auf der vorhandenen Steuerung. P25/P41–P43/P59/P60 sowie P44/P45 folgen konkretem Integrations-, Memory-, Verifikations- oder Identitätsbedarf. Mobile bleibt zurückgestellt.
+**Begleitende Produktpfade:** P58a bietet inzwischen Factory-begrenzte Maschinen-Leseabfragen mit Ausgabe, Ablauf und Widerruf eigener Credentials. N06 erschließt vorhandene Start-/Control-Services und Foundry-MCP für CI und Agenten; sie müssen die Rollenlieferung nicht blockieren. P03N/P05/P12 schließen native Anmeldung und vollständigen Instanzeinstieg; der bestehende Access-Modus erlaubt vorherige Featurearbeit. P14Z/P52 bauen zentrale Ressourcen passend zu den jeweils benötigten Workern und Rollen aus. P50 bleibt ein optionaler Koordinator auf der vorhandenen Steuerung. P25/P41–P43/P59/P60 sowie P44/P45 folgen konkretem Integrations-, Memory-, Verifikations- oder Identitätsbedarf. Mobile bleibt zurückgestellt.
 
 P02, P11, P26, P27 und P46 sowie G5 werden im [Leitplanken-Plan](basic-leitplanken.md) geführt. Sie bilden keine eigene Etappe der Feature-Reihenfolge; notwendige technische Gates gelten weiterhin vor Aktivierung. P18 bezeichnet P18a/P18b; P38 umfasst P38a/P38b/P38c. **P49a/P49b** präzisieren den gelieferten Basisumfang, den funktional gelieferten Factories-first-Arbeitsplatz und dessen aktuelle Gestaltungsüberarbeitung innerhalb der bisherigen P49-ID.
 
@@ -234,11 +235,14 @@ Einen Auftrag in T3 übernehmen, im zugehörigen Thread/Workspace bearbeiten und
 Der erste Schnitt verwendet die vorhandenen Foundry-/T3-Benutzersitzungen und
 dieselben Services für Suche, Start, Steuerung, Übergabe, Inbox und Konfiguration.
 Ein gesonderter Schnitt ergänzt eigenständige Maschinen-Credentials mit Ausgabe,
-Ablauf und Widerruf für Factory-begrenzte Leseabfragen. Maschinen-Start und -Steuerung
-bleiben offen; interaktive Cookies sind kein CI-Zugang. Der öffentliche Zugang durch
+Ablauf und Widerruf für Factory-begrenzte Leseabfragen. N06 ergänzt getrennte Start-/
+Control-Scopes, bestehende idempotente Starts einschließlich konfigurierter Swarms
+und erneute Credentialprüfung bei Workerkommunikation. Interaktive Cookies sind
+kein CI-Zugang. Der öffentliche Zugang durch
 vorgeschaltetes Access benötigt weiterhin eine eigene Betriebsabnahme.
-**P58b** ergänzt Factory-MCP für Suche, Start, Steuerung, Übergabe und
-Definitionsvalidierung. Vorhandene T3-MCP-Tokens besitzen keine Foundry-Identität
+**P58b** bietet mit N06 einen dünnen Foundry-MCP-Basispfad für Factory-/Workflowkontext,
+Start, Status/Ergebnisse und bestehende Steuerung. Handoff-Schreibzugriff, Planoperationen
+und Definitionsvalidierung sind dort nicht freigegeben. Vorhandene T3-MCP-Tokens besitzen keine Foundry-Identität
 und dürfen nicht als solche verwendet werden. MCP-Instruktionsevals gehören zur
 Abnahme von P58b, unabhängig von der späteren Eval-Produktoberfläche.
 

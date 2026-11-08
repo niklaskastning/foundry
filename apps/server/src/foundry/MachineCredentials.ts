@@ -48,10 +48,20 @@ export class MachineCredentials extends Context.Service<
       owner: Owner,
       id: string,
     ) => Effect.Effect<void, AutomationMachineCredentialError>;
-    readonly authenticate: (
-      token: string,
-    ) => Effect.Effect<
-      Owner & { readonly factoryIds: ReadonlyArray<string>; readonly credentialId: string },
+    readonly authenticateId: (id: string) => Effect.Effect<
+      Owner & {
+        readonly factoryIds: ReadonlyArray<string>;
+        readonly credentialId: string;
+        readonly scope: AutomationMachineCredential["scope"];
+      },
+      AutomationMachineCredentialError
+    >;
+    readonly authenticate: (token: string) => Effect.Effect<
+      Owner & {
+        readonly factoryIds: ReadonlyArray<string>;
+        readonly credentialId: string;
+        readonly scope: AutomationMachineCredential["scope"];
+      },
       AutomationMachineCredentialError
     >;
   }
@@ -80,7 +90,7 @@ const make = Effect.gen(function* () {
     if (!rows[0]) return yield* forbidden();
   });
   const columns = sql.literal(`c.id,c.label,c.factory_ids AS "factoryIds",
-    'automation:read' AS scope,c.expires_at::double precision AS "expiresAt",
+    c.scope AS scope,c.expires_at::double precision AS "expiresAt",
     (c.revoked OR c.instance_generation<>i.access_generation OR c.operator_generation<>o.access_generation) AS revoked`);
   const issue = Effect.fn("MachineCredentials.issue")(function* (
     owner: Owner,
@@ -100,7 +110,7 @@ const make = Effect.gen(function* () {
         const previous = yield* sql`SELECT ${columns},
             c.instance_id=${owner.instanceId} AND c.operator_id=${owner.operatorId}
               AND c.label=${input.label} AND c.factory_ids=${sql.json(input.factoryIds)}::jsonb
-              AND c.expires_at=${input.expiresAt} AS same
+              AND c.expires_at=${input.expiresAt} AND c.scope=${input.scope ?? "automation:read"} AS same
             FROM foundry_instance.machine_credentials c
             JOIN foundry_instance.instance i ON i.instance_id=c.instance_id
             JOIN foundry_instance.operator_binding o ON o.operator_id=c.operator_id
@@ -120,16 +130,16 @@ const make = Effect.gen(function* () {
         const token = `fmc_${base64UrlEncode(yield* crypto.randomBytes(32).pipe(Effect.orDie))}`;
         const digest = yield* hash(token);
         yield* sql`INSERT INTO foundry_instance.machine_credentials
-            (id,token_hash,instance_id,operator_id,instance_generation,operator_generation,label,factory_ids,expires_at)
+            (id,token_hash,instance_id,operator_id,instance_generation,operator_generation,label,factory_ids,expires_at,scope)
             VALUES(${input.id},${digest},${owner.instanceId},${owner.operatorId},
               ${generations[0].instanceGeneration}::bigint,${generations[0].operatorGeneration}::bigint,
-              ${input.label},${sql.json(input.factoryIds)},${input.expiresAt})`;
+              ${input.label},${sql.json(input.factoryIds)},${input.expiresAt},${input.scope ?? "automation:read"})`;
         return {
           credential: {
             id: input.id,
             label: input.label,
             factoryIds: input.factoryIds,
-            scope: "automation:read" as const,
+            scope: input.scope ?? ("automation:read" as const),
             expiresAt: input.expiresAt,
             revoked: false,
           },
@@ -159,6 +169,21 @@ const make = Effect.gen(function* () {
     },
     Effect.catchTags({ SqlError: unavailable, InstanceDatabaseError: unavailable }),
   );
+  const authenticateId = Effect.fn("MachineCredentials.authenticateId")(function* (id: string) {
+    const instanceId = yield* identity.readIdentity;
+    const now = yield* Clock.currentTimeMillis;
+    const rows =
+      yield* sql`SELECT ${columns},c.operator_id AS "operatorId" FROM foundry_instance.machine_credentials c JOIN foundry_instance.instance i ON i.instance_id=c.instance_id AND i.access_generation=c.instance_generation JOIN foundry_instance.operator_binding o ON o.operator_id=c.operator_id AND o.access_generation=c.operator_generation WHERE c.id=${id} AND c.instance_id=${instanceId} AND NOT c.revoked AND c.expires_at>${now}`;
+    if (!rows[0]) return yield* forbidden();
+    const credential = (yield* decodeCredentials(rows))[0]!;
+    return {
+      instanceId,
+      operatorId: String(rows[0].operatorId),
+      factoryIds: credential.factoryIds,
+      credentialId: credential.id,
+      scope: credential.scope,
+    };
+  }, Effect.catchTags(failures));
   const authenticate = Effect.fn("MachineCredentials.authenticate")(function* (token: string) {
     if (!isToken(token)) return yield* forbidden();
     const instanceId = yield* identity.readIdentity;
@@ -176,9 +201,10 @@ const make = Effect.gen(function* () {
       operatorId: String(rows[0].operatorId),
       factoryIds: credential.factoryIds,
       credentialId: credential.id,
+      scope: credential.scope,
     };
   }, Effect.catchTags(failures));
-  return MachineCredentials.of({ issue, list, revoke, authenticate });
+  return MachineCredentials.of({ issue, list, revoke, authenticate, authenticateId });
 });
 
 export const layer = Layer.effect(MachineCredentials, make);
