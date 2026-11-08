@@ -55,7 +55,7 @@ export function EvaluationsPanel({
     setBusy(false);
     setMessage(
       AsyncResult.isSuccess(response)
-        ? "Evaluation queued. Refresh to see the recorded result. Re-evaluation creates a new history entry."
+        ? `Evaluation ${response.value.kind === "evaluationQueued" ? response.value.id : ""} queued. Refresh to see the recorded result. Re-evaluation creates a new history entry.`
         : "Evaluation could not be queued. Check the run is completed and the scorer revision exists.",
     );
     history.refresh();
@@ -190,7 +190,24 @@ function EvaluationDetails({
             Run definition: {result.input.definitionRevision} · Scorer revision:{" "}
             {result.input.scorerRevision}
           </p>
-          <pre className="overflow-auto whitespace-pre-wrap">{result.input.scorerSource}</pre>
+          <p>Run Git revision: {result.input.runRevision}</p>
+          <details>
+            <summary>Run definition source</summary>
+            <pre className="overflow-auto whitespace-pre-wrap">
+              {JSON.stringify(result.input.definitionSource, null, 2)}
+            </pre>
+          </details>
+          <details>
+            <summary>Scorer definition and source</summary>
+            <pre className="overflow-auto whitespace-pre-wrap">{result.input.scorerSource}</pre>
+            <pre className="overflow-auto whitespace-pre-wrap">
+              {JSON.stringify(result.input.scorer, null, 2)}
+            </pre>
+          </details>
+          <p>
+            Judge: {result.input.scorer.judge.model} · Reasoning:{" "}
+            {result.input.scorer.judge.reasoningEffort}
+          </p>
           <pre className="overflow-auto whitespace-pre-wrap">
             {JSON.stringify(result.input.modelConfiguration, null, 2)}
           </pre>
