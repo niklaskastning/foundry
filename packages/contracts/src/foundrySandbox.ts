@@ -141,7 +141,10 @@ export class FoundrySandboxError extends Schema.TaggedError<FoundrySandboxError>
   }
 }
 export const FoundrySandboxCommand = Schema.Union([
-  Schema.Struct({ action: Schema.Literal("list") }),
+  Schema.Struct({
+    action: Schema.Literal("list"),
+    workflow: Schema.optionalKey(Schema.Struct({ factoryId: Key, runId: Key })),
+  }),
   Schema.Struct({ action: Schema.Literal("get"), allocationId: FoundrySandboxId }),
   Schema.Struct({ action: Schema.Literal("request"), request: FoundrySandboxRequest }),
   Schema.Struct({
@@ -255,7 +258,10 @@ export const FoundrySandboxDetail = Schema.Struct({
   setupLog: Schema.String,
 });
 export const FoundrySandboxQuery = Schema.Union([
-  Schema.Struct({ action: Schema.Literal("list") }),
+  Schema.Struct({
+    action: Schema.Literal("list"),
+    workflow: Schema.optionalKey(Schema.Struct({ factoryId: Key, runId: Key })),
+  }),
   Schema.Struct({ action: Schema.Literal("get"), allocationId: FoundrySandboxId }),
 ]);
 export const FoundrySandboxMutation = Schema.Union([

@@ -47,7 +47,7 @@ export const layer = Layer.unwrap(
               setupLog: detail.setup_log,
             }
           : input.action === "list"
-            ? yield* allocations.list(operator)
+            ? yield* allocations.list(operator, input.workflow)
             : input.action === "request"
               ? yield* allocations.request(operator, input.request)
               : input.action !== "get"
