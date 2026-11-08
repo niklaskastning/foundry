@@ -13,6 +13,8 @@ import * as ServerConfig from "../config.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 
 const decodeInput = Schema.decodeEffect(EvaluationInput);
+const encodeInput = Schema.encodeEffect(Schema.fromJsonString(EvaluationInput));
+const encodeJudgment = Schema.encodeEffect(Schema.fromJsonString(EvaluationJudgment));
 
 export class WorkerEvaluation extends Context.Service<
   WorkerEvaluation,
@@ -36,7 +38,7 @@ export const layer = Layer.effect(
         function* (raw) {
           if (!enabled || !binding) return yield* new FoundryWorkerError({ code: "not_enabled" });
           const input = yield* decodeInput(raw);
-          if (new TextEncoder().encode(JSON.stringify(input)).length > 200_000)
+          if (new TextEncoder().encode(yield* encodeInput(input)).length > 200_000)
             return yield* new FoundryWorkerError({ code: "probe_failed" });
           const instance = yield* registry.getInstance(ProviderInstanceId.make(binding));
           if (!instance?.enabled || instance.driverKind !== "codex" || !instance.generateEvaluation)
@@ -45,7 +47,7 @@ export const layer = Layer.effect(
             cwd: config.stateDir,
             evaluation: input,
           });
-          if (new TextEncoder().encode(JSON.stringify(judgment)).length > 200_000)
+          if (new TextEncoder().encode(yield* encodeJudgment(judgment)).length > 200_000)
             return yield* new FoundryWorkerError({ code: "probe_failed" });
           return judgment;
         },

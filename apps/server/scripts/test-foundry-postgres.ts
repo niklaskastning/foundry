@@ -1412,7 +1412,7 @@ try {
         "fork_automation",
       )
     )[0]?.version,
-    11,
+    12,
   );
 
   await NodeFSP.writeFile(
@@ -1731,7 +1731,7 @@ try {
           0,
         );
         await report(
-          "PASS enabled production Automation runtime: separate schema-11 database and restricted roles; current Foundry/T3 sessions read empty bindings/factories; read scope cannot mutate, management scope reaches domain validation; invalid CSRF rejected; no GitHub App configuration, worker or provider execution.",
+          "PASS enabled production Automation runtime: separate schema-12 database and restricted roles; current Foundry/T3 sessions read empty bindings/factories; read scope cannot mutate, management scope reaches domain validation; invalid CSRF rejected; no GitHub App configuration, worker or provider execution.",
         );
       }
       const login = await runtimeHandler.handler(

@@ -1,4 +1,4 @@
-import type { EvaluationInput, EvaluationJudgment } from "@t3tools/contracts";
+import { EvaluationInput, type EvaluationJudgment } from "@t3tools/contracts";
 import {
   FoundryWorkerHandoffError,
   type FoundryWorkerHandoffOpen,
@@ -59,6 +59,7 @@ export class WorkerTransportError extends Schema.TaggedError<WorkerTransportErro
 export const WorkerIdentity = GatewayGrants.AutomationGatewayIdentity;
 export type WorkerIdentity = typeof WorkerIdentity.Type;
 type Target = Pick<WorkerIdentity, "deviceId" | "environmentId">;
+const encodeEvaluationInput = Schema.encodeEffect(Schema.fromJsonString(EvaluationInput));
 
 export class WorkerTransport extends Context.Service<
   WorkerTransport,
@@ -231,11 +232,17 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.scoped, Effect.timeout(evaluation ? "3 minutes" : "20 seconds"));
   }, Effect.mapError(transportError));
   return WorkerTransport.of({
-    evaluate: Effect.fn("WorkerTransport.evaluate")((identity, input) =>
-      new TextEncoder().encode(JSON.stringify(input)).length > 200_000
-        ? Effect.fail(new WorkerTransportError({ reason: "unavailable" }))
-        : call(identity, (client) => client["foundry.workerEvaluate"](input), undefined, true),
-    ),
+    evaluate: Effect.fn("WorkerTransport.evaluate")(function* (identity, input) {
+      const encoded = yield* encodeEvaluationInput(input).pipe(Effect.mapError(transportError));
+      if (new TextEncoder().encode(encoded).length > 200_000)
+        return yield* new WorkerTransportError({ reason: "unavailable" });
+      return yield* call(
+        identity,
+        (client) => client["foundry.workerEvaluate"](input),
+        undefined,
+        true,
+      );
+    }),
     sandboxProjects: Effect.fn("WorkerTransport.sandboxProjects")(
       (target) => gateway.sandboxProjects(target),
       Effect.mapError(transportError),
