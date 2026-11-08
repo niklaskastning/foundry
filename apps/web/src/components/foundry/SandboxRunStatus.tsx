@@ -44,9 +44,18 @@ export function SandboxRunStatus({
           { environmentId, input: { action: "list", workflow: { factoryId, runId } } },
           { reportFailure: false },
         );
-        if (!AsyncResult.isSuccess(listed) || !("allocations" in listed.value))
+        if (
+          !AsyncResult.isSuccess(listed) ||
+          !("allocations" in listed.value) ||
+          listed.value.sandboxSupported === false
+        )
           throw new Error("Sandbox status unavailable. Refresh to retry.");
-        const allocation = listed.value.allocations[0];
+        const allocation = listed.value.allocations.find((entry) => {
+          const owner = entry.request.owner;
+          return (
+            owner.kind === "workflow" && owner.factoryId === factoryId && owner.runId === runId
+          );
+        });
         if (!allocation) {
           if (!disposed) setResponse({ key: requestKey });
           return;
@@ -58,6 +67,14 @@ export function SandboxRunStatus({
           { reportFailure: false },
         );
         if (!AsyncResult.isSuccess(result) || !("allocation" in result.value))
+          throw new Error("Sandbox status unavailable. Refresh to retry.");
+        const owner = result.value.allocation.request.owner;
+        if (
+          result.value.allocation.allocationId !== allocation.allocationId ||
+          owner.kind !== "workflow" ||
+          owner.factoryId !== factoryId ||
+          owner.runId !== runId
+        )
           throw new Error("Sandbox status unavailable. Refresh to retry.");
         if (!disposed) setResponse({ key: requestKey, detail: result.value });
       } catch {

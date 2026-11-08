@@ -585,14 +585,6 @@ export function RunDetail({
           />
         </section>
       ) : null}
-      {detail?.executionBinding?.sandbox ? (
-        <SandboxRunStatus
-          environmentId={environmentId}
-          factoryId={factoryId}
-          runId={runId}
-          target={detail.executionBinding.sandbox}
-        />
-      ) : null}
       {detail ? (
         <>
           <details className="rounded-lg border p-3">
