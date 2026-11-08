@@ -21,6 +21,8 @@ export const AutomationControlCommand = Schema.Union([
     ...Base,
     action: Schema.Literal("answer"),
     requestId: Key,
+    attemptCommandId: Schema.optional(Key),
+    questionRevision: Schema.optional(Key),
     resultRevision: Revision,
     answers: ProviderUserInputAnswers,
   }),

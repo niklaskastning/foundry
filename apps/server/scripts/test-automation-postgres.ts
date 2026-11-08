@@ -2296,6 +2296,20 @@ try {
   await NodeAssert.rejects(
     executeControl({ ...answerCommand, commandId: "invalid-answer", answers: { choice: "other" } }),
   );
+  await NodeAssert.rejects(
+    executeControl({
+      ...answerCommand,
+      commandId: "stale-question-revision",
+      questionRevision: "0",
+    }),
+  );
+  await NodeAssert.rejects(
+    executeControl({
+      ...answerCommand,
+      commandId: "wrong-question-attempt",
+      attemptCommandId: "other-attempt",
+    }),
+  );
   await executeControl(answerCommand);
   NodeAssert.equal((await dispatchCall((s) => s.answers("p20-retry"))).length, 1);
   await stop();
@@ -2376,6 +2390,24 @@ try {
   const newestAttempt = (await dispatchCall((store) => store.read("p19", "p20-retry"))).attempts.at(
     -1,
   )!;
+  await query(
+    "UPDATE foundry_automation.run_questions SET payload=payload-'attemptCommandId' WHERE run_id='p20-retry' AND request_id='old-question'",
+  );
+  await query(
+    `UPDATE foundry_automation.step_attempts SET receipt=(SELECT receipt FROM foundry_automation.step_attempts WHERE command_id='${answerLaunch}') WHERE command_id='${newestAttempt.commandId}'`,
+  );
+  await NodeAssert.rejects(
+    executeControl({
+      ...answerCommand,
+      commandId: "legacy-answer-reused-thread",
+      requestId: "old-question",
+      expectedRevision: nextQuestion.revision,
+      resultRevision: nextQuestion.resultRevision,
+    }),
+  );
+  await query(
+    `UPDATE foundry_automation.step_attempts SET receipt=NULL WHERE command_id='${newestAttempt.commandId}'`,
+  );
   await dispatchCall((store) =>
     store.record(retryClaim, {
       commandId: newestAttempt.commandId,

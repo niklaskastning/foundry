@@ -223,6 +223,17 @@ try {
   const question = (await call((service) => service.query(request, { kind: "question" })))
     .items[0]!;
   NodeAssert.equal(question.questions[0]?.id, "choice");
+  NodeAssert.equal(question.status, "pending");
+  NodeAssert.equal(question.attemptCommandId, "question-attempt");
+  NodeAssert.equal(question.questionRevision, "1");
+  await sql(
+    `INSERT INTO foundry_automation.step_attempts(command_id,run_id,ordinal,request,state,receipt) VALUES('parallel-attempt','run',1,'{}','running','{"receipt":{"threadId":"parallel-thread"}}')`,
+  );
+  NodeAssert.equal(
+    (await call((service) => service.query(request, { kind: "question" }))).items[0]?.requestId,
+    "question",
+  );
+  await sql("DELETE FROM foundry_automation.step_attempts WHERE command_id='parallel-attempt'");
   await sql(
     `UPDATE foundry_automation.step_attempts SET result='{"execution":{"lifecycle":{"writerEnded":true}}}' WHERE command_id='question-attempt'`,
   );
@@ -259,6 +270,26 @@ try {
   await sql(
     `INSERT INTO foundry_automation.run_questions(run_id,request_id,thread_id,payload,status,source_sequence) SELECT run_id,'question-retry','retry-thread',payload,'pending',2 FROM foundry_automation.run_questions WHERE request_id='question'`,
   );
+  await sql(
+    `UPDATE foundry_automation.step_attempts SET receipt='{"receipt":{"threadId":"thread"}}' WHERE command_id='question-retry-attempt'`,
+  );
+  NodeAssert.equal(
+    (await call((service) => service.query(request, { kind: "question" }))).items.length,
+    0,
+  );
+  await sql(
+    `UPDATE foundry_automation.run_questions SET thread_id='thread',payload=payload || '{"attemptCommandId":"question-retry-attempt"}'::jsonb WHERE request_id='question-retry'`,
+  );
+  NodeAssert.equal(
+    (await call((service) => service.query(request, { kind: "question" }))).items[0]?.requestId,
+    "question-retry",
+  );
+  await sql(
+    `UPDATE foundry_automation.step_attempts SET receipt='{"receipt":{"threadId":"retry-thread"}}' WHERE command_id='question-retry-attempt'`,
+  );
+  await sql(
+    "UPDATE foundry_automation.run_questions SET thread_id='retry-thread' WHERE request_id='question-retry'",
+  );
   const currentQuestions = await call((service) => service.query(request, { kind: "question" }));
   NodeAssert.equal(currentQuestions.items.length, 1);
   NodeAssert.equal(currentQuestions.items[0]?.requestId, "question-retry");
@@ -272,7 +303,43 @@ try {
   );
   const answer = (await call((service) => service.query(request, { kind: "answer" }))).items[0]!;
   NodeAssert.deepEqual(answer.answer, { choice: "Fixture A" });
+  const answeredQuestion = (
+    await call((service) => service.query(request, { kind: "question", status: "done" }))
+  ).items[0]!;
+  NodeAssert.equal(answeredQuestion.status, "answered");
+  NodeAssert.equal(answeredQuestion.isDone, true);
+  NodeAssert.deepEqual(answeredQuestion.answer, { choice: "Fixture A" });
   NodeAssert.equal(JSON.stringify(answer).includes("must-not-leak"), false);
+  await sql(
+    "UPDATE foundry_automation.run_controls SET mode='cancel_requested' WHERE run_id='run'",
+  );
+  const cancelled = (
+    await call((service) => service.query(request, { kind: "question", status: "all" }))
+  ).items;
+  NodeAssert.equal(cancelled.find((item) => item.requestId === "question")?.status, "cancelled");
+  NodeAssert.equal(
+    cancelled.find((item) => item.requestId === "question-retry")?.status,
+    "answered",
+  );
+  await sql("UPDATE foundry_automation.run_controls SET mode='active' WHERE run_id='run'");
+  await sql(
+    `UPDATE foundry_automation.run_questions SET payload=jsonb_set(payload,'{request,status}','"cancelled"') WHERE request_id='question'`,
+  );
+  NodeAssert.equal(
+    (
+      await call((service) => service.query(request, { kind: "question", status: "all" }))
+    ).items.find((item) => item.requestId === "question")?.status,
+    "cancelled",
+  );
+  await sql(
+    `UPDATE foundry_automation.run_questions SET payload=jsonb_set(payload,'{request,status}','"resolved"') WHERE request_id='question'`,
+  );
+  NodeAssert.equal(
+    (
+      await call((service) => service.query(request, { kind: "question", status: "done" }))
+    ).items.find((item) => item.requestId === "question")?.status,
+    "resolved",
+  );
   const first = await call((service) => service.query(request, { status: "all", limit: 1 }));
   NodeAssert.ok(first.nextCursor);
   const second = await call((service) =>
