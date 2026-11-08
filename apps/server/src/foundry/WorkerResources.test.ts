@@ -18,7 +18,7 @@ import {
   prepareSandboxSkills,
 } from "./WorkerResources.ts";
 
-it.effect("verifies pinned sandbox skill bytes on restart and refuses changed resources", () =>
+it.live("verifies pinned sandbox skill bytes on restart and refuses changed resources", () =>
   Effect.gen(function* () {
     const cwd = yield* Effect.promise(() =>
       NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "sandbox-skills-")),
@@ -29,6 +29,99 @@ it.effect("verifies pinned sandbox skill bytes on restart and refuses changed re
     const skills = fixture().resources.skills;
     const directory = yield* prepareSandboxSkills(cwd, skills);
     expect(yield* prepareSandboxSkills(cwd, skills)).toBe(directory);
+    const execute = NodeUtil.promisify(NodeChildProcess.execFile);
+    yield* Effect.promise(() => execute("git", ["init", "-q"], { cwd }));
+    yield* Effect.promise(() =>
+      execute("git", ["-c", "core.fileMode=true", "add", ".agents"], { cwd }),
+    );
+    yield* Effect.promise(() =>
+      execute(
+        "git",
+        [
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.invalid",
+          "commit",
+          "-qm",
+          "Pinned skills",
+        ],
+        { cwd },
+      ),
+    );
+    const bundle = NodePath.join(cwd, "archive.bundle");
+    yield* Effect.promise(() => execute("git", ["bundle", "create", bundle, "HEAD"], { cwd }));
+    const restored = NodePath.join(cwd, "restored");
+    yield* Effect.promise(() =>
+      execute(
+        process.execPath,
+        [
+          "-e",
+          'process.umask(0o022); const result = require("node:child_process").spawnSync("git", process.argv.slice(1), { stdio: "inherit" }); process.exit(result.status ?? 1);',
+          "clone",
+          "-q",
+          bundle,
+          restored,
+        ],
+        { cwd },
+      ),
+    );
+    const resumed = NodePath.join(restored, ".agents", "skills", "foundry-profile");
+    for (const file of skills[0]!.files) {
+      expect(
+        (yield* Effect.promise(() => NodeFSP.stat(NodePath.join(resumed, file.path)))).mode & 0o777,
+      ).toBe(file.mode === "100755" ? 0o755 : 0o644);
+    }
+    const document = NodePath.join(resumed, skills[0]!.files[0]!.path);
+    const script = NodePath.join(resumed, skills[0]!.files[1]!.path);
+    const scriptBytes = skills[0]!.files[1]!.content;
+    const outside = NodePath.join(cwd, "outside");
+    const extra = NodePath.join(resumed, "extra");
+    for (const corruption of [
+      {
+        damage: () => NodeFSP.writeFile(script, "tampered"),
+        repair: () => NodeFSP.writeFile(script, scriptBytes),
+      },
+      {
+        damage: () => NodeFSP.chmod(script, 0o644),
+        repair: () => NodeFSP.chmod(script, 0o755),
+      },
+      {
+        damage: () => NodeFSP.writeFile(extra, "unrequested"),
+        repair: () => NodeFSP.unlink(extra),
+      },
+      {
+        damage: () => NodeFSP.rename(script, outside),
+        repair: () => NodeFSP.rename(outside, script),
+      },
+      {
+        damage: () => NodeFSP.link(script, outside),
+        repair: () => NodeFSP.unlink(outside),
+      },
+      {
+        damage: async () => {
+          await NodeFSP.rename(script, outside);
+          await NodeFSP.symlink(outside, script);
+        },
+        repair: async () => {
+          await NodeFSP.unlink(script);
+          await NodeFSP.rename(outside, script);
+        },
+      },
+    ]) {
+      yield* Effect.promise(corruption.damage);
+      expect((yield* prepareSandboxSkills(restored, skills).pipe(Effect.result))._tag).toBe(
+        "Failure",
+      );
+      expect((yield* Effect.promise(() => NodeFSP.stat(document))).mode & 0o777).toBe(0o644);
+      yield* Effect.promise(corruption.repair);
+    }
+    expect(yield* prepareSandboxSkills(restored, skills)).toBe(resumed);
+    for (const file of skills[0]!.files) {
+      expect(
+        (yield* Effect.promise(() => NodeFSP.stat(NodePath.join(resumed, file.path)))).mode & 0o777,
+      ).toBe(file.mode === "100755" ? 0o500 : 0o400);
+    }
     const first = skills[0]!.files[0]!;
     yield* Effect.promise(() => NodeFSP.chmod(NodePath.join(directory, first.path), 0o600));
     yield* Effect.promise(() =>

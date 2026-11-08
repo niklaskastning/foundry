@@ -90,7 +90,12 @@ async function readFile(path: string) {
     await handle.close();
   }
 }
-async function verify(directory: string, request: SkillResources, metadata = false) {
+async function verify(
+  directory: string,
+  request: SkillResources,
+  metadata = false,
+  restoreGitModes = false,
+) {
   const entries = fileEntries(request);
   if (!(await NodeFSP.lstat(directory)).isDirectory()) throw invalid();
   const permitted = new Set(metadata ? ["request.json", "workspace.json"] : []);
@@ -112,20 +117,59 @@ async function verify(directory: string, request: SkillResources, metadata = fal
     }
   }
   await checkTree(directory, "");
-  for (const { file, bytes } of entries) {
-    const parts = file.path.split("/");
-    let parent = directory;
-    for (const part of parts.slice(0, -1)) {
-      parent = NodePath.join(parent, part);
-      if (!(await NodeFSP.lstat(parent)).isDirectory()) throw invalid();
+  const opened: { handle: NodeFSP.FileHandle; path: string; mode: number; restore: boolean }[] = [];
+  try {
+    for (const { file, bytes } of entries) {
+      const parts = file.path.split("/");
+      let parent = directory;
+      for (const part of parts.slice(0, -1)) {
+        parent = NodePath.join(parent, part);
+        if (!(await NodeFSP.lstat(parent)).isDirectory()) throw invalid();
+      }
+      const path = NodePath.join(directory, file.path);
+      if (restoreGitModes) {
+        const handle = await NodeFSP.open(
+          path,
+          NodeFS.constants.O_RDONLY | NodeFS.constants.O_NOFOLLOW,
+        );
+        const mode = file.mode === "100755" ? 0o500 : 0o400;
+        const entry = { handle, path, mode, restore: false };
+        opened.push(entry);
+        const stat = await handle.stat();
+        if (
+          !stat.isFile() ||
+          stat.nlink !== 1 ||
+          stat.size !== bytes.length ||
+          ((stat.mode & 0o7777) !== mode &&
+            (stat.mode & 0o7777) !== (file.mode === "100755" ? 0o755 : 0o644)) ||
+          !(await handle.readFile()).equals(bytes)
+        )
+          throw invalid();
+        entry.restore = (stat.mode & 0o7777) !== mode;
+        continue;
+      }
+      const actual = await readFile(path);
+      if (
+        !actual.equals(bytes) ||
+        (await NodeFSP.lstat(path)).mode % 512 !== (file.mode === "100755" ? 0o500 : 0o400)
+      )
+        throw invalid();
     }
-    const path = NodePath.join(directory, file.path);
-    const actual = await readFile(path);
-    if (
-      !actual.equals(bytes) ||
-      (await NodeFSP.lstat(path)).mode % 512 !== (file.mode === "100755" ? 0o500 : 0o400)
-    )
-      throw invalid();
+    // Keep verified handles until the entire restored tree passes; never chmod a substituted path.
+    for (const { handle, path } of opened) {
+      const current = await NodeFSP.lstat(path);
+      const original = await handle.stat();
+      if (
+        !current.isFile() ||
+        current.dev !== original.dev ||
+        current.ino !== original.ino ||
+        original.nlink !== 1
+      )
+        throw invalid();
+    }
+    for (const { handle, mode, restore } of opened) if (restore) await handle.chmod(mode);
+  } finally {
+    await Promise.all(opened.map(({ handle }) => handle.close()));
   }
 }
 export const prepareSandboxSkills = Effect.fn("WorkerResources.prepareSandboxSkills")(
@@ -144,6 +188,7 @@ export const prepareSandboxSkills = Effect.fn("WorkerResources.prepareSandboxSki
         const directory = NodePath.join(parent, "foundry-profile");
         try {
           await NodeFSP.lstat(directory);
+          await verify(directory, request, false, true);
           await verify(directory, request);
           return directory;
         } catch (error) {
