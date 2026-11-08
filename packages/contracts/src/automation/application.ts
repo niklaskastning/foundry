@@ -51,7 +51,12 @@ const Page = {
 const FactoryFilter = { factoryId: Schema.optional(Key) };
 export const AutomationApplicationQuery = Schema.Union([
   Schema.Struct({ op: Schema.Literal("evaluation"), factoryId: Key, id: Key }),
-  Schema.Struct({ op: Schema.Literal("evaluations"), factoryId: Schema.optional(Key), runId: Schema.optional(Key), after: Schema.optional(Key) }),
+  Schema.Struct({
+    op: Schema.Literal("evaluations"),
+    factoryId: Schema.optional(Key),
+    runId: Schema.optional(Key),
+    after: Schema.optional(Key),
+  }),
   Schema.Struct({ op: Schema.Literal("mcpBindings"), factoryId: Key }),
   ...AutomationHandoffQuery.members,
   Schema.Struct({ op: Schema.Literal("executionDefaults"), factoryId: Key, repository: Key }),

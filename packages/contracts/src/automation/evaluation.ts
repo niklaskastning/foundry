@@ -26,19 +26,23 @@ export const EvaluationInput = Schema.Struct({
 });
 export type EvaluationInput = typeof EvaluationInput.Type;
 export const EvaluationJudgment = Schema.Struct({
-  criteria: Schema.Array(Schema.Struct({
-    id: Key,
-    score: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
-    rationale: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(20_000)),
-    evidenceIds: Schema.Array(Key).check(Schema.isMinLength(1), Schema.isMaxLength(100)),
-  })).check(Schema.isMaxLength(100)),
+  criteria: Schema.Array(
+    Schema.Struct({
+      id: Key,
+      score: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+      rationale: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(20_000)),
+      evidenceIds: Schema.Array(Key).check(Schema.isMinLength(1), Schema.isMaxLength(100)),
+    }),
+  ).check(Schema.isMaxLength(100)),
   modelRevision: Key,
 });
 export type EvaluationJudgment = typeof EvaluationJudgment.Type;
 export const EvaluationResult = Schema.Struct({
   input: EvaluationInput,
   status: Schema.Literals(["completed", "incomplete", "failed", "skipped"]),
-  reason: Schema.NullOr(Schema.Literals(["missing_evidence", "invalid_judgment", "judge_unavailable", "not_sampled"])),
+  reason: Schema.NullOr(
+    Schema.Literals(["missing_evidence", "invalid_judgment", "judge_unavailable", "not_sampled"]),
+  ),
   judgment: Schema.NullOr(EvaluationJudgment),
   passed: Schema.NullOr(Schema.Boolean),
   recordedAt: Schema.String,
