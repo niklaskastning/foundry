@@ -266,8 +266,8 @@ export function FoundryPage() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            The browser opens the chosen origin for Access sign-in. Remove the current Foundry
-            session before switching. No credentials are forwarded to another origin.
+            Sign in at the verified instance. Remove the current Foundry session before switching.
+            No credentials are forwarded to another origin.
           </p>
         </div>
         {state?.binding ? (
