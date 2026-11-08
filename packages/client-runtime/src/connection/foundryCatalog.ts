@@ -9,8 +9,8 @@ import {
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { type InstanceBinding, OnboardingError } from "./foundry.ts";
-import { FoundryConnectionTarget } from "./model.ts";
-import { FoundryConnectionRegistration } from "./catalog.ts";
+import { FoundryConnectionTarget, PrimaryConnectionTarget } from "./model.ts";
+import { FoundryConnectionRegistration, PrimaryConnectionRegistration } from "./catalog.ts";
 
 const decodeCatalog = Schema.decodeUnknownSync(FoundryDeviceCatalog);
 const decodeTarget = Schema.decodeUnknownSync(FoundryGatewayGrantRequest);
@@ -40,7 +40,20 @@ export function restoreDeviceSelection(
       target.environmentId === binding.mainEnvironmentId
     )
       return [];
-    return [new FoundryConnectionRegistration({ target })];
+    const mainUrl = new URL(binding.origin);
+    const httpBaseUrl = mainUrl.toString();
+    mainUrl.protocol = mainUrl.protocol === "https:" ? "wss:" : "ws:";
+    return [
+      new FoundryConnectionRegistration({ target }),
+      new PrimaryConnectionRegistration({
+        target: new PrimaryConnectionTarget({
+          environmentId: binding.mainEnvironmentId,
+          label: "Foundry Main",
+          httpBaseUrl,
+          wsBaseUrl: mainUrl.toString(),
+        }),
+      }),
+    ] as const;
   } catch {
     return [];
   }

@@ -11,6 +11,7 @@ import { Atom } from "effect/reactivity";
 
 import { verifySavedInstance } from "../foundry/onboarding";
 import { isGuestPage } from "../guestPage";
+import { isStandaloneFoundryPage } from "../foundry/pageMode";
 
 import * as Runtime from "../lib/runtime";
 import * as BackgroundActivityReporter from "../lib/backgroundActivityReporter";
@@ -57,7 +58,7 @@ const layerConnection = BackgroundActivityReporter.layer.pipe(
 // Guest viewing and Foundry sign-in must not open the origin or saved T3 environments.
 const layerForPage = Layer.unwrap(
   Effect.suspend(() =>
-    isGuestPage() || window.location.pathname === "/foundry"
+    isGuestPage() || isStandaloneFoundryPage(window.location.pathname, window.location.search)
       ? Effect.die(new Error("This standalone page has no environment connection."))
       : Effect.tryPromise({
           try: verifySavedInstance,

@@ -91,10 +91,18 @@ const make = Effect.gen(function* () {
   }, Effect.catchTags(failures));
   const list = Effect.fn("DeviceRegistry.list")(function* (operatorId: string) {
     const instanceId = yield* identity.readIdentity;
-    const rows = yield* sql<DeviceRow & { enabled: boolean; access_generation: number }>`
-      SELECT d.*, g.enabled, g.generation AS access_generation
+    const rows = yield* sql<
+      DeviceRow & {
+        enabled: boolean;
+        access_generation: number;
+        automation_enabled: boolean;
+        automation_generation: number;
+      }
+    >`
+      SELECT d.*, g.enabled, g.generation AS access_generation, a.enabled AS automation_enabled, a.generation AS automation_generation
       FROM foundry_instance.devices d
       JOIN foundry_instance.device_grants g ON g.device_id = d.device_id AND g.kind = 'clientAccess'
+      JOIN foundry_instance.device_grants a ON a.device_id = d.device_id AND a.kind = 'automationExecution'
       WHERE d.instance_id = ${instanceId} AND d.operator_id = ${operatorId}
       ORDER BY d.device_id LIMIT 129`;
     if (rows.length > 128) return yield* new FoundryDeviceError({ code: "unavailable" });
@@ -104,6 +112,10 @@ const make = Effect.gen(function* () {
           deviceId: device.deviceId,
           environmentId: device.environmentId,
           revoked: device.revoked,
+          automationExecution: {
+            enabled: row.automation_enabled && !device.revoked,
+            generation: row.automation_generation,
+          },
           clientAccess: {
             enabled: row.enabled && !device.revoked,
             generation: row.access_generation,

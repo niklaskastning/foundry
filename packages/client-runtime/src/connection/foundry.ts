@@ -32,7 +32,8 @@ export class OnboardingError extends Error {
     | "unsupported"
     | "session"
     | "storage"
-    | "coordination";
+    | "coordination"
+    | "coordination_busy";
 
   constructor(code: OnboardingError["code"]) {
     super(
@@ -52,6 +53,8 @@ export class OnboardingError extends Error {
         session: "The Foundry session is missing, expired or revoked. Sign in again.",
         coordination:
           "This browser cannot coordinate instance sessions across tabs. Use a current browser on HTTPS.",
+        coordination_busy:
+          "Another Foundry tab is still checking or renewing the session. Close or reload that tab, then retry. No session was changed by this attempt.",
         storage:
           "The saved instance could not be read or updated. No existing binding was replaced.",
       }[code],
@@ -193,6 +196,9 @@ export interface OnboardingResult {
   binding: InstanceBinding | null;
   confirmed: boolean;
   session: FoundrySession | null;
+  artifactsAvailable?: boolean;
+  archivesAvailable?: boolean;
+  automationAvailable?: boolean;
   message: string;
 }
 
@@ -271,7 +277,7 @@ export function createInstanceClient(options: {
     };
     if (operation !== "inspect" && !saved && operation !== "confirm")
       throw new OnboardingError("unconfirmed");
-    const { binding } = verifyDescriptor(
+    const { binding, descriptor } = verifyDescriptor(
       await request(
         "/.well-known/foundry?protocolVersion=1&requiredCapability=foundry.access-sessions",
       ),
@@ -330,6 +336,9 @@ export function createInstanceClient(options: {
       binding,
       confirmed: true,
       session,
+      artifactsAvailable: descriptor.artifactTransfer?.protocolVersion === "1",
+      automationAvailable: descriptor.automation?.protocolVersion === "1",
+      archivesAvailable: descriptor.threadArchive?.protocolVersion === "1",
       message:
         "Signed in to Foundry. This session does not grant T3 environment or gateway access.",
     };

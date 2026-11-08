@@ -1,4 +1,5 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
+import { factoryReturnPath } from "../foundry/home";
 
 import {
   HostedPairingRouteSurface,
@@ -7,7 +8,10 @@ import {
 } from "../components/auth/PairingRouteSurface";
 
 export const Route = createFileRoute("/pair")({
-  beforeLoad: async ({ context }) => {
+  validateSearch: (search: Record<string, unknown>): { returnTo?: string } => ({
+    returnTo: factoryReturnPath(search.returnTo),
+  }),
+  beforeLoad: async ({ context, search }) => {
     const { authGateState } = context;
     if (authGateState.status === "hosted-pairing") {
       return {
@@ -20,7 +24,7 @@ export const Route = createFileRoute("/pair")({
       authGateState.status === "hosted-static" ||
       authGateState.status === "guest"
     ) {
-      throw redirect({ to: "/", replace: true });
+      throw redirect({ href: search.returnTo ?? "/", replace: true });
     }
     return {
       authGateState,
@@ -33,6 +37,7 @@ export const Route = createFileRoute("/pair")({
 function PairRouteView() {
   const router = useRouter();
   const { authGateState } = Route.useRouteContext();
+  const { returnTo } = Route.useSearch();
 
   if (!authGateState) {
     return null;
@@ -47,7 +52,7 @@ function PairRouteView() {
       auth={authGateState.auth}
       onAuthenticated={() => {
         // Recreate the connection so WebSocket and cached scopes use the new pairing cookie.
-        router.history.replace("/");
+        router.history.replace(returnTo ?? "/");
         router.history.flush();
         window.location.reload();
       }}

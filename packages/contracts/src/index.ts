@@ -7,6 +7,7 @@ export * from "./acpRegistry.ts";
 export * from "./auth.ts";
 export * from "./environment.ts";
 export * from "./foundryWorker.ts";
+export * from "./foundryWorkspace.ts";
 export * from "./environmentHttp.ts";
 export * from "./relayClient.ts";
 export * from "./desktopBootstrap.ts";
@@ -76,3 +77,23 @@ export * from "./foundry.ts";
 export * from "./foundryDevices.ts";
 export * from "./foundryDeviceChannel.ts";
 export * from "./foundryGateway.ts";
+export * from "./automation/factory.ts";
+export * from "./automation/definition.ts";
+export * from "./foundryArtifact.ts";
+export * from "./foundryArchive.ts";
+
+export * from "./automation/control.ts";
+export * from "./automation/application.ts";
+export * from "./automation/api.ts";
+export * from "./automation/machineCredential.ts";
+export * from "./automation/inbox.ts";
+
+export * from "./automation/trigger.ts";
+
+export * from "./automation/definitionSource.ts";
+
+export * from "./foundryHandoff.ts";
+export * from "./automation/handoff.ts";
+export * from "./automation/definitionV4.ts";
+export * from "./automation/mcpBinding.ts";
+export * from "./automation/executionV4.ts";

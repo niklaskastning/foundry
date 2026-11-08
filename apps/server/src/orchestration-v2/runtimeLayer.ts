@@ -1,3 +1,4 @@
+import * as ArchivePublication from "../foundry/ArchivePublication.ts";
 import * as GuestShareService from "../guest/GuestShareService.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -84,6 +85,9 @@ const layerStores = Layer.mergeAll(
 );
 
 export const layerEventSink = EventSink.layerFromStores.pipe(Layer.provide(layerStores));
+export const layerArchivePublication = ArchivePublication.layer.pipe(
+  Layer.provide(layerEventStoreProvided),
+);
 const layerProjectionMaintenanceProvided = ProjectionMaintenance.layer.pipe(
   Layer.provide(layerStores),
 );
@@ -368,6 +372,9 @@ export const layer = Layer.mergeAll(
 );
 
 export const layerProduction = Layer.mergeAll(
+  ArchivePublication.layerWatch.pipe(
+    Layer.provide(Layer.mergeAll(layerStores, layerEventSink, layerArchivePublication)),
+  ),
   layer.pipe(Layer.provide(layerProjectService)),
   layerProjectService,
   layerManagedProjectFoldersProvided,

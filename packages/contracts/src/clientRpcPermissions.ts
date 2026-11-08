@@ -15,7 +15,22 @@ import { WS_METHODS } from "./rpc.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [WS_METHODS.foundryAutomationTriggerQuery]: AuthOrchestrationReadScope,
+  [WS_METHODS.foundryAutomationTriggerCommand]: AuthAccessWriteScope,
+  [WS_METHODS.foundryAutomationQuery]: AuthOrchestrationReadScope,
+  [WS_METHODS.foundryAutomationCommand]: AuthOrchestrationOperateScope,
+  [WS_METHODS.foundryAutomationControl]: AuthOrchestrationOperateScope,
+  [WS_METHODS.foundryAutomationInboxQuery]: AuthOrchestrationReadScope,
+  [WS_METHODS.foundryAutomationInboxMark]: AuthOrchestrationReadScope,
+
+  [WS_METHODS.foundryWorkerHandoffOpen]: AuthOrchestrationOperateScope,
+  [WS_METHODS.foundryWorkerHandoffFinish]: AuthOrchestrationOperateScope,
+  [WS_METHODS.foundryWorkerHandoffReopen]: AuthOrchestrationOperateScope,
+  [WS_METHODS.foundryWorkerRenew]: AuthOrchestrationOperateScope,
+  [WS_METHODS.foundryWorkerCancel]: AuthOrchestrationOperateScope,
   [WS_METHODS.foundryWorkerLaunch]: AuthOrchestrationOperateScope,
+  [WS_METHODS.foundryWorkerFollow]: AuthOrchestrationReadScope,
+  [WS_METHODS.foundryWorkerRead]: AuthOrchestrationReadScope,
   [WS_METHODS.foundryWorkerStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.assetsReadChunk]: AuthOrchestrationReadScope,
   [WS_METHODS.attachmentsWriteChunk]: AuthOrchestrationOperateScope,
@@ -83,6 +98,24 @@ export function clientRpcRequiredScopes(
   method: string,
   input: unknown,
 ): readonly AuthEnvironmentScope[] {
+  if (
+    method === WS_METHODS.foundryAutomationCommand &&
+    typeof input === "object" &&
+    input !== null &&
+    "op" in input &&
+    typeof input.op === "string" &&
+    [
+      "createFactory",
+      "activateDefinition",
+      "configureDefinitionSource",
+      "configureExecutionDefaults",
+      "setMcpBinding",
+      "syncDefinitionSource",
+      "setDefinitionSourceEnabled",
+      "activateDefinitionRevision",
+    ].includes(input.op)
+  )
+    return [AuthAccessWriteScope];
   if (method === WS_METHODS.gitPreparePullRequestThread && input !== undefined) {
     const payload = decodePrepareThread(input);
     if (payload.mode === "worktree" && payload.threadId !== undefined)

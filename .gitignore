@@ -26,7 +26,6 @@ __screenshots__/
 squashfs-root/
 .vercel
 .gstack/
-.plans/
 /audits/
 dist-electron/
 .electron-runtime/
@@ -48,3 +47,5 @@ node_modules/
 
 # pnpm content-addressable store; never belongs in the repo.
 .pnpm-store/
+
+*.mp4

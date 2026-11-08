@@ -64,7 +64,10 @@ const make = Effect.gen(function* () {
           const versions = yield* sql<{
             version: number;
           }>`SELECT version FROM foundry_instance.schema_version`;
-          if (versions.length !== 1 || ![1, 2, 3, 4, 5].includes(versions[0]?.version ?? 0)) {
+          if (
+            versions.length !== 1 ||
+            ![1, 2, 3, 4, 5, 6, 7, 8].includes(versions[0]?.version ?? 0)
+          ) {
             return yield* new InstanceDatabase.InstanceDatabaseError({
               reason: "schema_incompatible",
             });
@@ -117,6 +120,70 @@ const make = Effect.gen(function* () {
               CROSS JOIN (VALUES ('clientAccess'), ('automationExecution'), ('sandboxProvisioning')) AS kinds(kind)`;
             yield* sql`UPDATE foundry_instance.schema_version SET version = 5`;
           }
+          if ((versions[0]?.version ?? 0) < 6) {
+            yield* sql`CREATE TABLE foundry_instance.artifact_uploads (
+              artifact_id uuid PRIMARY KEY,
+              ordinal bigserial NOT NULL UNIQUE,
+              instance_id uuid NOT NULL REFERENCES foundry_instance.instance(instance_id),
+              operator_id uuid NOT NULL REFERENCES foundry_instance.operator_binding(operator_id),
+              command_id text NOT NULL,
+              request jsonb NOT NULL,
+              state text NOT NULL DEFAULT 'uploading' CHECK(state IN ('uploading','published','aborted')),
+              confirmed_offset integer NOT NULL DEFAULT 0 CHECK(confirmed_offset >= 0 AND confirmed_offset <= (request->>'sizeBytes')::integer),
+              UNIQUE(instance_id,operator_id,command_id))`;
+            yield* sql`CREATE INDEX artifact_uploads_owner_page ON foundry_instance.artifact_uploads(instance_id,operator_id,ordinal DESC) WHERE state='published'`;
+            yield* sql`UPDATE foundry_instance.schema_version SET version=6`;
+          }
+          if ((versions[0]?.version ?? 0) < 7) {
+            yield* sql`CREATE TABLE foundry_instance.archive_threads (
+              ordinal bigserial NOT NULL UNIQUE,
+              instance_id uuid NOT NULL REFERENCES foundry_instance.instance(instance_id),
+              operator_id uuid NOT NULL REFERENCES foundry_instance.operator_binding(operator_id),
+              environment_id text NOT NULL,
+              thread_id text NOT NULL,
+              device_id uuid NOT NULL,
+              confirmed_cursor bigint NOT NULL DEFAULT 0 CHECK(confirmed_cursor >= 0),
+              confirmed_source_sequence bigint NOT NULL DEFAULT 0 CHECK(confirmed_source_sequence >= 0),
+              source_head bigint NOT NULL DEFAULT 0 CHECK(source_head >= confirmed_cursor),
+              source_complete boolean NOT NULL,
+              PRIMARY KEY(instance_id,environment_id,thread_id))`;
+            yield* sql`CREATE INDEX archive_threads_owner_page ON foundry_instance.archive_threads(instance_id,operator_id,ordinal DESC)`;
+            yield* sql`CREATE TABLE foundry_instance.archive_events (
+              instance_id uuid NOT NULL,
+              environment_id text NOT NULL,
+              thread_id text NOT NULL,
+              sequence bigint NOT NULL CHECK(sequence > 0),
+              source_sequence bigint NOT NULL CHECK(source_sequence > 0),
+              event jsonb NOT NULL,
+              PRIMARY KEY(instance_id,environment_id,thread_id,sequence),
+              UNIQUE(instance_id,environment_id,thread_id,source_sequence),
+              FOREIGN KEY(instance_id,environment_id,thread_id)
+                REFERENCES foundry_instance.archive_threads(instance_id,environment_id,thread_id))`;
+            yield* sql`CREATE UNIQUE INDEX archive_event_identity ON foundry_instance.archive_events(instance_id,environment_id,thread_id,((event->'event'->>'id')))`;
+            yield* sql`CREATE TABLE foundry_instance.archive_artifacts (
+              instance_id uuid NOT NULL,
+              environment_id text NOT NULL,
+              thread_id text NOT NULL,
+              attachment_id text NOT NULL,
+              reference jsonb,
+              PRIMARY KEY(instance_id,environment_id,thread_id,attachment_id),
+              FOREIGN KEY(instance_id,environment_id,thread_id)
+                REFERENCES foundry_instance.archive_threads(instance_id,environment_id,thread_id))`;
+            yield* sql`UPDATE foundry_instance.schema_version SET version=7`;
+          }
+          if ((versions[0]?.version ?? 0) < 8) {
+            yield* sql`CREATE TABLE foundry_instance.machine_credentials (
+              id uuid PRIMARY KEY, token_hash text NOT NULL UNIQUE,
+              instance_id uuid NOT NULL REFERENCES foundry_instance.instance(instance_id),
+              operator_id uuid NOT NULL REFERENCES foundry_instance.operator_binding(operator_id),
+              instance_generation bigint NOT NULL CHECK(instance_generation >= 0),
+              operator_generation bigint NOT NULL CHECK(operator_generation >= 0),
+              label text NOT NULL CHECK(length(label) BETWEEN 1 AND 100),
+              factory_ids jsonb NOT NULL CHECK(jsonb_typeof(factory_ids)='array' AND jsonb_array_length(factory_ids) BETWEEN 1 AND 32),
+              expires_at bigint NOT NULL CHECK(expires_at > 0),
+              revoked boolean NOT NULL DEFAULT false)`;
+            yield* sql`UPDATE foundry_instance.schema_version SET version=8`;
+          }
           yield* InstanceDatabase.checkSchema();
           const identities = yield* sql<{
             instance_id: string;
@@ -134,6 +201,8 @@ const make = Effect.gen(function* () {
           yield* sql`GRANT USAGE ON SCHEMA foundry_instance TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT SELECT ON foundry_instance.schema_version, foundry_instance.instance, foundry_instance.operator_binding TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT UPDATE (access_generation) ON foundry_instance.instance TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT SELECT, INSERT ON foundry_instance.machine_credentials TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT UPDATE(revoked) ON foundry_instance.machine_credentials TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT SELECT, INSERT, DELETE ON foundry_instance.sessions TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT INSERT, UPDATE ON foundry_instance.operator_binding TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT SELECT, INSERT ON foundry_instance.devices, foundry_instance.device_enrollments TO ${sql(input.runtimeRole)}`;
@@ -142,6 +211,13 @@ const make = Effect.gen(function* () {
           yield* sql`GRANT SELECT, INSERT ON foundry_instance.device_grants TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT UPDATE (enabled, generation) ON foundry_instance.device_grants TO ${sql(input.runtimeRole)}`;
           yield* sql`GRANT UPDATE (consumed) ON foundry_instance.device_enrollments TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT SELECT, INSERT ON foundry_instance.artifact_uploads TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT UPDATE(confirmed_offset,state) ON foundry_instance.artifact_uploads TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT USAGE ON SEQUENCE foundry_instance.artifact_uploads_ordinal_seq TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT SELECT,INSERT ON foundry_instance.archive_threads,foundry_instance.archive_events,foundry_instance.archive_artifacts TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT UPDATE(confirmed_cursor,confirmed_source_sequence,source_head) ON foundry_instance.archive_threads TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT UPDATE(reference) ON foundry_instance.archive_artifacts TO ${sql(input.runtimeRole)}`;
+          yield* sql`GRANT USAGE ON SEQUENCE foundry_instance.archive_threads_ordinal_seq TO ${sql(input.runtimeRole)}`;
         }),
       );
     },

@@ -1,5 +1,11 @@
+import { isSvgAttachment } from "@t3tools/shared/image";
 import { filePreviewDelimiter } from "@t3tools/shared/delimitedPreview";
-import type { AssetResource, EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import type {
+  AssetResource,
+  EnvironmentId,
+  ScopedThreadRef,
+  FoundryArtifactManifest,
+} from "@t3tools/contracts";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { readFilePreviewResponse } from "@t3tools/client-runtime/file-preview";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
@@ -79,7 +85,11 @@ export function AttachmentFilePreview(props: {
   sizeBytes: number;
   file?: Blob | null;
   asset?:
-    | { environmentId: EnvironmentId; attachmentId: string }
+    | {
+        environmentId: EnvironmentId;
+        attachmentId: string;
+        foundryArtifact?: FoundryArtifactManifest;
+      }
     | {
         environmentId: EnvironmentId;
         resource: Extract<AssetResource, { _tag: "media-file" | "draft-workspace-file" }>;
@@ -90,7 +100,12 @@ export function AttachmentFilePreview(props: {
   onRemove?: () => void;
   onClose?: () => void;
 }) {
-  const kind = filePreviewKind(props);
+  const central =
+    props.asset && "foundryArtifact" in props.asset ? props.asset.foundryArtifact : undefined;
+  const kind =
+    central && (filePreviewKind(props) === "html" || isSvgAttachment(props))
+      ? "text"
+      : filePreviewKind(props);
   const officeKind = officePreviewKind(props);
   const delimiter = filePreviewDelimiter(props);
   const renderedMode =
@@ -114,6 +129,7 @@ export function AttachmentFilePreview(props: {
         ? {
             _tag: "attachment" as const,
             attachmentId,
+            ...(central ? { foundryArtifact: central } : {}),
             fileName: props.name,
             mimeType: props.mimeType,
             disposition: "inline" as const,

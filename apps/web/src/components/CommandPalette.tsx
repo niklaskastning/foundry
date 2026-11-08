@@ -1,3 +1,4 @@
+import { useAutomationAvailable } from "../foundry/FactoryNavigation";
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 
@@ -1208,7 +1209,20 @@ function OpenCommandPaletteDialog(props: {
     if (firstOption) startNewProject(firstOption.environmentId, null);
   };
 
+  const automationAvailable = useAutomationAvailable();
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+  if (automationAvailable)
+    for (const view of ["factories", "work", "inbox", "runs", "resources"] as const)
+      actionItems.push({
+        kind: "action",
+        value: `action:foundry:${view}`,
+        title: `Open ${view === "inbox" ? "decisions" : view}`,
+        searchTerms: ["foundry", "factory", view],
+        icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await navigate({ to: "/foundry", search: { view } });
+        },
+      });
 
   if (projects.length > 0) {
     const activeProjectTitle =

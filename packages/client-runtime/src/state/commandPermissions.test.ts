@@ -7,6 +7,7 @@ import type { RpcSession } from "../rpc/session.ts";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
+  CommandId,
   AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
@@ -149,6 +150,13 @@ describe("command permissions", () => {
     WS_METHODS.attachmentsWriteChunk,
     WS_METHODS.attachmentsChunkStatus,
     WS_METHODS.foundryWorkerLaunch,
+    WS_METHODS.foundryWorkerHandoffOpen,
+    WS_METHODS.foundryWorkerHandoffFinish,
+    WS_METHODS.foundryWorkerHandoffReopen,
+    WS_METHODS.foundryWorkerRenew,
+    WS_METHODS.foundryWorkerCancel,
+    WS_METHODS.foundryAutomationCommand,
+    WS_METHODS.foundryAutomationControl,
   ])("uses the target grant for both availability and execution of %s", (method) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -528,18 +536,34 @@ it.effect("rejects protected unary and streamed RPCs outside a guarded command",
       action: "commit",
     }).pipe(Stream.runDrain, Effect.provideService(EnvironmentSupervisor, supervisor), Effect.flip);
     expect(streamed._tag).toBe("EnvironmentAuthorizationError");
+    const workerProgress = yield* runStreamGuarded(WS_METHODS.foundryWorkerFollow, {
+      commandId: CommandId.make("worker-follow"),
+    }).pipe(Stream.runDrain, Effect.provideService(EnvironmentSupervisor, supervisor), Effect.flip);
+    expect(workerProgress).toMatchObject({
+      _tag: "EnvironmentAuthorizationError",
+      requiredPermission: AuthOrchestrationReadScope,
+    });
+
     expect(writes).toBe(0);
   }),
 );
 
-it.effect("worker readiness requires read permission on its destination", () =>
+it.effect.each([
+  WS_METHODS.foundryWorkerStatus,
+  WS_METHODS.foundryWorkerRead,
+  WS_METHODS.foundryWorkerFollow,
+  WS_METHODS.foundryAutomationTriggerQuery,
+  WS_METHODS.foundryAutomationQuery,
+  WS_METHODS.foundryAutomationInboxQuery,
+  WS_METHODS.foundryAutomationInboxMark,
+])("%s requires read permission on its destination", (method) =>
   Effect.scoped(
     Effect.gen(function* () {
       const registry = yield* setup;
-      const command = createCommandPermissions(runtime, WS_METHODS.foundryWorkerStatus);
+      const command = createCommandPermissions(runtime, method);
       registry.set(sessions(env), AsyncResult.success(grant(false)));
       expect(registry.get(command.permissionAtom(env))).toBe(false);
-      expect(yield* command.authorize(registry, env, {}).pipe(Effect.flip)).toMatchObject({
+      expect(yield* command.authorize(registry, env).pipe(Effect.flip)).toMatchObject({
         requiredPermission: AuthOrchestrationReadScope,
       });
       registry.set(
@@ -551,8 +575,65 @@ it.effect("worker readiness requires read permission on its destination", () =>
         }),
       );
       expect(registry.get(command.permissionAtom(env))).toBe(true);
-      yield* command.authorize(registry, env, {});
+      yield* command.authorize(registry, env);
       expect(registry.get(command.permissionAtom(other))).toBe(false);
+    }),
+  ),
+);
+
+it.effect.each([
+  "createFactory",
+  "activateDefinition",
+  "configureDefinitionSource",
+  "configureExecutionDefaults",
+  "setMcpBinding",
+  "syncDefinitionSource",
+  "setDefinitionSourceEnabled",
+  "activateDefinitionRevision",
+  "create",
+  "activate",
+  "deactivate",
+  "revoke",
+])("%s requires management permission rather than execution permission", (op) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      const method = [
+        "createFactory",
+        "activateDefinition",
+        "configureDefinitionSource",
+        "configureExecutionDefaults",
+        "setMcpBinding",
+        "syncDefinitionSource",
+        "setDefinitionSourceEnabled",
+        "activateDefinitionRevision",
+      ].includes(op)
+        ? WS_METHODS.foundryAutomationCommand
+        : WS_METHODS.foundryAutomationTriggerCommand;
+      const command = createCommandPermissions(runtime, method);
+      registry.set(sessions(env), AsyncResult.success(grant(true)));
+      expect(registry.get(command.permissionAtom(env, { op }))).toBe(false);
+      expect(
+        (yield* command.authorize(registry, env, { op }).pipe(Effect.flip)).requiredPermission,
+      ).toBe(AuthAccessWriteScope);
+      registry.set(
+        sessions(env),
+        AsyncResult.success({
+          ...grant(false),
+          scopes: [AuthAccessWriteScope],
+          permissions: [AuthAccessWriteScope],
+        }),
+      );
+      expect(registry.get(command.permissionAtom(env, { op }))).toBe(true);
+      yield* command.authorize(registry, env, { op });
+      if (method === WS_METHODS.foundryAutomationCommand) {
+        expect(registry.get(command.permissionAtom(env, { op: "start" }))).toBe(false);
+        expect(
+          (yield* command.authorize(registry, env, { op: "start" }).pipe(Effect.flip))
+            .requiredPermission,
+        ).toBe(AuthOrchestrationOperateScope);
+      }
+      expect(registry.get(command.permissionAtom(other, { op }))).toBe(false);
     }),
   ),
 );

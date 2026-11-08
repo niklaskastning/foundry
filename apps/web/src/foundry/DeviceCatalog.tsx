@@ -1,23 +1,25 @@
 import { WorkerStatus } from "./WorkerStatus";
-import { useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { AsyncResult } from "effect/reactivity";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { FoundryDeviceCatalog, FoundryEnrollment } from "@t3tools/contracts";
 import { useAtomCommand } from "../state/use-atom-command";
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { deviceCommand } from "./devices";
 import { readDeviceSelection } from "./selection";
 
-export function DeviceCatalog() {
+export function DeviceCatalog({ readinessInDetails = false }: { readinessInDetails?: boolean }) {
+  const [readinessOpen, setReadinessOpen] = useState(false);
   const [catalog, setCatalog] = useState<FoundryDeviceCatalog>();
   const [enrollment, setEnrollment] = useState<FoundryEnrollment>();
   const [environmentId, setEnvironmentId] = useState("");
   const [publicKey, setPublicKey] = useState("");
-  const [message, setMessage] = useState(
-    "Load the device list after signing in to Foundry and pairing this client with Main.",
-  );
+  const [message, setMessage] = useState("");
+  const [failed, setFailed] = useState(false);
+  const initialLoadStarted = useRef(false);
   const [busy, setBusy] = useState(false);
   const run = useAtomCommand(deviceCommand, { reportFailure: false });
   const navigate = useNavigate();
@@ -25,6 +27,7 @@ export function DeviceCatalog() {
 
   async function operate(input: Parameters<typeof run>[0]) {
     setBusy(true);
+    setFailed(false);
     const result = await run(input);
     if (AsyncResult.isSuccess(result)) {
       if (result.value.catalog) setCatalog(result.value.catalog);
@@ -32,10 +35,11 @@ export function DeviceCatalog() {
       setMessage(
         input.type === "disconnect"
           ? "Foundry device disconnected. Personal T3 connections are unchanged."
-          : "Device list updated. Visibility alone does not grant execution permission.",
+          : "Device list updated.",
       );
-      if (input.type === "select") await navigate({ to: "/" });
+      if (input.type === "select") await navigate({ to: "/chats" });
     } else {
+      setFailed(true);
       const error = squashAtomCommandFailure(result);
       setMessage(error instanceof Error ? error.message : "Device operation failed.");
       setCatalog(undefined);
@@ -44,6 +48,14 @@ export function DeviceCatalog() {
     setBusy(false);
     return AsyncResult.isSuccess(result);
   }
+
+  const loadInitially = useEffectEvent(() => void operate({ type: "load" }));
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Load the remote device catalog once when this resource view mounts, including StrictMode effect replay.
+  useEffect(() => {
+    if (initialLoadStarted.current) return;
+    initialLoadStarted.current = true;
+    loadInitially();
+  }, []);
 
   function downloadEnrollment() {
     if (!enrollment) return;
@@ -59,59 +71,104 @@ export function DeviceCatalog() {
   }
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        Devices belong to this Foundry instance. A Foundry login and a Main T3 session are separate
-        requirements; no pairing with each device is needed. Projects and threads open in the
-        existing workspace views.
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <Button
-          variant="outline"
-          disabled={busy}
-          onClick={() => {
-            void operate({ type: "disconnect" }).then((success) => {
-              if (success) window.location.assign("/foundry");
-            });
-          }}
-        >
-          Manage instance sign-in
-        </Button>
-        <Button disabled={busy} onClick={() => void operate({ type: "load" })}>
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Machine access</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Open a machine for interactive work or manage its factory authorization.
+          </p>
+        </div>
+        <Button variant="outline" disabled={busy} onClick={() => void operate({ type: "load" })}>
           Refresh devices
         </Button>
-        <Button
-          variant="outline"
-          disabled={busy || !selected}
-          onClick={() => void operate({ type: "disconnect" })}
-        >
-          Disconnect selected device
-        </Button>
       </div>
-      <p role="status" className="text-sm">
-        {busy ? "Updating devices…" : message}
+      <p role={failed ? "alert" : "status"} className="text-sm text-muted-foreground">
+        {busy ? "Loading devices…" : message}
       </p>
       {selected ? (
-        <WorkerStatus key={selected.environmentId} environmentId={selected.environmentId} />
+        readinessInDetails ? (
+          <details
+            className="border-b pb-3 text-sm"
+            onToggle={(event) => setReadinessOpen(event.currentTarget.open)}
+          >
+            <summary className="cursor-pointer text-muted-foreground">
+              Selected interactive device readiness
+            </summary>
+            {readinessOpen ? (
+              <div className="pt-3">
+                <WorkerStatus key={selected.environmentId} environmentId={selected.environmentId} />
+              </div>
+            ) : null}
+          </details>
+        ) : (
+          <WorkerStatus key={selected.environmentId} environmentId={selected.environmentId} />
+        )
       ) : null}
-      {catalog?.devices.length === 0 ? <p className="text-sm">No devices registered.</p> : null}
+      {catalog?.devices.length === 0 ? (
+        <div className="rounded-lg border border-dashed p-6 text-sm">
+          <p className="font-medium">No machines registered</p>
+          <p className="mt-1 text-muted-foreground">
+            Register a worker below to make its projects available to this instance.
+          </p>
+        </div>
+      ) : null}
+      {catalog && !catalog.canManage ? (
+        <p className="text-sm text-muted-foreground">
+          You can open authorized devices. Managing registration and access requires additional
+          permission.
+        </p>
+      ) : null}
       {catalog?.devices.map((device) => (
-        <div key={device.deviceId} className="space-y-2 rounded-md border p-3">
-          <p className="break-all text-sm font-medium">
-            {device.environmentId}
-            {selected?.environmentId === device.environmentId ? " · selected" : ""}
-          </p>
-          <p className="break-all text-xs text-muted-foreground">Device ID: {device.deviceId}</p>
-          <p className="text-sm">
-            {device.revoked
-              ? "Registration revoked"
-              : device.online
-                ? device.rpcReady
-                  ? "Online"
-                  : "Online · interactive transport unavailable"
-                : "Offline"}{" "}
-            · {device.clientAccess.enabled ? "Client access enabled" : "Client access disabled"}
-          </p>
+        <article key={device.deviceId} className="space-y-3 border-b py-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs text-muted-foreground">
+                {selected?.environmentId === device.environmentId ? "Selected device" : "Device"}
+              </p>
+              <h3 className="mt-1 text-sm font-semibold">
+                {device.automationExecution?.enabled
+                  ? "Factory execution machine"
+                  : "Interactive machine"}
+              </h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Environment {device.environmentId.slice(0, 8)}
+              </p>
+            </div>
+            <Badge
+              variant={
+                device.revoked
+                  ? "error"
+                  : device.online && device.rpcReady
+                    ? "success"
+                    : "secondary"
+              }
+            >
+              {device.revoked
+                ? "Revoked"
+                : device.online
+                  ? device.rpcReady
+                    ? "Online"
+                    : "Transport unavailable"
+                  : "Offline"}
+            </Badge>
+          </div>
+          <dl className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
+            <div>
+              <dt className="text-xs text-muted-foreground">Interactive access</dt>
+              <dd className="mt-1">{device.clientAccess.enabled ? "Allowed" : "Disabled"}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Factory execution</dt>
+              <dd className="mt-1">
+                {device.automationExecution
+                  ? device.automationExecution.enabled
+                    ? "Authorized"
+                    : "Not authorized"
+                  : "Not supported"}
+              </dd>
+            </div>
+          </dl>
           <div className="flex flex-wrap gap-2">
             <Button
               disabled={
@@ -125,80 +182,139 @@ export function DeviceCatalog() {
             >
               Open device
             </Button>
-            {catalog.canManage && !device.revoked ? (
-              <>
-                <Button
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() =>
-                    void operate({
-                      type: "access",
-                      deviceId: device.deviceId,
-                      enabled: !device.clientAccess.enabled,
-                      generation: device.clientAccess.generation,
-                    })
-                  }
-                >
-                  {device.clientAccess.enabled ? "Disable client access" : "Enable client access"}
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        "Revoke this device registration for all clients? Connecting it again requires a new registration.",
+          </div>
+          <details className="border-t pt-3 text-sm">
+            <summary className="cursor-pointer">Access and registration</summary>
+            <div className="space-y-3 pt-3">
+              <p className="break-all text-xs text-muted-foreground">
+                Environment: {device.environmentId} · Device ID: {device.deviceId}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Interactive access and factory execution are separate permissions. Allowing
+                execution does not start work.
+              </p>
+              {catalog.canManage && !device.revoked ? (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() =>
+                      void operate({
+                        type: "access",
+                        kind: "clientAccess",
+                        deviceId: device.deviceId,
+                        enabled: !device.clientAccess.enabled,
+                        generation: device.clientAccess.generation,
+                      })
+                    }
+                  >
+                    {device.clientAccess.enabled ? "Disable client access" : "Enable client access"}
+                  </Button>
+                  {device.automationExecution ? (
+                    <Button
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() =>
+                        void operate({
+                          type: "access",
+                          kind: "automationExecution",
+                          deviceId: device.deviceId,
+                          enabled: !device.automationExecution!.enabled,
+                          generation: device.automationExecution!.generation,
+                        })
+                      }
+                    >
+                      {device.automationExecution.enabled
+                        ? "Revoke automation execution"
+                        : "Allow automation execution"}
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          "Revoke this device registration for all clients? Connecting it again requires a new registration.",
+                        )
                       )
-                    )
-                      void operate({ type: "revoke", deviceId: device.deviceId });
-                  }}
-                >
-                  Revoke registration…
-                </Button>
-              </>
-            ) : null}
+                        void operate({ type: "revoke", deviceId: device.deviceId });
+                    }}
+                  >
+                    Revoke registration…
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          </details>
+        </article>
+      ))}
+      <details className="text-sm">
+        <summary className="cursor-pointer text-muted-foreground">Connection and sign-in</summary>
+        <div className="pt-3">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                void operate({ type: "disconnect" }).then((success) => {
+                  if (success) window.location.assign("/foundry?view=instance");
+                });
+              }}
+            >
+              Manage instance sign-in
+            </Button>
+            <Button
+              variant="outline"
+              disabled={busy || !selected}
+              onClick={() => void operate({ type: "disconnect" })}
+            >
+              Disconnect selected device
+            </Button>
           </div>
         </div>
-      ))}
+      </details>
       {catalog?.canManage ? (
-        <div className="space-y-2 border-t pt-4">
-          <p className="text-sm font-medium">Register a machine</p>
-          <p className="text-xs text-muted-foreground">
-            Prepare a device request on the machine with the Foundry CLI. Enter its environment ID
-            and public key, then transfer the downloaded approval securely to that machine. Approval
-            expires after ten minutes. Private keys stay on the machine.
-          </p>
-          <label className="text-sm" htmlFor="foundry-device-environment">
-            Environment ID
-          </label>
-          <Input
-            id="foundry-device-environment"
-            value={environmentId}
-            onChange={(event) => setEnvironmentId(event.target.value)}
-            disabled={busy}
-          />
-          <label className="text-sm" htmlFor="foundry-device-key">
-            Device public key
-          </label>
-          <Input
-            id="foundry-device-key"
-            value={publicKey}
-            onChange={(event) => setPublicKey(event.target.value)}
-            disabled={busy}
-          />
-          <Button
-            disabled={busy || !environmentId || !publicKey}
-            onClick={() => void operate({ type: "approve", environmentId, publicKey })}
-          >
-            Approve registration
-          </Button>
-          {enrollment ? (
-            <Button variant="outline" onClick={downloadEnrollment}>
-              Download private enrollment approval
+        <details className="border-t pt-4">
+          <summary className="cursor-pointer font-medium">Register a machine</summary>
+          <div className="space-y-3 pt-4">
+            <p className="text-xs text-muted-foreground">
+              Prepare a device request on the machine with the Foundry CLI. Enter its environment ID
+              and public key, then transfer the downloaded approval securely to that machine.
+              Approval expires after ten minutes. Private keys stay on the machine.
+            </p>
+            <label className="text-sm" htmlFor="foundry-device-environment">
+              Environment ID
+            </label>
+            <Input
+              id="foundry-device-environment"
+              value={environmentId}
+              onChange={(event) => setEnvironmentId(event.target.value)}
+              disabled={busy}
+            />
+            <label className="text-sm" htmlFor="foundry-device-key">
+              Device public key
+            </label>
+            <Input
+              id="foundry-device-key"
+              value={publicKey}
+              onChange={(event) => setPublicKey(event.target.value)}
+              disabled={busy}
+            />
+            <Button
+              disabled={busy || !environmentId || !publicKey}
+              onClick={() => void operate({ type: "approve", environmentId, publicKey })}
+            >
+              Approve registration
             </Button>
-          ) : null}
-        </div>
+            {enrollment ? (
+              <Button variant="outline" onClick={downloadEnrollment}>
+                Download private enrollment approval
+              </Button>
+            ) : null}
+          </div>
+        </details>
       ) : null}
-    </div>
+    </section>
   );
 }

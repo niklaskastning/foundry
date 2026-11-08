@@ -1,6 +1,6 @@
 import DocumentPages, { sanitizeDocumentHtml } from "./DocumentPages";
 import { act, render, stubGlobal, type Screen } from "../../../test/render";
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, FoundryInstanceId, FoundryArtifactId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 import "~/index.css";
@@ -1962,6 +1962,50 @@ describe("attachment HTML preview recovery", () => {
   function setup() {
     refresh.mockReset().mockResolvedValueOnce(originalUrl).mockResolvedValue(renewedUrl);
   }
+
+  it.each(["html", "svg"])(
+    "keeps centrally confirmed %s in an escaped source view",
+    async (extension) => {
+      setup();
+      const text =
+        extension === "html"
+          ? "<html><script>top.injectedArtifact = true</script></html>"
+          : '<svg xmlns="http://www.w3.org/2000/svg" onload="top.injectedArtifact = true"/>';
+      const mimeType = extension === "html" ? "text/html" : "image/svg+xml";
+      using _fetch = stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(text)),
+      );
+      await using screen = await render(
+        <AttachmentFilePreview
+          name={`report.${extension}`}
+          mimeType={mimeType}
+          sizeBytes={text.length}
+          asset={{
+            environmentId: EnvironmentId.make("removed-worker"),
+            attachmentId: "confirmed",
+            foundryArtifact: {
+              reference: {
+                instanceId: FoundryInstanceId.make("11111111-1111-4111-8111-111111111111"),
+                artifactId: FoundryArtifactId.make("22222222-2222-4222-8222-222222222222"),
+                owner: {
+                  environmentId: EnvironmentId.make("removed-worker"),
+                  threadId: ThreadId.make("thread"),
+                },
+              },
+              name: `report.${extension}`,
+              mimeType,
+              sizeBytes: text.length,
+              sha256: "0".repeat(64),
+            },
+          }}
+        />,
+      );
+      await expect.element(screen.getByText(text, { exact: true })).toBeVisible();
+      expect(screen.container.querySelector("iframe")).toBeNull();
+      expect(screen.container.querySelector("img")).toBeNull();
+    },
+  );
 
   const openRemote = () =>
     render(

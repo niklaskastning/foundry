@@ -788,16 +788,18 @@ const EMPTY_IMAGE_RESOURCES = Object.freeze<ReadonlyArray<AttachmentResource>>([
 export function selectMessageImageResources(
   attachments: ChatMessage["attachments"],
 ): ReadonlyArray<AttachmentResource> {
-  const attachmentIds = new Set<string>();
+  const attachmentIds = new Map<string, AttachmentResource>();
   for (const attachment of attachments ?? []) {
     if (!isImageAttachment(attachment)) continue;
     const previewUrl = attachment.previewUrl;
     if (previewUrl?.startsWith("blob:") || previewUrl?.startsWith("data:")) continue;
-    attachmentIds.add(attachment.id);
+    attachmentIds.set(attachment.id, {
+      _tag: "attachment",
+      attachmentId: attachment.id,
+      ...(attachment.foundryArtifact ? { foundryArtifact: attachment.foundryArtifact } : {}),
+    });
   }
-  return attachmentIds.size === 0
-    ? EMPTY_IMAGE_RESOURCES
-    : Array.from(attachmentIds, (attachmentId) => ({ _tag: "attachment", attachmentId }));
+  return attachmentIds.size === 0 ? EMPTY_IMAGE_RESOURCES : Array.from(attachmentIds.values());
 }
 
 export function selectHandoffImageResources(

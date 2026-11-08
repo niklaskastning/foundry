@@ -1,8 +1,13 @@
+import * as WorkerHandoff from "./foundry/WorkerHandoff.ts";
+import * as WorkspaceGate from "./foundry/workspaces/WorkspaceGate.ts";
+import * as WorkspaceReconciler from "./foundry/workspaces/WorkspaceReconciler.ts";
+import * as ExecutionStore from "./foundry/ExecutionStore.ts";
 import * as CommandReceiptStore from "./orchestration-v2/CommandReceiptStore.ts";
 import * as WorkerLaunch from "./foundry/WorkerLaunch.ts";
 import * as WorkerReadiness from "./foundry/WorkerReadiness.ts";
 import * as AssetTransfer from "./assets/AssetTransfer.ts";
 import * as FoundryRuntime from "./foundry/Runtime.ts";
+import * as ArtifactPublication from "./foundry/ArtifactPublication.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as Random from "effect/Random";
@@ -59,6 +64,7 @@ import * as ResetCreditCoordinator from "./provider/resetCreditCoordinator.ts";
 import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as RuntimePolicy from "./orchestration-v2/RuntimePolicy.ts";
 import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
 import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCodeServerLedger";
 import * as ProviderHostLive from "./provider/ProviderHostLive.ts";
@@ -527,7 +533,15 @@ const layerScheduledTaskWebhookOrigin = Layer.effect(
   }),
 );
 
+const layerWorkspaceGate = WorkspaceGate.layerConfigured.pipe(Layer.provide(GitVcsDriver.layer));
+
+const layerExecutionStore = ExecutionStore.layer.pipe(
+  Layer.provide(RuntimeLayer.layerArchivePublication),
+);
+
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
+  Layer.provide(layerWorkspaceGate),
+  Layer.provide(ExecutionStore.layerObserver.pipe(Layer.provide(layerExecutionStore))),
   Layer.provide(layerScheduledTaskWebhookOrigin),
   Layer.provide(ProviderEventIngestor.layerAnalytics),
   Layer.provide(layerCheckpointStore),
@@ -590,12 +604,30 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
   }),
 );
 
+const layerWorkerLaunch = WorkerLaunch.layer.pipe(
+  Layer.provide(RuntimePolicy.layerFromProjectStore),
+  Layer.provide(layerWorkspaceGate),
+  Layer.provide(layerExecutionStore),
+  Layer.provide(layerCheckpointStore),
+  Layer.provide(EventStoreV2.layerFromOrchestrationEventStore),
+  Layer.provide(CommandReceiptStore.layer),
+  Layer.provide(WorkerReadiness.layer.pipe(Layer.provide(layerExecutionStore))),
+);
+
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
-  WorkerLaunch.layer.pipe(
-    Layer.provide(CommandReceiptStore.layer),
-    Layer.provide(WorkerReadiness.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
+  WorkspaceReconciler.layerWatchdog.pipe(
+    Layer.provide(layerWorkspaceGate),
+    Layer.provide(layerExecutionStore),
   ),
-  WorkerReadiness.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
+  layerWorkerLaunch,
+  WorkerHandoff.layerConfigured.pipe(
+    Layer.provide(layerWorkerLaunch),
+    Layer.provide(layerWorkspaceGate),
+    Layer.provide(layerCheckpointStore),
+    Layer.provide(GitVcsDriver.layer),
+    Layer.provide(RuntimeLayer.layerArchivePublication),
+  ),
+  WorkerReadiness.layer.pipe(Layer.provide(layerExecutionStore)),
   AssetTransfer.layer.pipe(Layer.provide(NativeAppIconResolver.layer)),
   AgentAwarenessRelay.layer,
   HeldHooksWaker.layer,
@@ -1118,6 +1150,9 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(RelayTracing.layerServerRelayBroker),
       Layer.provideMerge(layerHttpServer),
       Layer.provide(layerApplicationObservability),
+      Layer.provideMerge(
+        ArtifactPublication.layer.pipe(Layer.provide(ServerEnvironment.layerIdentity)),
+      ),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(VcsProcess.layer),
       Layer.provideMerge(AgentScopeLive.layer),

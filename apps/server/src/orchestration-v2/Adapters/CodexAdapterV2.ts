@@ -1,4 +1,8 @@
+import * as ExecutionObserver from "../../foundry/ExecutionObserver.ts";
+import * as Exit from "effect/Exit";
 import { pipe } from "effect/Function";
+import * as WorkerResources from "../../foundry/WorkerResources.ts";
+import type { FoundryWorkerDefinitionV4, RunId } from "@t3tools/contracts";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
@@ -748,6 +752,10 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     /** ChatGPT token sharing does not accept service tiers. */
     readonly omitServiceTier?: boolean;
     readonly appContext?: ProviderAdapter.ProviderAdapterV2TurnInput["appContext"];
+    readonly foundryResources?: {
+      readonly directory: string;
+      readonly request: FoundryWorkerDefinitionV4;
+    } | null;
   }) {
     const runtimeModeDefaults = codexRuntimeModeTurnDefaults(input.runtimePolicy.runtimeMode);
     const approvalPolicy =
@@ -790,7 +798,14 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
         : { ...t3Context, ...appContext };
     return yield* decodeCodexTurnStartParamsWithCollaborationMode({
       threadId: input.nativeThreadId,
-      input: input.codexInput,
+      input: [
+        ...input.codexInput,
+        ...(input.foundryResources?.request.resources.skills.map((skill) => ({
+          type: "skill",
+          name: skill.id,
+          path: `${input.foundryResources!.directory}/${skill.directory}/SKILL.md`,
+        })) ?? []),
+      ],
       ...(additionalContext ? { additionalContext } : {}),
       cwd: input.runtimePolicy.cwd,
       model: input.modelSelection.model,
@@ -802,6 +817,18 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
       ...(sandboxPolicy === undefined ? {} : { sandboxPolicy }),
       ...(effort === undefined ? {} : { effort }),
       ...(serviceTier === undefined ? {} : { serviceTier }),
+      ...(input.foundryResources
+        ? {
+            approvalPolicy: "never",
+            sandboxPolicy: WorkerResources.codexSandboxPolicy(
+              input.foundryResources.request.workspaceAccess,
+              input.runtimePolicy.cwd,
+            ),
+            ...(input.foundryResources.request.resultSchema
+              ? { outputSchema: input.foundryResources.request.resultSchema }
+              : {}),
+          }
+        : {}),
       // Codex supplies its own mode instructions; send both modes to clear Plan on exit.
       collaborationMode: {
         mode: input.runtimePolicy.interactionMode,
@@ -1337,6 +1364,7 @@ function codexThreadRuntimeParams(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly modelSelection?: { readonly model: string };
   readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+  readonly resourceConfig?: Readonly<Record<string, Schema.Json>>;
 }): {
   readonly cwd?: string;
   readonly model?: string;
@@ -1360,6 +1388,7 @@ function codexThreadRuntimeParams(input: {
               },
             },
           }),
+      ...input.resourceConfig,
     },
   };
 }
@@ -1485,6 +1514,7 @@ function redactCodexProtocolValue(value: unknown): unknown {
 function isSensitiveCodexProtocolKey(key: string): boolean {
   const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
   return (
+    normalized === "env" ||
     normalized.endsWith("authorization") ||
     normalized.endsWith("apikey") ||
     normalized.endsWith("token") ||
@@ -1632,11 +1662,23 @@ export interface CodexAdapterV2Options {
 export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   adapterOptions: CodexAdapterV2Options,
 ) {
+  const executionObserver = yield* ExecutionObserver.ExecutionObserver;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const readMcpSession = (threadId: ThreadId | null) =>
     // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
     threadId === null ? Effect.succeed(undefined) : mcpSessions.read(threadId);
   const { clientFactory, crypto, fileSystem, idAllocator, serverConfig } = adapterOptions;
+  const foundryConfig = Effect.fn("CodexAdapterV2.foundryConfig")(function* (
+    threadId: ThreadId | null,
+  ) {
+    if (!threadId) return undefined;
+    const resources = yield* WorkerResources.readResources(serverConfig.stateDir, threadId);
+    if (!resources) return undefined;
+    if (resources.request.resources.skills.length && !resources.nativeDirectory)
+      return yield* new WorkerResources.WorkerResourceError({ reason: "invalid_resource" });
+    const secrets = yield* WorkerResources.resolveResourceSecrets(resources.request);
+    return WorkerResources.codexResourceConfig(resources.request, secrets);
+  });
   const continuationRequests = adapterOptions.continuationRequests;
 
   return ProviderAdapter.ProviderAdapterV2.of({
@@ -1671,6 +1713,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
           environment: resolvedRuntime?.environment ?? adapterOptions.environment,
+        });
+        const isolatedFoundryConfig = Effect.fn("CodexAdapterV2.isolatedFoundryConfig")(function* (
+          threadId: ThreadId | null,
+        ) {
+          const resourceConfig = yield* foundryConfig(threadId);
+          if (!resourceConfig) return undefined;
+          const inherited = yield* client.request("config/read", {
+            cwd: input.runtimePolicy.cwd,
+            includeLayers: false,
+          });
+          return WorkerResources.isolateCodexMcpConfig(
+            resourceConfig,
+            Reflect.get(inherited.config, "mcp_servers"),
+          );
         });
         const additionalContextByThread = yield* Ref.make(
           new Map<
@@ -3594,6 +3650,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             updatedAt,
             type: "command_execution",
             input: item.command,
+            cwd: item.cwd,
             ...(item.aggregatedOutput === null || item.aggregatedOutput === undefined
               ? {}
               : { output: item.aggregatedOutput }),
@@ -6635,19 +6692,99 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           );
         });
 
+        const startsInFlight = new Set<RunId>();
+        const rejectedBeforeStart = new Set<RunId>();
+        const requestedNativeRuns = new Set<RunId>();
         const startNativeTurn = Effect.fn("CodexAdapterV2.startNativeTurn")(
           function* (
             turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
             codexInput: ReadonlyArray<CodexSchema.V2TurnStartParams__UserInput>,
           ) {
+            startsInFlight.add(turnInput.runId);
+            rejectedBeforeStart.delete(turnInput.runId);
             const threadId = yield* getNativeThreadId(turnInput.providerThread);
             const mcpSession = yield* mcpSessions.read(turnInput.threadId);
+            const foundryResources = yield* Effect.gen(function* () {
+              const foundryResources = yield* WorkerResources.readResources(
+                serverConfig.stateDir,
+                turnInput.threadId,
+              );
+              if (foundryResources) {
+                const sandbox = yield* client.request(
+                  "command/exec",
+                  WorkerResources.codexSandboxProbe(
+                    foundryResources.request.workspaceAccess,
+                    turnInput.runtimePolicy.cwd,
+                  ),
+                );
+                if (sandbox.exitCode !== 0 || sandbox.stdout !== "foundry-sandbox-ready")
+                  return yield* new WorkerResources.WorkerResourceError({
+                    reason: "permission_denied",
+                  });
+                const inventory = yield* client.request("mcpServerStatus/list", {
+                  threadId,
+                  detail: "full",
+                  limit: 100,
+                });
+                WorkerResources.verifyMcpInventory(
+                  foundryResources.request,
+                  inventory.data,
+                  inventory.nextCursor,
+                );
+                if (foundryResources.request.resources.skills.length) {
+                  if (!foundryResources.nativeDirectory || !turnInput.runtimePolicy.cwd)
+                    return yield* new WorkerResources.WorkerResourceError({
+                      reason: "invalid_resource",
+                    });
+                  const catalog = yield* client.request("skills/list", {
+                    cwds: [turnInput.runtimePolicy.cwd],
+                    forceReload: true,
+                  });
+                  for (const skill of foundryResources.request.resources.skills) {
+                    const expected = `${foundryResources.nativeDirectory}/${skill.directory}/SKILL.md`;
+                    if (
+                      !catalog.data.some((entry) =>
+                        entry.skills.some(
+                          (candidate) =>
+                            candidate.name === skill.id &&
+                            candidate.path === expected &&
+                            candidate.enabled,
+                        ),
+                      )
+                    )
+                      return yield* new WorkerResources.WorkerResourceError({
+                        reason: "invalid_resource",
+                      });
+                  }
+                }
+              }
+              return foundryResources;
+            }).pipe(
+              Effect.onExit((exit) => {
+                if (!Exit.isFailure(exit) || requestedNativeRuns.has(turnInput.runId))
+                  return Effect.void;
+                rejectedBeforeStart.add(turnInput.runId);
+                return (
+                  executionObserver.rejectedBeforeStart?.({
+                    threadId: turnInput.threadId,
+                    providerThreadId: turnInput.providerThread.id,
+                    runOrdinal: turnInput.runOrdinal,
+                  }) ?? Effect.void
+                );
+              }),
+            );
             const turnStartParams = yield* buildCodexTurnStartParams({
               nativeThreadId: threadId,
               codexInput,
               runtimePolicy: turnInput.runtimePolicy,
               modelSelection: turnInput.modelSelection,
-              hasT3Mcp: mcpSession !== undefined,
+              hasT3Mcp: !foundryResources && mcpSession !== undefined,
+              foundryResources: foundryResources
+                ? {
+                    ...foundryResources,
+                    directory: foundryResources.nativeDirectory ?? foundryResources.directory,
+                  }
+                : null,
               browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
@@ -6670,6 +6807,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               ...(yield* Ref.get(settledTurns)),
               ...(yield* Ref.get(activeTurns)),
             ]);
+            requestedNativeRuns.add(turnInput.runId);
             const started = yield* client.request("turn/start", turnStartParams);
             const previousTurn =
               previousTurns.get(started.turn.id) ??
@@ -6695,6 +6833,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           },
           (effect, turnInput) =>
             effect.pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  startsInFlight.delete(turnInput.runId);
+                }),
+              ),
               Effect.ensuring(
                 Effect.flatMap(getNativeThreadId(turnInput.providerThread), (threadId) =>
                   Ref.update(pendingRootTurns, (current) => {
@@ -6902,6 +7045,73 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           providerSessionId: input.providerSessionId,
           providerSession: session,
           events: Stream.fromEffectRepeat(Queue.take(events)),
+          confirmWriterEnded: Effect.fn("CodexAdapterV2.confirmWriterEnded")(
+            function* (probe) {
+              yield* ensureInitialized;
+              const nativeThreadId = yield* getNativeThreadId(probe.providerThread);
+              if (startsInFlight.size !== 0) return false;
+              if (
+                !probe.nativeTurnId &&
+                !rejectedBeforeStart.has(probe.runId) &&
+                input.initialNativeThreadId !== nativeThreadId
+              )
+                return false;
+              if (yield* runtime.hasPendingBackgroundWorkForThread!(probe.providerThread))
+                return false;
+              // Native history survives synthetic interrupt terminalization in the app projection.
+              const ids = new Set([nativeThreadId]);
+              for (const [id, child] of yield* Ref.get(subagentThreads)) {
+                if (approvalOwnerCodexTurn(child.parentContext).owner.input.runId === probe.runId)
+                  ids.add(id);
+              }
+              for (const threadId of ids) {
+                if (
+                  goalsByNativeThread.get(threadId)?.status === "active" ||
+                  goalActivations.has(threadId) ||
+                  goalHolds.has(threadId)
+                )
+                  return false;
+                const { thread } = yield* client.request("thread/read", {
+                  threadId,
+                  includeTurns: true,
+                });
+                if (
+                  (thread.status.type !== "idle" && thread.status.type !== "notLoaded") ||
+                  thread.turns.some((turn) => turn.status === "inProgress")
+                )
+                  return false;
+                if (
+                  threadId === nativeThreadId &&
+                  (probe.nativeTurnId
+                    ? !thread.turns.some(
+                        (turn) => turn.id === probe.nativeTurnId && turn.status !== "inProgress",
+                      )
+                    : thread.turns.length !== 0)
+                )
+                  return false;
+                for (const turn of thread.turns) {
+                  for (const item of turn.items) {
+                    if (item.type === "collabAgentToolCall")
+                      for (const child of item.receiverThreadIds) ids.add(child);
+                    if (item.type === "subAgentActivity") ids.add(item.agentThreadId);
+                  }
+                }
+                if (ids.size > 256) return false;
+                if (
+                  thread.turns.some(
+                    (turn) =>
+                      turn.itemsView !== "full" ||
+                      turn.items.some(
+                        (item) => item.type === "commandExecution" && item.status === "inProgress",
+                      ),
+                  )
+                )
+                  return false;
+              }
+              return true;
+            },
+            Effect.orElseSucceed(() => false),
+          ),
           canReuseContextUsage: canReuseCodexContextUsage,
           // Idle release can beat delayed subagent resumes: Codex reports them completed between turns with no resume-expected signal.
           hasPendingBackgroundWork: Effect.gen(function* () {
@@ -6953,15 +7163,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           ensureThread: (threadInput) =>
             ensureInitialized.pipe(
               Effect.andThen(mcpSessions.read(threadInput.threadId)),
-              Effect.flatMap((mcpSession) =>
-                client.request(
-                  "thread/start",
-                  codexThreadRuntimeParams({
-                    mcpSession,
-                    modelSelection: threadInput.modelSelection,
-                    runtimePolicy: threadInput.runtimePolicy,
-                  }),
-                ),
+              Effect.flatMap(
+                Effect.fn("CodexAdapterV2.startConfiguredThread")(function* (mcpSession) {
+                  const resourceConfig = yield* isolatedFoundryConfig(threadInput.threadId);
+                  return yield* client.request(
+                    "thread/start",
+                    codexThreadRuntimeParams({
+                      mcpSession,
+                      modelSelection: threadInput.modelSelection,
+                      runtimePolicy: threadInput.runtimePolicy,
+                      ...(resourceConfig ? { resourceConfig } : {}),
+                    }),
+                  );
+                }),
               ),
               Effect.map((response): OrchestrationV2ProviderThread =>
                 providerThreadFromCodexThread({
@@ -6984,11 +7198,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             ),
           resumeThread: Effect.fn("CodexAdapterV2.resumeThread")(
             function* (threadInput) {
+              yield* ensureInitialized;
               const nativeThreadId = yield* getNativeThreadId(threadInput.providerThread);
+              const resourceConfig = yield* isolatedFoundryConfig(
+                threadInput.threadId ?? threadInput.providerThread.appThreadId,
+              );
               const resume = client.raw.request("thread/resume", {
                 threadId: nativeThreadId,
                 excludeTurns: true,
                 ...codexThreadRuntimeParams({
+                  ...(resourceConfig ? { resourceConfig } : {}),
                   mcpSession: yield* readMcpSession(
                     threadInput.threadId ?? threadInput.providerThread.appThreadId,
                   ),
@@ -7772,11 +7991,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
               // thread/revert requires the thread loaded in this app-server; resume after restart or idle release.
               if (!loaded) {
+                const resourceConfig = yield* isolatedFoundryConfig(
+                  threadInput.providerThread.appThreadId,
+                );
                 yield* client.raw.request("thread/resume", {
                   threadId,
                   excludeTurns: true,
                   ...codexThreadRuntimeParams({
                     mcpSession: yield* readMcpSession(threadInput.providerThread.appThreadId),
+                    ...(resourceConfig ? { resourceConfig } : {}),
                     modelSelection: input.modelSelection,
                     runtimePolicy: input.runtimePolicy,
                   }),

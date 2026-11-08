@@ -1,4 +1,5 @@
 import * as AccessConfig from "./AccessConfig.ts";
+import * as DeviceConfig from "./DeviceConfig.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { expect, it } from "@effect/vitest";
@@ -17,6 +18,8 @@ import * as InstanceDescriptor from "./InstanceDescriptor.ts";
 import * as FoundryHttp from "./http.ts";
 
 const isDescriptor = Schema.is(FoundryDescriptor);
+const { artifactTransfer: _transfer, ...legacyFields } = FoundryDescriptor.fields;
+const decodeLegacyDescriptor = Schema.decodeEffect(Schema.Struct(legacyFields));
 
 const descriptorLayer = InstanceDescriptor.layer.pipe(
   Layer.provide(InstanceIdentityStore.layerFile),
@@ -113,6 +116,7 @@ it.layer(NodeServices.layer)("Foundry descriptor", (it) => {
           Effect.provide(
             Layer.fresh(descriptorLayer).pipe(
               Layer.provide(Layer.succeed(AccessConfig.AccessEnabled, true)),
+              Layer.provide(Layer.succeed(DeviceConfig.ArtifactsEnabled, true)),
               Layer.provide(
                 Layer.succeed(AccessConfig.AccessConfig, {
                   origin: "https://foundry.example",
@@ -126,6 +130,14 @@ it.layer(NodeServices.layer)("Foundry descriptor", (it) => {
         );
         expect(JSON.stringify(enabled)).not.toContain("private-audience");
         expect(enabled.capabilities).toContain("foundry.access-sessions");
+        expect(enabled.artifactTransfer).toEqual({
+          protocolVersion: "1",
+          chunkBytes: 256 * 1024,
+          maxBytes: 50 * 1024 * 1024,
+        });
+        const legacy = yield* decodeLegacyDescriptor(enabled);
+        expect(legacy).not.toHaveProperty("artifactTransfer");
+        expect(legacy.capabilities).toEqual(enabled.capabilities);
         expect(enabled.instanceAuth).toEqual({
           publicOrigin: "https://foundry.example",
           issuer: "https://team.cloudflareaccess.com",

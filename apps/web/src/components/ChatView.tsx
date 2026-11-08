@@ -1,3 +1,4 @@
+import { FactoryRunReturn } from "../foundry/FactoryNavigation";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
@@ -1472,20 +1473,30 @@ export default function ChatView(props: ChatViewProps) {
   const sendQueuesBehindSetup =
     isServerThread && (activeRunPreparing || activeActivityRun?.status === "starting");
   const [setupQueueSendThreadKey, setSetupQueueSendThreadKey] = useState<string | null>(null);
-  const downloadFileAttachment = async (attachment: ChatFileAttachment) => {
+  const downloadFileAttachment = async (
+    attachment: ChatFileAttachment,
+    preparedUrl?: string | null,
+  ) => {
     const connection = readPreparedConnection(environmentId);
-    if (!connection) {
+    if (!connection && !attachment.foundryArtifact) {
       toastManager.add({ type: "error", title: "The environment is not connected." });
       return;
     }
 
     try {
-      const url = await resolveFileAttachmentUrl({
-        attachment,
-        environmentId,
-        httpBaseUrl: connection.httpBaseUrl,
-        createAssetUrl: createAttachmentAssetUrl,
-      });
+      const url =
+        preparedUrl === undefined
+          ? await resolveFileAttachmentUrl({
+              attachment,
+              environmentId,
+              httpBaseUrl: connection?.httpBaseUrl ?? null,
+              createAssetUrl: createAttachmentAssetUrl,
+            })
+          : preparedUrl;
+      if (!url) {
+        toastManager.add({ type: "error", title: "The attachment could not be loaded." });
+        return;
+      }
       const anchor = document.createElement("a");
       anchor.href = url;
       anchor.download = attachment.name;
@@ -3349,6 +3360,7 @@ export default function ChatView(props: ChatViewProps) {
             />
           </header>
         )}
+        {embedded ? null : <FactoryRunReturn />}
 
         <div className="relative flex min-h-0 min-w-0 flex-1">
           <ThreadFindCanvas

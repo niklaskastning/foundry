@@ -1,3 +1,32 @@
+import * as Fiber from "effect/Fiber";
+import * as EventSink from "./EventSink.ts";
+import {
+  FoundryWorkerHandoffResult,
+  FoundryWorkspaceError,
+  FoundryDeviceId,
+  EventId,
+  CheckpointId,
+  CheckpointRef,
+  CheckpointScopeId,
+  NodeId,
+  ProviderThreadId,
+  ProviderSessionId,
+  ProviderTurnId,
+  RunAttemptId,
+  FoundryArtifactId,
+  FoundryInstanceId,
+  EnvironmentId,
+  FoundryArtifactError,
+  type FoundryArtifactManifest,
+  VcsProcessExitError,
+} from "@t3tools/contracts";
+import * as ExecutionStore from "../foundry/ExecutionStore.ts";
+import * as ArtifactPublication from "../foundry/ArtifactPublication.ts";
+import { WorkspaceGate } from "../foundry/workspaces/WorkspaceGate.ts";
+import * as ReservationStore from "../foundry/workspaces/ReservationStore.ts";
+import type { WriterBinding } from "../foundry/workspaces/ReservationStore.ts";
+import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
+import * as EventStore from "./EventStore.ts";
 import * as WorkerLaunch from "../foundry/WorkerLaunch.ts";
 import { WorkerReadiness } from "../foundry/WorkerReadiness.ts";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -63,12 +92,14 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
+import * as RuntimePolicy from "./RuntimePolicy.ts";
+import * as ProviderSessions from "./ProviderSessionManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as ThreadTitleRegeneration from "./ThreadTitleRegenerationService.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
-import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const projectId = ProjectId.make("project:launch-test");
 const otherProjectId = ProjectId.make("project:launch-other");
@@ -121,6 +152,7 @@ const claudeAdapter = {
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 
 interface HarnessOptions {
+  readonly workspaceRoot?: string;
   readonly closeTerminal?: TerminalManager.TerminalManager["Service"]["close"];
   readonly adapters?: ReadonlyArray<ProviderAdapter.ProviderAdapterV2["Service"]>;
   readonly managedFolders?: Layer.Layer<ManagedProjectFolders.ManagedProjectFolders>;
@@ -138,6 +170,10 @@ interface HarnessOptions {
 }
 
 function makeHarness(options: HarnessOptions = {}) {
+  const fixtureProject = {
+    ...project,
+    workspaceRoot: options.workspaceRoot ?? project.workspaceRoot,
+  };
   const layerDatabase = SqlitePersistence.layerMemory;
   const layerRegistry = ProviderAdapterRegistry.layerFromAdapters(options.adapters ?? [adapter]);
   const layerOrchestrator = ProviderReplayHarness.layerWithRegistry(
@@ -190,12 +226,12 @@ function makeHarness(options: HarnessOptions = {}) {
       getById: (id) =>
         Effect.succeed(
           id === projectId
-            ? Option.some(project)
+            ? Option.some(fixtureProject)
             : id === otherProjectId
               ? Option.some(otherProject)
               : Option.none(),
         ),
-      getByWorkspaceRoot: () => Effect.succeedSome(project),
+      getByWorkspaceRoot: () => Effect.succeedSome(fixtureProject),
       snapshot: Effect.die("unused"),
       getShell: () => Effect.die("unused"),
       listShells: () => Effect.die("unused"),
@@ -246,7 +282,7 @@ function makeHarness(options: HarnessOptions = {}) {
           ? Option.some({
               projectId,
               title: project.title,
-              workspaceRoot: project.workspaceRoot,
+              workspaceRoot: fixtureProject.workspaceRoot,
               defaultModelSelection: project.defaultModelSelection,
               defaultThreadEnvMode: null,
               autoPull: false,
@@ -270,6 +306,7 @@ function makeHarness(options: HarnessOptions = {}) {
   return {
     layer: Layer.mergeAll(
       layerLaunch,
+      layerOrchestrator,
       layerReceipts,
       layerRegistry,
       layerThreadManagement,
@@ -2394,21 +2431,54 @@ it.effect("replays an accepted send after the project disables the instance", ()
   }).pipe(Effect.provide(Layer.mergeAll(harness.layer, layerFiles)));
 });
 
-function workerLayer(roots = ["/repo"], providerReady = true) {
+const encodeHandoffResult = Schema.encodeEffect(Schema.fromJsonString(FoundryWorkerHandoffResult));
+
+function workerLayer(
+  roots = ["/repo"],
+  providerReady = true,
+  enabled = true,
+  checkpointExists = false,
+  checkpointOverrides: Partial<CheckpointStore.CheckpointStore["Service"]> = {},
+  filesystemLayer: Layer.Layer<FileSystem.FileSystem> = FileSystem.layerNoop({
+    realPath: (path) => Effect.succeed(path),
+  }),
+  capacity = 1,
+) {
   return WorkerLaunch.layer.pipe(
+    Layer.provide(
+      GitVcsDriver.layer.pipe(
+        Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "worker-git-" })),
+        Layer.provide(NodeServices.layer),
+      ),
+    ),
+    Layer.provide(RuntimePolicy.layer),
+    Layer.provideMerge(ExecutionStore.layer),
+    Layer.provide(
+      Layer.succeed(CheckpointStore.CheckpointStore, {
+        isGitRepository: () => Effect.succeed(true),
+        hasCheckpointRef: () => Effect.succeed(checkpointExists),
+        captureCheckpoint: () => Effect.void,
+        restoreCheckpoint: () => Effect.succeed(false),
+        diffCheckpoints: () => Effect.succeed(""),
+        listAuthoredPaths: () => Effect.succeed(new Set<string>()),
+        deleteCheckpointRefs: () => Effect.void,
+        ...checkpointOverrides,
+      }),
+    ),
+    Layer.provide(EventStore.layer),
     Layer.provide(
       Layer.mergeAll(
         ConfigProvider.layer(
           ConfigProvider.fromEnv({
             env: {
-              FOUNDRY_WORKER_ENABLED: "true",
+              FOUNDRY_WORKER_ENABLED: String(enabled),
               FOUNDRY_WORKER_PROVIDER_INSTANCE_ID: "codex",
               FOUNDRY_WORKER_WORKSPACE_ROOTS: JSON.stringify(roots),
             },
           }),
         ),
         Path.layer,
-        FileSystem.layerNoop({ realPath: (path) => Effect.succeed(path) }),
+        filesystemLayer,
         Layer.succeed(WorkerReadiness, {
           read: () =>
             Effect.succeed({
@@ -2420,6 +2490,7 @@ function workerLayer(roots = ["/repo"], providerReady = true) {
               checkedAt: "2026-01-01T00:00:00.000Z",
               capacityAvailable: true,
               activeRuns: 0,
+              capacity,
             }),
         }),
       ),
@@ -2435,16 +2506,204 @@ const workerInput = {
 };
 
 it.effect.each([
+  "stopped",
+  "unproven",
+  "unavailable",
+  "other-instance",
+  "not-started",
+  "not-started-unproven",
+] as const)(
+  "worker recovers native writer evidence after losing its local session: %s",
+  (history) => {
+    const open = vi.fn<ProviderAdapter.ProviderAdapterV2["Service"]["openSession"]>((input) =>
+      Effect.gen(function* () {
+        if (history === "unavailable")
+          return yield* new ProviderAdapter.ProviderAdapterOpenSessionError({
+            driver: adapter.driver,
+            providerSessionId: input.providerSessionId,
+          });
+        const now = yield* DateTime.now;
+        return {
+          instanceId: adapter.instanceId,
+          driver: adapter.driver,
+          providerSessionId: input.providerSessionId,
+          providerSession: {
+            id: input.providerSessionId,
+            driver: adapter.driver,
+            providerInstanceId: adapter.instanceId,
+            status: "ready",
+            cwd: input.runtimePolicy.cwd ?? "/repo",
+            model: input.modelSelection.model,
+            capabilities: CodexProviderCapabilitiesV2,
+            createdAt: now,
+            updatedAt: now,
+            lastError: null,
+          },
+          events: Stream.never,
+          confirmWriterEnded: (probe) => {
+            assert.equal(
+              probe.nativeTurnId,
+              history.startsWith("not-started") ? undefined : "interrupted-native-turn",
+            );
+            assert.equal(probe.providerThread.nativeThreadRef?.nativeId, "original-native-thread");
+            return Effect.succeed(history === "stopped" || history === "not-started");
+          },
+          ensureThread: () => Effect.die("Recovery must not create a native thread"),
+          resumeThread: () => Effect.die("Recovery must not resume a native thread"),
+          startTurn: () => Effect.die("Recovery must not start a native turn"),
+          steerTurn: () => Effect.die("Recovery must not steer a native turn"),
+          interruptTurn: () => Effect.die("Recovery must only inspect native history"),
+          respondToRuntimeRequest: () => Effect.die("Recovery must not approve commands"),
+          readThreadSnapshot: () => Effect.die("Recovery must use the writer verifier"),
+          rollbackThread: () => Effect.die("Recovery must not roll back a native thread"),
+          forkThread: () => Effect.die("Recovery must not fork a native thread"),
+        } satisfies ProviderAdapter.ProviderAdapterV2SessionRuntime;
+      }),
+    );
+    const harness = makeHarness({ adapters: [{ ...adapter, openSession: open }] });
+    return Effect.gen(function* () {
+      const worker = yield* WorkerLaunch.WorkerLaunch;
+      const store = yield* ExecutionStore.ExecutionStore;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const sink = yield* EventSink.EventSinkV2;
+      const sessions = yield* ProviderSessions.ProviderSessionManagerV2;
+      const receipt = yield* worker.launch(workerInput);
+      const { runs } = yield* threads.getThreadRecords(receipt.threadId, ["runs"]);
+      const run = runs[0]!;
+      const attemptId = RunAttemptId.make("crashed-worker-attempt");
+      const providerThreadId = ProviderThreadId.make("crashed-worker-provider-thread");
+      const providerSessionId = ProviderSessionId.make("crashed-worker-provider-session");
+      assert.isTrue(
+        yield* store.starting({ threadId: receipt.threadId, providerThreadId, runOrdinal: 1 }),
+      );
+      yield* store.stop(workerInput.commandId);
+      yield* store.uncertain(workerInput.commandId);
+      const now = yield* DateTime.now;
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("crashed-worker-provider-thread"),
+            type: "provider-thread.updated",
+            threadId: receipt.threadId,
+            driver: adapter.driver,
+            occurredAt: now,
+            payload: {
+              id: providerThreadId,
+              driver: adapter.driver,
+              providerInstanceId:
+                history === "other-instance"
+                  ? ProviderInstanceId.make("other-codex")
+                  : adapter.instanceId,
+              providerSessionId,
+              appThreadId: receipt.threadId,
+              ownerNodeId: null,
+              nativeThreadRef: {
+                driver: adapter.driver,
+                nativeId: "original-native-thread",
+                strength: "strong",
+              },
+              nativeConversationHeadRef: null,
+              status: "idle",
+              firstRunOrdinal: 1,
+              lastRunOrdinal: 1,
+              handoffIds: [],
+              forkedFrom: null,
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+          {
+            id: EventId.make("crashed-worker-provider-turn"),
+            type: "provider-turn.updated",
+            threadId: receipt.threadId,
+            runId: run.id,
+            driver: adapter.driver,
+            occurredAt: now,
+            payload: {
+              id: ProviderTurnId.make("crashed-worker-provider-turn"),
+              providerThreadId,
+              nodeId: NodeId.make("crashed-worker-node"),
+              runAttemptId: attemptId,
+              nativeTurnRef: history.startsWith("not-started")
+                ? null
+                : {
+                    driver: adapter.driver,
+                    nativeId: "interrupted-native-turn",
+                    strength: "strong",
+                  },
+              ordinal: 1,
+              status: "interrupted",
+              startedAt: now,
+              completedAt: now,
+            },
+          },
+          {
+            id: EventId.make("crashed-worker-run"),
+            type: "run.updated",
+            threadId: receipt.threadId,
+            occurredAt: now,
+            payload: {
+              ...run,
+              status: "interrupted",
+              providerThreadId,
+              activeAttemptId: attemptId,
+              completedAt: now,
+            },
+          },
+        ],
+      });
+      assert.isTrue(Option.isNone(yield* sessions.get(providerSessionId)));
+      const result = yield* worker.read({ commandId: workerInput.commandId });
+      if (history === "stopped" || history === "not-started") {
+        assert.isTrue(result.lifecycle?.writerEnded);
+        assert.equal(result.lifecycle?.state, "stopped");
+        assert.deepInclude(result.lifecycle?.manifest, {
+          outcome: "stopped",
+          runId: run.id,
+          checkpointId: null,
+        });
+        assert.deepEqual(
+          (yield* worker.read({ commandId: workerInput.commandId })).lifecycle?.manifest,
+          result.lifecycle?.manifest,
+        );
+      } else {
+        assert.isFalse(result.lifecycle?.writerEnded);
+        assert.equal(result.lifecycle?.state, "uncertain");
+        assert.isNull(result.lifecycle?.manifest);
+      }
+      assert.equal(open.mock.calls.length, history === "other-instance" ? 0 : 1);
+      if (open.mock.calls[0]) {
+        assert.deepEqual(open.mock.calls[0][0].modelSelection, run.modelSelection);
+        assert.equal(open.mock.calls[0][0].initialNativeThreadId, "original-native-thread");
+      }
+      assert.deepEqual(yield* worker.launch(workerInput), receipt);
+      assert.lengthOf((yield* threads.getThreadRecords(receipt.threadId, ["runs"])).runs, 1);
+    }).pipe(Effect.provide(workerLayer().pipe(Layer.provideMerge(harness.layer))));
+  },
+);
+
+it.effect.each([
   "before-commit",
   "after-thread-commit",
   "after-message-commit",
   "lost-response",
+  "configured-options",
 ] as const)("worker receipt survives %s and recreation of its service", (failurePoint) => {
   const harness = makeHarness();
+  const input = {
+    ...workerInput,
+    ...(failurePoint === "configured-options"
+      ? { options: { reasoningEffort: "high" as const } }
+      : {}),
+  };
   return Effect.gen(function* () {
     const threads = yield* ThreadManagement.ThreadManagementService;
     const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
-    const ids = WorkerLaunch.workerLaunchIds(workerInput, "codex");
+    const ids = WorkerLaunch.workerLaunchIds(input, "codex");
+    const legacyIds = WorkerLaunch.workerLaunchIds(workerInput, "codex");
+    assert.equal(ids.commandId, legacyIds.commandId);
+    if (failurePoint === "configured-options") assert.notEqual(ids.threadId, legacyIds.threadId);
+    else assert.equal(ids.threadId, legacyIds.threadId);
     if (failurePoint === "before-commit") {
       const fault = Layer.mock(ThreadLaunch.ThreadLaunchService)({
         launch: () =>
@@ -2458,7 +2717,7 @@ it.effect.each([
           ),
       });
       const failed = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
-        worker.launch(workerInput),
+        worker.launch(input),
       ).pipe(Effect.provide(workerLayer().pipe(Layer.provide(fault))), Effect.flip);
       assert.deepInclude(failed, { code: "launch_failed" });
       assert.isTrue(Option.isNone(yield* receipts.getByCommandId(ids.commandId)));
@@ -2467,7 +2726,7 @@ it.effect.each([
         type: "thread.create",
         ...ids,
         projectId,
-        title: workerInput.title,
+        title: input.title,
         modelSelection,
         runtimeMode: "approval-required",
         interactionMode: "default",
@@ -2501,7 +2760,7 @@ it.effect.each([
         ),
       );
       const stopped = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
-        worker.launch(workerInput),
+        worker.launch(input),
       ).pipe(Effect.provide(workerLayer().pipe(Layer.provide(interruptedLaunch))), Effect.exit);
       assert.isTrue(Exit.isFailure(stopped));
       if (Exit.isFailure(stopped))
@@ -2513,15 +2772,42 @@ it.effect.each([
       );
     } else {
       // The durable launch completes but its response is lost before the caller sees it.
-      yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) => worker.launch(workerInput)).pipe(
+      yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) => worker.launch(input)).pipe(
         Effect.provide(workerLayer()),
         Effect.andThen(Effect.fail("lost response")),
         Effect.flip,
       );
     }
-    const first = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
-      worker.launch(workerInput),
-    ).pipe(Effect.provide(workerLayer()));
+    const recoveredRead = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+      worker.read({ commandId: input.commandId }),
+    ).pipe(Effect.provide(workerLayer()), Effect.result);
+    if (failurePoint === "before-commit" || failurePoint === "after-thread-commit") {
+      assert.isTrue(Result.isFailure(recoveredRead));
+      if (Result.isFailure(recoveredRead))
+        assert.deepInclude(recoveredRead.failure, { code: "not_found" });
+    } else {
+      assert.isTrue(Result.isSuccess(recoveredRead));
+      if (Result.isSuccess(recoveredRead))
+        assert.equal(recoveredRead.success.receipt.threadId, ids.threadId);
+    }
+    const first = yield* Effect.gen(function* () {
+      const worker = yield* WorkerLaunch.WorkerLaunch;
+      const receipt = yield* worker.launch(input);
+      if (failurePoint === "before-commit") {
+        const store = yield* ExecutionStore.ExecutionStore;
+        const row = yield* store.read(input.commandId);
+        assert.equal(row?.stopRequested, 1);
+        assert.isFalse(yield* store.renew(input.commandId, row!.generation));
+        assert.isFalse(
+          yield* store.starting({
+            threadId: receipt.threadId,
+            providerThreadId: ProviderThreadId.make("must-not-revive"),
+            runOrdinal: 1,
+          }),
+        );
+      }
+      return receipt;
+    }).pipe(Effect.provide(workerLayer()));
     const settings = yield* ServerSettings.ServerSettingsService;
     yield* settings.updateSettings({
       projectSettingsOverrides: {
@@ -2529,21 +2815,55 @@ it.effect.each([
       },
     });
     const second = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
-      worker.launch(workerInput),
+      worker.launch(input),
     ).pipe(Effect.provide(workerLayer()));
     assert.deepEqual(first, second);
     assert.equal(first.threadId, ids.threadId);
     const projection = yield* threads.getThreadProjection(first.threadId);
     assert.equal(projection.messages.length, 1);
     assert.equal(projection.runs.length, 1);
+    const expectedModelSelection = {
+      ...modelSelection,
+      ...(input.options ? { options: [{ id: "reasoningEffort", value: "high" }] } : {}),
+    };
+    assert.deepEqual(projection.thread.modelSelection, expectedModelSelection);
+    assert.deepEqual(projection.runs[0]!.modelSelection, expectedModelSelection);
+    const execution = yield* Effect.gen(function* () {
+      const worker = yield* WorkerLaunch.WorkerLaunch;
+      if (failurePoint === "after-message-commit")
+        yield* threads.streamStoredEventsFrom({ threadId: first.threadId }).pipe(
+          Stream.filter(
+            (stored) =>
+              stored.event.type === "run.updated" && stored.event.payload.status === "interrupted",
+          ),
+          Stream.runHead,
+        );
+      return yield* worker.read({ commandId: input.commandId });
+    }).pipe(Effect.provide(workerLayer(["/other"], false)));
+    assert.deepEqual(execution.receipt, first);
+    assert.deepInclude(execution.run, {
+      id: projection.runs[0]!.id,
+      checkpointId: projection.runs[0]!.checkpointId,
+    });
+    if (failurePoint === "after-message-commit") assert.equal(execution.run.status, "interrupted");
     assert.equal(
       (yield* threads.listProjectThreads({ projectId, includeSubagents: true })).length,
       1,
     );
     const conflict = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
-      worker.launch({ ...workerInput, prompt: "Different request" }),
+      worker.launch({ ...input, prompt: "Different request" }),
     ).pipe(Effect.provide(workerLayer()), Effect.flip);
     assert.deepInclude(conflict, { code: "command_conflict" });
+    const changedOptions = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+      worker.launch({ ...input, options: { reasoningEffort: "low" } }),
+    ).pipe(Effect.provide(workerLayer()), Effect.flip);
+    assert.deepInclude(changedOptions, { code: "command_conflict" });
+    if (input.options) {
+      const removedOptions = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+        worker.launch(workerInput),
+      ).pipe(Effect.provide(workerLayer()), Effect.flip);
+      assert.deepInclude(removedOptions, { code: "command_conflict" });
+    }
     assert.equal((yield* threads.getThreadProjection(first.threadId)).messages.length, 1);
   }).pipe(Effect.provide(harness.layer));
 });
@@ -2552,6 +2872,22 @@ it.effect("worker rejects outside projects and disabled providers before committ
   const harness = makeHarness();
   return Effect.gen(function* () {
     const threads = yield* ThreadManagement.ThreadManagementService;
+    const disabledRead = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (disabledWorker) =>
+      disabledWorker.read({ commandId: workerInput.commandId }),
+    ).pipe(Effect.provide(workerLayer(["/repo"], true, false)), Effect.flip);
+    assert.deepInclude(disabledRead, { code: "not_enabled" });
+    const disabledFollow = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+      worker.follow({ commandId: workerInput.commandId }).pipe(Stream.runHead),
+    ).pipe(Effect.provide(workerLayer(["/repo"], true, false)), Effect.flip);
+    assert.deepInclude(disabledFollow, { code: "not_enabled" });
+    const disabledCancel = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
+      worker.cancel({
+        commandId: CommandId.make("disabled-cancel"),
+        launchCommandId: workerInput.commandId,
+      }),
+    ).pipe(Effect.provide(workerLayer(["/repo"], true, false)), Effect.flip);
+    assert.deepInclude(disabledCancel, { code: "not_enabled" });
+
     for (const roots of [[], ["/other"], ["/rep"], ["relative"]]) {
       const denied = yield* Effect.flatMap(WorkerLaunch.WorkerLaunch, (worker) =>
         worker.launch(workerInput),
@@ -2612,3 +2948,997 @@ it.effect("worker rejects outside projects and disabled providers before committ
     );
   }).pipe(Effect.provide(harness.layer));
 });
+
+it.effect("worker reads the accepted initial run, never a later turn or an unknown command", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const worker = yield* WorkerLaunch.WorkerLaunch;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const missing = yield* worker.read({ commandId: workerInput.commandId }).pipe(Effect.flip);
+    assert.equal(missing.code, "not_found");
+    const receipt = yield* worker.launch(workerInput);
+    const first = yield* worker.read({ commandId: workerInput.commandId });
+    yield* threads.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("later-command"),
+      threadId: receipt.threadId,
+      messageId: MessageId.make("later-message"),
+      text: "A later independent turn",
+      attachments: [],
+      modelSelection,
+      dispatchMode: { type: "defer_start", workspaceStrategy: { type: "root" } },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const projection = yield* threads.getThreadProjection(receipt.threadId);
+    assert.equal(projection.runs.length, 2);
+    const read = yield* worker.read({ commandId: workerInput.commandId });
+    assert.deepEqual(read.receipt, receipt);
+    assert.equal(read.run.id, first.run.id);
+    const ordinaryCommand = yield* worker
+      .read({ commandId: CommandId.make("later-command") })
+      .pipe(Effect.flip);
+    assert.equal(ordinaryCommand.code, "not_found");
+    const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+    const ids = WorkerLaunch.workerLaunchIds(workerInput, "codex");
+    const initialMessage = yield* receipts.getByCommandId(
+      CommandId.make(`${ids.commandId}:initial-message`),
+    );
+    assert.isTrue(Option.isSome(initialMessage));
+    if (Option.isSome(initialMessage)) {
+      yield* receipts.upsert({
+        ...initialMessage.value,
+        threadId: ThreadId.make("unrelated-thread"),
+      });
+      const inconsistent = yield* worker
+        .read({ commandId: workerInput.commandId })
+        .pipe(Effect.flip);
+      assert.equal(inconsistent.code, "read_failed");
+      const failedFollow = yield* worker
+        .follow({ commandId: workerInput.commandId })
+        .pipe(Stream.runHead, Effect.flip);
+      assert.equal(failedFollow.code, "follow_failed");
+    }
+  }).pipe(Effect.provide(workerLayer().pipe(Layer.provideMerge(harness.layer))));
+});
+
+it.effect("worker follows its run across replay/live and resumes without later turns", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const worker = yield* WorkerLaunch.WorkerLaunch;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const missing = yield* worker
+      .follow({ commandId: workerInput.commandId })
+      .pipe(Stream.runHead, Effect.flip);
+    assert.equal(missing.code, "not_found");
+    const receipt = yield* worker.launch(workerInput);
+    const original = yield* worker.read({ commandId: workerInput.commandId });
+    const invalid = yield* worker
+      .follow({ commandId: workerInput.commandId, afterSequence: Number.MAX_SAFE_INTEGER })
+      .pipe(Stream.runHead, Effect.flip);
+    assert.equal(invalid.code, "invalid_cursor");
+    const first = yield* worker.follow({ commandId: workerInput.commandId }).pipe(Stream.runHead);
+    assert.isTrue(Option.isSome(first));
+    if (Option.isNone(first)) return;
+    const firstSequence = first.value.sequence;
+    const progress = yield* worker.follow({ commandId: workerInput.commandId }).pipe(
+      Stream.tap((value) =>
+        value.sequence !== firstSequence
+          ? Effect.void
+          : Effect.gen(function* () {
+              yield* threads.dispatch({
+                type: "message.dispatch",
+                commandId: CommandId.make("follow-later-command"),
+                threadId: receipt.threadId,
+                messageId: MessageId.make("follow-later-message"),
+                text: "Independent later turn",
+                attachments: [],
+                modelSelection,
+                dispatchMode: { type: "defer_start", workspaceStrategy: { type: "root" } },
+                createdBy: "user",
+                creationSource: "web",
+              });
+              yield* threads.dispatch({
+                type: "run.interrupt",
+                commandId: CommandId.make("follow-interrupt"),
+                threadId: receipt.threadId,
+                runId: original.run.id,
+              });
+            }),
+      ),
+      Stream.takeUntil((value) => value.execution.run.status === "interrupted"),
+      Stream.runCollect,
+    );
+    assert.isAtLeast(progress.length, 2);
+    assert.equal(progress[0]!.sequence, firstSequence);
+    assert.equal(progress.at(-1)!.execution.run.status, "interrupted");
+    assert.isTrue(progress.every((value) => value.execution.run.id === original.run.id));
+    assert.isTrue(
+      progress.every(
+        (value, index) => index === 0 || value.sequence > progress[index - 1]!.sequence,
+      ),
+    );
+    assert.deepEqual(progress[0]!.execution.receipt, receipt);
+    assert.equal((yield* threads.getThreadProjection(receipt.threadId)).runs.length, 2);
+    const resumed = yield* worker
+      .follow({ commandId: workerInput.commandId, afterSequence: firstSequence })
+      .pipe(Stream.take(progress.length - 1), Stream.runCollect);
+    assert.deepEqual(resumed, progress.slice(1));
+  }).pipe(Effect.provide(workerLayer().pipe(Layer.provideMerge(harness.layer))));
+});
+
+it.effect(
+  "worker cancellation retries stay bound to the original run and acknowledge only a request",
+  () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const worker = yield* WorkerLaunch.WorkerLaunch;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const input = {
+        commandId: CommandId.make("worker-cancel"),
+        launchCommandId: workerInput.commandId,
+      };
+      const abandoned = {
+        commandId: CommandId.make("cancel-before-delivery"),
+        launchCommandId: CommandId.make("abandoned-launch"),
+      };
+      const missing = yield* worker.cancel(abandoned);
+      assert.equal(missing.status, "not_started");
+      assert.deepEqual(yield* worker.cancel(abandoned), missing);
+      assert.equal(
+        (yield* worker
+          .launch({ ...workerInput, commandId: abandoned.launchCommandId })
+          .pipe(Effect.flip)).code,
+        "capacity_unavailable",
+      );
+      assert.equal(
+        (yield* worker
+          .cancel({ ...abandoned, launchCommandId: workerInput.commandId })
+          .pipe(Effect.flip)).code,
+        "command_conflict",
+      );
+      const launch = yield* worker.launch(workerInput);
+      const original = yield* worker.read({ commandId: workerInput.commandId });
+      const [first, concurrent] = yield* Effect.all([worker.cancel(input), worker.cancel(input)], {
+        concurrency: "unbounded",
+      });
+      assert.deepEqual(first, concurrent);
+      assert.equal(first.status, "requested");
+      if (first.status === "not_started") throw new Error("Expected accepted run cancellation");
+      assert.equal(first.runId, original.run.id);
+      assert.deepEqual(first.launch, launch);
+      assert.equal(
+        (yield* worker.read({ commandId: workerInput.commandId })).run.status,
+        "interrupted",
+      );
+      yield* threads.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("cancel-later-command"),
+        threadId: launch.threadId,
+        messageId: MessageId.make("cancel-later-message"),
+        text: "An independent later turn",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "defer_start", workspaceStrategy: { type: "root" } },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const beforeRetry = yield* threads.getThreadProjection(launch.threadId);
+      const retry = yield* worker.cancel(input);
+      assert.deepEqual(retry, first);
+      const terminal = yield* worker.cancel({
+        ...input,
+        commandId: CommandId.make("new-cancel-terminal"),
+      });
+      assert.deepInclude(terminal, {
+        status: "already_terminal",
+        runStatus: "interrupted",
+        runId: original.run.id,
+      });
+      const afterRetry = yield* threads.getThreadProjection(launch.threadId);
+      assert.deepEqual(afterRetry.runs, beforeRetry.runs);
+      assert.equal(
+        afterRetry.turnItems.filter((item) => item.type === "run_interrupt_request").length,
+        1,
+      );
+      const otherInput = { ...workerInput, commandId: CommandId.make("other-worker-launch") };
+      const otherLaunch = yield* worker.launch(otherInput);
+      yield* threads.streamStoredEventsFrom({ threadId: otherLaunch.threadId }).pipe(
+        Stream.filter(
+          (stored) =>
+            stored.event.type === "run.updated" && stored.event.payload.status === "starting",
+        ),
+        Stream.runHead,
+      );
+      const otherBefore = yield* worker.read({ commandId: otherInput.commandId });
+      const conflict = yield* worker
+        .cancel({ ...input, launchCommandId: otherInput.commandId })
+        .pipe(Effect.flip);
+      assert.equal(conflict.code, "command_conflict");
+      assert.deepEqual(yield* worker.read({ commandId: otherInput.commandId }), otherBefore);
+    }).pipe(
+      Effect.provide(
+        workerLayer(undefined, undefined, undefined, undefined, undefined, undefined, 2).pipe(
+          Layer.provideMerge(harness.layer),
+        ),
+      ),
+    );
+  },
+);
+
+it.effect(
+  "worker materializes required artifacts with new thread ownership before accepting a turn",
+  () => {
+    const harness = makeHarness();
+    const bytes = new TextEncoder().encode("required result\n");
+    const source: FoundryArtifactManifest = {
+      reference: {
+        instanceId: FoundryInstanceId.make("11111111-1111-4111-8111-111111111111"),
+        artifactId: FoundryArtifactId.make("22222222-2222-4222-8222-222222222222"),
+        owner: { environmentId: EnvironmentId.make("worker"), threadId: ThreadId.make("previous") },
+      },
+      name: "result.txt",
+      mimeType: "text/plain",
+      sizeBytes: bytes.length,
+      sha256: "a".repeat(64),
+    };
+    let mode = "unavailable";
+    let downloads = 0;
+    const publication = Layer.effect(
+      ArtifactPublication.ArtifactPublication,
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        return ArtifactPublication.ArtifactPublication.of({
+          download: () => {
+            downloads++;
+            return mode === "unavailable"
+              ? Effect.fail(new FoundryArtifactError({ code: "unavailable" }))
+              : Effect.succeed({
+                  manifest: mode === "changed" ? { ...source, sha256: "b".repeat(64) } : source,
+                  bytes,
+                });
+          },
+          publishAttachment: (threadId, attachment) =>
+            Effect.gen(function* () {
+              const target = resolveAttachmentPath({
+                attachmentsDir: config.attachmentsDir,
+                attachment,
+              });
+              assert.isNotNull(target);
+              assert.deepEqual(yield* fs.readFile(target!), bytes);
+              return {
+                ...attachment,
+                foundryArtifact: {
+                  ...source,
+                  reference: {
+                    ...source.reference,
+                    artifactId: FoundryArtifactId.make("33333333-3333-4333-8333-333333333333"),
+                    owner: { ...source.reference.owner, threadId: ThreadId.make(threadId) },
+                  },
+                },
+              };
+            }).pipe(Effect.mapError(() => new FoundryArtifactError({ code: "unavailable" }))),
+        });
+      }),
+    );
+    const files = ServerConfig.layerTest(process.cwd(), {
+      prefix: "worker-artifact-handoff-",
+    }).pipe(Layer.provideMerge(NodeServices.layer));
+    const workerFiles = Layer.effect(
+      FileSystem.FileSystem,
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        return {
+          ...fs,
+          realPath: (path: string) => (path === "/repo" ? Effect.succeed(path) : fs.realPath(path)),
+        };
+      }),
+    ).pipe(Layer.provide(NodeServices.layer));
+    return Effect.gen(function* () {
+      const worker = yield* WorkerLaunch.WorkerLaunch;
+      const store = yield* ExecutionStore.ExecutionStore;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const input = {
+        ...workerInput,
+        commandId: CommandId.make("artifact-handoff"),
+        inputArtifacts: [source],
+      };
+      assert.equal((yield* worker.launch(input).pipe(Effect.flip)).code, "handoff_unavailable");
+      assert.isUndefined(yield* store.read(input.commandId));
+      mode = "changed";
+      assert.equal((yield* worker.launch(input).pipe(Effect.flip)).code, "handoff_changed");
+      assert.isUndefined(yield* store.read(input.commandId));
+      mode = "ready";
+      const receipt = yield* worker.launch(input);
+      const records = yield* threads.getThreadRecords(receipt.threadId, ["messages"]);
+      const attachment = records.messages[0]?.attachments[0];
+      assert.isDefined(attachment);
+      assert.equal(attachment!.foundryArtifact?.reference.owner.threadId, receipt.threadId);
+      assert.notEqual(
+        attachment!.foundryArtifact?.reference.artifactId,
+        source.reference.artifactId,
+      );
+      assert.deepEqual(
+        yield* fs.readFile(
+          resolveAttachmentPath({
+            attachmentsDir: config.attachmentsDir,
+            attachment: attachment!,
+          })!,
+        ),
+        bytes,
+      );
+      const before = downloads;
+      assert.deepEqual(yield* worker.launch(input), receipt);
+      assert.equal(downloads, before);
+      assert.equal(
+        (yield* worker
+          .launch({ ...input, inputArtifacts: [{ ...source, sha256: "b".repeat(64) }] })
+          .pipe(Effect.flip)).code,
+        "command_conflict",
+      );
+    }).pipe(
+      Effect.provide(
+        workerLayer(["/repo"], true, true, false, {}, workerFiles).pipe(
+          Layer.provideMerge(harness.layer),
+          Layer.provide(publication),
+          Layer.provideMerge(files),
+        ),
+      ),
+    );
+  },
+);
+
+it.effect.each([
+  "absent",
+  "missing",
+  "error",
+  "stale",
+  "missing-object",
+  "ready",
+  "other-workspace",
+  "branch-workspace",
+] as const)(
+  "worker completion waits for writer evidence and a ready checkpoint with Git object: %s",
+  (checkpointState) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const git = yield* GitVcsDriver.GitVcsDriver;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "worker-checkpoint-" });
+      const repository = `${directory}/repo`;
+      const otherRepository = `${directory}/other-repo`;
+      const branchWorkspace = `${repository}/branch`;
+      const command = (cwd: string, args: string[]) =>
+        git.execute({ operation: "worker-checkpoint-fixture", cwd, args });
+      for (const cwd of [repository, otherRepository]) {
+        yield* fs.makeDirectory(cwd);
+        yield* command(cwd, ["init", "-q"]);
+        yield* command(cwd, [
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.test",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "checkpoint",
+        ]);
+        yield* command(cwd, ["update-ref", "refs/checkpoints/worker-result", "HEAD"]);
+      }
+      yield* command(repository, ["worktree", "add", "--detach", branchWorkspace, "HEAD"]);
+      const expectedCommit = (yield* command(
+        checkpointState === "other-workspace" ? otherRepository : repository,
+        ["rev-parse", "HEAD"],
+      )).stdout.trim();
+      const harness = makeHarness({ workspaceRoot: repository });
+      let handoffDiff = "";
+      let captureFails = false;
+      let checkpointAvailable = checkpointState !== "missing-object";
+      const temporaryRefs = new Set<string>();
+      let lastTemporaryRef: string | undefined;
+      let diffCalls = 0;
+      let changeAfterReservation = false;
+      const bindings: WriterBinding[] = [];
+      const released: string[] = [];
+      const gate = Layer.succeed(WorkspaceGate, {
+        handoffs: null,
+        reconcile: Effect.void,
+        installReconciler: () => Effect.void,
+        prepare: () => Effect.succeed(true),
+        starting: () => Effect.succeed(true),
+        bindings: Effect.succeed(bindings),
+        reserve: (input) =>
+          Effect.sync(() => {
+            bindings.push({
+              requestId: input.commandId,
+              commandId: input.commandId,
+              threadId: input.threadId,
+              generation: input.generation,
+              runId: null,
+              attemptId: null,
+              closed: 0,
+              verified: 0,
+            });
+            return checkpointState === "branch-workspace"
+              ? {
+                  requestId: input.commandId,
+                  repositoryPath: input.repositoryPath,
+                  mode: input.mode,
+                  managedRoot: repository,
+                  workspacePath: input.repositoryPath,
+                  baseCommit: "base",
+                  branch: null,
+                  state: "ready" as const,
+                }
+              : null;
+          }),
+        confirm: (requestId) =>
+          Effect.sync(() => {
+            released.push(requestId);
+          }),
+      });
+      return yield* Effect.gen(function* () {
+        const worker = yield* WorkerLaunch.WorkerLaunch;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const sink = yield* EventSink.EventSinkV2;
+        const store = yield* ExecutionStore.ExecutionStore;
+        const receipt = yield* worker.launch(workerInput);
+        const { runs } = yield* threads.getThreadRecords(receipt.threadId, ["runs"]);
+        const run = runs[0]!;
+        const now = yield* DateTime.now;
+        const scopeId = CheckpointScopeId.make("worker-result-scope");
+        const checkpointId = CheckpointId.make("worker-result-checkpoint");
+        const nodeId = NodeId.make("worker-result-root");
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make("worker-done"),
+              type: "run.updated",
+              threadId: receipt.threadId,
+              occurredAt: now,
+              payload: {
+                ...run,
+                status: "completed",
+                completedAt: now,
+                checkpointId: checkpointState === "absent" ? null : checkpointId,
+              },
+            },
+          ],
+        });
+        let result = yield* worker.read({ commandId: workerInput.commandId });
+        assert.isFalse(result.lifecycle?.writerEnded);
+        assert.isNull(result.lifecycle?.manifest);
+        const row = yield* store.read(workerInput.commandId);
+        yield* store.confirm(workerInput.commandId, row!.generation);
+        result = yield* worker.read({ commandId: workerInput.commandId });
+        assert.equal(result.lifecycle?.state, "finalizing");
+        assert.isNull(result.lifecycle?.manifest);
+        if (checkpointState !== "absent") {
+          yield* sink.write({
+            events: [
+              {
+                id: EventId.make("worker-result-scope"),
+                type: "checkpoint-scope.created",
+                threadId: receipt.threadId,
+                occurredAt: now,
+                payload: {
+                  id: scopeId,
+                  threadId: receipt.threadId,
+                  runId: run.id,
+                  nodeId,
+                  parentScopeId: null,
+                  providerThreadId: null,
+                  kind: "root_run",
+                  ordinalWithinParent: 0,
+                  advancesAppRunCount: true,
+                  cwd:
+                    checkpointState === "other-workspace"
+                      ? otherRepository
+                      : checkpointState === "branch-workspace"
+                        ? branchWorkspace
+                        : repository,
+                  createdAt: now,
+                },
+              },
+              {
+                id: EventId.make("worker-result-captured"),
+                type: "checkpoint.captured",
+                threadId: receipt.threadId,
+                occurredAt: now,
+                payload: {
+                  id: checkpointId,
+                  threadId: receipt.threadId,
+                  scopeId,
+                  runId: run.id,
+                  nodeId,
+                  parentCheckpointId: null,
+                  ordinalWithinScope: 1,
+                  appRunOrdinal: 1,
+                  ref: CheckpointRef.make("refs/checkpoints/worker-result"),
+                  status:
+                    checkpointState === "missing-object" ||
+                    checkpointState === "other-workspace" ||
+                    checkpointState === "branch-workspace"
+                      ? "ready"
+                      : checkpointState,
+                  files: [],
+                  capturedAt: now,
+                },
+              },
+            ],
+          });
+        }
+        result = yield* worker.read({ commandId: workerInput.commandId });
+        if (
+          checkpointState === "ready" ||
+          checkpointState === "other-workspace" ||
+          checkpointState === "branch-workspace"
+        ) {
+          assert.equal(result.lifecycle?.state, "completed");
+          assert.deepInclude(result.lifecycle?.manifest, {
+            checkpointId,
+            runId: run.id,
+            outcome: "completed",
+            checkpointCommitSha: expectedCommit,
+          });
+          assert.deepEqual(yield* worker.read({ commandId: workerInput.commandId }), result);
+          const next = {
+            ...workerInput,
+            commandId: CommandId.make("worker-handoff"),
+            previousExecution: { commandId: workerInput.commandId, generation: row!.generation },
+          };
+          if (checkpointState === "other-workspace") {
+            assert.equal((yield* worker.launch(next).pipe(Effect.flip)).code, "project_denied");
+            assert.equal(temporaryRefs.size, 0);
+            return;
+          }
+          for (const invalid of [
+            {
+              ...next,
+              previousExecution: { ...next.previousExecution, generation: row!.generation + 1 },
+            },
+            { ...next, workspaceMode: "worktree" as const },
+          ]) {
+            assert.equal(
+              (yield* worker
+                .launch({
+                  ...invalid,
+                  commandId: CommandId.make(
+                    `invalid-handoff-${invalid.previousExecution.generation}-${"workspaceMode" in invalid ? invalid.workspaceMode : "checkout"}`,
+                  ),
+                })
+                .pipe(Effect.flip)).code,
+              "handoff_unavailable",
+            );
+          }
+          checkpointAvailable = false;
+          assert.equal((yield* worker.launch(next).pipe(Effect.flip)).code, "handoff_unavailable");
+          checkpointAvailable = true;
+          captureFails = true;
+          assert.equal((yield* worker.launch(next).pipe(Effect.flip)).code, "handoff_unavailable");
+          assert.equal(temporaryRefs.size, 0);
+          captureFails = false;
+          // Model a crash after capture: the retry must remove the pre-existing snapshot too.
+          temporaryRefs.add(lastTemporaryRef!);
+          handoffDiff = "modified working tree";
+          assert.equal((yield* worker.launch(next).pipe(Effect.flip)).code, "handoff_changed");
+          assert.equal(temporaryRefs.size, 0);
+          handoffDiff = "";
+          diffCalls = 0;
+          changeAfterReservation = true;
+          const raced = { ...next, commandId: CommandId.make("handoff-raced") };
+          assert.equal((yield* worker.launch(raced).pipe(Effect.flip)).code, "handoff_changed");
+          assert.deepEqual(released, [raced.commandId]);
+          const fenced = yield* store.read(raced.commandId);
+          assert.deepInclude(fenced, { stopRequested: 1, writerEnded: 1, manifest: null });
+          changeAfterReservation = false;
+          assert.equal((yield* worker.launch(raced).pipe(Effect.flip)).code, "launch_failed");
+          assert.isFalse(
+            yield* store.starting({
+              threadId: fenced!.threadId,
+              providerThreadId: ProviderThreadId.make("must-not-start"),
+              runOrdinal: 1,
+            }),
+          );
+          assert.equal(
+            (yield* worker.read({ commandId: raced.commandId }).pipe(Effect.flip)).code,
+            "not_found",
+          );
+          const nextReceipt = yield* worker.launch(next);
+          assert.notEqual(nextReceipt.threadId, receipt.threadId);
+          if (checkpointState === "branch-workspace")
+            assert.equal(
+              (yield* threads.getThreadRecords(nextReceipt.threadId, [])).thread.worktreePath,
+              branchWorkspace,
+            );
+          assert.equal(temporaryRefs.size, 0);
+          assert.deepEqual(yield* worker.launch(next), nextReceipt);
+          assert.equal(
+            (yield* worker
+              .launch({
+                ...next,
+                previousExecution: { ...next.previousExecution, generation: row!.generation + 1 },
+              })
+              .pipe(Effect.flip)).code,
+            "command_conflict",
+          );
+        } else {
+          assert.equal(result.lifecycle?.state, "finalizing");
+          assert.isNull(result.lifecycle?.manifest);
+        }
+      }).pipe(
+        Effect.provide(
+          workerLayer([repository], true, true, checkpointState !== "missing-object", {
+            hasCheckpointRef: () => Effect.succeed(checkpointAvailable),
+            captureCheckpoint: ({ checkpointRef }) =>
+              Effect.gen(function* () {
+                temporaryRefs.add(checkpointRef);
+                lastTemporaryRef = checkpointRef;
+                if (captureFails)
+                  return yield* new VcsProcessExitError({
+                    operation: "capture",
+                    command: "git",
+                    cwd: repository,
+                    exitCode: 1,
+                    detail: "fixture failure",
+                  });
+              }),
+            diffCheckpoints: () =>
+              Effect.sync(() => {
+                diffCalls++;
+                return changeAfterReservation && diffCalls === 2
+                  ? "changed after reservation"
+                  : handoffDiff;
+              }),
+            deleteCheckpointRefs: ({ checkpointRefs }) =>
+              Effect.sync(() => {
+                for (const ref of checkpointRefs) temporaryRefs.delete(ref);
+              }),
+          }).pipe(Layer.provide(gate), Layer.provideMerge(harness.layer)),
+        ),
+      );
+    }).pipe(
+      Effect.provide(
+        GitVcsDriver.layer.pipe(
+          Layer.provide(
+            ServerConfig.layerTest(process.cwd(), { prefix: "worker-checkpoint-git-" }),
+          ),
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    ),
+);
+
+it.effect(
+  "worker releases an expired prelaunch reservation without inventing a completed run",
+  () =>
+    Effect.gen(function* () {
+      const released = yield* Deferred.make<string>();
+      const bindings: WriterBinding[] = [];
+      const gate = Layer.succeed(WorkspaceGate, {
+        handoffs: null,
+        reconcile: Effect.void,
+        installReconciler: () => Effect.void,
+        prepare: () => Effect.succeed(true),
+        starting: () => Effect.succeed(true),
+        bindings: Effect.succeed(bindings),
+        reserve: () => Effect.succeed(null),
+        confirm: (requestId) => Deferred.succeed(released, requestId).pipe(Effect.asVoid),
+      });
+      yield* Effect.gen(function* () {
+        const worker = yield* WorkerLaunch.WorkerLaunch;
+        const store = yield* ExecutionStore.ExecutionStore;
+        const commandId = CommandId.make("crashed-before-thread");
+        const threadId = ThreadId.make("foundry-launch:crashed-before-thread");
+        const row = yield* store.reserve(commandId, threadId);
+        bindings.push({
+          requestId: "reservation-before-thread",
+          commandId,
+          threadId,
+          generation: row.generation,
+          runId: null,
+          attemptId: null,
+          closed: 0,
+          verified: 0,
+        });
+        yield* TestClock.adjust("60 seconds");
+        assert.equal(yield* Deferred.await(released), "reservation-before-thread");
+        assert.deepInclude(yield* store.read(commandId), {
+          writerEnded: 1,
+          stopRequested: 1,
+          manifest: null,
+        });
+        assert.equal((yield* worker.read({ commandId }).pipe(Effect.flip)).code, "not_found");
+        assert.isFalse(
+          yield* store.starting({
+            threadId,
+            providerThreadId: ProviderThreadId.make("forbidden-start"),
+            runOrdinal: 1,
+          }),
+        );
+      }).pipe(
+        Effect.provide(
+          workerLayer().pipe(Layer.provide(gate), Layer.provideMerge(makeHarness().layer)),
+        ),
+      );
+    }),
+);
+
+it.effect("running worker cancel remains uncertain until confirmed writing end", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const worker = yield* WorkerLaunch.WorkerLaunch;
+    const store = yield* ExecutionStore.ExecutionStore;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const sink = yield* EventSink.EventSinkV2;
+    const receipt = yield* worker.launch(workerInput);
+    const execution = yield* worker.read({ commandId: workerInput.commandId });
+    const row = yield* store.read(workerInput.commandId);
+    assert.isTrue(
+      yield* store.starting({
+        threadId: receipt.threadId,
+        providerThreadId: ProviderThreadId.make("running-worker"),
+        runOrdinal: 1,
+      }),
+    );
+    yield* worker.cancel({
+      commandId: CommandId.make("stop-running-worker"),
+      launchCommandId: workerInput.commandId,
+    });
+    let stopped = yield* worker.read({ commandId: workerInput.commandId });
+    assert.isFalse(stopped.lifecycle?.writerEnded);
+    assert.isNull(stopped.lifecycle?.manifest);
+    yield* store.confirm(workerInput.commandId, row!.generation);
+    const { runs } = yield* threads.getThreadRecords(receipt.threadId, ["runs"]);
+    const now = yield* DateTime.now;
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make("worker-stop-confirmed"),
+          type: "run.updated",
+          threadId: receipt.threadId,
+          occurredAt: now,
+          payload: {
+            ...runs.find((run) => run.id === execution.run.id)!,
+            status: "interrupted",
+            completedAt: now,
+          },
+        },
+      ],
+    });
+    stopped = yield* worker.read({ commandId: workerInput.commandId });
+    assert.equal(stopped.lifecycle?.state, "stopped");
+    assert.deepInclude(stopped.lifecycle?.manifest, { outcome: "stopped", checkpointId: null });
+  }).pipe(Effect.provide(workerLayer().pipe(Layer.provideMerge(harness.layer))));
+});
+
+it.effect(
+  "worker watchdog interrupts only its original run after the controller stops renewing",
+  () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const worker = yield* WorkerLaunch.WorkerLaunch;
+      const store = yield* ExecutionStore.ExecutionStore;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const receipt = yield* worker.launch(workerInput);
+      const original = yield* worker.read({ commandId: workerInput.commandId });
+      const row = yield* store.read(workerInput.commandId);
+      yield* store.starting({
+        threadId: receipt.threadId,
+        providerThreadId: ProviderThreadId.make("partitioned-worker"),
+        runOrdinal: 1,
+      });
+      const stopped = yield* threads
+        .streamStoredEventsFrom({ threadId: receipt.threadId, afterSequence: receipt.sequence })
+        .pipe(
+          Stream.filter(
+            (stored) =>
+              stored.event.type === "run.updated" &&
+              stored.event.payload.id === original.run.id &&
+              stored.event.payload.status === "interrupted",
+          ),
+          Stream.runHead,
+          Effect.forkChild,
+        );
+      yield* TestClock.adjust("60 seconds");
+      assert.isTrue(Option.isSome(yield* Fiber.join(stopped)));
+      const result = yield* worker.read({ commandId: workerInput.commandId });
+      assert.isFalse(result.lifecycle?.writerEnded);
+      assert.isNull(result.lifecycle?.manifest);
+      assert.isFalse(yield* store.renew(workerInput.commandId, row!.generation));
+      assert.deepEqual(yield* worker.launch(workerInput), receipt);
+      assert.lengthOf((yield* threads.getThreadRecords(receipt.threadId, ["runs"])).runs, 1);
+    }).pipe(Effect.provide(workerLayer().pipe(Layer.provideMerge(harness.layer))));
+  },
+);
+
+it.live.each(["branch", "existing"] as const)(
+  "worker starts a returned branch only at the confirmed commit and keeps its receipt after lost acknowledgement: %s",
+  (mode) =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      const fs = yield* FileSystem.FileSystem;
+      const git = yield* GitVcsDriver.GitVcsDriver;
+      const temp = yield* fs.makeTempDirectoryScoped();
+      const cwd = `${temp}/returned`;
+      yield* fs.makeDirectory(cwd);
+      const execute = Effect.fn("test.returned.git")(function* (args: ReadonlyArray<string>) {
+        return (yield* git.execute({ cwd, operation: "test.returned", args })).stdout.trim();
+      });
+      yield* execute(["init"]);
+      yield* fs.writeFileString(`${cwd}/result.txt`, "returned");
+      yield* execute(["add", "."]);
+      yield* execute([
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-m",
+        "result",
+      ]);
+      const originalHead = yield* execute(["rev-parse", "HEAD"]);
+      if (mode === "existing") {
+        yield* fs.writeFileString(`${cwd}/checkpoint-only.txt`, "uncommitted checkpoint");
+        yield* execute(["add", "."]);
+        yield* execute([
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.test",
+          "commit",
+          "-m",
+          "checkpoint",
+        ]);
+      }
+      const commitSha = yield* execute(["rev-parse", "HEAD"]);
+      const treeSha = yield* execute(["rev-parse", "HEAD^{tree}"]);
+      if (mode === "existing") yield* execute(["reset", "--mixed", originalHead]);
+      const result = {
+        receipt: {
+          handoffId: "interactive",
+          threadId: ThreadId.make("interactive-thread"),
+          projectId,
+          workspacePath: cwd,
+          branch: "result",
+          baseCommit: originalHead,
+          baseCheckpointRef: commitSha,
+          sourceThreadId: ThreadId.make("source"),
+          mode,
+        },
+        commitSha,
+        treeSha,
+        checkpointRef: commitSha,
+        bundle: {
+          reference: {
+            instanceId: FoundryInstanceId.make("11111111-1111-4111-8111-111111111111"),
+            artifactId: FoundryArtifactId.make("22222222-2222-4222-8222-222222222222"),
+            owner: {
+              environmentId: EnvironmentId.make("worker"),
+              threadId: ThreadId.make("interactive-thread"),
+            },
+          },
+          name: "result.bundle",
+          mimeType: "application/octet-stream",
+          sizeBytes: 1,
+          sha256: "a".repeat(64),
+        },
+        archive: {
+          instanceId: FoundryInstanceId.make("11111111-1111-4111-8111-111111111111"),
+          deviceId: FoundryDeviceId.make("33333333-3333-4333-8333-333333333333"),
+          deviceGeneration: 1,
+          owner: {
+            environmentId: EnvironmentId.make("worker"),
+            threadId: ThreadId.make("interactive-thread"),
+          },
+          cursor: 1,
+          sourceSequence: 1,
+        },
+        tests: "manual",
+        openPoints: "",
+      };
+      const encoded = yield* encodeHandoffResult(result);
+      const journal = ReservationStore.layer(`${temp}/journal.sqlite`);
+      const gate = Layer.effect(
+        WorkspaceGate,
+        Effect.gen(function* () {
+          const store = yield* ReservationStore.ReservationStore;
+          return WorkspaceGate.of({
+            handoffs: store,
+            reconcile: Effect.void,
+            installReconciler: () => Effect.void,
+            prepare: () => Effect.succeed(true),
+            starting: () => Effect.succeed(true),
+            bindings: store.bindings,
+            confirm: (id) => store.setState(id, "released"),
+            reserve: Effect.fn("test.returned.reserve")(function* (input) {
+              const reservation = {
+                requestId: input.commandId,
+                repositoryPath: input.repositoryPath,
+                workspacePath: input.repositoryPath,
+                managedRoot: temp,
+                mode: input.mode,
+                baseCommit: commitSha,
+                branch: "result",
+                state: "ready" as const,
+              };
+              if (!(yield* store.claim(reservation, input.threadId)))
+                return yield* new FoundryWorkspaceError({ code: "writer_busy" });
+              return reservation;
+            }),
+          });
+        }),
+      ).pipe(Layer.provideMerge(journal));
+      yield* Effect.gen(function* () {
+        const worker = yield* WorkerLaunch.WorkerLaunch;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const store = yield* ReservationStore.ReservationStore;
+        yield* store.hold({
+          id: "interactive",
+          threadId: result.receipt.threadId,
+          workspacePath: cwd,
+          state: "open",
+          payload: "request",
+          receipt: null,
+          result: encoded,
+          closingCommand: null,
+        });
+        const input = {
+          ...workerInput,
+          commandId: CommandId.make("returned-launch"),
+          previousHandoff: { handoffId: "interactive", commitSha },
+        };
+        assert.equal((yield* worker.launch(input).pipe(Effect.flip)).code, "handoff_unavailable");
+        yield* store.transitionHandoff("interactive", "open", "returned");
+        assert.equal(
+          (yield* worker
+            .launch({
+              ...input,
+              previousHandoff: { ...input.previousHandoff, commitSha: "a".repeat(40) },
+            })
+            .pipe(Effect.flip)).code,
+          "handoff_changed",
+        );
+        const receipt = yield* worker.launch(input);
+        assert.equal(
+          (yield* threads.getThreadRecords(receipt.threadId, [])).thread.worktreePath,
+          cwd,
+        );
+        yield* execute([
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.invalid",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "later",
+        ]);
+        assert.deepEqual(yield* worker.launch(input), receipt);
+        assert.equal(
+          (yield* worker
+            .launch({ ...input, commandId: CommandId.make("changed-head") })
+            .pipe(Effect.flip)).code,
+          "handoff_changed",
+        );
+        assert.equal((yield* threads.getThreadRecords(receipt.threadId, ["runs"])).runs.length, 1);
+      }).pipe(
+        Effect.provide(
+          workerLayer([temp], true, true, true, {}, NodeServices.layer).pipe(
+            Layer.provideMerge(gate),
+            Layer.provideMerge(harness.layer),
+          ),
+        ),
+      );
+    }).pipe(
+      Effect.provide(
+        GitVcsDriver.layer.pipe(
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "returned-worker-" })),
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+      Effect.scoped,
+    ),
+);

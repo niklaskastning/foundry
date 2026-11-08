@@ -1351,7 +1351,13 @@ export default function FilePreviewPanel({
               name={attachment.name}
               mimeType={attachment.mimeType}
               sizeBytes={attachment.sizeBytes}
-              asset={{ environmentId, attachmentId: attachment.id }}
+              asset={{
+                environmentId,
+                attachmentId: attachment.id,
+                ...(attachment.foundryArtifact
+                  ? { foundryArtifact: attachment.foundryArtifact }
+                  : {}),
+              }}
               htmlRender={attachment.htmlRender === true}
               threadRef={threadRef}
             />

@@ -29,6 +29,9 @@ export const FoundryCatalogDevice = Schema.Struct({
   online: Schema.Boolean,
   rpcReady: Schema.Boolean,
   clientAccess: Schema.Struct({ enabled: Schema.Boolean, generation: Schema.Int }),
+  automationExecution: Schema.optionalKey(
+    Schema.Struct({ enabled: Schema.Boolean, generation: Schema.Int }),
+  ),
 });
 export type FoundryCatalogDevice = typeof FoundryCatalogDevice.Type;
 export const FoundryDeviceCatalog = Schema.Struct({

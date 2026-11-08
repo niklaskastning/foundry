@@ -1,4 +1,46 @@
 import {
+  FoundryWorkerHandoffOpen,
+  FoundryWorkerHandoffFinish,
+  FoundryWorkerHandoffReopen,
+  FoundryWorkerHandoffReceipt,
+  FoundryWorkerHandoffResult,
+  FoundryWorkerHandoffError,
+} from "./foundryHandoff.ts";
+import {
+  AutomationTriggerCommand,
+  AutomationTriggerQuery,
+  AutomationTriggerResult,
+  AutomationTriggerError,
+} from "./automation/trigger.ts";
+import {
+  AutomationApplicationQuery,
+  AutomationApplicationCommand,
+  AutomationApplicationResult,
+  AutomationApplicationError,
+} from "./automation/application.ts";
+import {
+  AutomationControlCommand,
+  AutomationControlSnapshot,
+  AutomationControlError,
+} from "./automation/control.ts";
+import {
+  AutomationInboxQuery,
+  AutomationInboxMark,
+  AutomationInboxPage,
+  AutomationInboxEntry,
+  AutomationInboxError,
+} from "./automation/inbox.ts";
+import { FoundryWorkerRenewInput, FoundryWorkerRenewError } from "./foundryWorker.ts";
+import {
+  FoundryWorkerCancelInput,
+  FoundryWorkerCancellation,
+  FoundryWorkerCancelError,
+  FoundryWorkerFollowInput,
+  FoundryWorkerProgress,
+  FoundryWorkerFollowError,
+  FoundryWorkerReadInput,
+  FoundryWorkerExecution,
+  FoundryWorkerReadError,
   FoundryWorkerLaunchInput,
   FoundryWorkerLaunchReceipt,
   FoundryWorkerLaunchError,
@@ -52,7 +94,7 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
-import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, TrimmedNonEmptyString, ProjectId } from "./baseSchemas.ts";
 import {
   ProviderAuthCancelInput,
   ProviderAuthCompleteInput,
@@ -438,6 +480,20 @@ export const WS_METHODS = {
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
   assetsCreateUrl: "assets.createUrl",
+  foundryAutomationTriggerQuery: "foundry.automationTriggerQuery",
+  foundryAutomationTriggerCommand: "foundry.automationTriggerCommand",
+  foundryAutomationQuery: "foundry.automationQuery",
+  foundryAutomationCommand: "foundry.automationCommand",
+  foundryAutomationControl: "foundry.automationControl",
+  foundryAutomationInboxQuery: "foundry.automationInboxQuery",
+  foundryAutomationInboxMark: "foundry.automationInboxMark",
+  foundryWorkerHandoffOpen: "foundry.workerHandoffOpen",
+  foundryWorkerHandoffFinish: "foundry.workerHandoffFinish",
+  foundryWorkerHandoffReopen: "foundry.workerHandoffReopen",
+  foundryWorkerRenew: "foundry.workerRenew",
+  foundryWorkerCancel: "foundry.workerCancel",
+  foundryWorkerFollow: "foundry.workerFollow",
+  foundryWorkerRead: "foundry.workerRead",
   foundryWorkerLaunch: "foundry.workerLaunch",
   foundryWorkerStatus: "foundry.workerStatus",
   assetsReadChunk: "assets.readChunk",
@@ -1401,13 +1457,84 @@ const WsAgentSessionsImportRpc = Rpc.make(WS_METHODS.agentSessionsImport, {
   ]),
 });
 
+const WsAutomationTriggerQueryRpc = Rpc.make(WS_METHODS.foundryAutomationTriggerQuery, {
+  payload: AutomationTriggerQuery,
+  success: AutomationTriggerResult,
+  error: Schema.Union([AutomationTriggerError, EnvironmentAuthorizationError]),
+});
+const WsAutomationTriggerCommandRpc = Rpc.make(WS_METHODS.foundryAutomationTriggerCommand, {
+  payload: AutomationTriggerCommand,
+  success: AutomationTriggerResult,
+  error: Schema.Union([AutomationTriggerError, EnvironmentAuthorizationError]),
+});
+const WsAutomationQueryRpc = Rpc.make(WS_METHODS.foundryAutomationQuery, {
+  payload: AutomationApplicationQuery,
+  success: AutomationApplicationResult,
+  error: Schema.Union([AutomationApplicationError, EnvironmentAuthorizationError]),
+});
+const WsAutomationCommandRpc = Rpc.make(WS_METHODS.foundryAutomationCommand, {
+  payload: AutomationApplicationCommand,
+  success: AutomationApplicationResult,
+  error: Schema.Union([AutomationApplicationError, EnvironmentAuthorizationError]),
+});
+const WsAutomationControlRpc = Rpc.make(WS_METHODS.foundryAutomationControl, {
+  payload: AutomationControlCommand,
+  success: AutomationControlSnapshot,
+  error: Schema.Union([AutomationControlError, EnvironmentAuthorizationError]),
+});
+const WsAutomationInboxQueryRpc = Rpc.make(WS_METHODS.foundryAutomationInboxQuery, {
+  payload: AutomationInboxQuery,
+  success: AutomationInboxPage,
+  error: Schema.Union([AutomationInboxError, EnvironmentAuthorizationError]),
+});
+const WsAutomationInboxMarkRpc = Rpc.make(WS_METHODS.foundryAutomationInboxMark, {
+  payload: AutomationInboxMark,
+  success: AutomationInboxEntry,
+  error: Schema.Union([AutomationInboxError, EnvironmentAuthorizationError]),
+});
+const WsFoundryWorkerHandoffOpenRpc = Rpc.make(WS_METHODS.foundryWorkerHandoffOpen, {
+  payload: FoundryWorkerHandoffOpen,
+  success: FoundryWorkerHandoffReceipt,
+  error: Schema.Union([FoundryWorkerHandoffError, EnvironmentAuthorizationError]),
+});
+const WsFoundryWorkerHandoffFinishRpc = Rpc.make(WS_METHODS.foundryWorkerHandoffFinish, {
+  payload: FoundryWorkerHandoffFinish,
+  success: FoundryWorkerHandoffResult,
+  error: Schema.Union([FoundryWorkerHandoffError, EnvironmentAuthorizationError]),
+});
+const WsFoundryWorkerHandoffReopenRpc = Rpc.make(WS_METHODS.foundryWorkerHandoffReopen, {
+  payload: FoundryWorkerHandoffReopen,
+  success: FoundryWorkerHandoffReceipt,
+  error: Schema.Union([FoundryWorkerHandoffError, EnvironmentAuthorizationError]),
+});
+const WsFoundryWorkerRenewRpc = Rpc.make(WS_METHODS.foundryWorkerRenew, {
+  payload: FoundryWorkerRenewInput,
+  success: Schema.Void,
+  error: Schema.Union([FoundryWorkerRenewError, EnvironmentAuthorizationError]),
+});
+const WsFoundryWorkerCancelRpc = Rpc.make(WS_METHODS.foundryWorkerCancel, {
+  payload: FoundryWorkerCancelInput,
+  success: FoundryWorkerCancellation,
+  error: Schema.Union([FoundryWorkerCancelError, EnvironmentAuthorizationError]),
+});
+const WsFoundryWorkerFollowRpc = Rpc.make(WS_METHODS.foundryWorkerFollow, {
+  payload: FoundryWorkerFollowInput,
+  success: FoundryWorkerProgress,
+  error: Schema.Union([FoundryWorkerFollowError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+const WsFoundryWorkerReadRpc = Rpc.make(WS_METHODS.foundryWorkerRead, {
+  payload: FoundryWorkerReadInput,
+  success: FoundryWorkerExecution,
+  error: Schema.Union([FoundryWorkerReadError, EnvironmentAuthorizationError]),
+});
 const WsFoundryWorkerLaunchRpc = Rpc.make(WS_METHODS.foundryWorkerLaunch, {
   payload: FoundryWorkerLaunchInput,
   success: FoundryWorkerLaunchReceipt,
   error: Schema.Union([FoundryWorkerLaunchError, EnvironmentAuthorizationError]),
 });
 const WsFoundryWorkerStatusRpc = Rpc.make(WS_METHODS.foundryWorkerStatus, {
-  payload: Schema.Struct({}),
+  payload: Schema.Struct({ projectId: Schema.optional(ProjectId) }),
   success: FoundryWorkerStatus,
   error: Schema.Union([FoundryWorkerError, EnvironmentAuthorizationError]),
 });
@@ -2146,6 +2273,20 @@ export const WsRpcGroup = RpcGroup.make(
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
   WsAssetsCreateUrlRpc,
+  WsAutomationTriggerQueryRpc,
+  WsAutomationTriggerCommandRpc,
+  WsAutomationQueryRpc,
+  WsAutomationCommandRpc,
+  WsAutomationControlRpc,
+  WsAutomationInboxQueryRpc,
+  WsAutomationInboxMarkRpc,
+  WsFoundryWorkerHandoffOpenRpc,
+  WsFoundryWorkerHandoffFinishRpc,
+  WsFoundryWorkerHandoffReopenRpc,
+  WsFoundryWorkerRenewRpc,
+  WsFoundryWorkerCancelRpc,
+  WsFoundryWorkerFollowRpc,
+  WsFoundryWorkerReadRpc,
   WsFoundryWorkerLaunchRpc,
   WsFoundryWorkerStatusRpc,
   WsAssetsReadChunkRpc,

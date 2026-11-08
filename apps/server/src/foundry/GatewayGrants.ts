@@ -2,7 +2,12 @@ import {
   ORCHESTRATION_PROTOCOL_QUERY_PARAM,
   ORCHESTRATION_PROTOCOL_VERSION,
   AuthOrchestrationReadScope,
+  type AuthEnvironmentScope,
   AuthAccessWriteScope,
+  AuthSessionId,
+  EnvironmentId,
+  ProjectId,
+  FoundryInstanceId,
   FoundryDeviceId,
   FoundryDeviceApproval,
   type FoundryDeviceCatalog,
@@ -30,12 +35,12 @@ import { base64UrlEncode } from "../auth/utils.ts";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
-import { timingSafeEqualBase64Url } from "../auth/utils.ts";
 import * as DeviceGrants from "./DeviceGrants.ts";
 import * as DeviceRegistry from "./DeviceRegistry.ts";
 import * as DeviceChannel from "./DeviceChannel.ts";
 import * as DeviceConfig from "./DeviceConfig.ts";
 import * as FoundrySessions from "./FoundrySessions.ts";
+import * as ClientIdentity from "./ClientIdentity.ts";
 
 const decodeRequest = Schema.decodeUnknownEffect(FoundryGatewayGrantRequest, {
   onExcessProperty: "error",
@@ -55,9 +60,58 @@ const denied = () => new FoundryGatewayError({ code: "forbidden" });
 const invalid = () => new FoundryGatewayError({ code: "invalid_request" });
 type Request = HttpServerRequest.HttpServerRequest;
 
+const AutomationIdentityFields = {
+  instanceId: FoundryInstanceId,
+  operatorId: Schema.String,
+  deviceId: FoundryDeviceId,
+  environmentId: EnvironmentId,
+  deviceGeneration: Schema.Int,
+  accessGeneration: Schema.Int,
+  automationGeneration: Schema.Int,
+};
+export const UnattendedGatewayIdentity = Schema.Struct({
+  ...AutomationIdentityFields,
+  authority: Schema.Literal("unattended"),
+  bindingId: Schema.String,
+  bindingGeneration: Schema.Int,
+  projectId: ProjectId,
+  workflowVersionId: Schema.String,
+});
+export type UnattendedGatewayIdentity = typeof UnattendedGatewayIdentity.Type;
+export const isUnattendedIdentity = Schema.is(UnattendedGatewayIdentity);
+export const ManualAutomationGatewayIdentity = Schema.Struct({
+  instanceId: FoundryInstanceId,
+  operatorId: Schema.String,
+  deviceId: FoundryDeviceId,
+  environmentId: EnvironmentId,
+  deviceGeneration: Schema.Int,
+  accessGeneration: Schema.Int,
+  automationGeneration: Schema.Int,
+  clientSessionId: AuthSessionId,
+  foundrySessionHash: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/)),
+});
+export const AutomationGatewayIdentity = Schema.Union([
+  ManualAutomationGatewayIdentity,
+  UnattendedGatewayIdentity,
+]);
+export type AutomationGatewayIdentity = typeof AutomationGatewayIdentity.Type;
+
 export class GatewayGrants extends Context.Service<
   GatewayGrants,
   {
+    readonly identityForWrite: (
+      request: Request,
+      scope: AuthEnvironmentScope,
+    ) => Effect.Effect<
+      Pick<AutomationGatewayIdentity, "instanceId" | "operatorId">,
+      FoundryGatewayError
+    >;
+    readonly identityForRead: (
+      request: Request,
+    ) => Effect.Effect<
+      Pick<AutomationGatewayIdentity, "instanceId" | "operatorId">,
+      FoundryGatewayError
+    >;
     readonly catalog: (
       request: Request,
       input: unknown,
@@ -85,6 +139,15 @@ export class GatewayGrants extends Context.Service<
     readonly stream: (
       request: Request,
       upgrade: Effect.Effect<Socket.Socket, FoundryGatewayError>,
+    ) => Effect.Effect<void, FoundryGatewayError>;
+    readonly authorizeAutomation: (
+      request: Request,
+      target: Pick<AutomationGatewayIdentity, "deviceId" | "environmentId">,
+    ) => Effect.Effect<AutomationGatewayIdentity, FoundryGatewayError>;
+    readonly openAutomation: (
+      identity: AutomationGatewayIdentity,
+      socket: Socket.Socket,
+      unattendedAuthorization?: Effect.Effect<void, FoundryGatewayError>,
     ) => Effect.Effect<void, FoundryGatewayError>;
     readonly projects: (
       request: Request,
@@ -122,20 +185,11 @@ const make = Effect.gen(function* () {
   >();
   // Handles are not credentials: every use reauthenticates both sessions and the device lease.
   const grants = new Map<string, { grant: FoundryGatewayGrant; binding: string }>();
+  const clientIdentityContext =
+    yield* Effect.context<Effect.Services<ReturnType<typeof ClientIdentity.authenticate>>>();
   const authenticate = Effect.fn("GatewayGrants.authenticate")(
-    function* (request: Request) {
-      const url = HttpServerRequest.toURL(request);
-      if (request.headers.origin !== origin || Option.isNone(url) || url.value.origin !== origin)
-        return yield* denied();
-      yield* sessions.checkOrigin(request.headers.origin, request.headers["content-type"]);
-      const foundry = yield* sessions.inspect(
-        request.cookies[FoundrySessions.FOUNDRY_SESSION_COOKIE],
-      );
-      const csrf = request.headers["x-foundry-csrf"];
-      if (!csrf || !timingSafeEqualBase64Url(csrf, foundry.csrfToken)) return yield* denied();
-      const client = yield* auth.authenticateHttpRequest(request);
-      return { foundry, client };
-    },
+    (request: Request) =>
+      ClientIdentity.authenticate(request).pipe(Effect.provide(clientIdentityContext)),
     Effect.mapError((error) =>
       EnvironmentAuth.isServerAuthInternalError(error) ||
       (error._tag === "FoundryAuthError" && error.code === "unavailable")
@@ -188,6 +242,19 @@ const make = Effect.gen(function* () {
     if (grants.size >= 128) return yield* new FoundryGatewayError({ code: "capacity" });
     grants.set(grantId, { grant, binding: identity.foundry.csrfToken });
     return grant;
+  });
+  const identityForWrite = Effect.fn("GatewayGrants.identityForWrite")(function* (
+    request: Request,
+    scope: AuthEnvironmentScope,
+  ) {
+    const identity = yield* authenticate(request);
+    if (!identity.client.scopes.includes(scope)) return yield* denied();
+    return { instanceId: identity.foundry.instanceId, operatorId: identity.foundry.operatorId };
+  });
+  const identityForRead = Effect.fn("GatewayGrants.identityForRead")(function* (request: Request) {
+    const identity = yield* authenticate(request);
+    if (!identity.client.scopes.includes(AuthOrchestrationReadScope)) return yield* denied();
+    return { instanceId: identity.foundry.instanceId, operatorId: identity.foundry.operatorId };
   });
   const owned = Effect.fn("GatewayGrants.owned")(function* (request: Request, grantId: unknown) {
     const identity = yield* authenticate(request);
@@ -274,6 +341,140 @@ const make = Effect.gen(function* () {
   ) {
     const grant = yield* inspect(request, input);
     return yield* channels.projects(grant, validation(request, grant));
+  });
+  const automationAccess = Effect.fn("GatewayGrants.automationAccess")(function* (
+    deviceId: FoundryDeviceId,
+    operatorId: string,
+    generation?: number,
+  ) {
+    const rows = yield* access.read(deviceId, operatorId);
+    const grant = rows.find((row) => row.kind === "automationExecution");
+    if (!grant?.enabled || (generation !== undefined && grant.generation !== generation))
+      return yield* denied();
+    return grant.generation;
+  });
+  const authorizeAutomation = Effect.fn("GatewayGrants.authorizeAutomation")(function* (
+    request: Request,
+    target: Pick<AutomationGatewayIdentity, "deviceId" | "environmentId">,
+  ) {
+    const grant = yield* create(request, {
+      deviceId: target.deviceId,
+      environmentId: target.environmentId,
+      scopes: ["orchestration:read", "orchestration:operate"],
+    });
+    return yield* Effect.gen(function* () {
+      const automationGeneration = yield* automationAccess(grant.deviceId, grant.operatorId);
+      const foundrySessionHash = yield* sessions
+        .reference(request.cookies[FoundrySessions.FOUNDRY_SESSION_COOKIE])
+        .pipe(Effect.mapError(denied));
+      return {
+        instanceId: grant.instanceId,
+        operatorId: grant.operatorId,
+        deviceId: grant.deviceId,
+        environmentId: grant.environmentId,
+        deviceGeneration: grant.generation,
+        accessGeneration: grant.accessGeneration,
+        automationGeneration,
+        clientSessionId: grant.clientSessionId,
+        foundrySessionHash,
+      } satisfies AutomationGatewayIdentity;
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          grants.delete(grant.grantId);
+        }),
+      ),
+    );
+  });
+  const validateAutomation = Effect.fn("GatewayGrants.validateAutomation")(function* (
+    identity: AutomationGatewayIdentity,
+    unattendedAuthorization?: Effect.Effect<void, FoundryGatewayError>,
+  ) {
+    if (!streamsEnabled) return yield* denied();
+    const credentials = yield* Effect.gen(function* () {
+      if (isUnattendedIdentity(identity)) {
+        if (!unattendedAuthorization) return yield* denied();
+        yield* unattendedAuthorization;
+        const expiresAt = (yield* Clock.currentTimeMillis) + 60_000;
+        // This transport subject is not a user session; its authority is checked on every frame.
+        return {
+          foundry: { expiresAt },
+          client: {
+            sessionId: AuthSessionId.make(`automation:${identity.bindingId}`),
+            subject: `automation:${identity.bindingId}`,
+            expiresAt: DateTime.makeUnsafe(expiresAt),
+          },
+        };
+      }
+      const foundry = yield* sessions
+        .inspectReference(identity.foundrySessionHash)
+        .pipe(Effect.mapError(denied));
+      if (foundry.instanceId !== identity.instanceId || foundry.operatorId !== identity.operatorId)
+        return yield* denied();
+      const clients = yield* clientSessions
+        .listActive()
+        .pipe(Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })));
+      const client = clients.find((entry) => entry.sessionId === identity.clientSessionId);
+      if (
+        !client ||
+        !client.scopes.includes("orchestration:read") ||
+        !client.scopes.includes("orchestration:operate")
+      )
+        return yield* denied();
+      return { foundry, client };
+    });
+    yield* access.check(identity.deviceId, identity.operatorId, identity.accessGeneration);
+    yield* automationAccess(identity.deviceId, identity.operatorId, identity.automationGeneration);
+    const lease = yield* channels.current(identity.deviceId).pipe(Effect.mapError(denied));
+    if (
+      lease.device.revoked ||
+      lease.device.instanceId !== identity.instanceId ||
+      lease.device.environmentId !== identity.environmentId ||
+      lease.device.generation !== identity.deviceGeneration ||
+      !lease.rpcStream
+    )
+      return yield* denied();
+    return { ...credentials, lease };
+  });
+  const openAutomation = Effect.fn("GatewayGrants.openAutomation")(function* (
+    identity: AutomationGatewayIdentity,
+    socket: Socket.Socket,
+    unattendedAuthorization?: Effect.Effect<void, FoundryGatewayError>,
+  ) {
+    const { foundry, client, lease } = yield* validateAutomation(identity, unattendedAuthorization);
+    const expiresAt = Math.min(
+      (yield* Clock.currentTimeMillis) + 60_000,
+      foundry.expiresAt,
+      DateTime.toEpochMillis(client.expiresAt),
+    );
+    const grant: FoundryGatewayGrant = {
+      deviceId: identity.deviceId,
+      environmentId: identity.environmentId,
+      scopes: ["orchestration:read", "orchestration:operate"],
+      grantId: FoundryGatewayGrantId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie)),
+      protocolVersion: "2",
+      grantKind: "clientAccess",
+      accessGeneration: identity.accessGeneration,
+      instanceId: identity.instanceId,
+      origin,
+      operatorId: identity.operatorId,
+      clientSessionId: client.sessionId,
+      subject: client.subject,
+      generation: identity.deviceGeneration,
+      channelGeneration: lease.channelGeneration,
+      expiresAt,
+    };
+    // clientAccess authorizes the existing transport; Automation additionally checks its own grant.
+    const check = Effect.gen(function* () {
+      const current = yield* validateAutomation(identity, unattendedAuthorization);
+      if (
+        current.lease.channelGeneration !== grant.channelGeneration ||
+        grant.expiresAt <= (yield* Clock.currentTimeMillis)
+      )
+        return yield* denied();
+    });
+    yield* check;
+    yield* channels.stream(grant, check, socket);
   });
   const ticket = Effect.fn("GatewayGrants.ticket")(function* (request: Request, input: unknown) {
     if (!streamsEnabled) return yield* denied();
@@ -385,6 +586,8 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError(() => new FoundryGatewayError({ code: "unavailable" })));
   });
   return GatewayGrants.of({
+    identityForRead,
+    identityForWrite,
     catalog,
     approveDevice,
     revokeDevice,
@@ -394,6 +597,8 @@ const make = Effect.gen(function* () {
     projects,
     ticket,
     stream,
+    authorizeAutomation,
+    openAutomation,
     readAccess,
     updateAccess,
   });

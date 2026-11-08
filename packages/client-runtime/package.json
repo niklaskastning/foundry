@@ -518,6 +518,10 @@
     "./provider-clients": {
       "types": "./src/providerClients.ts",
       "default": "./src/providerClients.ts"
+    },
+    "./automation/commands": {
+      "types": "./src/automation/commands.ts",
+      "default": "./src/automation/commands.ts"
     }
   },
   "scripts": {

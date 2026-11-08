@@ -1,3 +1,4 @@
+import { FactoryNavigation } from "../../foundry/FactoryNavigation";
 import { isFoundryBuild } from "@t3tools/shared/foundryBuild";
 import { DeviceCatalog } from "../../foundry/DeviceCatalog";
 import { SessionPermissions } from "./SessionPermissions";
@@ -1468,6 +1469,7 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
     <SettingsPageContainer>
       {isFoundryBuild() && (!desktopBridge || window.location.protocol === "https:") ? (
         <SettingsSection title="Foundry instance">
+          <FactoryNavigation />
           <DeviceCatalog />
         </SettingsSection>
       ) : null}

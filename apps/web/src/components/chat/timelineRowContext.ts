@@ -2,6 +2,7 @@ import type { ToolCallDiffTarget } from "../../diffPanelStore";
 import type {
   ProviderApprovalDecision,
   RuntimeRequestId,
+  OrchestrationV2RuntimeRequest,
   WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import {
@@ -35,6 +36,11 @@ import { type HandoffTimelineRun } from "./V2LifecycleRow";
  * from the environment; the guest page reads them through its own routes.
  */
 export interface TurnItemSource {
+  readonly inlineDiff?: boolean;
+  readonly readOnlyArchive?: boolean;
+  readonly runtimeRequest?: (
+    requestId: RuntimeRequestId,
+  ) => OrchestrationV2RuntimeRequest | undefined;
   readonly detail: TurnItemDetailSource;
   readonly commandOutput: (target: {
     readonly threadId: ThreadId;
@@ -75,6 +81,7 @@ export interface TimelineRowSharedState {
    * Draws a published HTML visual. Unset, the row loads it from the environment; the guest page
    * loads it through its own route.
    */
+  renderMcpApp?: ((row: Extract<TimelineRow, { kind: "mcp-app" }>) => ReactNode) | undefined;
   renderHtmlRender: ((row: Extract<TimelineRow, { kind: "html-render" }>) => ReactNode) | undefined;
   /** Unset, expanded rows read detail and command output from the environment. */
   turnItemSource: TurnItemSource | undefined;
@@ -86,8 +93,8 @@ export interface TimelineRowSharedState {
     | undefined;
   onToggleTurnFold: (runId: RunId) => void;
   onToggleAttemptFold: (attemptId: RunAttemptId) => void;
-  onFileOpen: (attachment: ChatFileAttachment) => void;
-  onFileDownload: (attachment: ChatFileAttachment) => void;
+  onFileOpen: (attachment: ChatFileAttachment, preparedUrl?: string | null) => void;
+  onFileDownload: (attachment: ChatFileAttachment, preparedUrl?: string | null) => void;
   openPullRequest: (event: MouseEvent<HTMLElement>, url: string) => void;
   onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
   onToggleWorkEntry: (anchorKey: string, collapsed: boolean) => void;

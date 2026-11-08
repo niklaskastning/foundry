@@ -1,18 +1,20 @@
 # Foundry-Entwicklung
 
-Einstieg für die Weiterentwicklung unseres dauerhaften T3-Code-Forks. Foundry soll eine selbst gehostete Single-User-Software-Factory innerhalb von T3 Code werden: mit einer Hauptdomain, registrierten Devices, produktbezogenen Factories, Factory as Code und später Sandboxes. Warp Factories dient als Referenz für Funktionsumfang und Seitenaufteilung; Gestaltung und interaktive Agentenarbeit kommen aus T3 Code. Die Main Node steuert; ein eigener Host-Worker führt zunächst Agenten aus.
+Einstieg für die Weiterentwicklung unseres dauerhaften T3-Code-Forks. Foundry ist als selbst gehostete Single-User-Software-Factory auf T3 Code ausgerichtet. Factories sind Home und Hauptanwendung; Chats bleiben als Arbeitsdetails eines Auftrags und als sekundärer interaktiver Einstieg erreichbar: mit einer Hauptdomain, registrierten Devices, produktbezogenen Factories, Factory as Code und später Sandboxes. Warp Factories dient als Referenz für Funktionsumfang und Seitenaufteilung; Gestaltung und interaktive Agentenarbeit kommen aus T3 Code. Die Main Node steuert; ein eigener Host-Worker führt zunächst Agenten aus.
 
 ## Wo anfangen?
 
-| Dokument                                 | Zweck                                                                                  |
-| ---------------------------------------- | -------------------------------------------------------------------------------------- |
-| [Architektur](architecture.md)           | Produktumfang, Zuständigkeiten, Workflow-Semantik, Isolation und vorhersehbare Risiken |
-| [Deployment-Design](deployment.md)       | Instanzanmeldung, Gateway-Vertrauen, Cloudflare, Persistenz und Hosting-Grenzen        |
-| [Umsetzungsplan](implementation-plan.md) | PR-große Arbeitspakete, Abhängigkeiten, Prüfgates und Handoffs                         |
-| [Betrieb](operations.md)                 | Tatsächlich vorhandenen Grundbetrieb bauen, starten, koppeln und wiederherstellen      |
-| [Fork-Wartung](maintenance.md)           | Branch/Commit/PR, Upstream-Integration und sparsamer Actions-Betrieb                   |
+| Dokument                                  | Zweck                                                                                  |
+| ----------------------------------------- | -------------------------------------------------------------------------------------- |
+| [Architektur](architecture.md)            | Produktumfang, Zuständigkeiten, Workflow-Semantik, Isolation und vorhersehbare Risiken |
+| [Deployment-Design](deployment.md)        | Instanzanmeldung, Gateway-Vertrauen, Cloudflare, Persistenz und Hosting-Grenzen        |
+| [Umsetzungsplan](implementation-plan.md)  | Features, Funktionen, Reihenfolge und funktionale Abnahmen                             |
+| [Warp-Vergleich](warp-comparison.md)      | Code-/Browserbefund zu Funktionen und UI sowie begründete Prioritäten                  |
+| [Basic-Leitplanken](basic-leitplanken.md) | Sicherheit, Optimierung, Backups, Betrieb und technische Prüfgates                     |
+| [Betrieb](operations.md)                  | Tatsächlich vorhandenen Grundbetrieb bauen, starten, koppeln und wiederherstellen      |
+| [Fork-Wartung](maintenance.md)            | Branch/Commit/PR, Upstream-Integration und sparsamer Actions-Betrieb                   |
 
-Architektur und Deployment erklären **was und warum**; der Umsetzungsplan besitzt **Reihenfolge und Abnahme**. Nur der Betriebsleitfaden beschreibt vorhandene Bedienwege. Ein Arbeitspaket im Plan ist keine Implementierungszusage für den aktuellen Build.
+Architektur und Deployment erklären **was und warum**; der Umsetzungsplan besitzt **Feature-Reihenfolge und funktionale Abnahme**. Basic-Leitplanken führt technische Voraussetzungen, Sicherheits- und Betriebsabnahmen separat. Nur der Betriebsleitfaden beschreibt vorhandene Bedienwege. Ein Arbeitspaket im Plan ist keine Implementierungszusage für den aktuellen Build.
 
 ## Zielvision und Erweiterung
 
@@ -20,14 +22,48 @@ Architektur und Deployment erklären **was und warum**; der Umsetzungsplan besit
 
 ## Vorhandener Stand und nächster Schritt
 
-Vorhanden sind das isolierte Linux-Main-Deployment, Web und Browser-Pairing, eigene Build-Einstiege sowie inzwischen Instanz-Descriptor, PostgreSQL-Anbindung und Access-Session-Bausteine. Instanz-Gateway, automatische Device-Discovery, Workflow-Engine und Sandbox-Verwaltung sind noch geplant. Windows-Build-Konfiguration bedeutet noch keine bestandene Windows-Laufzeitabnahme.
+Main, Instanz-PostgreSQL/Access, Gateway und dauerhafter Linux-Worker sind integriert. Der Factory-Kern umfasst sequenzielle Runs, Steuerung/Inbox, GitHub-Polling und PR-Publishing, Zeitpläne, zentrale Archive, Git-Definitionen und T3-Handoff. P58a stellt eine versionierte HTTP-API für vorhandene Benutzersitzungen sowie Factory-begrenzte Maschinen-Leseabfragen mit eigenen Credentials bereit. Maschinen-Start/-Steuerung und Factory-MCP bleiben offen; der öffentliche Maschinenzugang durch Access benötigt eine eigene Betriebsabnahme. Windows-Anmeldung ist praktisch bestätigt, die vollständige Factory-Bedienung unter Windows noch nicht.
 
-Der nächste Entwicklungsabschnitt ist **G1: Instanzeinstieg und Anmeldung**. Die vorhandenen Identitäts-/Persistenz-/Access-Bausteine werden bis zum praktisch nachgewiesenen Web-/Windows-Anmeldeweg integriert; ihr Vorhandensein allein schließt G1 nicht ab. G2 prüft anschließend den ausgehenden Device-Transport. Keine vorsorgliche Codex-Installation im Main-Container und kein separates Connect-/Clerk-Deployment.
+Der [Warp-Vergleich](warp-comparison.md) trennt funktionale Lieferung und Gestaltungsqualität. Der Factories-first-Arbeitsplatz aus [PR #67](https://github.com/niklaskastning/foundry/pull/67) ist funktional abgeschlossen. [PR #72](https://github.com/niklaskastning/foundry/pull/72) ergänzt abgenommene v4-Ausführung für Linux/Codex und Web: vollständige Skill-Bundles, explizite MCP-Bindings, parallele Swarms und fachliche Review/Fix-Runden. Diese Nachweise sind **keine Nutzer-Designabnahme**. Auf ausdrücklichen Nutzerauftrag ist die erneute Überarbeitung aller zentralen Ansichten aktuelle Produktarbeit unter P49b: klare Aufgaben, Ergebnisse und nächste Aktionen, verständliche Workflows sowie kompakte Listen und zugängliche Konfigurationsdetails. Die Überarbeitung ist in [PR #74](https://github.com/niklaskastning/foundry/pull/74) implementiert und durch automatisierte Prüfungen, einen integrierten Browserpass mit realen VPS-Daten und unabhängiges Review geprüft. Der PR führt Screenshots, finale Artefakt-/CI-Prüfungen und den Deploymentnachweis; die menschliche Designabnahme bleibt offen.
+
+P34–P40 werden parallel als eigenständige Sandbox-Lieferung bearbeitet; sie sind noch keine ausgelieferte Fähigkeit und blockieren die eigenständig nutzbare UI nicht. Danach folgen messbare Qualität und repositoryübergreifende Arbeit. Der [Umsetzungsplan](implementation-plan.md#nächste-produktlieferungen) besitzt Reihenfolge und funktionale Abnahme; technische Nachweise stehen in [Basic-Leitplanken](basic-leitplanken.md). Native Windows-Bedienung, öffentliches SSO, native Anmeldung, zusätzliche Provider-/Kontoverbindungen und der Einstieg ohne getrenntes Main-T3-Pairing behalten eigene offene Gates. Die Definitionen liegen im separaten privaten Repository [foundry-definitions](https://github.com/niklaskastning/foundry-definitions).
 
 ## Arbeitsweise
 
-Jedes Arbeitspaket erhält einen eigenen Branch, fokussierte Commits und einen PR zum Fork. Die IDs P01–P60 sind Planungsschlüssel, keine GitHub-PR-Nummern. Konkreter Status, Entscheidungen und Nachweise leben im zugehörigen Issue/PR; dieser Ordner ist kein zweites Fortschrittsboard. Ein Gate wird mit den tatsächlich geprüften Commit-/Build-Ständen belegt.
+Jedes Arbeitspaket erhält einen eigenen Branch, fokussierte Commits und einen PR zum Fork. Die IDs P01–P60 sind Planungsschlüssel, keine GitHub-PR-Nummern. Erledigte Features und offene funktionale Abnahmen stehen auf Maintainerwunsch im Umsetzungsplan, technische Nachweise in Basic-Leitplanken; konkrete Entscheidungen und Nachweise bleiben im zugehörigen Issue/PR. Ein Gate wird mit den tatsächlich geprüften Commit-/Build-Ständen belegt.
 
-Die Maintainer-Vorgaben stehen in [AGENTS.md](../../AGENTS.md). Ein automatischer PR-Check, manuelle Artefakt-Builds bei Bedarf; keine zusätzliche CI-Matrix. Implementierungsnotizen und temporäre Versuchsergebnisse bleiben außerhalb des Repositories. Die ausdrücklich angeforderten Architektur-, Deployment- und Umsetzungsdokumente sind versionierte Ausnahmen davon.
+Die Maintainer-Vorgaben stehen in [AGENTS.md](../../AGENTS.md). Ein automatischer PR-Check, manuelle Artefakt-Builds bei Bedarf; keine zusätzliche CI-Matrix. Implementierungsnotizen und temporäre Versuchsergebnisse bleiben außerhalb des Repositories. Die ausdrücklich angeforderten Architektur-, Deployment-, Umsetzungs- und Leitplankendokumente sind versionierte Ausnahmen davon.
 
-Die ausdrücklich vorgezogene Entwicklung von P06–P12 und die später nachzuholenden Windows-/G1-/Integrationsnachweise werden in [Tracking-Issue #13](https://github.com/niklaskastning/foundry/issues/13) geführt. Vor Weiterarbeit dieses Issue und seine Paket-PRs lesen; Entwicklungsfreigabe ist keine Gate-Abnahme oder Deployment-Freigabe.
+Das abgeschlossene [Issue #13](https://github.com/niklaskastning/foundry/issues/13) archiviert die bisherigen Integrations- und Windows-Nachweise. Offene Punkte sind nach Produktfunktionen im Umsetzungsplan und technischen Arbeiten in Basic-Leitplanken getrennt. Die dauerhafte Freigabe für Deployments einschließlich offener PRs auf diesen Entwicklungs-VPS steht in [AGENTS.md](../../AGENTS.md#development-vps-and-agent-autonomy). Ein Deployment ersetzt keine Gate-Abnahme; ein Merge benötigt weiterhin einen ausdrücklichen Auftrag.
+
+## Manuell mit Factories arbeiten
+
+Bei aktivierter Automation öffnet Home die **Factories**. **Work** führt zur Factory-Auswahl für Aufträge, **Decisions** zur persönlichen Inbox; Runs und Ressourcen sind nachgeordnet erreichbar. Innerhalb der Factory stehen Übersicht, Arbeit, Agenten, Runs, Definition und Trigger im selben Kontext. **Workflows** zeigt den Ablauf in einem eigenen Tab. **Chats** öffnet die interaktive T3-Arbeit; direkte Threadlinks, Tastaturbefehle und der Rückweg zum Auftrag bleiben erhalten. Ohne Foundry-Fähigkeit bleibt der normale T3-Einstieg bestehen.
+Foundry-Anmeldung und die T3-Verbindung zu Main sind weiterhin beide erforderlich.
+
+Eine Factory legt Repository-Bindungsschlüssel fest. Im Factory-Bereich **Definition** lässt sich eine noch lokal verwaltete
+Definition bearbeiten oder als kanonischer Dateisatz importieren und exportieren.
+Git-gebundene Factories werden im Definitionsrepository geändert. **Agents & skills**
+zeigt den aktiven Rollen-/Skillstand. Die Workflowansicht fasst Ablauf, zusätzliche Ressourcen und wirksame Einstellungen zusammen; Instruktionen und Herkunft bleiben aufklappbar. **Validate** prüft sie; Aktivieren veröffentlicht eine unveränderliche
+Definitionsversion für neue Starts. Es veröffentlicht keinen GitHub-PR. Bereits
+laufende Runs behalten ihre gepinnte Version.
+
+Für einen manuellen Start einen Auftrag und den passenden Workflow wählen.
+Worker-Projekt und weitere Betriebsbindungen können pro Factory/Repository als
+Startvorgaben gespeichert und bei späteren Aufträgen wiederverwendet werden. Projekt- und Providerbindung
+werden vor dem Start geprüft. Der Run bleibt nach Schließen des Browsers bestehen;
+Versuche und Ergebnisse lassen sich später in **Runs** öffnen. Größere Ausgaben werden
+erst auf Anforderung geladen. Bestätigte Thread-Archive und Anhänge bleiben über Main
+lesbar, auch wenn der Worker offline ist; fehlende Daten bleiben als unvollständig markiert.
+
+Pause verhindert neue Steps und lässt bereits zugestellte Arbeit auslaufen. Cancel
+fordert einen Stop an und ist erst nach bestätigtem Writer-Ende abgeschlossen. Ein
+bewusstes Retry legt einen neuen Versuch an und setzt einen sicher beendeten alten
+Writer voraus. Nach abgelaufener oder entzogener Anmeldung verlangt Resume aktuelle
+Autorisierung.
+
+Die persönliche Inbox zeigt vorhandene Fragen, Freigaben, Blocker und Fehler.
+**Done** und **Undo** organisieren die Inbox; sie genehmigen keine Arbeit. Eine
+Freigabe gilt für den angezeigten Eingabe- und Ergebnisstand. Bei geändertem Ergebnis
+neu laden und erneut entscheiden. Antworten werden ausdrücklich an die aktuell
+zuständige Frage gesendet; eine alte Frage kann keinen neuen Versuch steuern.

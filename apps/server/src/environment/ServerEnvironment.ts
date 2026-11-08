@@ -267,6 +267,22 @@ export const make = Effect.gen(function* () {
       projectCloneTracking: true,
       projectOrganization: true,
       ignoredFileListing: true,
+      foundryWorkerLifecycle: yield* Config.Boolean("FOUNDRY_WORKER_ENABLED").pipe(
+        Config.withDefault(false),
+      ),
+      foundryWorkerCancel: yield* Config.Boolean("FOUNDRY_WORKER_ENABLED").pipe(
+        Config.withDefault(false),
+      ),
+      foundryWorkerFollow: yield* Config.Boolean("FOUNDRY_WORKER_ENABLED").pipe(
+        Config.withDefault(false),
+      ),
+      foundryWorkerRead: yield* Config.Boolean("FOUNDRY_WORKER_ENABLED").pipe(
+        Config.withDefault(false),
+      ),
+      foundryManagedWorkspaces: yield* Effect.all([
+        Config.Boolean("FOUNDRY_WORKER_ENABLED").pipe(Config.withDefault(false)),
+        Config.String("FOUNDRY_WORKER_PROVIDER_INSTANCE_ID").pipe(Config.withDefault("")),
+      ]).pipe(Effect.map(([enabled, binding]) => enabled && binding.trim().length > 0)),
       foundryWorkerLaunch: yield* Config.Boolean("FOUNDRY_WORKER_ENABLED").pipe(
         Config.withDefault(false),
       ),

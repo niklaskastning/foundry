@@ -4,6 +4,7 @@ import {
   FoundryDevicePublicKey,
   FoundryEnrollment,
   FoundryDeviceError,
+  FoundryGatewayError,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -17,6 +18,7 @@ import { Command, Flag } from "effect/cli";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as DeviceConfig from "../foundry/DeviceConfig.ts";
+import * as DeviceGrants from "../foundry/DeviceGrants.ts";
 import * as DeviceRegistry from "../foundry/DeviceRegistry.ts";
 import * as InstanceDatabase from "../foundry/InstanceDatabase.ts";
 import * as InstancePostgres from "../foundry/InstancePostgres.ts";
@@ -129,4 +131,49 @@ const revoke = Command.make("revoke-device", {
     }),
   ),
 );
-export const deviceCommands = [keygen, approve, sign, revoke] as const;
+const automationAccess = Command.make("automation-access", {
+  ...authLocationFlags,
+  deviceId: Flag.String("device-id").pipe(Flag.withSchema(FoundryDeviceId)),
+  environmentId: Flag.String("environment-id").pipe(Flag.withSchema(EnvironmentId)),
+  generation: Flag.Int("generation").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThan(0))),
+  ),
+  enabled: Flag.Literals("enabled", ["true", "false"]),
+}).pipe(
+  Command.withDescription(
+    "Locally change the explicitly selected worker's automation grant at its current generation; does not start runs.",
+  ),
+  Command.withHandler(
+    Effect.fn("foundry.automationAccess")(function* (flags) {
+      const config = yield* resolveCliAuthConfig(flags, yield* GlobalFlag.LogLevel);
+      const url = yield* Config.Redacted("FOUNDRY_INSTANCE_DATABASE_URL");
+      const instance = InstancePostgres.layer.pipe(
+        Layer.provideMerge(InstanceDatabase.layer({ url })),
+        Layer.provide(ServerEnvironment.layerIdentity),
+        Layer.provide(ServerConfig.layer(config)),
+      );
+      const grant = yield* Effect.gen(function* () {
+        const sql = yield* InstanceDatabase.InstanceDatabase;
+        const identity = yield* InstancePostgres.InstancePostgres;
+        const instanceId = yield* identity.readIdentity;
+        const owners = yield* sql<{
+          operatorId: string;
+        }>`SELECT b.operator_id AS "operatorId" FROM foundry_instance.operator_binding b JOIN foundry_instance.instance i USING(singleton) JOIN foundry_instance.devices d ON d.operator_id=b.operator_id AND d.instance_id=i.instance_id WHERE i.instance_id=${instanceId} AND d.device_id=${flags.deviceId} AND d.environment_id=${flags.environmentId} AND NOT d.revoked`;
+        if (owners.length !== 1 || !owners[0])
+          return yield* new FoundryGatewayError({ code: "forbidden" });
+        const grants = yield* DeviceGrants.DeviceGrants;
+        return yield* grants.update(
+          {
+            deviceId: flags.deviceId,
+            kind: "automationExecution",
+            generation: flags.generation,
+            enabled: flags.enabled === "true",
+          },
+          owners[0].operatorId,
+        );
+      }).pipe(Effect.provide(DeviceGrants.layer.pipe(Layer.provideMerge(instance))));
+      yield* Console.log(yield* encodeJson(grant));
+    }),
+  ),
+);
+export const deviceCommands = [keygen, approve, sign, revoke, automationAccess] as const;

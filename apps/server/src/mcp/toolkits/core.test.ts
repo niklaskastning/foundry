@@ -461,7 +461,9 @@ it.effect("resolves reused attachment references from stored metadata", () =>
       name: "changed.jpg",
       mimeType: "image/jpeg",
       sizeBytes: 99,
+      foundryArtifact: { untrusted: "A caller cannot supply server confirmation" },
     });
+    expect(forged).not.toHaveProperty("foundryArtifact");
     const result = yield* AttachmentHandlers.resolveAttachmentReferences([forged], [stored]);
     expect(result).toEqual([stored]);
     const failure = yield* AttachmentHandlers.resolveAttachmentReferences(

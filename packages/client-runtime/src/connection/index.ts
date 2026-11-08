@@ -9,8 +9,9 @@ export * from "./hostFreeze.ts";
 export * as Connection from "./layer.ts";
 export * from "./model.ts";
 export * as ConnectionOnboarding from "./onboarding.ts";
-export { FoundryInstanceSession } from "./foundryGateway.ts";
+export { FoundryInstanceSession } from "./foundryMain.ts";
 export * as FoundryOnboarding from "./foundry.ts";
+export * as FoundryArtifacts from "./foundryArtifacts.ts";
 export { createDeviceCatalogClient, restoreDeviceSelection } from "./foundryCatalog.ts";
 export * from "./presentation.ts";
 export * as ProfileStore from "./profileStore.ts";
@@ -25,3 +26,7 @@ export * as Wakeups from "./wakeups.ts";
 export { orchestrationProtocolCompatibilityError } from "./compatibility.ts";
 // Flat so consumers' inferred command types can name it.
 export { OutdatedHostUpdateError } from "./outdatedHostUpdate.ts";
+
+export * as FoundryArchive from "./foundryArchive.ts";
+
+export * as FoundryMain from "./foundryMain.ts";

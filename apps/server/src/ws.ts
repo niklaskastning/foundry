@@ -1,4 +1,12 @@
-import { FoundryWorkerLaunchError } from "@t3tools/contracts";
+import * as WorkerHandoff from "./foundry/WorkerHandoff.ts";
+import { FoundryWorkerHandoffError } from "@t3tools/contracts";
+import {
+  AutomationTriggerError,
+  AutomationApplicationError,
+  AutomationControlError,
+  AutomationInboxError,
+} from "@t3tools/contracts";
+import { FoundryWorkerLaunchError, FoundryWorkerCancelError } from "@t3tools/contracts";
 import * as WorkerLaunch from "./foundry/WorkerLaunch.ts";
 import * as WorkerReadiness from "./foundry/WorkerReadiness.ts";
 import * as AssetTransfer from "./assets/AssetTransfer.ts";
@@ -1351,6 +1359,7 @@ export const layerWsRpc = (
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const workerLaunch = yield* WorkerLaunch.WorkerLaunch;
+      const workerHandoff = yield* WorkerHandoff.WorkerHandoff;
       const workerReadiness = yield* WorkerReadiness.WorkerReadiness;
       const assetTransfer = yield* AssetTransfer.AssetTransfer;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -2858,6 +2867,21 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.attachmentsCreateUploadUrl]: (input) => issueAttachmentUploadUrl(input),
         [WS_METHODS.attachmentsDelete]: (input) => assetTransfer.remove(input.attachmentId),
+        // Automation HTTP requests reauthenticate both sessions and CSRF for every operation.
+        [WS_METHODS.foundryAutomationTriggerQuery]: () =>
+          Effect.fail(new AutomationTriggerError({ code: "unavailable" })),
+        [WS_METHODS.foundryAutomationTriggerCommand]: () =>
+          Effect.fail(new AutomationTriggerError({ code: "unavailable" })),
+        [WS_METHODS.foundryAutomationQuery]: () =>
+          Effect.fail(new AutomationApplicationError({ code: "unavailable" })),
+        [WS_METHODS.foundryAutomationCommand]: () =>
+          Effect.fail(new AutomationApplicationError({ code: "unavailable" })),
+        [WS_METHODS.foundryAutomationControl]: () =>
+          Effect.fail(new AutomationControlError({ code: "unavailable" })),
+        [WS_METHODS.foundryAutomationInboxQuery]: () =>
+          Effect.fail(new AutomationInboxError({ reason: "unavailable" })),
+        [WS_METHODS.foundryAutomationInboxMark]: () =>
+          Effect.fail(new AutomationInboxError({ reason: "unavailable" })),
         [WS_METHODS.foundryWorkerLaunch]: (input) =>
           startup.enqueueCommand(workerLaunch.launch(input)).pipe(
             Effect.catchTags({
@@ -2865,7 +2889,38 @@ export const layerWsRpc = (
                 Effect.fail(new FoundryWorkerLaunchError({ code: "launch_failed" })),
             }),
           ),
-        [WS_METHODS.foundryWorkerStatus]: () => workerReadiness.read(),
+        [WS_METHODS.foundryWorkerCancel]: (input) =>
+          startup.enqueueCommand(workerLaunch.cancel(input)).pipe(
+            Effect.catchTags({
+              ServerRuntimeStartupError: () =>
+                Effect.fail(new FoundryWorkerCancelError({ code: "cancel_failed" })),
+            }),
+          ),
+        [WS_METHODS.foundryWorkerHandoffOpen]: (input) =>
+          startup.enqueueCommand(workerHandoff.open(input)).pipe(
+            Effect.catchTags({
+              ServerRuntimeStartupError: () =>
+                Effect.fail(new FoundryWorkerHandoffError({ code: "unavailable" })),
+            }),
+          ),
+        [WS_METHODS.foundryWorkerHandoffFinish]: (input) =>
+          startup.enqueueCommand(workerHandoff.finish(input)).pipe(
+            Effect.catchTags({
+              ServerRuntimeStartupError: () =>
+                Effect.fail(new FoundryWorkerHandoffError({ code: "unavailable" })),
+            }),
+          ),
+        [WS_METHODS.foundryWorkerHandoffReopen]: (input) =>
+          startup.enqueueCommand(workerHandoff.reopen(input)).pipe(
+            Effect.catchTags({
+              ServerRuntimeStartupError: () =>
+                Effect.fail(new FoundryWorkerHandoffError({ code: "unavailable" })),
+            }),
+          ),
+        [WS_METHODS.foundryWorkerRenew]: (input) => workerLaunch.renew(input),
+        [WS_METHODS.foundryWorkerFollow]: (input) => workerLaunch.follow(input),
+        [WS_METHODS.foundryWorkerRead]: (input) => workerLaunch.read(input),
+        [WS_METHODS.foundryWorkerStatus]: ({ projectId }) => workerReadiness.read(projectId),
         [WS_METHODS.assetsReadChunk]: (input) => assetTransfer.read(input),
         [WS_METHODS.attachmentsWriteChunk]: (input) => assetTransfer.write(input),
         [WS_METHODS.attachmentsChunkStatus]: (input) => assetTransfer.status(input),

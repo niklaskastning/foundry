@@ -1,697 +1,363 @@
-# Foundry – Umsetzungsplan in PR-großen Arbeitspaketen
+# Foundry – Implementierungsplan für Features und Funktionen
 
-Stand: 1. November 2026. Planungsbaseline für [Architektur](architecture.md) und [Deployment](deployment.md), keine Liste bereits implementierter Features. Die Pakete P01–P60 sind **keine GitHub-PR-Nummern**. Aktueller Arbeitsstatus, Nachweise und Aufteilungskorrekturen gehören ins owning Issue/PR. Dieses ausdrücklich angeforderte versionierte Dokument beschreibt Umfang und Abnahmereihenfolge, kein zweites Fortschrittsboard.
+Stand: 6. November 2026. Dieser Plan beschreibt Produktfunktionen, ihre Reihenfolge und funktionale Abnahmen. Sicherheits-, Betriebs-, Backup-, Performance- und technische Prüfthemen stehen im separaten [Plan für Basic-Leitplanken](basic-leitplanken.md). Architektur und Deployment bleiben die zugehörigen Entwürfe. Paket-IDs P01–P60 bleiben erhalten und sind keine GitHub-PR-Nummern. Der [Warp-Abgleich](warp-comparison.md) dokumentiert Code- und Browserbefunde getrennt nach Funktionen und UI; dieser Plan besitzt weiterhin Reihenfolge und Abnahme.
 
-## Regeln für ein Arbeitspaket
+## Erledigte Implementierung und verbleibende Abnahmen
 
-Ein Paket ist ein vorgesehener PR mit einem prüfbaren Ergebnis. Es enthält die für dieses Ergebnis notwendigen Contracts, Service-/Adapteränderungen, gezielten Tests und gegebenenfalls einen schmalen UI-Anschluss. Keine Mischung mit Branding, Dependency-Upgrades oder allgemeinem Cleanup. Ein Paket ist zu groß, wenn Reviewer mehrere unabhängig freigebbare Verhaltensänderungen beurteilen müssten: vor Umsetzung im Issue in Unterpakete wie P08a/P08b teilen, eindeutige Abhängigkeiten und Teilgates festhalten und diese Planung aktualisieren. Nicht erst am Ende einen Sammel-PR erzeugen.
+- [x] **P01, P03–P17 (Access-Modus, ohne P03N/P14Z):** Instanzeinstieg über Access, Device-Katalog, Gateway und dauerhafter Linux-Worker sind integriert. Web/Windows können denselben Worker nutzen. Funktionaler G3-Abschluss bestätigt ([#29](https://github.com/niklaskastning/foundry/pull/29), [#45](https://github.com/niklaskastning/foundry/pull/45)).
+- [x] **P18a/P18b, P47:** Factories, Aufträge, Workflow-Versionen und kanonischer Definitionsimport/-export integriert ([#36](https://github.com/niklaskastning/foundry/pull/36), [#46](https://github.com/niklaskastning/foundry/pull/46), [#47](https://github.com/niklaskastning/foundry/pull/47)).
+- [x] **P38a/P38b:** Zentrale Anhänge und fortlaufende Thread-Archive integriert und auf der Entwicklungs-VPS aktiviert ([#48](https://github.com/niklaskastning/foundry/pull/48), [#50](https://github.com/niklaskastning/foundry/pull/50)).
+- [x] **P19:** Sequenzieller Workflow-Dispatch integriert ([#51](https://github.com/niklaskastning/foundry/pull/51)).
+- [x] **P20/P21/P49a – Basisschnitt:** Run-Steuerung, manueller Definitions-/Startfluss, Navigationseinstiege und persönliche Inbox integriert; Automation auf der Entwicklungs-VPS aktiviert ([#52](https://github.com/niklaskastning/foundry/pull/52)).
+- [x] **P22/P23/P24 – Implementierung:** GitHub-Polling, PR-Publishing und Zeitpläne implementiert. Die reale GitHub-App-Verbindung und ein betreuter nativer Issue-bis-PR-Workflow sind bestätigt ([#56](https://github.com/niklaskastning/foundry/pull/56)).
+- [ ] **Funktionale Restabnahmen:** Instanzwechsel/Entfernen mit zwei realen Instanzen, Worker auf zweiter Maschine, Wiederverbindung beider Clients und Wiederaufnahme laufender Aufträge. Windows-Laufzeit und Bedienung der Factory bleiben offen; der bestätigte native G4-Durchstich schließt diese Restabnahmen nicht.
+- [x] **P28 / erster P52a-Schnitt / P49b – funktionaler Webstand:** Git-versionierte Rollen, Betriebsbindings und der Factories-first-Arbeitsplatz aus [PR #67](https://github.com/niklaskastning/foundry/pull/67) sind geliefert. [PR #72](https://github.com/niklaskastning/foundry/pull/72) bestätigt v4 mit dateibasierten Skills, Codex-MCP/Secret-Bindings, echten parallelen Swarms, Review/Fix-Runden und Web-/T3-Rückkehr für Linux/Codex. Die native Windows-Abnahme sowie weitere Connector-/Providerpfade bleiben offen; G6 und G12 sind nicht vollständig abgeschlossen.
+- [ ] **P49b – erneute Produktgestaltung und Nutzerabnahme:** Der Nutzer ist mit der Gestaltung trotz funktionaler Lieferung nicht zufrieden. Der aktuelle Auftrag umfasst Audit und substanzielle Überarbeitung aller zentralen Ansichten mit realen Daten. [PR #74](https://github.com/niklaskastning/foundry/pull/74) implementiert die Änderungen; automatisierte Prüfungen, integrierter Browserpass und unabhängiges Review sind erfolgt. Die vier Reviewbefunde wurden behoben. Finale Artefakt-/CI-Prüfungen und Deployment werden im PR nachgewiesen; die menschliche Designabnahme bleibt offen. Dies ist aktuelle Produktarbeit, kein kosmetischer Backlog.
+- [ ] **Produktlücken:** Native Foundry-Anmeldung P03N, automatischer Katalog-Erstabruf, Einstieg ohne getrenntes T3-Pairing und Windows-Downloads im Foundry-Einstieg.
+- [ ] **Zentrale Verbindungen P14Z:** Provider-, Source-Control- und MCP-Konten einmal in Foundry einrichten und auf Workern/Sandboxes nutzen.
+- [x] **P48 / funktionales G11:** Git-Quellbindung, lesende Synchronisierung, Driftabgleich, dauerhafte Git-Ownership und explizite Aktivierung/Rollback sind implementiert ([#57](https://github.com/niklaskastning/foundry/pull/57)). Isoliertes PostgreSQL bestätigt Import → Git-Änderung → ungültigen Folgecommit → Runs und Inbox-Entscheidungen mit erhaltenen alten Revisionen. Der gemeinsame lokale Browserpass bestätigt Quelle/Diff/Fehler, Übernahme und gepinnte Run-Herkunft mit Inbox-Entscheidung. Die Entwicklungs-VPS liest das private Definitionsrepository; die bestehende G4-Definition wurde unverändert über [Definitions-PR #1](https://github.com/niklaskastning/foundry-definitions/pull/1) übernommen. Kein neuer nativer Writer-, Windows- oder öffentlicher SSO-Nachweis.
 
-Jedes Paket erhält **Gate Pxx**: alle unter „Nachweis“ genannten Erwartungen müssen am finalen Head erfüllt sein. Standardmäßig gelten außerdem:
+- [x] **P51 – Implementierung:** Aufträge im vorhandenen Workspace, auf Alternativbranch oder aus bestätigtem Git-Bundle in einen verknüpften T3-Thread übernehmen und mit neuer Revision zurückgeben. Der Folgelauf bleibt bis zur ausdrücklichen Fortsetzung pausiert. Persistenz-/Worker-Nachweise sind im Leitplanken-Plan getrennt vom lokalen UI-Pass und Entwicklungsdeployment geführt. P58 und das vollständige G12 bleiben offen; keine neue Provider-Freigabe.
 
-- Fokus-/Regressionstests an der niedrigsten passenden Schicht; Fehler-Injektion für durable Grenzen und Auth. Reine Dokument-/Copy-/Visualänderungen brauchen keine Spiegeltests. PostgreSQL-Locks und Migrationen gegen isoliertes echtes PostgreSQL prüfen.
-- Vor Push `vp run check:changed`; keine unaufgeforderten repo-weiten Checks, keine zusätzlichen automatischen Actions-Jobs. Artefakt-Builds manuell nur an den genannten Integrationsgates.
-- Bei sichtbarer UI-Änderung ein integrierter Pass im realen Client; bei Auth-/Transportänderungen zählt ein Backend-Test allein nicht als Windows-Nachweis. Replay statt bezahlter Agent-Turns, außer beim ausdrücklich freigegebenen Provider-Nachweis.
-- PR nennt getesteten SHA/Build, Voraussetzungen, genaue Befehle oder Bedienfolge, erwartetes/beobachtetes Ergebnis, negative Fälle und relevante Grenzen. Keine Tokens oder Pairing-Links in Evidence. Modell-/MCP-Instruktionen benötigen passende Evals gemäß [Eval-Regeln](../../evals/README.md).
-- Ergebnis darf hinter deaktivierter Capability landen, wenn sein Paketgate bestanden ist. Eine abhängige Produktfunktion bleibt bis zum übergeordneten Gate gesperrt. Merge bedeutet weder Deployment noch Produktabnahme.
+Der zentrale Benutzerzugang ist noch ein Übergangsstand: Foundry-Anmeldung und eine separat autorisierte Main-T3-Sitzung werden gemeinsam geprüft. Worker-Zugriff benötigt kein eigenes Geräte-Pairing, reicht aber bisher nur die freigegebenen Thread-, Terminal- und Dateileserechte weiter; `settings:write` gehört noch nicht zum Gateway-Vertrag. Eine Anmeldung mit vollständig daraus abgeleiteten zentralen Benutzerrechten ist damit noch nicht abgenommen. Dies betrifft den Benutzerzugang, nicht die getrennte Provider-Autorisierung aus P14Z.
 
-Ein fehlgeschlagener oder nicht ausführbarer Nachweis bleibt **offen/blockiert**, niemals „bestanden mit TODO“. Zuerst Fehler beheben oder einen begrenzten Alternativweg entscheiden; keine Sicherheitsprüfung abschalten. Kein automatischer Architekturwechsel, Providerwechsel oder Infrastrukturkauf. Der Maintainer entscheidet Merge und produktive Aktivierung; Agenten bereiten Änderung, Tests und konkrete Handoffs vor.
+Die ausführlichen bisherigen Prüf- und Deploymentnachweise sind nach [Basic-Leitplanken](basic-leitplanken.md#bestehende-nachweise-und-offene-technische-abnahmen) verschoben. Offene Abnahmen werden durch diese Aufteilung nicht als erledigt markiert.
 
-## Gate-Übersicht und kritischer Pfad
+**P58a – erster Schnitt:** Die versionierte HTTP-API und ihr maschinenlesbarer
+Vertrag verwenden die vorhandenen Benutzersitzungen und zentralen Services.
+Funktionale HTTP-/PostgreSQL-Nachweise bestätigen UI/API-Gleichheit,
+Command-Wiederholung und Rechteabweisung. Maschinen-Ausführung, P58b/MCP und
+vollständiges G12 bleiben offen; der Schnitt erteilt keine neue Provider-Freigabe.
 
-| Gate                                | Umfang / notwendige Paketgates                          | Freigabe und explizite Stop-Bedingung                                                                                                 |
-| ----------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| G1 · Instanzeinstieg                | P01–P05                                                 | Web/Windows melden sich im freigegebenen Auth-Modus an. Access und native Foundry-Anmeldung benötigen getrennte Nachweise             |
-| G2 · Device-Zugriff                 | G1, P06–P12                                             | Zwei Clients sehen ein Device; HTTP/WS/Dateien/Widerruf über Main funktionieren. Ohne Scope-/URL-Bindung keine Host-Agentenfreigabe   |
-| G3 · Dauerhafter Worker             | G2, P13–P17                                             | Launch/Follow/Cancel und Checkpoint ohne Eltern-Agenten; bei verlorenem Ack genau ein Thread. Unklarer Stop verhindert Wiederbelegung |
-| G4 · Workflow-MVP                   | G3, P18a/P18b, P19–P24                                  | Manuell oder per GitHub-Polling bis geprüftem PR, mit Freigabe und Recovery. P25 separat nur für öffentliche Webhooks                 |
-| G5 · Dauerbetrieb                   | G4, P26–P27                                             | Isolierter Restore und kontrolliertes Upgrade bestanden; kein Dauerbetrieb allein aufgrund gesunder Container                         |
-| G6 · Wiederverwendung / Multi-Repo  | G5, P47, P28–P30; P31 nur für Multi-Repo-Thread         | Gepinnte Vorlagen, begrenzter Fan-out und getrennte Repo-Ergebnisse. Keine Zusage eines Multi-Repo-Threads ohne P31                   |
-| G7 · Mehrere Worker                 | G5, P32–P33                                             | Explizite Platzierung/Kapazität und Partition-Recovery; kein zweiter Writer bei unklarem Altversuch                                   |
-| G8 · Sandboxes                      | G7, P34–P40                                             | Benutzer- und Workflow-Nutzung teilen Provisionierung/Quoten; Setup, Auth, Archiv und Cleanup nachgewiesen                            |
-| G9 · Optionale Connectoren / Memory | Je benötigtes Paket P41–P43 plus dessen Voraussetzungen | Jede Integration wird separat abgenommen; nicht für G1–G8 erforderlich                                                                |
-| G10 · Optionale Identität / Hosting | P44–P46 nur nach Bedarf und jeweiligen Voraussetzungen  | IdP, Device-Gruppen und Hosting einzeln freigeben; kein implizites Enterprise-/HA-Versprechen                                         |
-| G11 · Factory als Produkt           | G5, P47–P49                                             | Definition atomar aus UI/Dateien/Git aktivieren; persönliche Inbox und Factory-Navigation verwenden dieselben Aufträge.               |
-| G12 · Interaktive Zusammenarbeit    | G11, G6, P50–P53, P58                                   | Koordinator, T3-Übernahme/Rückgabe, Ressourcen und API/MCP greifen auf dieselben autorisierten Services zu.                           |
-| G13 · Messen und verbessern         | G11, P28, P54–P57                                       | Metriken und Evaluationsbelege nachvollziehen; Benchmark isoliert ausführen; Verbesserung nur als geprüften Vorschlag übernehmen.     |
-| G14 · Zusätzliche Einsatzfälle      | Je benötigtes Teilpaket P59/P60                         | Connector oder Browser-/Incident-Vorlage separat abnehmen; keine pauschale Freigabe aller Integrationen.                              |
+## Nächste Produktlieferungen
 
-Kritischer Pfad: **G1 → G2 → G3 → G4 → G5**, danach G6 und G7 unabhängig; G8 folgt G7. P26 kann schon nach P18 vorbereitet werden, Restore-Abnahme für echte Nutzung benötigt aber die endgültigen Daten-/Receipt-Verträge. P25 ist optional und blockiert den Polling-MVP nicht. G6 ist keine Voraussetzung für eine Sandbox mit einem Repository. Zukünftige Pakete werden beim Beginn gegen den dann aktuellen Upstream geprüft; das ist keine Begründung, frühe Gates zu überspringen.
+Priorität haben große nutzbare Fähigkeiten. P17/G3, der sequenzielle Factory-Kern, Git-Ownership und T3-Handoff werden nicht erneut implementiert; offene Plattform-/Betriebsabnahmen oben und in Basic-Leitplanken bleiben davon unabhängig bestehen. Die Etappen sind Ergebnisse, keine Aufforderung zu einem einzigen großen PR. Bestehende P-IDs bleiben die fachlichen Arbeitspakete.
 
-**Erweiterung zur Factory-Zielvision:** Die Infrastruktur-Reihenfolge bleibt erhalten. P18 wird vor Umsetzung in P18a/P18b geteilt, damit Factory und WorkItem von Anfang an die fachlichen Besitzer sind. P21 liefert bereits den kleinen Factory-Einstieg. Nach G5 folgt P47 vor P28; P48/P49 können daneben entstehen. G11 benötigt weder Sandboxes noch einen Koordinator. G12 und G13 sind anschließend getrennte Ausbaupfade. Die IDs P47–P60 sind stabile Planungsschlüssel, keine Ausführungsreihenfolge. P59/P60 sind unten ausdrücklich in einzeln prüfbare Unterpakete geteilt. Betriebspakete bleiben bestehen; die neue Produktoberfläche ersetzt keine Recovery-Abnahme.
+| Reihenfolge                                        | Nutzbares Ergebnis                                                                                                                                             | Pakete und Voraussetzung                                                                                                                                                    |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1 · Produktiver Factory-Arbeitsplatz — aktuell** | Aufgaben, nächste Entscheidungen und Ergebnisse in allen zentralen Ansichten verstehen und bedienen; v4-Konfiguration, Swarms und Reviewrunden nachvollziehen. | Erneute P49b-Gestaltung auf geliefertem P28/P52/P29/P32/P33-Stand. Browser-/Reviewnachweis in PR #74; finale Auslieferungsprüfungen und menschliche Designabnahme getrennt. |
+| **Parallel · Reproduzierbare Sandboxes**           | Frische Linux-Umgebung mit Profil starten, beobachten, archivieren, löschen und Arbeit wieder aufnehmen.                                                       | P34–P40 einschließlich P37 und Archive P38a/P38b in eigenständiger Umsetzung, noch nicht ausgeliefert. UI integriert nur vorhandene Daten/Actions mit Backend-Capability.   |
+| **Danach · Qualität vergleichen und verbessern**   | Runs bewerten, Konfigurationen auf denselben Aufgaben vergleichen und belegte Änderungs-PRs vorschlagen.                                                       | P54 → P55 → P56 → P57. Belegte Betriebszahlen können früher helfen; fehlende Qualitäts-/Kostendaten bleiben unbekannt.                                                      |
+| **Danach · Repositoryübergreifende Arbeit**        | Ein Auftrag liefert getrennte Änderungen/PRs über mehrere Repositories, später gemeinsamer Agent-Step.                                                         | P30 → P31 auf Rollen, Workspace-Zuordnung und Ausführungskapazität. Bei konkretem Bedarf vor der Qualitätslieferung priorisierbar.                                          |
 
-G1 wird pro Betriebsart abgenommen: zunächst **G1-Access** für unser Deployment, später **G1-Nativ** für den eigenständig sicheren Betrieb ohne Cloudflare Access. G1-Nativ benötigt zusätzlich P03N sowie die Onboarding-/Transportnachweise von P05 ohne Access. Der erste G2-Durchstich darf auf G1-Access aufbauen; seine Freigabe gilt dann nur für diesen Modus. Vor Freigabe desselben Funktionsumfangs ohne Access müssen G1-Nativ und die betroffenen HTTP-/WebSocket-/Device-Grenzen ohne vorgeschaltetes Access erneut geprüft werden. Native Foundry-Authentifizierung ist ein verbindliches Produktziel, nicht vom optionalen P44 abhängig. Sie wird separat umgesetzt und nicht stillschweigend in P04 eingeschoben.
+Koordinierte Parallelität mit Poolmapping und Kapazitätssteuerung ist aus PR #66/#70/#71 vorhanden; v4 aus PR #72 ergänzt persistente Swarm-/Loop-Zustände. Diese Funktionen werden für die aktuelle UI wiederverwendet, nicht als noch ausstehender Grundlagenbau geführt.
 
-## PR-Pakete
+**Begleitende Produktpfade:** P58a bietet inzwischen Factory-begrenzte Maschinen-Leseabfragen mit Ausgabe, Ablauf und Widerruf eigener Credentials. Maschinen-Start/-Steuerung und P58b erschließen künftig weitere Services für CI und Agenten; sie müssen die Rollenlieferung nicht blockieren. P03N/P05/P12 schließen native Anmeldung und vollständigen Instanzeinstieg; der bestehende Access-Modus erlaubt vorherige Featurearbeit. P14Z/P52 bauen zentrale Ressourcen passend zu den jeweils benötigten Workern und Rollen aus. P50 bleibt ein optionaler Koordinator auf der vorhandenen Steuerung. P25/P41–P43/P59/P60 sowie P44/P45 folgen konkretem Integrations-, Memory-, Verifikations- oder Identitätsbedarf. Mobile bleibt zurückgestellt.
 
-### P01 · Instanzidentität und Protokollvertrag
+P02, P11, P26, P27 und P46 sowie G5 werden im [Leitplanken-Plan](basic-leitplanken.md) geführt. Sie bilden keine eigene Etappe der Feature-Reihenfolge; notwendige technische Gates gelten weiterhin vor Aktivierung. P18 bezeichnet P18a/P18b; P38 umfasst P38a/P38b/P38c. **P49a/P49b** präzisieren den gelieferten Basisumfang, den funktional gelieferten Factories-first-Arbeitsplatz und dessen aktuelle Gestaltungsüberarbeitung innerhalb der bisherigen P49-ID.
 
-**Voraussetzungen:** keine.
+### Anschluss an die v3-Parallelitätslieferung: Definitionsmodell v4
 
-**Ergebnis und Umfang:** Versionierten Instanz-Descriptor mit stabiler instanceId, Main-environmentId, zulässigen Auth-Verfahren und Capability-Aushandlung einführen. IDs über Neustarts erhalten; inkompatible Versionen ausdrücklich ablehnen.
+Das abgestimmte [modulare Modell im Definitionsrepository](https://github.com/niklaskastning/foundry-definitions/blob/main/docs/definition-model.md) ([Spezifikations-PR #3](https://github.com/niklaskastning/foundry-definitions/pull/3)) bleibt die gemeinsame Grundlage für P28/P52/P29. Der v4-Schnitt ist implementiert: getrennte Ressourcenregistrierung, vollständige gehashte Skilltrees, additive Workflow-/Step-Erweiterungen, explizite Migrationsexporte, strukturierte Resultate, typisierte Conditions und persistente Swarm-/Loop-Zustände auf dem bestehenden Automation-PostgreSQL. Technisches Retry und fachliche Review/Fix-Iteration besitzen getrennte Identitäten und Budgets; `test`-Nodes zählen wegen ihres physischen Workerstarts ebenfalls gegen Ausführungs- und Parallelitätslimits.
 
-**Abgrenzung:** Noch keine Registrierung, Gateway-Verbindung oder Teamverwaltung.
+Die Workeranbindung ist Codex-spezifisch. MCP stdio/Streamable HTTP benötigt eine aktivierte Factory-Bindung, aktuelle Secret-Referenzen und nachweisbar durchgesetzte exakte Toolrechte. HTTP-Auth verwendet zunächst Bearer-Referenzen; zusätzliche Provider/OAuth-Flows werden nicht mitbehauptet. Die Spezifikation besitzt die konkreten Bundle-, Graph-, Resultat- und Budgetgrenzen. Pollende Runansichten verwenden kompakte Node-Seiten mit gesonderten Details; die UI unterscheidet Definition, Herkunft, gepinnten Attempt und Iterationszustand.
 
-**Gate P01 – Nachweis:** Neustart liefert dieselbe Identität; falsche/fehlende Protokollversion wird verständlich abgelehnt; Descriptor enthält keine Secrets oder Device-Liste.
+**Linux/Codex und Web nativ abgenommen; ausdrückliche v4-Aktivierung möglich.** Der geprüfte Main-/Worker-Stand ist `73736699a4910bb2cf2ccad22c2a52050e00acc0`, Main-Image `sha256:740692707d4cc74441f9075002356b384083b3e26fd5b3a9837cea7d013831ef`, Instanz-/Automation-Schema 8/11. [Foundry PR #72](https://github.com/niklaskastning/foundry/pull/72) und [Definitions-PR #5](https://github.com/niklaskastning/foundry-definitions/pull/5) besitzen die Abnahmebelege.
 
-### P02 · PostgreSQL-Grundlage für Instanzdaten
+Der native Swarm belegte beide gleichzeitig an MCP wartenden Writer, getrennte Workspaces und die explizite Integration beider Git-Checkpoints mit Marker 1 trotz aktiver Revision mit Marker 2. Der Main-Neustart erhielt den gepinnten Stand. Delivery-Run `559833db-d503-4ba2-80ea-8786684fbaf6` endete nach ausdrücklicher UI-Freigabe erfolgreich: vier Luna-Turns mit `medium`, zwei fachliche Iterationen und kein technischer Retry. Der erste Writer-Checkpoint enthielt `draft`, der zweite erbte exakt diesen Stand und enthielt `approved`; die Reviews lasen diese Dateien und `until` wurde in Iteration 2 wahr. Das ausgeführte Skillskript entsprach dem gepinnten Inhalts-Hash. Der Webpfad einschließlich T3-Verbindung und Handoff-Rückkehr ohne zusätzlichen Providerturn ist mit bestätigtem zentralen Archiv geprüft; die pausierte Fortsetzung wurde anschließend beendet.
 
-**Voraussetzungen:** P01.
+Strukturierte JSON-Resultate allein belegen keine Dateiarbeit. Der deterministische Skillskript-/Git-Nachweis prüft die tatsächliche Ausführung, keine allgemeine Modellqualität. Loader-/Validator-, PostgreSQL- und Adaptertests ergänzen ungültige Resultate, Conditions, Teilfehler, Retry/Restart/Cancel, Budgets und Rückwärtskompatibilität; sie bleiben von den nativen Nachweisen getrennt. Windows-Nativ und öffentliches SSO haben weiterhin eigene offene Gates; Mobile bleibt zurückgestellt. Der allgemeine Beispielsatz `factories/modular-review` ist validatorgeprüft, während `factories/v4-native` die konkrete Abnahmefixture enthält.
 
-**Ergebnis und Umfang:** Eigene Instanz-Migrationen für Identität, Betreiberbindung und Zugangsgenerationen in fork_connect; getrennte Runtime-/Migrationsrolle, Transaktionsschnittstelle und Readiness einführen.
+V1/v2/v3 werden weder umgedeutet noch automatisch migriert. V3 bleibt die kompatible Grundlage für statische DAGs und seine bisherige Reparatursemantik; ein v4-Migrationsexport muss insbesondere die neue Einstufung retryfähiger technischer Fehler prüfen. Reproduzierbare Sandboxes P34–40 bleiben die nächste eigenständige große Etappe. Keine zweite Definitionssprache und keine Sandboxplattform in diesen Schnitt aufnehmen.
 
-**Abgrenzung:** Kein Relay-Schemaimport, keine Automation-Tabellen und keine SQLite-Portierung.
+### Abnahme der aktuellen UI-Lieferung
 
-**Gate P02 – Nachweis:** Auf isoliertem PostgreSQL: Neuinstallation, Wiederholung, konkurrierender Migrationsstart und inkompatibles Schema prüfen. Runtime kann keine DDL ausführen; DB-Ausfall blockiert Readiness statt Ersatzdaten anzulegen.
+Der funktionale Web-/Linux-/Codex-Nachweis aus PR #67/#72 bleibt bestehen. [PR #74](https://github.com/niklaskastning/foundry/pull/74) belegt die erneute P49b-Prüfung am Implementierungsstand `6087f1e2ec8e2a137012a1aedac541baa402686e`: echte VPS-Main-Daten, eigener approval-only v4-Run mit zwei revisionsgebundenen Freigaben und ohne Providerstart/Writer, T3-Gateway-Threadlink mit Rückkehr, Reload und Browser-Zurück. Geprüft wurden außerdem Filter/Pagination, 390/480/1440px in Hell/Dunkel, Offline-Wiederverbindung über den eigenen Prüfproxy sowie eine echte Sitzung mit Leserechten. Das unabhängige Review ist abgeschlossen; seine vier Befunde sind behoben. Screenshots, automatisierte Nachweise, finale Artefakt-/CI-Ergebnisse und Deploymentrevision bleiben im PR als Auslieferungsnachweis. Native Windows-UI und öffentliches SSO sind damit nicht abgenommen; die menschliche Designabnahme bleibt offen.
 
-### P03 · Access-Nachweis und Foundry-Benutzersession
+Für die Lieferung gelten folgende Kriterien; geprüfte technische Bedienbarkeit ersetzt keine menschliche Designbestätigung:
 
-**Voraussetzungen:** P01, P02.
+1. Vorher-/Nachhercaptures repräsentativer Hauptansichten auf echten laufenden Daten: Home/Factory, Auftrag, Agenten/Skills/MCP, Workflows/Definition, Run mit v4-Iteration, Inbox, Ressourcen und Einstieg/Settings. Pro Ansicht Aufgabe, konkreten Bruch und Änderung festhalten; funktionierende Bereiche bewahren.
+2. Zusammenhängend Home → Factory → Auftrag → v4-Run/Iteration → revisionsgebundene Inboxentscheidung → T3 → derselbe Auftrag bedienen. Eigene kostenlose/approval-only Daten für Mutationen; fremde Abnahmeruns nur lesen. Ergebnisse und Evidence öffnen, tatsächlichen Worker/Checkpoint und gepinnte Ressourcen nachvollziehen.
+3. Reload, Browser-Zurück, Deep-Links, Filter und Pagination erhalten den Kontext. Leer-/Lade-/Fehler-/Offline-/Rechtefälle sowie 390–480px und breite Desktopdarstellung in Hell/Dunkel prüfen; Tastaturfokus und Labels erhalten. Keine Erfolgssuggestion für fehlgeschlagene oder unvollständige Ausführung.
+4. Factories bleibt erster Einstieg ohne Chatflash während Auth-/Capability-Laden. Chats und direkte Threadlinks sowie standalone T3 bleiben funktionsfähig. Web-/Desktop-Shell und gemeinsame Entry Points werden geprüft; native Windows-Laufzeit und öffentliches SSO bleiben eigene offene Gates.
+5. Unabhängiges Review der integrierten UI, fokussierte Logik-/Navigation-/Permissionstests und tatsächliches Deployment mit Revisionsnachweis abschließen. Ein funktionaler Testpass oder Fixture-Demo ersetzt keine Gestaltungsprüfung. Die menschliche Designabnahme wird nur nach ausdrücklicher Nutzerbestätigung geschlossen.
 
-**Ergebnis und Umfang:** Validierten Access-Subject an den vorkonfigurierten Betreiber binden; eigene Session, Ablauf, Erneuerung, CSRF-/Origin-Prüfung und Logout als Services bereitstellen.
+Nicht Teil dieser UI-Lieferung sind ein freier Workflow-Canvas, neue Provider-Laufzeiten, automatische Modellrouter, neue Qualitätsmetriken oder leere Sandbox-Menüs. Die parallele P34–P40-Lieferung besitzt eigene Funktions- und Abnahmegrenzen; eine UI-Integration behauptet keine noch fehlende Sandboxfähigkeit.
 
-**Abgrenzung:** Ein Benutzer; keine Selbstregistrierung, Rollenoberfläche oder Clerk-Integration.
+## Funktionale Meilensteine
 
-**Gate P03 – Nachweis:** Gültiger Nachweis funktioniert; gefälschte Signatur, falscher Issuer/Audience, fremder Subject und abgelaufener Nachweis scheitern. Logout entwertet die Sitzung; Header-Spoofing schafft keinen Zugang.
+| Meilenstein                        | Nutzbares Ergebnis                                                                                                                                                        |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1 · Instanzeinstieg               | Web und Windows: Instanz wählen, anmelden, wechseln und entfernen; Access und native Anmeldung separat.                                                                   |
+| G2 · Device-Zugriff                | Zwei Clients nutzen Device-Katalog, Threads, Terminal, Dateien, Diffs und Anhänge über Main.                                                                              |
+| G3 · Worker                        | Agentenauftrag ohne Eltern-Agenten starten, verfolgen, abbrechen und Ergebnis öffnen.                                                                                     |
+| G4 · Workflow-MVP                  | Definition bearbeiten/importieren → manuell oder über GitHub/Zeitplan starten → Analyse, Änderung, Test und Freigabe → PR; Inbox und Ergebnisse bedienen.                 |
+| G6 · Wiederverwendung / Multi-Repo | Agenten/Skills wiederverwenden, Arbeit aufteilen und Ergebnisse je Repository öffnen; Multi-Repo-Step erst mit P31.                                                       |
+| G7 · Mehrere Worker                | Feste Ziele und Pools wählen und Aufträge verschiedenen Workern zuordnen.                                                                                                 |
+| G8 · Sandboxes                     | Dasselbe Profil interaktiv und im Workflow nutzen, Sandbox löschen und Arbeit aus dem Archiv fortsetzen.                                                                  |
+| G9 · Connectoren / Memory          | Gewählten Connector nutzen beziehungsweise Wissen speichern, suchen und löschen.                                                                                          |
+| G10 · Identität / Gruppen          | Gewählten Anmeldeanbieter verbinden oder Device-Gruppen gemeinsam nutzen.                                                                                                 |
+| G11 · Factory als Produkt          | Lokale Definition ausdrücklich nach Git übernehmen; Git-Änderung und ungültigen Folgecommit prüfen; gepinnte Revision am Run und Inbox-Entscheidung nachvollziehen.       |
+| G12 · Zusammenarbeit               | Auftrag mit T3-Übernahme und Rückgabe bis zum PR über UI/API/MCP bearbeiten; Maschinenzugang separat nachweisen. Koordinator P50 nur bei Aktivierung zusätzlich abnehmen. |
+| G13 · Qualitätsfunktionen          | Dashboard öffnen, Runs bewerten, Benchmarks vergleichen und Verbesserungsvorschläge übernehmen.                                                                           |
+| G14 · Weitere Einsatzfälle         | Jeden zusätzlichen Connector und jede Browser-/Incident-Vorlage einzeln nutzen.                                                                                           |
+
+## Instanzeinstieg und Devices
+
+### P01 · Instanzerkennung
+
+Instanzen eindeutig erkennen und verfügbare Funktionen an Clients melden.
+
+### P03 · Anmeldung über Access
+
+Über Cloudflare Access bei Foundry anmelden, die Sitzung erneuern und sich abmelden.
 
 ### P03N · Native Foundry-Anmeldung ohne Cloudflare Access
 
-**Voraussetzungen:** P01, P02, P03; vor Umsetzung genau ein natives Anmeldeverfahren und dessen Credential-/Recovery-Vertrag festlegen. Bestehende Services wiederverwenden; die Access-spezifische Bindung ausdrücklich von der internen Betreiberidentität trennen.
+Foundry ohne Cloudflare oder externen Identitätsanbieter einrichten und nutzen: Erstanmeldung, Kontoverwaltung, Login/Logout und Wechsel des Anmeldeverfahrens.
 
-**Ergebnis und Umfang:** Kontrollierte Erstbesitzer-Einrichtung, Credential-Verwaltung, Missbrauchsschutz und native Anmeldung an dieselbe interne Betreiberidentität und Foundry-Autorisierung anbinden. Session-Ablauf, Erneuerung, Logout, Widerruf und Recovery ohne externen IdP bereitstellen. Den expliziten Wechsel zwischen nativer und Access-Anmeldung mit Erhalt der Instanz-/Betreiberidentität und Behandlung vorhandener Sessions unterstützen. Vor Umsetzung bei Bedarf in eigenständig prüfbare PRs teilen.
+### P04 · Windows-Anmeldung über Access
 
-**Abgrenzung:** Kein anonymes öffentliches Setup mit „erster Besucher wird Admin“, kein Auth-Bypass bei fehlender Konfiguration, keine Teams oder Pflicht zu Cloudflare/Clerk. Verfahren wie Passwort oder Passkey werden hier noch nicht vorweggenommen. Bisheriges T3-Pairing ist kein Nachweis dieses neuen Instanz-Logins.
-
-**Gate P03N – Nachweis:** Ohne Cloudflare oder externen IdP: autorisierte Erstinitialisierung einschließlich konkurrierender Versuche, Login und falsche Credentials, begrenzte Fehlversuche, Session-Ablauf/Erneuerung, Neustart, Logout/Widerruf und Recovery prüfen. Unauthentifizierte HTTP-/WebSocket-Zugriffe sowie gefälschte Proxy-/Access-Header scheitern. Moduswechsel erhält Identitäten und reaktiviert keine widerrufenen Sessions; Fehlkonfiguration oder DB-Ausfall öffnet keinen Zugang. G1-Nativ ergänzt reale Web-/Windows-Abnahme.
-
-### P04 · Windows-Transport für Access-Anmeldung
-
-**Voraussetzungen:** P03.
-
-**Ergebnis und Umfang:** Für Google als IdP den freigegebenen Systembrowser-/Managed-OAuth-Weg mit PKCE, zustandsgebundenem Loopback-Callback und instanzisolierter Credential-Speicherung prüfen und implementieren. HTTP und WebSocket müssen denselben autorisierten Access-Kontext nutzen. Die Transportanbindung vom Anmeldeadapter trennen, damit P03N später ohne Cloudflare-Abhängigkeit angeschlossen werden kann.
-
-**Abgrenzung:** Kein Service-Token im Client; keine pauschale Freigabe von Node/IPC für Remote-Seiten. Keine Umgehung der Google-Beschränkung für eingebettete Browser. Managed OAuth für die konkrete Anwendung, Callback-Zulassung und Auth-Header-Kompatibilität vor Freigabe nachweisen; keine automatische Cloudflare-Konfigurationsänderung.
-
-**Gate P04 – Nachweis:** Auf Windows mit echtem IdP: Login, API, WebSocket, Ablauf, Neustart und Logout nachweisen. Remote-Login kann keine privilegierten IPCs nutzen; Session A wird nicht an Instanz B gesendet. Ist kein Windows-Testhost verfügbar, bleibt G1 offen.
+Access-Anmeldung im Windows-Client über den Systembrowser ermöglichen und für die anschließende Instanzverbindung verwenden.
 
 ### P05 · Instanz-URL und Onboarding in Web/Windows
 
-**Voraussetzungen:** P01, P03, P04.
-
-**Ergebnis und Umfang:** Runtime-Instanzwahl, verifizierten Descriptor und verständliche Login-/Fehlerzustände an vorhandenen Connection-Supervisor anbinden. Wechsel und Entfernen der Instanz anbieten.
-
-**Abgrenzung:** Noch kein Device-Katalog; keine zweite Reconnect-Steuerung oder Mehrinstanz-Parallelität.
-
-**Gate P05 – Nachweis:** Frisches Profil gelangt per URL zur angemeldeten Main Node. HTML-Access-Redirect wird nicht als JSON-Fehler versteckt. Unerwarteter Identitätswechsel und fremde Redirect-Ziele werden gestoppt; Entfernen leert nur zugehörige Sessions/Caches.
+Instanz-URL eingeben, anmelden, Instanzen wechseln und gespeicherte Instanzen entfernen. Anmelde- und Verbindungszustände verständlich anzeigen.
 
 ### P06 · Device-Registrierung und einmaliges Enrollment
 
-**Voraussetzungen:** G1.
-
-**Ergebnis und Umfang:** Device-Schlüssel, einmalige keygebundene Enrollment-Freigabe, Registry-Persistenz und Widerruf als Backend-Service implementieren; begrenzten operatorseitigen Enrollment-Befehl bereitstellen.
-
-**Abgrenzung:** Noch keine automatische Cloudflare-Provisionierung, kein Device-Verkehr und keine Benutzergruppen.
-
-**Gate P06 – Nachweis:** Verlorene Antwort und Retry liefern dieselbe Registrierung. Abgelaufenes oder fremdschlüsselgebundenes Token scheitert; Doppelverbrauch erzeugt keine zweite Identität; Widerruf bleibt nach Restart bestehen.
+Devices an einer Instanz registrieren und wieder trennen.
 
 ### P07 · Ausgehender Device-Kanal
 
-**Voraussetzungen:** P06.
+Devices verbinden sich ausgehend mit Main und melden ihren Verbindungsstatus.
 
-**Ergebnis und Umfang:** Authentifizierten Connector mit Version/Generation, Heartbeat, Reconnect und Bindung an genau sein lokales Environment einführen. Im Access-Betrieb zusätzlich das Access-Machine-Credential sicher konfigurieren; der Device-Nachweis bleibt in beiden Betriebsarten erforderlich.
+### P08 · HTTP-Zugriff über Main
 
-**Abgrenzung:** Keine beliebige URL als Proxy-Ziel; noch keine vollständige Client-Weiterleitung.
-
-**Gate P07 – Nachweis:** Device ohne eingehend erreichbaren Port verbindet sich; falsche Identität/Generation wird abgewiesen. Tunnelunterbrechung und Main-Neustart werden abgeglichen; nur eine aktuelle Verbindung darf eine Registrierung bedienen.
-
-### P08 · Gateway-Session und HTTP-Autorisierung
-
-**Voraussetzungen:** P03, P07.
-
-**Ergebnis und Umfang:** Clientauth an Main terminieren, Device-Session mit begrenzten Scopes erzeugen und typisierte HTTP-Routen vermitteln. Akteur/Grant und korrekte URL-Bindung in Auth-Adapter erhalten.
-
-**Abgrenzung:** Kein universeller Admin-Proxy, keine Abschaltung von DPoP und kein beliebiger Content-Proxy.
-
-**Gate P08 – Nachweis:** Scope-Eskalation, falsches Environment, DPoP-Replay und Path-Traversal ablehnen. Device-Cookies/Redirects werden nicht blind weitergereicht. Read-only-Grant kann keine Mutation auslösen; gültiger Read erreicht genau das registrierte Ziel.
-
-**Technische Aufteilung:** P08a führt die Main-seitige Ausgabe und erneute Prüfung kurzlebiger Grants mit Bindung an Foundry-/T3-Session, Akteur, Device, Environment und Kanalgeneration ein. P08b verwendet diese Grenze für Device-seitige Sessions und die begrenzte HTTP-Weiterleitung. Bestehende T3-Sessions allein tragen diese Delegationsbindung noch nicht; die Autorisierungsgrenze und ihre Transport-Einlösung werden daher separat geprüft. P08a bewirbt noch keine Gateway-Capability und besteht allein nicht Gate P08. Reihenfolge, Teilnachweise und offene Arbeit: [Issue #13](https://github.com/niklaskastning/foundry/issues/13).
+HTTP-Funktionen eines registrierten Devices über die gemeinsame Main-Domain erreichen.
 
 ### P09 · WebSocket-, Thread- und Terminaltransport
 
-**Voraussetzungen:** P08.
-
-**Ergebnis und Umfang:** Begrenzte Stream-Kanäle, Socket-Tickets und Anschluss an bestehende Client-Transportlogik implementieren. Steuerverkehr vom Datenrückstau trennen.
-
-**Abgrenzung:** Keine unbeschränkten Buffers; Terminaleingaben nicht blind wiederholen.
-
-**Gate P09 – Nachweis:** Replay-Turn streamt über Main. Langsamer Empfänger, Kanalabbruch und Reconnect führen zu Backpressure oder sichtbarem Abbruch. Bestätigte Mutationen werden nicht dupliziert; unbestätigte Terminaleingaben werden als unsicher markiert.
+Live-Threads und Terminalverbindungen über Main bedienen.
 
 ### P10 · Dateien, Diffs und Attachments über Gateway
 
-**Voraussetzungen:** P08, P09.
-
-**Ergebnis und Umfang:** Benötigte Datei-/Diff-/Attachment-Pfade inklusive Größenlimits und bestätigtem Chunk-Resume anbinden. Content-Type/Download-Behandlung von privilegierter UI-Origin trennen.
-
-**Abgrenzung:** Keine aktive Projekt-Preview unter der Instanz-Origin, kein Object-Storage-Ausbau.
-
-**Gate P10 – Nachweis:** Datei und Attachment mit Hashvergleich übertragen; unterbrochenen Transfer fortsetzen. Große/unerlaubte Payloads kontrolliert ablehnen; Device-HTML kann weder Script noch Service Worker an der Main-Origin ausführen.
-
-### P11 · Grants, aktive Sessions und Widerruf
-
-**Voraussetzungen:** P06, P08, P09.
-
-**Ergebnis und Umfang:** clientAccess, automationExecution und sandboxProvisioning getrennt modellieren; lokale Zugangsprüfung und aktive Stream-/Session-Invalidierung an Grant-Generationen koppeln.
-
-**Abgrenzung:** Noch ein Betreiber; kein transitive Trust und keine Zusage eines Fern-Kills offline laufender Prozesse.
-
-**Gate P11 – Nachweis:** Widerruf schließt betroffene aktive Verbindungen und verhindert neue; andere Grants bleiben erhalten. DB-Ausfall lässt keine unbegrenzt gültige alte Autorisierung zu. Unabhängige direkte T3-Verbindung wird nicht als widerrufener Instanzzugang ausgegeben.
+Dateien, Diffs und Anhänge über Main öffnen und herunterladen; unterbrochene Übertragungen fortsetzen.
 
 ### P12 · Device-Katalog und interaktive Auswahl
 
-**Voraussetzungen:** P05, P06, P09, P10, P11.
+Devices mit Online-/Offline-Status anzeigen und für bestehende Projekt- und Threadansichten auswählen, registrieren oder trennen.
 
-**Ergebnis und Umfang:** Registrieren/Trennen, Online-/Offline-Zustand und Device-Auswahl im gemeinsamen Client integrieren. Vorhandene Thread-/Projektansichten verwenden.
+## Worker
 
-**Abgrenzung:** Keine Automation-Zustandsmaschine; Sichtbarkeit ist keine automatische Ausführungsfreigabe.
+### P13 · Dauerhafter Linux-Worker
 
-**Gate P12 – Nachweis:** Zwei frische Clients desselben Betreibers sehen dasselbe Device ohne Pairing je Client/Device und öffnen dort denselben Testthread. Offline bleibt sichtbar; Entzug entfernt Zugriff in beiden Clients.
-
-### P13 · Host-Worker als eigener Linux-Dienst
-
-**Voraussetzungen:** G2.
-
-**Ergebnis und Umfang:** Installations-/Update-/Stop-Verfahren für einen isolierten Foundry-Host-Dienst mit eigenem Home, Dienstkonto, erlaubten Workspace-Wurzeln und Ressourcenbudget liefern.
-
-**Abgrenzung:** Kein Zugriff auf persönliches T3-State, kein Host-Home-Mount in Main und keine Sandbox-Zusage.
-
-**Gate P13 – Nachweis:** Auf isoliertem Zustand Installation, Neustart, Upgrade und Entfernung prüfen. Environment-ID bleibt erhalten, bestehendes T3 bleibt erreichbar. Betriebskonto/Dateirechte und ohne Interaktiv-Shell wirksamer PATH sind dokumentiert.
+Einen dauerhaften Linux-Worker für Agenten und Entwicklungswerkzeuge betreiben, starten und stoppen.
 
 ### P14 · Provider-Bereitschaft und Codex-Bindung
 
-**Voraussetzungen:** P13.
+Codex auf dem Worker einrichten und anmelden; Verbindung, Provider-Bereitschaft und freie Kapazität getrennt anzeigen.
 
-**Ergebnis und Umfang:** Codex-Installation/Anmeldung im Host-Worker und Capability-Abfrage verbinden. online, providerReady und capacityAvailable getrennt melden; fehlende Anmeldung mit Handoff anzeigen.
+### P15 · Worker-Aufträge starten
 
-**Abgrenzung:** Keine Credentials vom bestehenden Benutzer kopieren; keine anderen Provider oder automatische API-Abrechnung.
-
-**Gate P14 – Nachweis:** Fehlendes Binary, abgelaufene Anmeldung und unbekannte Provider-Version liefern korrekten Status. Neustart erhält autorisierte Konfiguration. Zuerst Replay; nur mit expliziter Freigabe ein minimaler echter Codex-Turn.
-
-### P15 · Idempotentes Launch-Receipt ohne Eltern-Agenten
-
-**Voraussetzungen:** P11, P13.
-
-**Ergebnis und Umfang:** Servicebasierten Worker-Launch mit stable Command-ID und durablem Receipt an ThreadLaunchService anbinden; normale Projekt-/Provider-Rechte anwenden.
-
-**Abgrenzung:** Keine künstlichen Agenten-Elternthreads und keine zweite Provider-Spawn-Implementierung.
-
-**Gate P15 – Nachweis:** Crash vor/nach T3-Command-Commit und verlorene Antwort injizieren: Wiederholung findet exakt denselben Thread. Nicht berechtigtes Projekt oder deaktivierter Provider startet keinen Prozess.
+Agentenarbeit direkt als Worker-Auftrag starten, ohne einen übergeordneten Agenten-Thread zu benötigen.
 
 ### P16 · Follow, Ergebnisfinalisierung und Cancel
 
-**Voraussetzungen:** P15.
-
-**Ergebnis und Umfang:** Follow/Read/Cancel als Services, lokalen Lease-Watchdog und bestätigten Ergebnisabschluss einschließlich Checkpoint/Manifest implementieren.
-
-**Abgrenzung:** Noch kein Workflow-Graph; Lease-Ablauf ist kein Beweis für Prozessende.
-
-**Gate P16 – Nachweis:** Turn fertig, Checkpoint offen bleibt finalizing. Cancel während Start und laufendem Turn endet erst nach bestätigtem Stop. Verlorene Verbindung erzeugt unklaren Status statt zweiten Writer; alte Generation überschreibt kein Ergebnis.
+Worker-Aufträge verfolgen, Ergebnisse einschließlich Checkpoint lesen und laufende Arbeit abbrechen.
 
 ### P17 · Workspace-Belegung für manuelle und automatisierte Arbeit
 
-**Voraussetzungen:** P15, P16.
+Checkouts und Worktrees für manuelle sowie automatisierte Arbeit anlegen, zuordnen und wieder freigeben.
 
-**Ergebnis und Umfang:** Verwaltete Checkout-/Worktree-Allokation, Writer-Reservierung und Freigabe mit Recovery bereitstellen.
+### P14Z · Zentrale Kontoverbindungen
 
-**Abgrenzung:** Ein Repository je Auftrag; keine implizite Synchronisation mit anderen Devices oder Sperrgarantie für fremde Host-Prozesse.
+Provider- und externe Kontoverbindungen einmal in Foundry einrichten, prüfen, erneuern und trennen. Neue Worker übernehmen ausgewählte Verbindungen ohne separate Anmeldung. **P14Za** liefert Codex für dauerhafte Worker; **P14Zb** ergänzt weitere Provider einzeln. GitHub folgt über P23, Azure DevOps über P41, Sandboxes über P37 und MCP-Verbindungen über P52.
 
-**Gate P17 – Nachweis:** Zwei Writer auf demselben verwalteten Checkout werden serialisiert oder getrennten Worktrees zugeordnet. Restart verliert aktive Reservierung nicht; Cancel gibt erst nach Stop frei; Nutzerdateien außerhalb verwalteter Wurzeln bleiben unberührt.
+## Factory-MVP
 
 ### P18a · Factory und beständiger Auftrag
 
-**Voraussetzungen:** G3.
+Factories und beständige Aufträge mit Quelle, Zustand und Repository-Bezug verwalten. Factories archivieren und wiederherstellen; Auftragsabschluss und einzelne Run-Ergebnisse getrennt führen.
 
-**Ergebnis und Umfang:** Eigene Automation-Migrationen und Services für Factory, unveränderliche Factory-Version und WorkItem mit Quelle, fachlichem Zustand und Repository-Scope. Archivieren/Wiederherstellen der Factory sperrt/erlaubt neue Starts; aktive Runs brauchen eine separate Steueraktion. Keine historischen Bezüge durch Löschen verlieren.
+### P18b · Workflow-Versionen und Runs
 
-**Abgrenzung:** Keine Teams, Agentenkoordination oder Git-Synchronisation. Auftragsabschluss ist unabhängig von technischem Run-Erfolg.
-
-**Gate P18a – Nachweis:** Wiederholter Create-Command erzeugt einen Auftrag. Zwei Factories können unabhängig konfiguriert werden; fremde Repository-Bindings scheitern. Archivierung und Neustart erhalten Historie und Start-Sperre.
-
-### P18b · Workflow-Versionen und Automation-Persistenz
-
-**Voraussetzungen:** P18a. Bestehende Verweise auf P18 meinen beide Teilpakete.
-
-**Ergebnis und Umfang:** Unveränderliche Workflow-Versionen, Runs, Commands und Outbox unter Factory/WorkItem; Schema-Validierung für sequenzielle Agent-/Test-/Approval-/Publish-Steps. Factory-Version und Repository-Scope beim Start festhalten.
-
-**Abgrenzung:** Keine graphische Canvas, dynamische Fan-outs oder frei evaluierbare Backend-Skripte.
-
-**Gate P18b – Nachweis:** Version bleibt für gestarteten Run unverändert. Ungültige Referenzen/Zyklen werden abgewiesen; gleiches Command erzeugt einen Run. DB-Rollback hinterlässt weder halben Run noch isolierte Outbox-Aktion; mehrere Revisionen bleiben demselben Auftrag zugeordnet.
-
-### P19 · Scheduler und zuverlässiger Step-Dispatch
-
-**Voraussetzungen:** P18, P15, P16, P17.
-
-**Ergebnis und Umfang:** Reine Step-Entscheidungen, persistente Claims/Leases und Outbox-Effekte an Worker-Adapter koppeln; erst nächsten Step nach gesichertem Ergebnis starten.
-
-**Abgrenzung:** Noch keine externen Trigger und keine Parallelität über mehrere Worker.
-
-**Gate P19 – Nachweis:** Crash nach Claim, nach Zustellung und vor Ergebnisbestätigung injizieren. Reconciliation findet vorhandenen Attempt; Testfehler blockiert Folgeaktionen; DB-Lock wird nicht während Netzwerkzugriff gehalten.
-
-### P20 · Run-Steuerung und menschliche Freigabe
-
-**Voraussetzungen:** P19.
-
-**Ergebnis und Umfang:** Pause/Resume/Cancel/Retry und revisionsgebundene Freigaben als Services mit gemeinsamen Web-/Desktop-Commands implementieren.
-
-**Abgrenzung:** Keine automatische Antwort auf Agentenfragen, kein stilles Retry fachlicher Fehler.
-
-**Gate P20 – Nachweis:** Pause verhindert neue Steps; Resume startet nur zulässige. Revision nach Freigabe verändert: Veröffentlichung blockiert. Doppelklick auf Freigabe bleibt idempotent; veraltete UI kann keine frühere Revision freigeben.
-
-### P21 · Manueller Start und Run-Ansicht
-
-**Voraussetzungen:** P20.
-
-**Ergebnis und Umfang:** Factory-Auswahl und Auftragsdetail, minimalen Formulareditor, Veröffentlichung, manuelles Starten und paginierte Run-/Step-Ansicht mit Thread-Links liefern; gleiche Rechte für Settings/Palette/MCP beachten.
-
-**Abgrenzung:** Keine Canvas, Transkriptkopien aller Threads oder neuer Provider.
-
-**Gate P21 – Nachweis:** Replay-Run von Definition bis Ergebnis in Web und Windows bedienen. Browser schließen stoppt Run nicht; erneutes Öffnen zeigt durable Zustände. Umfangreiche Ausgabe wird erst bei Bedarf geladen.
-
-### P22 · GitHub-Polling mit persistentem Eingang
-
-**Voraussetzungen:** P18, P19.
-
-**Ergebnis und Umfang:** Ersten GitHub-Issue-Connector mit Opt-in-Label, API-Zugang, Cursor/Overlap, Rate-Limit-Backoff und durablem Inbox-Commit implementieren.
-
-**Abgrenzung:** Kein öffentlicher Webhook erforderlich; keine Rekonstruktion jeder kurzlebigen Eventfolge behaupten.
-
-**Gate P22 – Nachweis:** Mehrfach gelesene Revision und Crash vor Cursorfortschritt erzeugen einen fachlichen Start. Cursor erst nach Inbox-Commit; Bot-Rückmeldungen lösen keine Schleife aus; Rate-Limit verschiebt kontrolliert.
-
-### P23 · Kontrollierter GitHub-Publish-Step
-
-**Voraussetzungen:** P20, P22.
-
-**Ergebnis und Umfang:** Begrenzten Publish-Service mit revisionsgebundener Freigabe, GitHub-App-Zugang, Operationsschlüssel und PR-Reconciliation liefern.
-
-**Abgrenzung:** Kein Merge/Deployment; keine breiten Push-Tokens an Implementierungsagenten.
-
-**Gate P23 – Nachweis:** PR erstellt, Antwort verloren: vorhandenen PR finden statt zweiten erstellen. Unzulässiges Repository, widerrufener Grant oder andere Revision blockieren. Testnachweis gehört genau zum veröffentlichten Commit.
-
-### P24 · Zeitplan-Trigger
-
-**Voraussetzungen:** P18, P19.
-
-**Ergebnis und Umfang:** Zeitplan-Bindings mit Zeitzone, eindeutiger Termin-ID, Nachhol-/Überlappungsregel und Restart-Recovery auf Workflow-Inbox abbilden.
-
-**Abgrenzung:** Bestehende Scheduled Tasks werden weder migriert noch parallel für denselben Workflow aktiviert.
-
-**Gate P24 – Nachweis:** TestClock prüft DST, verpassten Termin, doppelte Claim-Versuche und deaktivierten Trigger. Jede gewählte Nachholregel liefert die definierte begrenzte Zahl von Runs.
-
-### P25 · Signierter GitHub-Webhook als optionaler Eingang
-
-**Voraussetzungen:** P22, P23.
-
-**Ergebnis und Umfang:** Eng begrenzten Webhook-Handler mit Raw-Body-HMAC, Installation/Repo-Prüfung und gemeinsamer fachlicher Deduplizierung ergänzen; genaue Access-Routenregel im Runbook beschreiben.
-
-**Abgrenzung:** Keine globale Access-Ausnahme; erst nach operatorseitiger Konfiguration aktivieren.
-
-**Gate P25 – Nachweis:** Gültiger Event wird erst nach Commit bestätigt; falsche Signatur/Installation scheitert. Webhook plus Polling erzeugen einen Start. DB-Ausfall liefert Fehler; UI/API/Gateway behalten ihre Foundry-Autorisierung und im Access-Betrieb zusätzlich den Access-Schutz.
-
-### P26 · Backup und isolierter Restore
-
-**Voraussetzungen:** P02, P18.
-
-**Ergebnis und Umfang:** Koordinierte Sicherung von PostgreSQL, erforderlichem T3-State, Artefakten und Schlüsseln plus gesperrten Wiederanlauf implementieren; externes Ziel konfigurieren.
-
-**Abgrenzung:** Keine Sicherung gegen die persönliche Live-T3-DB und kein ungeprüftes Zurückspielen in Produktion.
-
-**Gate P26 – Nachweis:** Auf getrenntem Ziel vollständigen Restore ausführen. Entzogene Zugänge werden durch Rotation nicht reaktiviert; Trigger/Publishing bleiben bis Receipt-/PR-Abgleich gesperrt. Gemessene RPO/RTO mit Betreiberziel vergleichen.
-
-### P27 · Kontrollierter Rollout und Betriebsgrenzen
-
-**Voraussetzungen:** G4, P26.
-
-**Ergebnis und Umfang:** Einzelreplik-Rollout mit Drain/Migration/Readiness, Ressourcen-/Stream-/Disklimits und Mindestalarmierung dokumentieren und technisch anbinden.
-
-**Abgrenzung:** Keine neue automatische Release-Pipeline, HA oder Scale-to-zero.
-
-**Gate P27 – Nachweis:** Isoliertes Upgrade mit laufendem Replay und inkompatiblem Schema prüfen; zulässigen Rollback oder Restore belegen. Main-Neustart, voller Artefaktspeicher und DB-Ausfall führen zu sichtbarem begrenztem Fehler, keinem zweiten Writer.
-
-### P28 · Versionierter Agent- und Skill-Katalog
-
-**Voraussetzungen:** G5, P47.
-
-**Ergebnis und Umfang:** Gepinnte Agent-/Skill-Versionen im kanonischen Definitionsformat, Hashprüfung und effektiven Run-Snapshot hinzufügen; zunächst vorhandene Providerfähigkeiten nutzen.
-
-**Abgrenzung:** Keine globale mutable memory.md oder Ausweitung von Rechten durch Prompttexte.
-
-**Gate P28 – Nachweis:** Katalogänderung verändert gestarteten Run nicht; fehlender zwingender Skill blockiert. Materialisierung überschreibt keine Repo-Instruktionen. Modellseitige Texte erhalten passende Evals gemäß evals/README.md.
-
-### P29 · Fan-out/Join und begrenzte Reparaturschleifen
-
-**Voraussetzungen:** P28.
-
-**Ergebnis und Umfang:** Stabile Element-IDs, konfigurierbare Join-/Fehlerregeln, Parallelitätsgrenzen und explizites Iterationsbudget einführen.
-
-**Abgrenzung:** Keine freien rekursiven Swarms oder unbeschränkten technischen Retries.
-
-**Gate P29 – Nachweis:** Teilfehler/Retry erfüllen exakt die gewählte Join-Regel. Gleiches Element wird nicht dupliziert; Reparaturschleife stoppt am Limit; Ausfall während Fan-out verliert keinen Attempt.
-
-### P30 · Mehrere Repositories pro Auftrag
-
-**Voraussetzungen:** P29, P17.
-
-**Ergebnis und Umfang:** Den in P18a eingeführten Ticket-/Auftragsbezug auf eine gepinnte Repository-Menge mit getrennten Workspaces, Ergebnissen und PRs pro Repository erweitern.
-
-**Abgrenzung:** Zunächst ein Repository pro Thread; kein atomarer Cross-Repo-Push.
-
-**Gate P30 – Nachweis:** Zehn Analysen mit begrenzter Parallelität, danach nur betroffene Repositories implementieren. Teilveröffentlichung ist sichtbar; Retry erzeugt keine doppelten PRs und überschreibt keine fremden Branches.
-
-### P31 · Mehrere Repositories in einem Agent-Step
-
-**Voraussetzungen:** P30.
-
-**Ergebnis und Umfang:** Workspace-Bundle mit Hauptprojekt, zusätzlichen Checkouts sowie aggregiertem Diff-/Checkpoint-/Ergebnismanifest ergänzen.
-
-**Abgrenzung:** Nur wenn realer Ablauf mehrere Repositories in einem Thread verlangt; sonst G6 ohne dieses Paket abschließen und Fähigkeit deaktiviert lassen.
-
-**Gate P31 – Nachweis:** Änderungen und Basis-/Ergebnisobjekte aller Repositories sind im Manifest nachgewiesen. Fehlender Checkpoint eines Repos blockiert vollständigen Erfolg; Resume erhält dieselben Zuordnungen.
-
-### P32 · Kapazitäten und explizite Zielauswahl
-
-**Voraussetzungen:** G5, P11, P16.
-
-**Ergebnis und Umfang:** Atomare Worker-Reservierungen, provider-/kontobezogene Limits, feste Ziele und freigegebene Pools sowie draining bereitstellen.
-
-**Abgrenzung:** Kein stiller Wechsel von Konto, Provider oder isoliertem auf unisoliertes Ziel.
-
-**Gate P32 – Nachweis:** Zwei konkurrierende Claims überschreiten Kapazität nicht. Festes Offline-Ziel wartet; Pool nimmt nur passende erlaubte Geräte. Stale Heartbeat und Grant-Widerruf schließen neue Reservierung aus.
-
-### P33 · Mehrere Worker und Recovery bei Partitionen
-
-**Voraussetzungen:** P32.
-
-**Ergebnis und Umfang:** Mehrere dauerhafte Ziele mit Gateway-/Dispatch-Reconciliation und nachvollziehbarer Gerätezuordnung integrieren.
-
-**Abgrenzung:** Keine transparente Live-Migration aktiver Agenten.
-
-**Gate P33 – Nachweis:** Netzpartition während Implementierung und spätes Ergebnis einer alten Generation provozieren: kein konkurrierender Writer, keine Ergebnisüberschreibung. Browser- und Main-Neustart behalten Zuordnung; kontoweite Limits wirken geräteübergreifend.
-
-### P34 · Sandbox-Profile und Allocation-Service
-
-**Voraussetzungen:** G7.
-
-**Ergebnis und Umfang:** Versionierte Profile, Benutzer-/Run-Owner, Quoten, Zustände und idempotente Provisionierungsaufträge einführen; API auch ohne Workflow anbieten.
-
-**Abgrenzung:** Noch kein tatsächlicher Containerstart, keine Mehrmandanten-Garantie.
-
-**Gate P34 – Nachweis:** Doppelte Anfrage/Cancel erzeugt eine Allocation; Budget-/Capability-Verletzung scheitert vor Provisionierung. Ein Benutzerauftrag braucht keinen künstlichen Workflow-Run.
-
-### P35 · Linux-OCI-Supervisor
-
-**Voraussetzungen:** P34.
-
-**Ergebnis und Umfang:** Einen Container-Adapter mit Besitzlabels, Digest-Pinning, lokalen Ressourcenlimits, Cancel und Reconciliation implementieren. Supervisor außerhalb Sandbox mit eng begrenztem Provisionierungsvertrag.
-
-**Abgrenzung:** Kein Docker-Socket, privilegierter Container oder beliebiger Host-Mount in der Sandbox; nur vertrauenswürdiger Code.
-
-**Gate P35 – Nachweis:** Crash nach Containerstart vor Antwort: genau eine eigene Ressource wiederfinden. Fremde Container nie aufräumen. Abbruch in jeder Phase beendet Ressourcen; überschrittene Profile/Rechte werden abgewiesen.
-
-### P36 · Setup-Profil und Sandbox-Enrollment
-
-**Voraussetzungen:** P35, P06, P07.
-
-**Ergebnis und Umfang:** Sandbox-Environment registrieren, Bootstrap entfernen, gepinnte Checkouts/Tools/Skills und Setup-Befehle materialisieren; readiness erst nach erfolgreichem Setup.
-
-**Abgrenzung:** Keine Toolinstallation mit Admin-Secrets aus Main und kein stilles Image-Upgrade.
-
-**Gate P36 – Nachweis:** Fehlendes Tool, falsche Architektur, Setup-Fehler und Hashabweichung ergeben erklärten Nicht-ready-Zustand. Setup sieht weder Enrollment-Einmaltoken noch Host-/Main-Adminzugang; wiederholte Provisionierung bleibt konsistent.
-
-### P37 · Unterstützter Codex-Credential-Bootstrap für Sandboxes
-
-**Voraussetzungen:** P36, P14.
-
-**Ergebnis und Umfang:** Genau einen verifizierten Provider-Pfad mit Kontobindung, Refresh-Owner, Ablauf und Widerruf integrieren; capability-gesteuerte Freigabe.
-
-**Abgrenzung:** Kein Klonen vollständiger Benutzer-Homes oder erneuerbarer Login-Caches in einen Pool; andere Provider bleiben separat zu prüfen.
-
-**Gate P37 – Nachweis:** Zwei Sandboxes erzeugen keinen Refresh-Konflikt. Abgelaufener/entzogener Zugang blockiert weitere Nutzung; Logs/Artefakte enthalten keine Tokens. Fehlt unterstützter Pfad, bleibt Codex-Sandboxfähigkeit aus und G8 für echte Codex-Nutzung offen.
-
-### P38 · Archivtransfer und Cleanup
-
-**Voraussetzungen:** P36.
-
-**Ergebnis und Umfang:** Bestätigten Thread-/Artefakttransfer mit Sequenzcursor, Git-Objekten und Abschlussmanifest; TTL, Reaper und Notfallbereinigung implementieren.
-
-**Abgrenzung:** Ein gespeicherter SHA oder leeres Thread-Stub gilt nicht als vollständiges Archiv.
-
-**Gate P38 – Nachweis:** Disconnect während Transfer setzt ohne Lücke/Duplikat fort. Reguläres Löschen wartet auf Archivbestätigung. Erzwungener Verlust markiert unvollständig; fremde Ressourcen bleiben unberührt; wiederholtes Cleanup ist idempotent.
-
-### P39 · Interaktive Sandbox im Client
-
-**Voraussetzungen:** P37, P38, P12.
-
-**Ergebnis und Umfang:** Anfordern, Setupstatus, Öffnen, Verlängern und Löschen einer Benutzer-Sandbox sowie anschließende Archivansicht integrieren.
-
-**Abgrenzung:** Keine versteckten Workflow-Runs, keine automatisch dauerhafte Sandbox.
-
-**Gate P39 – Nachweis:** In Web/Windows Anfrage bis Thread und Archiv bedienen. Quota/fehlender Provider nachvollziehbar; Löschung schließt Livezugriff und öffnet Archiv. Fortsetzung erzeugt neue Umgebung aus gesichertem Stand.
-
-### P40 · Sandbox-Ausführung im Workflow
-
-**Voraussetzungen:** P34, P37, P38, P19.
-
-**Ergebnis und Umfang:** Allocation an Attempt oder Run binden, Reservierung/Provisionierung/Wartezustände und Abbruch in Dispatch einbeziehen.
-
-**Abgrenzung:** Manuelle und automatische Nutzung teilen denselben Service; kein zweiter Sandbox-Codepfad.
-
-**Gate P40 – Nachweis:** Cancel während Setup, Main-Ausfall und Retry finden dieselbe Allocation. Ergebnisfinalisierung wartet auf nötige Artefakte; kein Publishing mit alter Lease; Sandbox-Quota zählt Benutzer- und Workflow-Aufträge zusammen.
-
-### P41 · Azure-DevOps-Connector
-
-**Voraussetzungen:** G5.
-
-**Ergebnis und Umfang:** Einen priorisierten Work-Item-zu-Workflow-Pfad mit autorisierter Anwendungsidentität, Event-/Polling-Normalisierung und Deduplizierung ergänzen.
-
-**Abgrenzung:** Keine implizite Gleichsetzung von Azure- und GitHub-Tokenrechten; kein generischer Integrationsbaukasten.
-
-**Gate P41 – Nachweis:** Falsches Projekt/fehlendes Recht wird abgewiesen; doppelte/verspätete Zustellungen erzeugen keinen zweiten fachlichen Run. Abgelaufene Anmeldung wird als wartend sichtbar; Connector-Schleifen ausgeschlossen.
-
-### P42 · Jira/JSM-Connector
-
-**Voraussetzungen:** G5.
-
-**Ergebnis und Umfang:** Genau Jira Cloud oder Data Center für einen konkreten Bedarf auswählen; Request-Type/Projektbezug, autorisiertes Nachladen und Webhook-/Polling-Lebenszyklus implementieren.
-
-**Abgrenzung:** Nicht beide Hostingvarianten in einem PR, kein künstliches Source-Control-Interface für Tickets.
-
-**Gate P42 – Nachweis:** Unzulässiges Service-Projekt scheitert; fehlende JSM-Felder werden nur berechtigt geladen. Wiederzustellung/Erneuerung verlieren keinen akzeptierten Auftrag und duplizieren ihn nicht.
-
-### P43 · Belegbares Memory mit Aufbewahrung
-
-**Voraussetzungen:** P28, G5.
-
-**Ergebnis und Umfang:** Versionierte Repository-/Workflow-Einträge mit Herkunft, Scope, Freigabe und Löschung sowie einfacher Suche ergänzen.
-
-**Abgrenzung:** Keine Vektordatenbank als Voraussetzung und kein automatisch globales Wissen aus privaten Tickets.
-
-**Gate P43 – Nachweis:** Konkurrierende Updates erkennen Konflikt; alte/abgelaufene Einträge sind gekennzeichnet. Scope-Prüfung verhindert falsche Freigabe; Löschen/Aufbewahrung erfassen referenzierte sensible Inhalte nach festgelegter Policy.
-
-### P44 · Optionaler Clerk/OIDC-Identitätsadapter
-
-**Voraussetzungen:** G5.
-
-**Ergebnis und Umfang:** Einen tatsächlich benötigten IdP mit Zuordnung zur bestehenden internen Benutzeridentität integrieren; Account-Link/Unlink und Recovery explizit behandeln.
-
-**Abgrenzung:** Keine Teams/Rollen oder Mehrmandantenfähigkeit als Nebenwirkung; kein neuer Default ohne Betreiberentscheidung.
-
-**Gate P44 – Nachweis:** Login/Logout und falsche Audience/Subject prüfen; Account-Wechsel übernimmt keine fremden Devices. Migration erhält Besitz und Widerruf; Rückweg zum vorherigen Zugang wurde getestet.
-
-### P45 · Teamzugriff auf Device-Gruppen
-
-**Voraussetzungen:** P44.
-
-**Ergebnis und Umfang:** Für einen konkreten Mehrbenutzerbedarf Mitgliedschaften und Device-Gruppen-Grants an denselben Autorisierungspunkt anbinden; Audit und Migration vom Einzelbetreiber ergänzen.
-
-**Abgrenzung:** Nur Device-Gruppen in diesem Paket. Andere zentrale Objekttypen bleiben bis eigener Rechte-PRs owner-only; kein allgemeines Enterprise-Release.
-
-**Gate P45 – Nachweis:** Zwei reale Testidentitäten: verbotene Devices weder auflisten noch per erratener ID öffnen oder über Automation/Sandbox erreichen. Gruppenentzug beendet betroffene Sessions; bestehender Betreiber verliert nicht versehentlich Recovery-Zugang.
-
-### P46 · Portabilitätsnachweis auf einem zweiten Container-Host
-
-**Voraussetzungen:** G5.
-
-**Ergebnis und Umfang:** Für eine konkret gewählte Hostingplattform Single-Replik-Deployment mit externer DB, persistentem State/Artefakten, Secrets und Ingress validieren; vorhandenen Aufbau konfigurierbar halten.
-
-**Abgrenzung:** Keine HA oder horizontale Skalierung in diesem PR. Scale-to-zero und gemeinsam von Replikaten beschriebene SQLite bleiben ausgeschlossen.
-
-**Gate P46 – Nachweis:** Umzug auf isolierte Instanz mit Restore/Identitätsbindung, WebSocket-Reconnect, Shutdown/Drain und Ausfallprobe nachweisen. Hostpfade/Secrets sind nicht ins Image eingebrannt; ursprüngliche Instanz wird nicht parallel mit derselben aktiven Identität gestartet.
-
-## Ergänzende Factory-Pakete
-
-Die Produktanforderungen und Quellen besitzt [Architektur, Abschnitt 3.2](architecture.md#32-zielvision-eine-software-factory-innerhalb-von-t3-code); die Seitenaufteilung steht dort in Abschnitt 12. Die folgenden Pakete ergänzen den bisherigen Umfang, statt einen zweiten parallelen Implementierungsplan zu bilden.
+Workflow-Versionen mit sequenziellen Agent-, Test-, Freigabe- und Publish-Schritten definieren. Runs behalten ihre gestartete Version und bleiben dem Auftrag zugeordnet.
 
 ### P47 · Kanonische Definition und lokale Validierung
 
-**Voraussetzungen:** G5, P18a/P18b.
+Factories als kanonische `factory.yaml` mit Workflow-Dateien importieren, exportieren, validieren und aktivieren. Formulare und Dateien verwenden dasselbe Format; Fehler werden an Datei und Feld angezeigt.
 
-**Ergebnis und Umfang:** Versioniertes Factory-Schema für bereits unterstützte Ressourcen, deklarativen Import/Export, lokale Validierung mit Datei-/Feldfehlern und atomare Aktivierung implementieren. Formulare verwenden denselben Validator; Versionen haben Inhalts-Hash und Herkunft. Schema-Erweiterungen für Agenten/Evaluation folgen mit ihren Paketen.
+### P38a · Zentrale Attachment- und Artefaktpersistenz
 
-**Abgrenzung:** Noch kein Git-Sync und keine Warp-Formatkompatibilität. Früheres Factory-as-Code-Projekt nur nach tatsächlicher Quellprüfung als Importreferenz behandeln.
+Anhänge und Ergebnisartefakte zentral speichern. Web und Windows öffnen dieselben Referenzen unabhängig vom ursprünglichen Browser oder Worker.
 
-**Gate P47 – Nachweis:** Export/Import erhält semantisch dieselbe Konfiguration; ungültige Referenz oder Pfad verlässt die letzte gültige Version unverändert. Konkurrierendes Speichern erkennt Versionskonflikt; aktiver Run bleibt gepinnt; Import kann keine Credentials oder Grants erzeugen.
+### P38b · Fortlaufendes zentrales Thread-Archiv
 
-### P48 · Git als Definitions-Owner
+Manuelle und Workflow-Threads zentral archivieren und in der vorhandenen Timeline lesen. Herkunft, Anhänge, letzter übertragener Stand und Vollständigkeit anzeigen, auch wenn der Worker offline ist.
 
-**Voraussetzungen:** P47, P22, P23.
+### P19 · Sequenzielle Workflow-Ausführung
 
-**Ergebnis und Umfang:** Repository/Pfad/Branch an Factory binden, Commit synchronisieren und vollständige Definition validieren. UI zeigt Quelle, Diff, aktive Revision und Fehler; Git-Felder schreibgeschützt. Wechsel zwischen Foundry- und Git-Verwaltung sowie Aktivierung einer früheren gültigen Revision explizit machen.
+Sequenzielle Workflows auf einem ausgewählten Worker ausführen und nach Abschluss eines Schritts den nächsten starten.
 
-**Abgrenzung:** Ein Codehost zuerst: GitHub. Kein eigener gehosteter Git-Dienst und keine zusätzlichen automatischen CI-Jobs; Validierung in bestehende Checks oder lokal integrieren.
+### P20 · Run-Steuerung und menschliche Freigabe
 
-**Gate P48 – Nachweis:** Doppelzustellung und Restart aktivieren einen Commit einmal. Ungültiger Commit bleibt inaktiv; ein verspäteter Sync überschreibt keine neuere Auswahl. Owner-Wechsel erkennt Drift; Rollback verändert keinen laufenden Run und umgeht keine aktuellen Grants.
+Runs pausieren, fortsetzen, abbrechen und erneut versuchen. Menschliche Freigaben und Antworten dem jeweiligen Ergebnisstand zuordnen.
+
+### P21 · Manueller Start und Run-Ansicht
+
+Factory und Auftrag auswählen, Definitionen übergangsweise im Formular bearbeiten/importieren und als Snapshot aktivieren, Runs manuell starten sowie Schritte, Versuche, Ergebnisse und verlinkte Threads ansehen. Mit P48 werden Definitionen verbindlich über Git gepflegt.
 
 ### P49 · Factory-Navigation und persönliche Inbox
 
-**Voraussetzungen:** P21, P47; Git-Anzeige nach P48.
+**P49a – implementierter Basisschnitt:** Einstiege in Sidebar, Settings und Command Palette; Factory-/Run-Listen und persönliche Inbox für Fragen, Antworten, Reviews, Blocker und Fehler. Gelesen, erledigt und rückgängig sind getrennt von fachlichen Entscheidungen.
 
-**Ergebnis und Umfang:** Globale/factorybezogene Navigation aus Architekturabschnitt 12, gemeinsame Listenfilter und dauerhafte Inbox-Projektion für Fragen, Antworten, Spec-/PR-Review, Blocker und Fehler. Detailpanel verlinkt WorkItem/Run/T3-Thread; Antworten und Revisionen an P20 anbinden. Gelesen, erledigt und Rückgängig separat führen.
+**P49b – funktionaler Factories-first-Stand geliefert, erneute Gestaltung aktuell:** PR #67 liefert Factory-Home, globale und kontextuelle Navigation sowie beständige URLs; PR #72 bestätigt den erweiterten v4-Webdurchstich. Die erneute Nutzeranforderung betrifft die produktive Bedienbarkeit aller zentralen Ansichten. Die aktuelle Umsetzung priorisiert Arbeit, Entscheidungen und Ergebnisse in kompakten Listen, trennt Workflows in einen eigenen Tab und legt wirksame Konfiguration/Herkunft in Details. Runansichten unterscheiden Swarmzweige, fachliche Reviewrunden und technische Retries; Inbox-Done bleibt von Freigaben getrennt, T3 sekundärer Arbeitskontext. Automatisierte Prüfungen, Browserpass und unabhängiges Review sind in [PR #74](https://github.com/niklaskastning/foundry/pull/74) belegt; der PR führt auch den finalen Auslieferungsnachweis. Die menschliche Designabnahme bleibt offen. Die Kriterien oben prüfen echte Daten, Navigation, Zustände, Themes, schmale/weite Breite und Accessibility. Keine neue Workflow-Steuerung oder Metrikdefinition in der UI; die Zielstruktur steht in Architekturabschnitt 12, Kennzahlen gehören P54.
 
-**Abgrenzung:** Nur verfügbare Seiten zeigen. T3-Themes und Komponenten wiederverwenden; keine zweite Chatansicht oder vollständige Transkript-Synchronisation.
+### P22 · GitHub-Polling mit persistentem Eingang
 
-**Gate P49 – Nachweis:** Zwei Clients sehen konsistente Fragen/Freigaben; erledigt erteilt keine Genehmigung. Antwort und veraltete Revision aktualisieren Inbox nach Reconnect. Web/Windows zeigen Listen, Details und Rückweg aus Thread; Palette, Settings und vorhandene Keybindings rufen dieselben Commands auf. Vorher-/Nachher-Captures und Tastaturbedienung prüfen.
+GitHub-Issues mit ausgewähltem Label abrufen und daraus Workflow-Aufträge erzeugen.
 
-### P50 · Optionaler Koordinator als Agentenrolle
+### P23 · GitHub-PRs veröffentlichen
 
-**Voraussetzungen:** P28, P29, P49.
+Workflow-Ergebnisse nach Freigabe über einen zentral eingerichteten GitHub-App-Zugang als Pull Request veröffentlichen und den PR dem Auftrag zuordnen.
 
-**Ergebnis und Umfang:** Koordinator-Dialog am Auftrag, strukturierte Plan-/Revisionsvorschläge und validierte Auswahl zulässiger Stufen. Service setzt Budget, Rechte, Freigaben und begrenzte Reparatur durch; Koordinator läuft über den vorhandenen Worker-Adapter.
+### P24 · Zeitplan-Trigger
 
-**Abgrenzung:** Kein Agent als dauerhafter Scheduler, kein unbeschränkter dynamischer Graph und kein Agent auf Main.
+Workflows nach Zeitplan und Zeitzone starten; Verhalten bei verpassten oder überlappenden Terminen einstellen.
 
-**Gate P50 – Nachweis:** Eval für unzulässiges Repo, übersprungene Pflichtfreigabe und widersprüchliche Rückmeldung. Provider-Ausfall/Main-Restart verliert keinen angenommenen Plan; doppelter Vorschlag erzeugt keine doppelten Steps. Statischer Workflow funktioniert weiter ohne Koordinator.
+## Git-Verwaltung
+
+### P48 · Git als Definitions-Owner
+
+Das separate Definitions-Repository an Factory, Pfad und Branch binden und Änderungen synchronisieren. Quelle, Diff, aktive Revision und Fehler anzeigen; manuelle Testdefinitionen mit Driftabgleich übernehmen und frühere Git-Revisionen aktivieren. Git ist der dauerhafte Owner, kein Parallelmodus zu App-Definitionen. Menschen, autorisierte Agenten und ein späterer UI-Editor ändern dieselben Dateien über PRs. Betriebsbindungen, Trigger und Run-Entscheidungen bleiben in der App bedienbar. Aktivierte Snapshots bleiben für laufende Runs und Historie erhalten.
+
+## Zusammenarbeit und wiederverwendbare Agenten
 
 ### P51 · Auftrag in T3 übernehmen und zurückgeben
 
-**Voraussetzungen:** P17, P20, P49; Sandbox-Handoff zusätzlich P38/P39.
-
-**Ergebnis und Umfang:** Übernahme-/Rückgabe-Service mit Writer-Übergabe, explizitem Alternativbranch, Kontext-/Revisionsmanifest und beidseitigen Links. Vorhandenen Thread/Workspace verwenden oder aus gesichertem Stand einen neuen anlegen. Rückgabe setzt denselben Auftrag mit neuer Revision fort.
-
-**Abgrenzung:** Kein allgemeiner Session-Umzug zwischen Providern/Maschinen und kein Überschreiben uncommitteter Benutzerarbeit.
-
-**Gate P51 – Nachweis:** Gleichzeitige Übernahme/Dispatch und verlorenes Ack erzeugen keinen zweiten Writer. Rückgabe ist idempotent, prüft Basisrevision und entwertet alte Freigaben. Nach Ressourcenverlust nur gesicherten Stand öffnen; fehlendes Archiv sichtbar blockieren.
-
-### P52 · Agentenressourcen und Ausführungseinstellungen
-
-**Voraussetzungen:** P28, P49; Pool-/Sandbox-Einstellungen erst nach P32/P34.
-
-**Ergebnis und Umfang:** P52a liefert das Agentendetail mit Instruktionen, Automationen, Version und Einstellungen; globale MCP-/Secret-/Connector-Ressourcen an Factory und Rolle binden. Provider, Modell und unterstützte Optionen aus Worker-Capabilities beziehen; wirksame Defaults/Overrides anzeigen. P52b ergänzt deklarative Modell-Routingregeln nach Aufgabenklasse und ausdrücklich erlaubter Kandidatenliste; die aufgelöste Wahl samt Regelversion wird vor Dispatch festgehalten.
-
-**Abgrenzung:** Keine Secrets in Definitionsdateien und kein pauschales Fähigkeitenversprechen für alle Provider.
-
-**Gate P52a/P52b – Nachweis:** Fehlendes Recht und zwingend fehlende Fähigkeit blockieren verständlich. Widerruf wirkt auch nach einem gespeicherten Snapshot. Für Codex, Claude, Cursor, Grok, OpenCode und Antigravity je eine ausdrückliche Capability-Entscheidung dokumentieren; unterstützte Adapter gezielt prüfen, übrige deaktiviert lassen. Kein stiller Provider-/Kontowechsel. Routing ohne passenden autorisierten Kandidaten blockiert; ein Retry ändert die gespeicherte Auswahl nicht.
-
-### P53 · Vorlagen für Triage und PR-Review
-
-**Voraussetzungen:** P28, P29, P22, P23, P49.
-
-**Ergebnis und Umfang:** Zwei einzeln abnehmbare Vorlagen P53a (Issue-Triage) und P53b (PR-Review) ergänzen den Issue-to-PR-MVP. GitHub-Eingang und Rückmeldung am Ursprungsobjekt hinzufügen; Kommentare/Folgeereignisse dem vorhandenen Auftrag zuordnen.
-
-**Abgrenzung:** Kein automatisches Mergen. Review zunächst für autorisierten eigenen Code; fremden Code nicht auf dem Host-Worker ausführen.
-
-**Gate P53a/P53b – Nachweis:** Triage darf bewusst ohne Codeänderung enden. Neuer PR-Head verwirft veraltetes Review; doppelte Kommentare/Events erzeugen keine Rückkopplung. Findings führen zur passenden begrenzten Revision und nicht zu einem unabhängigen Auftrag. Modelltexte erhalten Evals.
-
-### P54 · Nachvollziehbare Betriebs- und Produktmetriken
-
-**Voraussetzungen:** G5, P49, P23.
-
-**Ergebnis und Umfang:** P54a erfasst versionierte Nutzungs-/PR-Ereignisse, Zuordnungsregeln und verfügbare Limits; P54b liefert darauf das Factory-Dashboard mit Zeitraum, Qualitäts-/PR-Aktivität, Zeitanteilen, Autonomie und ausgewiesenen Kostenschätzungen. Summen sind bis zu ihren Runs nachvollziehbar.
-
-**Abgrenzung:** Keine erfundenen Subscription-Einzelpreise oder Gleichsetzung von Schätzung und Rechnung. Keine zusätzliche Analytics-Infrastruktur.
-
-**Gate P54a/P54b – Nachweis:** Parent/Child und mehrere PRs doppelt zählen verhindern; verspätete Ereignisse und Reconciliation korrigieren Aggregate. Fehlender Preis bleibt unbekannt. Abbruch, Queue-/Review-Wartezeit und Zeitzonen in Fixtures prüfen; Dashboard über begrenzte Abfragen und sichtbare Subscriptions bedienen.
-
-### P55 · Versionierte Scorers und Bewertungshistorie
-
-**Voraussetzungen:** P28, P47, P54a.
-
-**Ergebnis und Umfang:** Kriterien, Judge-Konfiguration, Klassifikationen, Schwelle und Sampling versionieren. Nach abgeschlossenem Run oder manuell eine begrenzte Bewertung auf eingefrorener Evidence ausführen; Ergebnisse auf Scorer-Seite und am Run zeigen.
-
-**Abgrenzung:** Bewertungsfehler ist kein bestandenes Ergebnis. LLM-Bewertung ersetzt keine Test-Exitcodes oder Freigaben.
-
-**Gate P55 – Nachweis:** Sampling/Retry dupliziert keine Bewertung; Neubewertung erhält die alte Historie. Gepinnte Kriterien und Input bleiben nachvollziehbar; fehlende Evidence führt zu nicht bewertbar. Judge-Verbrauch zählt zum Budget. Evals für die Modellinstruktionen.
-
-### P56 · Wiederholbare Benchmarks
-
-**Voraussetzungen:** P55, P17; für Sandbox-Trials zusätzlich G8.
-
-**Ergebnis und Umfang:** Suites aus fertigen Runs oder manuellen Aufgaben, gepinnte Repo-Ausgangsstände, Kriterien und Konfigurationsvarianten definieren. Trials/Wiederholungen mit Grenzen starten und stoppen; Qualitäts-, Zeit- und Kostenvergleich mit Drill-down bereitstellen.
-
-**Abgrenzung:** Keine produktiven Publish-Aktionen oder universelle Modellrangliste. Referenzdaten mit Secrets/privaten Ticketinhalten nicht ungeprüft übernehmen.
-
-**Gate P56 – Nachweis:** Jede Variante startet am selben Stand; Trials schreiben getrennt und verändern keine Live-Factory. Abbruch und unbewertbare Trials erscheinen vollständig. Kosten enthalten Judges; Übernahme einer Empfehlung erzeugt eine neue geprüfte Definition.
-
-### P57 · Belegte Verbesserungsvorschläge
-
-**Voraussetzungen:** P48, P55, P56, P23.
-
-**Ergebnis und Umfang:** Explizit aktivierbare, begrenzte Fehlerauswertung erzeugt einen Auftrag und Vorschlags-PR für Code, Prompts, Skills oder Konfiguration. Fehlende/erledigte Fehlergruppen nicht erneut verarbeiten; manuell auslösbar und deaktivierbar.
-
-**Abgrenzung:** Keine autonome Aktivierung, kein Auto-Merge und keine Budget-/Rechteänderung durch den Verbesserungsagenten.
-
-**Gate P57 – Nachweis:** Wiederholte Auswertung erzeugt keinen zweiten Vorschlag. PR verlinkt Fehler, Definition und Regressionsevidence; Ablehnung und neue Revision bleiben nachvollziehbar. Produktivversion ändert sich erst über P48 und menschliche Entscheidung.
+Einen Auftrag in T3 übernehmen, im zugehörigen Thread/Workspace bearbeiten und mit neuer Revision zurückgeben. Alternativbranch und beidseitige Links anbieten; bei Bedarf aus dem archivierten Stand einen neuen Workspace erstellen.
 
 ### P58 · Externe API und Factory-MCP
 
-**Voraussetzungen:** P47, P49, P51.
+**P58a** stellt eine versionierte HTTP-API mit maschinenlesbarem Vertrag bereit.
+Der erste Schnitt verwendet die vorhandenen Foundry-/T3-Benutzersitzungen und
+dieselben Services für Suche, Start, Steuerung, Übergabe, Inbox und Konfiguration.
+Ein gesonderter Schnitt ergänzt eigenständige Maschinen-Credentials mit Ausgabe,
+Ablauf und Widerruf für Factory-begrenzte Leseabfragen. Maschinen-Start und -Steuerung
+bleiben offen; interaktive Cookies sind kein CI-Zugang. Der öffentliche Zugang durch
+vorgeschaltetes Access benötigt weiterhin eine eigene Betriebsabnahme.
+**P58b** ergänzt Factory-MCP für Suche, Start, Steuerung, Übergabe und
+Definitionsvalidierung. Vorhandene T3-MCP-Tokens besitzen keine Foundry-Identität
+und dürfen nicht als solche verwendet werden. MCP-Instruktionsevals gehören zur
+Abnahme von P58b, unabhängig von der späteren Eval-Produktoberfläche.
 
-**Ergebnis und Umfang:** P58a liefert dünne versionierte HTTP-Endpunkte und maschinenlesbaren API-Vertrag; P58b bindet MCP für Factory-/Auftragssuche, Start/Steuerung, Übergabe und Definitionsvalidierung an dieselben Services. Typisierte Client-Nutzung und minimale Beispiele statt mehrerer eigener SDK-Runtimes.
+### P28 · Versionierter Agent- und Skill-Katalog
 
-**Abgrenzung:** UI-interne RPCs bleiben erhalten. Maschinenzugang braucht eigene begrenzte Credentials; kein interaktives Access-Cookie in CI. Python-/TypeScript-SDK-Pakete erst bei konkretem Bedarf aus dem Vertrag ableiten.
+Agenten und Skills im Definitionsformat versionieren, in mehreren Workflows wiederverwenden und die verwendete Version am Run festhalten. Agent-Steps referenzieren Rollen; Aktivierung validiert Referenzen, Ausführung löst Instruktionen und Skills unveränderlich auf. Bestehende Prompt-Schritte bleiben kompatibel.
 
-**Gate P58a/P58b – Nachweis:** UI/API/MCP mit gleichem Grant haben gleiche erlaubte Wirkung. Lesen, Steuern, Konfiguration und Freigabe bleiben getrennt; unbekannte Versionen, fremde Factory und widerrufene Credentials scheitern. Command-Retry bleibt idempotent. MCP-Texte erhalten Evals.
+### P52 · Agentenressourcen und Ausführungseinstellungen
+
+**P52a** verbindet die versionierten Rollen mit tatsächlich unterstützten Worker-Fähigkeiten und zeigt Agenteninstruktionen, Automationen, Version und Einstellungen. MCP-, Secret- und Connector-Ressourcen an Factory und Rolle binden; Provider, Modell, Optionen sowie Defaults/Overrides wählen. Die wirksame Step-Konfiguration muss bis zum Worker durchgereicht und am Run sichtbar sein; ein UI-Selektor allein erfüllt dieses Paket nicht. **P52b** ergänzt Modell-Routing nach Aufgabenklasse mit sichtbarer aufgelöster Auswahl.
+
+### P29 · Fan-out/Join und begrenzte Reparaturschleifen
+
+Workflow-Arbeit parallel aufteilen und wieder zusammenführen. Join-Verhalten, Umgang mit Teilfehlern, Parallelität und Anzahl der Reparaturdurchläufe konfigurieren. Abnahme mit mindestens zwei gleichzeitig ausführbaren, voneinander getrennten Workspaces; Kapazität und Worker-Auswahl aus P32/P33 einbeziehen.
+
+### P50 · Optionaler Koordinator als Agentenrolle
+
+Optionalen Koordinator-Dialog am Auftrag ergänzen: Plan- und Revisionsvorschläge erstellen und Workflow-Stufen auswählen. Die Rolle läuft auf einem Worker.
+
+### P53 · Vorlagen für Triage und PR-Review
+
+**P53a** liefert eine Issue-Triage-Vorlage, **P53b** eine PR-Review-Vorlage. Kommentare, Rückfragen und Ergebnisse bleiben am GitHub-Ursprungsobjekt und zugehörigen Auftrag verbunden.
+
+### P30 · Mehrere Repositories pro Auftrag
+
+Einen Auftrag über mehrere Repositories mit eigenen Workspaces, Revisionen, Ergebnissen und PRs ausführen.
+
+### P31 · Mehrere Repositories in einem Agent-Step
+
+Mehrere Repository-Checkouts in einem Agentenschritt nutzen; gemeinsame Diff-, Checkpoint- und Ergebnisansicht anbieten.
+
+## Qualitätsfunktionen
+
+### P54 · Factory-Dashboard und Produktmetriken
+
+**P54a** ordnet Nutzungs- und PR-Aktivität den Runs zu. **P54b** zeigt ein Factory-Dashboard mit Zeitraum, Qualität, PR-Aktivität, Zeitanteilen, Autonomie, verfügbaren Limits und Kostenschätzungen samt Drill-down.
+
+### P55 · Versionierte Scorers und Bewertungshistorie
+
+Bewertungskriterien, Judge-Konfiguration, Klassen, Schwellen und Sampling versionieren. Runs automatisch nach Abschluss oder manuell bewerten; Ergebnisse am Run und in einer Scorer-Historie anzeigen.
+
+### P56 · Wiederholbare Benchmarks
+
+Benchmark-Suites aus vorhandenen Runs oder manuellen Aufgaben erstellen, Repo-Ausgangsstände und Konfigurationsvarianten wählen, Trials starten/stoppen und Qualität, Zeit sowie Kosten vergleichen.
+
+### P57 · Belegte Verbesserungsvorschläge
+
+Als aktivierbare Produktfunktion Beobachtungen und Evals auswerten und Vorschlags-PRs erzeugen: Factory-Workflows, Prompts, Skills und Evaluationsdefinitionen im gemeinsamen Definitionsrepository, Anwendungscode im jeweiligen Arbeitsrepository. Menschen und Agenten nutzen dieselben Dateien und denselben Review-Weg. Manuell starten und deaktivieren; bereits bearbeitete Fehlergruppen erkennen.
+
+## Mehrere Worker und Sandboxes
+
+### P32 · Kapazitäten und explizite Zielauswahl
+
+Feste Worker oder Worker-Pools für Aufträge auswählen, Kapazitäten anzeigen und Worker für neue Arbeit pausieren.
+
+### P33 · Mehrere dauerhafte Worker
+
+Aufträge auf mehreren dauerhaften Workern ausführen und die Gerätezuordnung im Run anzeigen.
+
+### P34 · Sandbox-Profile und Allocation-Service
+
+Sandbox-Profile versionieren und Sandboxes für Benutzer oder Workflow-Runs anfordern; Bereitstellungszustände anzeigen.
+
+### P35 · Linux-Container-Sandboxes
+
+Linux-Container als Sandbox anlegen und stoppen; einen OCI-Adapter an die Bereitstellung anbinden.
+
+### P36 · Setup-Profil und Sandbox-Enrollment
+
+Sandbox als Environment registrieren und mit ausgewählten Checkouts, Tools, Skills und Setup-Befehlen vorbereiten; Setupstatus anzeigen.
+
+### P37 · Codex-Verbindung für Sandboxes
+
+Die zentrale Codex-Verbindung auch in neu bereitgestellten Sandboxes verwenden.
+
+### P38c · Sandbox abschließen und löschen
+
+Sandbox-Arbeit mit Thread, Anhängen und Git-Stand abschließen und anschließend die Sandbox löschen. Archivierte Ergebnisse bleiben verfügbar; Lebensdauer und automatische Bereinigung unterstützen.
+
+### P39 · Interaktive Sandbox im Client
+
+Sandboxes im Client anfordern, Setup verfolgen, öffnen, verlängern und löschen. Danach das Archiv öffnen oder auf einem neuen Environment weiterarbeiten.
+
+### P40 · Sandbox-Ausführung im Workflow
+
+Sandbox-Ausführung an Workflow-Runs oder Versuche binden und Bereitstellung, Wartezustände sowie Abbruch in der Run-Steuerung anzeigen.
+
+## Weitere Eingänge, Memory und Vorlagen
+
+### P25 · GitHub-Webhooks
+
+GitHub-Ereignisse zusätzlich zum Polling per Webhook empfangen und vorhandenen Aufträgen zuordnen.
+
+### P41 · Azure-DevOps-Connector
+
+Azure-DevOps-Work-Items als Quelle für Workflow-Aufträge anbinden.
+
+### P42 · Jira/JSM-Connector
+
+Für den konkreten Bedarf Jira Cloud oder Data Center samt JSM-Feldern als Auftragsquelle anbinden.
+
+### P43 · Repository- und Workflow-Memory
+
+Repository- und Workflow-Wissen mit Version, Herkunft und Geltungsbereich speichern, suchen, freigeben und löschen.
 
 ### P59 · Zusätzliche Arbeitsquellen
 
-**Voraussetzungen:** G5, P49; P59a zusätzlich P25, Git-Schreibaktionen zusätzlich P23-Prinzipien.
-
-**Ergebnis und Umfang:** Getrennte PRs: **P59a** generische signierte Webhooks mit Payload-Filtern und Zustelllog, **P59b** GitLab, **P59c** Linear, **P59d** Slack, **P59e** Microsoft Teams. P41/P42 bleiben Owner für Azure DevOps und Jira/JSM. Jeder Connector normalisiert Auftrag, Rückfragen und Ergebnislinks am Ursprungsort; Verbindung, Widerruf und Fehlerzustand werden sichtbar.
-
-**Abgrenzung:** Kein Sammel-Connector-PR und keine Aktivierung ohne gewählten Account/Rechte. Filter begrenzen Trigger, nicht Ressourcenrechte.
-
-**Gate je Teilpaket – Nachweis:** Authentifizierung, doppelte/verspätete Zustellung, Identitätszuordnung, Bot-Schleifen, Tokenablauf und Rate Limits mit echten Providergrenzen prüfen. Eine Antwort setzt den passenden Auftrag fort. Öffentliche Route umgeht weder Foundry-Rechte noch die Authentifizierung der Zustellung.
+Weitere Arbeitsquellen einzeln anbinden: **P59a** generische Webhooks mit Payload-Filtern und Zustelllog, **P59b** GitLab, **P59c** Linear, **P59d** Slack, **P59e** Microsoft Teams. Aufträge, Rückfragen und Ergebnislinks mit dem Ursprungsort verbinden.
 
 ### P60 · Browser-Verifikation und Incident-Vorlagen
 
-**Voraussetzungen:** P28, P29, P49; **P60a** zusätzlich G8 und geprüfte Preview-Isolation; **P60b** zusätzlich den gewählten Monitoring-Eingang aus P59a/P58a.
+**P60a** lässt einen Browser-Verifier einen Teststand bedienen und Screenshots/Testberichte zum Auftrag liefern. **P60b** verbindet eingehende Betriebsalarme, Diagnose und Fix-Vorschläge in einer Incident-Vorlage.
 
-**Ergebnis und Umfang:** **P60a** lässt einen Verifier einen isolierten Teststand bedienen und revisionsgebundene Screenshots/Testberichte als Artefakte liefern. **P60b** korreliert Betriebsalarm, Diagnose und Fix-Vorschlag in einem Auftrag. Getrennte Vorlagen/PRs mit eigenen Capability-Nachweisen.
+## Optionale Anmeldung und Device-Gruppen
 
-**Abgrenzung:** Keine Browserinhalte unter privilegierter Main-Origin, keine Produktionscredentials im Testbrowser, kein automatischer Produktions-Deploy und keine Mobile-Abnahme.
+### P44 · Optionaler Clerk/OIDC-Identitätsadapter
 
-**Gate P60a/P60b – Nachweis:** Browserfehler/fehlende Evidence blockieren Verifikation; richtige Build-Revision und Artefaktzugriff nach Cleanup belegen. Wiederholter Alarm erzeugt keine parallelen Reparaturen; Diagnose ohne Fix bleibt ein zulässiges Ergebnis. Reale Browserabnahme und Instruktions-Evals ergänzen Replay-Tests.
+Optional einen Clerk-/OIDC-Anbieter mit der bestehenden Foundry-Benutzeridentität verbinden, wechseln und wieder trennen.
 
-## Übergeordnete Integrationsabnahmen und Handoffs
+### P45 · Teamzugriff auf Device-Gruppen
 
-Die folgenden Prüfungen testen das Zusammenspiel, das einzelne Pakettests nicht beweisen. Sie werden einmal auf dem integrierten Stand des jeweiligen Gates ausgeführt und nur bei Änderungen, Fehlern oder relevanten Upstream-Updates wiederholt. Nachweise liegen im abschließenden PR/Issue mit Links auf die Paket-PRs. Sie werden nicht als dauerhaftes Testergebnis in diesen Plan geschrieben.
-
-| Gate | Integrierter Nachweis                                                                                                                                                                                                                                                                           | Handoff Agent → Betreiber → Agent                                                                                                                                                                                                              |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| G1   | Zwei frische Profile (Web/Windows): URL, Anmeldung, Main-Identität, HTTP/WS, Tokenablauf, Neustart, Logout und fremde Instanz; separat für G1-Access und G1-Nativ. Keine kopierten Cookies oder geteilten Client-Secrets                                                                        | Agent liefert Build und reproduzierbare Bedienfolge; Betreiber stellt Windows-Testhost und führt den Login des jeweiligen Modus aus; Agent prüft Transport/Sessions. Fehlender Host oder fehlerhafter Login lässt dessen G1-Abnahme offen      |
-| G2   | Zwei Clients und ein Device ohne eingehend erreichbaren Port: Discovery, Replay-Thread, Terminal, Datei, Diff, Attachment. Main-Neustart und Session-Ablauf, im Access-Modus zusätzlich Access-Ablauf einbeziehen; Grant im laufenden Stream entziehen; falsches Device und Proxy-Ziel abweisen | Agent stellt isolierte Umgebung; Betreiber richtet im Access-Modus die dokumentierte Access-Machine-Policy ein und liefert das Secret sicher; Agent prüft erlaubten und verweigerten Zugriff. Kein Betreiber-Token wird in Artefakte eingebaut |
-| G3   | Worker-Dienst neu starten, Providerstatus prüfen, Launch-Antwort verlieren, Checkpoint verzögern, Cancel/Netzpartition und Workspace-Konflikt auslösen. Genau ein aktiver Attempt; kein fremder Checkout betroffen                                                                              | Agent bereitet eigenen Dienst und Replay-Nachweis vor; Betreiber entscheidet Dienstkonto/Workspace-Wurzeln und meldet Provider an; Agent prüft Status. Ein echter kostenpflichtiger Turn erfolgt nur mit eigener Freigabe                      |
-| G4   | Freigegebenes GitHub-Testissue über Polling: Analyse → Änderung → Test → Freigabe → PR. Inbox-/Dispatch-/Publish-Antworten gezielt verlieren, Browser schließen und Main neu starten. Genau ein fachlicher Run/PR, kein Publishing bei fehlerhaftem Test oder geänderter Revision               | Agent liefert Workflow und GitHub-App-Rechtebedarf; Betreiber wählt Repo/Label und richtet Zugang ein; Agent führt zunächst Replay/Connector-Fixtures aus und bereitet konkrete Veröffentlichung zur Freigabe vor                              |
-| G5   | Backup auf externes Ziel, isolierter Restore, Abgleich bereits veröffentlichter PRs, Zugangswiderruf nach Restore und Schema-Upgrade mit Drain. Datenintegrität sowie gemessene Wiederherstellungszeiten dokumentieren                                                                          | Agent liefert Backup-/Restore-Verfahren; Betreiber entscheidet Speicher, RPO/RTO und Aufbewahrung; Agent probt Wiederherstellung getrennt vom Live-System. Produktive Migration bleibt ein eigener konkreter Handoff                           |
-| G6   | Auftrag über mehrere Repositories mit gepinnten Versionen, begrenzter Parallelität, Teilfehler und Retry. Pro Repo nachvollziehbare Revision/PR; bei P31 Diff und Checkpoint aller Repos prüfen                                                                                                 | Agent bereitet Fixtures und Bericht vor; Betreiber legt reale Repo-Menge und Publish-Rechte fest, bevor diese aktiviert werden                                                                                                                 |
-| G7   | Zwei Worker, kontoweites Limit, festes Offline-Ziel, Pool-Auswahl und Netzpartition während Schreibarbeit. Ein verspätetes altes Ergebnis darf aktuelle Arbeit nicht überschreiben                                                                                                              | Agent zeigt Kapazitäts-/Fehlernachweis; Betreiber bestimmt erlaubte Devices, Providerkonten und Ressourcenlimits; Agent prüft tatsächliche Durchsetzung                                                                                        |
-| G8   | Dieselbe Sandbox-Profilversion einmal interaktiv und einmal per Workflow nutzen. Abbruch bei Provisionierung/Setup/Auth/Archivierung, Supervisor-Restart, Quota, TTL-Verlängerung, Löschung und Fortsetzung aus Archiv prüfen                                                                   | Agent liefert Profil/Supervisor und Replay-Nachweis; Betreiber designiert Sandbox-Host sowie Provider-Zugang; Agent validiert Isolation und Auth. Nicht unterstützter Provider bleibt deaktiviert, kein stiller API-Fallback                   |
-| G9   | Für jeden aktivierten Connector echte Auth-/Payload-Grenze plus deterministische Doppelzustellung; bei Memory Scope, Herkunft, Konflikt und Löschung                                                                                                                                            | Agent benennt minimale Rechte und Fixture-Ergebnisse; Betreiber stellt genau den ausgewählten Connector bereit; Agent bestätigt oder blockiert dessen Aktivierung separat                                                                      |
-| G10  | P44: bestehende Besitzerbindung nach IdP-Wechsel. P45: zweite Testidentität und negative Device-/Automation-/Sandbox-Zugriffsmatrix. P46: Restore/Ingress/WebSockets auf konkretem Hostingziel                                                                                                  | Betreiber wählt zuerst benötigten Ausbau; Agent spezifiziert dessen eigene Abnahme. Ein Erfolg bei P44 gibt weder Teams noch neues Hosting automatisch frei                                                                                    |
-
-Für **G11** führt der integrierte Nachweis von einer importierten Definition über Git-Änderung und ungültigen Folgecommit bis zu einem Auftrag mit Inbox-Entscheidung; alte Runs behalten ihre Version. **G12** weist denselben Auftrag von Koordinator über lokale T3-Übernahme und Rückgabe bis zum geprüften PR über UI und MCP nach, einschließlich widerrufener Rechte. **G13** reproduziert einen Fehler als Benchmark, erzeugt einen belegten Verbesserungsvorschlag und übernimmt ihn erst nach Prüfung; fehlende Kostendaten bleiben sichtbar. **G14** wird je Connector/Vorlage separat freigegeben. Der Agent liefert isolierte Fixtures, Builds und Evidence; der Betreiber stellt ausschließlich die für das jeweilige Gate benötigten Accounts/Devices bereit. Keine neuen pauschalen Zugangsvoraussetzungen für frühere Gates.
-
-## Evidence und Fehlerbehandlung
-
-Der Abschluss eines Gates dokumentiert: zugehörige Paket-PRs, geprüfte SHAs/Images, Umgebung und Protokollversionen, positive und negative Fälle, Ergebnis sowie offene Grenzen. Ein Screenshot beweist UI-Verhalten; Crash-Recovery, Autorisierung oder Deduplizierung benötigen zusätzlich Test-/Runtime-Nachweise. Keine Claims über Cloudflare/Windows/Provider-Kompatibilität ausschließlich aus Mocks ableiten.
-
-Bei Fehlschlag wird das Problem dem verursachenden Paket oder einem eng begrenzten Folge-PR zugeordnet. Nach Fix werden das betroffene Paketgate und die davon berührten Integrationsfälle erneut geprüft. Bereits bestandene, unabhängige Gates werden nicht ohne Anlass komplett wiederholt. Kompatibilitätsänderungen im Auth-/Transportvertrag können G1/G2 ausdrücklich wieder öffnen; der Änderungs-PR nennt dies.
-
-Vor der Umsetzung eines späten Pakets wird dessen Umfang gegen aktuelle Contracts und reale Anforderungen geschärft. Die Reihenfolge darf nur mit dokumentierten Auswirkungen auf Abhängigkeiten geändert werden. HA, Multi-Tenant-Hosting, vollständige Teamrechte auf alle Ressourcen, Mobile und zusätzliche Sandbox-Backends haben hier bewusst noch keine scheinbar fertigen PR-Pakete: Sie benötigen nach konkretem Bedarf einen eigenen Entwurf samt Gates. P45 allein erlaubt höchstens den beschriebenen begrenzten Device-Gruppenbetrieb, nicht die Vermarktung einer vollständig abgenommenen Enterprise-Plattform.
+Mitgliedschaften und Device-Gruppen für gemeinsam genutzte Devices verwalten. Dieses Paket umfasst noch keine Teamverwaltung für sämtliche Foundry-Objekte.

@@ -2,28 +2,88 @@
 
 Foundry serves the shared Web client and T3 backend at `http://127.0.0.1:3783`. The existing host `cloudflared` service should route `foundry.heavenforgeprod.com` to that origin. Keep Cloudflare Access enabled for this hostname, including HTTP and WebSocket paths. Do not expose port 3783 or PostgreSQL publicly.
 
-This is the isolated base deployment, not the planned instance gateway, Automation engine, or host worker. The backend still uses its own local SQLite state. PostgreSQL has empty `fork_automation` and `fork_connect` databases reserved for their separate future migrations. No application receives the database administrator credential. Owner roles cannot log in; runtime and migration logins are provisioned with the services that need them.
+This isolated Main serves the instance registry, gateway, confirmed artifacts and thread archives. Instance PostgreSQL uses `fork_connect` with its own migrations; local T3 state remains in the separate SQLite store. Automation retains its separate database/migrations and requires the explicit activation described below. No application receives the database administrator credential. Owner roles cannot log in; the migration login stays disabled outside an explicit migration. The dedicated host worker is managed separately.
+
+## Development-VPS authorization
+
+For this VPS, [the maintainer's standing agent instructions](../../AGENTS.md#development-vps-and-agent-autonomy) authorize deployment of tested PR heads before merge or user acceptance, task-related migrations and necessary resets of disposable Foundry test data. They override older requirements for a separate development-deployment approval in this runbook and the activation guides; production acceptance gates remain separate. User `niklas` has passwordless sudo for task-related operations; use `sudo -n`. The restricted helper below remains the preferred Main image-update path, but it is not the limit of the agent's authorized privileges on this host. Credentials, personal T3 state and unrelated services are outside the test-data reset permission.
 
 ## Experimental device enrollment (P06)
+
+Für einen realen Device-/Gateway-Versuch zuerst den [begrenzten G2-Aktivierungsablauf](g2-activation.md)
+lesen: Machine-Access, Worker-Isolation und der begrenzte Main-Konfigurationsübergang
+sind eigene Voraussetzungen. Die folgenden Einzelbefehle erteilen keine Aktivierungsfreigabe.
 
 Der separate Linux-Host-Dienst hat einen [eigenen Installer und Betriebsweg](../../deploy/fork/worker/README.md). Er wird nicht durch Main-Deployment oder Device-Enrollment installiert; seine reale Dienstkonto-/G2-Abnahme bleibt offen.
 
 This opt-in backend registers a device key and its first local environment. It does
 not connect that environment, provide gateway access or install an agent. The
-outstanding release gates and follow-up work are tracked in
-[issue #13](https://github.com/niklaskastning/foundry/issues/13). Do not activate it
+outstanding release gates and follow-up work are tracked in the
+[guardrails plan](basic-leitplanken.md#bestehende-nachweise-und-offene-technische-abnahmen). Do not activate it
 on the existing production deployment as part of development testing.
 
-Use an isolated Main with PostgreSQL instance schema **5**, the existing operator
+Use an isolated Main with PostgreSQL instance schema **7**, the existing operator
 binding, and the configured `FOUNDRY_PUBLIC_ORIGIN`. Run the existing
 `foundry migrate` command with the migration role before starting this source
-version; it upgrades schemas 1/2/3/4 while preserving instance identity, operator and
-sessions. Older binaries reject schema 5: an image-only downgrade is not
+version; it upgrades schemas 1/2/3/4/5/6 while preserving instance identity, operator and
+sessions. Older binaries reject schema 7: an image-only downgrade is not
 a recovery procedure. The runtime role cannot change device keys or enrollment
 expiry. Set `FOUNDRY_DEVICE_ENROLLMENT_ENABLED=true` explicitly alongside
 `FOUNDRY_ACCESS_ENABLED=true` to expose `/api/foundry/devices/enroll` and advertise
 `foundry.device-enrollment`; the route and capability are absent by default.
 This mode does not implement native authentication.
+
+The P38a artifact-store foundation is separately disabled by default. In an isolated
+Main, `FOUNDRY_ARTIFACTS_ENABLED=true` requires the complete stream-gateway profile
+and creates private `userdata/foundry-artifacts/{pending,blobs}` inside the existing
+state volume. Keep that directory and instance PostgreSQL in the same coordinated
+backup/recovery boundary. It exposes bounded JSON transfer operations at
+`POST /api/foundry/artifacts` for existing dual-authenticated clients and
+`POST /api/foundry/devices/channel` for signed device requests; the existing GET
+channel is unchanged. No Cloudflare machine-path expansion is needed. Descriptor
+support uses optional `artifactTransfer` metadata: adding an unknown capability to
+the strict version-1 enum would break older Windows readers. The separate opt-in
+[worker binding](../../deploy/fork/worker/README.md#zentrale-artefakte-p38a)
+confirms attachments before message commit. P38b also reconciles the local
+event journal with the central thread archive. When the artifact profile is enabled, `/foundry` shows Files after a
+verified session. Load files there without selecting or connecting their source
+device; a Main T3 session with `orchestration:read` remains required. Confirmed
+thread attachments use the same Main read path. HTML/SVG open as escaped source,
+and Blob URLs remain scoped to their viewer. The native Access sign-in probe does
+not host the file library; its existing Windows download block remains separate.
+Automated client coverage does not complete the live acceptance gate.
+
+For a reviewed schema-6 image on a schema-5 Docker deployment, the administrator uses
+`activate-access.py upgrade-artifacts sha256:<digest> <source-sha>` to migrate
+schema 5 to 6 with a coordinated database/state/workspace backup. This leaves the
+artifact profile disabled. Once the reviewed Main image is verified,
+`activate-access.py artifacts enable` changes only the private runtime flag,
+restarts Main and verifies schema, identity and transfer metadata. It saves the
+previous configuration and restores it if startup or verification fails; if
+recovery cannot be verified, Main stays stopped. No general sudo grant is added.
+The `update` command preserves schema 5, 6 or 7 and the enabled profile.
+
+Disable publication on workers before `activate-access.py artifacts disable`.
+This retains confirmed metadata and blobs. The helper refuses to disable the
+gateway while artifacts remain enabled. A schema upgrade failure still requires
+the coordinated restore procedure; a profile change is not a schema downgrade.
+Development builds alone may explicitly use HTTP on loopback for the artifact
+client, matching local instance verification; deployed clients require HTTPS.
+
+With schema 7, `/foundry` also lists confirmed thread archives after session
+verification. Open a thread and load further history as needed; messages, tool
+details, recorded decisions and confirmed attachments come from Main even when
+the source device is unavailable or removed. This view has no live terminal or
+writer actions. Incomplete history and missing resources stay explicitly marked.
+
+P38b uses instance schema 7 for central thread events, confirmed cursors and artifact
+references. Automation keeps its separate database and migrations. Upgrade an
+existing schema-6 Main with `activate-access.py upgrade-archive sha256:<digest>
+<source-sha>`; the helper holds the deployment lock through migration and
+verification and records the coordinated previous database/state/image recovery.
+An older schema-6 image alone cannot recover a schema-7 deployment. Same-schema
+`update` and profile changes retain schema 7. Worker credentials and local T3
+state remain on the worker; archive ingestion never copies an active SQLite file.
 
 From the source checkout, create a private key file on the execution machine:
 
@@ -224,7 +284,7 @@ sudo -n /usr/local/sbin/foundry-deploy status
 
 Installation copies the helper and fixed configuration to root-owned paths and adds
 only that helper to `/etc/sudoers.d/foundry-deploy`. It does not restart containers.
-Never grant sudo to the checkout script itself: the checkout is writable by the agent.
+For a restricted deployment account, do not grant sudo to the checkout script itself: the checkout is writable by the agent. This restriction does not describe `niklas`, whose broader development-host privileges are documented above.
 Unrestricted Docker access, including docker-group membership, effectively grants
 [root privileges](https://docs.docker.com/engine/install/linux-postinstall/).
 
@@ -248,6 +308,8 @@ health, readiness and unchanged environment/instance identities. The manifest re
 the previous image ID and candidate revision. Backups contain private state and are
 root-readable only; retention is manual. They do not include PostgreSQL or workspaces
 and are not a replacement for the complete backups described below.
+
+The updater already serializes runs with `/var/lib/foundry-deploy/lock` (an exclusive, nonblocking `flock`). Manual Foundry rollouts, worker updates and migrations use the same lock through verification. Do not acquire it again around the updater or bypass a busy lock. The manifest and `success` file provide automatic evidence; briefly report previous/target revision, healthcheck result and recovery path in the PR or handoff. Manual paths report the same fields there, without a separate file or checklist.
 
 If backup creation fails, the old container restarts. If candidate startup or identity
 verification fails, Main stays stopped and the helper reports the backup directory.
@@ -278,7 +340,7 @@ docker compose --env-file deploy/fork/.env -f deploy/fork/compose.yml exec main 
 
 For browser access through the tunnel, replace the local origin in the generated HTTP pairing URL with `https://foundry.heavenforgeprod.com`, preserving its path, query, and fragment. Do not post the token in issues, commits, or logs. If it expires or was consumed, generate another.
 
-Native clients and automated callers cannot assume an interactive Access session. Do not put shared Access service-token secrets in a Web or desktop bundle. Before enabling automated calls, configure an appropriate separate machine endpoint or implement a supported service-auth transport. The revised plan integrates instance login, device discovery, and routing into Main; it does not deploy a separate Connect broker or require Clerk. These capabilities are not implemented yet; current browser pairing reaches only the Main environment. The Windows package's connection through Access has not been validated on a Windows client.
+Native clients and automated callers cannot assume an interactive Access session. Do not put shared Access service-token secrets in a Web or desktop bundle. Foundry sessions, device discovery and the authenticated Worker gateway are implemented in Main. Interactive gateway access currently requires both a Foundry session and a Main T3 session; selecting a Worker does not require separate device pairing. The gateway forwards approved thread, terminal and file-read scopes, but does not yet forward `settings:write`. A single central login that supplies all authorized user capabilities is still incomplete. Unattended Automation uses its explicit binding and current grant generations rather than reviving a browser session. Windows session evidence and remaining acceptance gaps are tracked separately in the implementation plan.
 
 For Cloudflare's machine authentication model, see [service tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/). Access rules must not turn future webhook paths into unauthenticated bypasses; retain connector authentication when those endpoints are implemented.
 
@@ -617,7 +679,7 @@ Durchgehende Main-/Client-Integration, Browser-Nachweis der Content-Isolation un
 
 ### Device-Freigaben und aktive Gateway-Sessions
 
-Instanzschema 5 trennt `clientAccess`, `automationExecution` und `sandboxProvisioning` pro Device mit eigener Generation. Die Migration erhält den bisherigen Client-Zugang registrierter, nicht widerrufener Devices; neue Enrollments erhalten nur `clientAccess`. Automation und Sandbox-Provisionierung bleiben deaktiviert und können über die API nicht freigegeben werden. Die Device-Registrierung und ihr dauerhafter Widerruf bleiben getrennt von dieser wiedererteilbaren Client-Freigabe.
+Instanzschema 5 trennt `clientAccess`, `automationExecution` und `sandboxProvisioning` pro Device mit eigener Generation. Die Migration erhält den bisherigen Client-Zugang registrierter, nicht widerrufener Devices; neue Enrollments erhalten nur `clientAccess`. Automation wird getrennt über die Device-Einstellungen oder den lokalen Betreiberbefehl freigegeben; Sandbox-Provisionierung bleibt gesperrt. Die Device-Registrierung und ihr dauerhafter Widerruf bleiben getrennt von dieser wiedererteilbaren Client-Freigabe.
 
 Am bestehenden Gateway sind POST `/api/foundry/gateway/grants/readAccess` (`deviceId`) und `/api/foundry/gateway/grants/updateAccess` (`deviceId`, `kind: "clientAccess"`, `enabled`, aktuelle `generation`) verfügbar. Beide benötigen die bestätigte Foundry-Session, Origin/CSRF und eine Main-T3-Session mit `access:write`. Jede erfolgreiche Änderung erhöht die Generation; ein veralteter Schreibstand wird abgewiesen. Die Verbindungseinstellungen bieten die interaktive Bedienung bei beworbener Capability `foundry.device-catalog`. Bestehendes `/remove` entfernt dagegen nur einen kurzlebigen Gateway-Grant dieser Client-Session.
 
@@ -629,8 +691,604 @@ Migration und Widerruf sind auf isoliertem Zustand zu prüfen, nicht als Image-o
 
 Mit aktiviertem Stream-Gateway bewirbt Main zusätzlich `foundry.device-catalog`. Nach bestätigter Instanzanmeldung und einer Main-T3-Session öffnet `/settings/connections` den Katalog. `Refresh devices` liest den aktuellen Stand; die Liste behält Offline-Geräte. Die Auswahl öffnet vorhandene Projekt-/Threadansichten über Main, ohne weiteres Pairing je Client/Device. Sie bleibt innerhalb dieses Browser-Tabs gespeichert; Wechsel und Trennen verwenden die bestehende Connection-Registry. Nach dem Trennen gibt es keinen automatischen Rückfall auf die direkte Main-Verbindung. Bereits gespeicherte persönliche T3-Verbindungen werden nicht überschrieben.
 
-Die Liste erfordert `orchestration:read`, Verwaltung zusätzlich `access:write`. Client-Zugriff lässt sich auch offline entziehen und erneut freigeben; `Revoke registration` beendet die Registrierung dauerhaft. Für eine neue Maschine zuerst mit der vorhandenen CLI den öffentlichen Device-Request erstellen, dessen Environment-ID und Public Key in den Einstellungen bestätigen und die kurzlebige Approval-Datei sicher zur Maschine übertragen. Der private Device-Schlüssel bleibt dort. Automation und Sandbox-Ausführung sind keine Katalogaktionen.
+Die Liste erfordert `orchestration:read`, Verwaltung zusätzlich `access:write`. Client-Zugriff lässt sich auch offline entziehen und erneut freigeben; `Revoke registration` beendet die Registrierung dauerhaft. Für eine neue Maschine zuerst mit der vorhandenen CLI den öffentlichen Device-Request erstellen, dessen Environment-ID und Public Key in den Einstellungen bestätigen und die kurzlebige Approval-Datei sicher zur Maschine übertragen. Der private Device-Schlüssel bleibt dort. Automation wird getrennt freigegeben und benötigt weiterhin die explizite Main-Konfiguration; Sandbox-Ausführung ist keine Katalogaktion.
 
 Vor einem Instanzwechsel führt `Manage instance sign-in` den lokalen Disconnect samt Registry-Aufräumen aus. Andere Clients behalten ihre eigene Auswahl, verlieren aber bei serverseitigem Entzug gemäß P11 den Zugriff. Die sichtbare Liste wird ausdrücklich aktualisiert; der Connection-Supervisor bleibt die einzige Reconnect-Steuerung.
 
 Der Cookie-Adapter setzt weiterhin die Main-Origin voraus: Web und das remote geladene P04-Desktopfenster verwenden dieselbe Oberfläche. Eine normale lokale Desktop-Shell erhält dadurch noch keinen Auth-Adapter für fremde Origins. Die reale Zwei-Client-/Windows-Abnahme und UI-Aufnahmen stehen weiterhin aus; siehe [Issue #13](https://github.com/niklaskastning/foundry/issues/13).
+
+### Worker-Ausführungs-Lease und Ergebnis (P16)
+
+Worker mit `foundryWorkerLifecycle` erfassen vor dem Provider-Start eine lokale,
+dauerhafte Ausführung in ihrer eigenen T3-SQLite-Datenbank. Nach `workerLaunch`
+liefert `workerRead` unter `lifecycle` Generation, Ablauf, Writer-Nachweis und
+Ergebnismanifest. Der Auftraggeber erneuert die 60-Sekunden-Lease mit
+`foundry.workerRenew` und genau dieser Generation rechtzeitig vor Ablauf;
+Read/Follow und eine offene Gateway-Verbindung erneuern sie nicht. Erneuerung
+benötigt wie Start/Cancel `orchestration:operate`. Eine abgelaufene Lease lässt
+sich nicht wiederbeleben. Die Device-Kanal-Generation ist davon unabhängig.
+
+Der lokale Watchdog fordert bei Ablauf den Abbruch ausschließlich des ursprünglichen
+Runs an. Nach Neustart bleiben nicht bestätigte Ausführungen `uncertain`; ein Retry
+findet denselben Auftrag und eröffnet keinen Ersatz-Writer. Auch ein bestätigter
+Cancel-Request oder ein terminaler T3-Run ist kein Writer-Nachweis. Vor dem Eintritt
+in den Provider verhindert eine dauerhafte Startsperre die Ausführung; danach prüft
+der Codex-Adapter den nativen Zustand samt bekannten Unteragenten und vollständigen
+Befehlsdaten. Fehlende/unerreichbare Nachweise halten die Ausführung gesperrt.
+Ein untätiger Provider-Server darf weiterleben. Andere Adapter liefern derzeit
+keinen positiven Abschlussnachweis für diesen Worker-Pfad.
+
+Ein erfolgreiches Manifest verlangt zusätzlich den passenden `ready`-Checkpoint
+und dessen vorhandene Git-Referenz. Ein fertiger Agent mit offenem oder ungültigem
+Checkpoint bleibt `finalizing`; normale T3-Finalisierung/Capture bleiben zuständig.
+Ein bestätigter Abbruch kann ein `stopped`-Manifest ohne Checkpoint liefern; dieses
+ist kein erfolgreiches Arbeitsergebnis. Bereits gespeicherte Manifeste sind
+unveränderlich. Bei älteren Aufträgen ohne Ausführungsdatensatz wird kein Nachweis
+nachträglich erfunden.
+
+Auf aktivierten Workern mit Provider-Bindung schützt `foundry-workspaces.sqlite` im Worker-State die
+verwalteten Checkout-Pfade. Worker-Launch reserviert vor Thread-Anlage und bindet
+Command, Thread und Ausführungs-Generation dauerhaft. Manuelle Turns in denselben
+Wurzeln reservieren vor Setup-Skripten und Provider-Eintritt denselben Writer-Platz.
+Ein konkurrierender Start wird abgewiesen; ein Neustart beseitigt die Sperre nicht.
+Die Freigabe verlangt das generationgebundene P16-Manifest beziehungsweise bei
+manuellen Turns einen terminalen Run mit positivem nativem Writer-Nachweis. Fehlt
+bei einem Adapter dieser Nachweis, bleibt sein Checkout reserviert. Unklare
+abgebrochene Vorbereitungen bleiben ebenfalls gesperrt; Journaldateien nicht zur
+Freigabe löschen. Das schützt verwaltete Agentenstarts, keine beliebigen Host-Prozesse
+oder manuell ausgeführten Terminalbefehle.
+
+Worker mit Capability `foundryManagedWorkspaces` unterstützen die Reservierungsbindung.
+Ungebundene Worker behalten ihren bisherigen interaktiven Betrieb, etwa für kostenlose
+Replay-Prüfungen; Foundry-Launch verlangt weiterhin die gesonderte Provider-Bindung.
+`foundry.workerLaunch` akzeptiert dort optional `workspaceMode: "worktree"` für einen
+eigenen verwalteten Worktree. Dafür muss eine erlaubte Wurzel das Quellrepository
+enthalten; Worktrees werden nicht innerhalb ihres Quell-Checkouts erzeugt. Ohne
+Option bleibt der Checkout-Modus erhalten. Beide Modi benutzen dasselbe dauerhafte
+Journal pro Worker. Die reale G3-Abnahme ist im [Leitplanken-Plan](basic-leitplanken.md#bestehende-nachweise-und-offene-technische-abnahmen)
+mit Evidence in PR #45 festgehalten. Die Factory-Aktivierung bleibt gesondert.
+
+## Automation-Persistenz, manueller Start und Steuerung (P18a/P18b/P47/P19–P21/P49)
+
+`apps/server/src/automation/` speichert gepinnte Runs und Definitionen. P19 ergänzt
+einen standardmäßig deaktivierten Scheduler im bestehenden Main-Prozess. Das
+Anlegen eines `pending`-Runs erteilt keine Ausführungsfreigabe.
+Sie verwendet einen eigenen `AutomationDatabase`-Pool und den schemaqualifizierten
+Namespace `foundry_automation` mit eigenem Migrationsmarker. Für spätere Aktivierung
+ist eine separate Automation-Datenbank mit eigenen Migrator-/Runtime-Rollen
+vorzusehen; weder Instanz-Migrator noch lokales T3-SQLite werden dafür verwendet.
+Die Automation-Migration verändert keine Instanzobjekte. Sie verlangt eine Runtime
+ohne DDL-/Owner-Rechte und vergibt keine UPDATE-/DELETE-Rechte auf Versionen oder
+Command-Receipts. Der Migrator bleibt außerhalb des späteren Runtime-Prozesses.
+
+Repository-Schlüssel sind hier opake Bindings einer unveränderlichen Version,
+keine Dateipfade oder Zugriffsrechte. P47 liefert das gemeinsame Definitionsformat;
+P18a speichert noch keine Workflow-DSL, Credentials oder Grants. Ein Create-Retry
+muss dieselbe globale Command-ID und denselben Inhalt verwenden. Er liest die
+vorhandene Entität einschließlich ihres aktuellen fachlichen Zustands.
+
+Archivieren sperrt neue Starts, erhält Aufträge/Versionen und beendet keine Runs.
+`Workflows.start` verwendet `Factories.withStartEligibility` und speichert Command,
+Run und Outbox innerhalb derselben Automation-Transaktion. Ein identischer Retry
+liest den vorhandenen Run auch nach Archivierung; neue Starts bleiben gesperrt.
+Externe Ausführung folgt ausschließlich nach dem Automation-Commit.
+WorkItem-Abschluss wird ausdrücklich fachlich gesetzt, unabhängig von Run-Erfolg.
+Schema 2 erweitert vorhandene P18a-Daten ohne Instanz-/T3-Migration. Factory- und
+Workflow-Version sowie Repository und Eingaberevision bleiben am Run gepinnt;
+die Revision ist ein opaker Eingabestand, kein verifiziertes Git-Objekt. Die
+geordnete Step-Liste unterstützt Agent, Test, Approval und Publish; Referenzen
+dürfen nur auf vorherige Steps zeigen. Test-IDs sind konfigurierte Prüfungen,
+keine im Backend auszuwertenden Skripte. Die Runtime darf Versionen, Run-Snapshots und ursprüngliche Outbox nicht ändern
+oder löschen. Schema 4 ergänzt getrennte, gezielt beschreibbare Dispatchzustände,
+Attempts und Zustell-Outbox. `readRun` projiziert daraus den aktuellen Zustand.
+
+P47 ergänzt in Schema 3 unveränderliche Definitions-Snapshots und einen aktiven
+Versionszeiger. Der gemeinsame Validator in `@t3tools/shared/factoryDefinition`
+verarbeitet einen expliziten Dateibaum, liest keine Host-Pfade und wird auch vom
+späteren Formulareditor verwendet. Einstieg ist `factory.yaml`:
+
+```yaml
+schemaVersion: 1
+factoryId: existing-factory
+repositories: [existing-repository-binding]
+workflows:
+  - id: main
+    file: workflows/main.yaml
+```
+
+Die Workflow-Datei enthält `steps` nach dem P18b-Schema. Weitere Ressourcen,
+Credential-Werte und Grants sind nicht Bestandteil dieses Formats. Dateipfade
+sind relativ, ohne Parent-Segmente, URLs oder Backslashes; alle referenzierten
+Dateien müssen mitgeliefert werden. Maximal 101 Dateien, 256 KiB je Datei und
+2 MiB insgesamt, auch nach kanonischem Export. YAML-Aliasse und unbekannte Felder
+werden abgewiesen. Die Validierung liefert Datei und Feldpfad, keine Quellwerte
+in Fehlermeldungen.
+
+Die Aktivierung verlangt die erwartete aktive Basisversion und eine bestehende
+Factory-Version als Repository-Freigabe; Definitionen dürfen deren Scope nur
+einschränken. Command, vollständiger Snapshot, neue Factory-/Workflow-Versionen
+und aktiver Zeiger werden gemeinsam committet. Hashes beziehen sich auf die
+kanonische Semantik, Herkunft wird separat gespeichert. Ein identischer Retry
+liest seine ursprüngliche Revision auch nach späteren Aktivierungen. Eine alte
+Version wird für neue Starts durch Export und erneute Aktivierung mit aktuellem
+Basisabgleich wiedergewählt; bestehende Runs bleiben gepinnt. Definitionsaktivierung
+startet keine Ausführung.
+
+Für Git-Definitionen erhält `foundry-github-app` einen gesonderten Repository-Eintrag
+mit `purpose: "definitions"`; dieser erlaubt ausschließlich Definitionslesen mit
+`contents:read`, kein Issue-Polling oder Publishing. Die GitHub-App-Installation
+muss das Repository ebenfalls freigeben. Änderungen erhöhen die Konfigurationsgeneration;
+bestehende Quellbindungen verlangen anschließend ausdrückliche Reautorisierung.
+
+Unter Factory → Definition das Definitionsrepository, seine numerische ID, Branch
+und Verzeichnis binden. Bei bestehenden lokalen Definitionen wird die aktuelle
+Version samt Inhaltshash als Importbasis festgehalten. Die erste Git-Aktivierung
+verlangt gleiche Inhalte und unveränderte Basis. Bei Drift die Dateien im Repository
+angleichen oder ausdrücklich die aktuelle lokale Version als neue Importbasis wählen.
+Nach der Übernahme bleibt Git dauerhaft Owner; lokale Aktivierungsbefehle werden
+abgewiesen. Änderungen erfolgen per PR im Definitionsrepository.
+
+Synchronisierung liest und validiert einen konkreten Commit, aktiviert ihn aber nicht.
+Quelle und Revisionen zeigen Fehler, Dateien und Diff zur aktiven Version. Erst die
+explizite Aktivierung übernimmt die geprüfte Revision für neue Runs. Ein Rollback
+aktiviert eine frühere gültige Git-Revision mit aktuellen Rechten; bestehende Runs
+behalten ihren Snapshot. Hintergrundlesen lässt sich auch nach einem Rechtewiderruf
+pausieren. Betriebsbindungen und Trigger bleiben unabhängig in der App bedienbar.
+
+Der isolierte Nachweis verwendet ausschließlich einen temporären PostgreSQL-Cluster,
+keine vorhandenen Datenbanken oder persönlichen Provider-Zugänge:
+
+```sh
+FOUNDRY_TEST_PG_BIN=/path/to/postgresql/bin vp run --filter t3 test:automation-postgres
+```
+
+### P19 gezielt aktivieren
+
+Die Factory-Ansichten bieten manuelle Starts, Run-Steuerung und eine persönliche
+Inbox. Fachliche Fehler werden nicht automatisch wiederholt; Publish-Steps besitzen
+eine revisionsgebundene Entscheidung, aber noch keinen GitHub-Publish-Adapter.
+Es gibt genau einen konfigurierten Worker und höchstens einen aktiven Run darauf.
+
+Vor Aktivierung eine separate Automation-Datenbank mit eigenem Migrator und
+Runtime-Benutzer bereitstellen. Die Runtime braucht weder DDL noch Migrator-Login.
+Migration erfolgt ausdrücklich mit `FOUNDRY_AUTOMATION_MIGRATION_URL` aus geschützter
+Konfiguration und `foundry automation-migrate --database <bestätigte-datenbank>
+--runtime-role <automation-runtime>`. Der Befehl prüft den Datenbanknamen und verweigert
+ein vorhandenes Instanzschema. Er startet keine Runs. Auf der Entwicklungs-VPS gilt
+der gemeinsame Deployment-Lock; Instanzschema 7 und lokales T3-SQLite bleiben getrennt.
+
+Die Main-Runtime verlangt bei `FOUNDRY_AUTOMATION_ENABLED=true` zusätzlich:
+
+- `FOUNDRY_AUTOMATION_DATABASE_URL`: separater Runtime-Pool, Schema 7;
+- `FOUNDRY_AUTOMATION_TARGET`: JSON mit genau `deviceId`, `environmentId` und
+  `allowedRunIds` (explizite eigene Fixture-Runs, höchstens 100);
+- den vorhandenen Gateway-/Artefaktbetrieb sowie eine bewusst erteilte
+  `automationExecution`-Device-Freigabe zusätzlich zu `clientAccess`.
+
+Die Automation-Freigabe ist in Connections getrennt von Client-Zugang sichtbar.
+Kein Flag, allgemeines Capability-Bit oder Deployment aktiviert bestehende Runs.
+Ein Produktstart speichert eine ausdrückliche, dauerhafte Zulassung zusammen mit
+Run und Receipt; er erfordert eine aktuell aktive Definition und explizite
+Projekt-/Workerbindung. Die P19-Allowlist bleibt ausschließlich für den begrenzten
+Fixture-Enroll-Pfad bestehen.
+
+Auf der Entwicklungs-VPS aktiviert der geprüfte Betreiberpfad das Profil nach dem
+Image-Update ausdrücklich:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py automation enable <device-id> <environment-id>
+```
+
+Er sperrt den bestehenden Deployment-Lock, verifiziert die eigene leere
+`fork_automation`, provisioniert getrennte Rollen, migriert auf Schema 5 und schaltet
+den Migrator wieder auf NOLOGIN. Die Automation-Freigabe wird über denselben
+DeviceGrants-Service mit erwarteter Generation vergeben. Das Profil konfiguriert
+genau diesen Worker mit leerer Fixture-Allowlist. Bestehende Runs werden nicht
+zugelassen. Keine Credentials in Shell-Argumente oder Logs übernehmen.
+
+Das `automation-*/manifest.json` hält vorheriges Profil und Grant fest. Fehler stellen
+das Profil sowie den früheren Freigabewert mit neuer Generation wieder her;
+nicht bestätigbare Recovery lässt Main gestoppt. Die separate migrierte Datenbank
+bleibt inaktiv. Bei späteren Updates gehört sie zum Recovery-Bundle; Schema 5 darf
+nicht durch einen reinen Image-Downgrade auf Schema-4-Code zurückgesetzt werden.
+
+Der aktive Entwicklungsstand wird von Automation-Schema 7 auf 8 über denselben
+intern sperrenden Betreiberpfad aktualisiert:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-automation sha256:<image-digest> <source-sha>
+```
+
+Dieser Pfad verlangt das aktive Schema-7-Profil, stoppt Main, sichert zusätzlich die
+separate Automation-Datenbank und migriert sie mit dem Zielimage. Der Migrator wird
+anschließend wieder gesperrt. Bei Fehlschlag umfasst Recovery auch diese Datenbank;
+kein Image-only-Downgrade. Der Aufruf aktiviert keine Trigger. Für spätere Updates
+innerhalb Schema 8 bleibt `update` der passende Pfad.
+
+### Wiederverwendbare Rollen und Startvorgaben
+
+Definitionsschema 2 ergänzt `roles`, `skills` und `defaults` in `factory.yaml`.
+Ein Agent-Step behält seinen konkreten `prompt` und kann eine `role`, zusätzliche
+`skills` und `execution`-Overrides referenzieren. Schema 1 bleibt für bisherige
+Prompt-Workflows verfügbar. Rollen und Skills werden mit der gesamten aktivierten
+Definition versioniert; Sync allein verändert keine laufende Arbeit.
+
+Beispiel für einen gemeinsamen Rollen-/Skillkatalog in `factory.yaml`:
+
+```yaml
+schemaVersion: 2
+factoryId: example
+repositories: [app]
+defaults:
+  provider: codex
+  model: <Modell-ID aus dem Worker-Katalog>
+roles:
+  - id: engineer
+    name: Engineer
+    description: Änderungen umsetzen und prüfen
+    instructions: Bewahre vorhandenes Verhalten und erläutere die Verifikation.
+    skills: [verification]
+    execution:
+      options:
+        reasoningEffort: low
+skills:
+  - id: verification
+    name: Verification
+    instructions: Führe passende Prüfungen aus und berichte ihre tatsächlichen Ergebnisse.
+workflows:
+  - id: implement
+    file: workflows/implement.yaml
+  - id: investigate
+    file: workflows/investigate.yaml
+```
+
+Beide Workflow-Dateien können dieselbe Rolle verwenden. Beispielsweise enthält
+`workflows/implement.yaml`:
+
+```yaml
+steps:
+  - id: implement
+    kind: agent
+    dependsOn: []
+    role: engineer
+    prompt: Setze den Auftrag um.
+```
+
+Der Untersuchungsworkflow ergänzt stattdessen seinen konkreten Analyseauftrag.
+Die verwendete Modell-ID und Reasoning-Stufe müssen vom Worker angeboten werden.
+
+Die Ausführung löst Einstellungen in der Reihenfolge Definitionsdefaults → Rolle →
+Step auf. Nicht gesetzte Modelle verwenden die ausdrücklich bestätigte
+Betriebsbindung. Unterstützt sind Codex, das Modell und `options.reasoningEffort`.
+Skill-Instruktionen werden aus dem aktivierten Snapshot in den Auftrag übernommen;
+es werden keine Repository-Dateien überschrieben. Dateibasierte Skill-Bundles,
+MCP-/Connector-Ressourcen, Secret-Ausgabe und weitere Provideradapter sind nicht
+Teil dieses Schnitts. Unbekannte Felder oder fehlende Referenzen verhindern die
+Aktivierung. Git-Dateien erteilen keine Betriebsrechte.
+
+Unter **Agents & skills** stehen Rollen, Skills, wirksame Step-Einstellungen und
+der Änderungsweg zum Definitionsrepository. **Overview** zeigt offene Arbeit,
+Entscheidungen und letzte Runs. Beim Auftrag lassen sich Worker-Projekt,
+Fallback-Modell, Prüfkommandos und Artefaktanforderungen einmal pro Factory und
+Repository speichern. Dafür ist Verwaltungsrecht erforderlich; Speichern startet
+keinen Run und ersetzt keine aktuelle Worker-/Sessionfreigabe. Jeder Start zeigt
+seine Einstellungen, bestehende Runs behalten ihre gespeicherten Requests.
+
+Main benötigt weiterhin Instanzschema 8, Automation jetzt Schema 9. Zuerst den
+getesteten Worker mit dem vorhandenen Worker-Updater installieren, dann Main mit
+dem intern sperrenden Migrationspfad aktualisieren:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-factory-agents sha256:<digest> <commit>
+```
+
+Der Worker meldet `roleExecutionVersion: 1`; ältere Worker erhalten keine
+Rollenaufträge. Der Main-Updater hält die Deploymentsperre, sichert den vorherigen
+Stand, migriert bei gestopptem Main und sperrt den Migrator anschließend wieder.
+`manifest.json` und `success` im ausgegebenen Recovery-Verzeichnis bleiben der
+Betriebsnachweis. Recovery auf Schema-8-Code verlangt den koordinierten vorherigen
+Daten-/State-Stand; kein reiner Image-Downgrade. Updates innerhalb Schema 9 nutzen
+wieder `update`. Windows-Bedienung und weitere Provider benötigen eigene Abnahmen.
+
+### Parallele Factory-Ausführung aktualisieren
+
+P29 benötigt weiterhin Instanzschema 8 und Automation-Schema 10. Den getesteten
+Worker zuerst installieren; `install STAGE --capacity 2` am bestehenden
+`deploy/fork/worker/activate-artifacts.py` aktiviert zwei Plätze im dauerhaften
+Workerprofil. Zulässig sind 1–8, ohne Option bleibt der bisherige Wert erhalten
+(bei älteren Profilen 1). Der Worker-Updater prüft den gemeldeten Wert vor dem
+Wiederverbinden und hält den bestehenden Deployment-Lock bis zur Verifikation.
+Die bereits gebundene Provideranmeldung bleibt unverändert.
+
+Danach das immutable Main-Image aus demselben getesteten Stand migrieren:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-factory-parallel sha256:<digest> <commit>
+```
+
+Der intern sperrende Pfad verlangt das aktive Automation-Schema 9, sichert den
+koordinierten vorherigen Stand und migriert bei gestopptem Main auf 10.
+`manifest.json` und `success` belegen Zielstand und Recovery-Verzeichnis.
+Ein Rückgang auf Schema-9-Code verlangt den koordinierten Daten-/State-Restore;
+ein reiner Image-Downgrade ist nicht sicher. Spätere Schema-10-Updates verwenden
+`update`. Die Worker-Konfigurationsrecovery ist nur bei unverändertem lokalem
+SQLite-Schema zulässig. Diese Lieferung ergänzt dort Migration 79 für dauerhafte
+Abbruchnachweise vor dem Workerstart; der Rückgang zum vorherigen Worker benötigt
+deshalb dessen gesicherten Datenstand, nicht nur die alte Dienstkonfiguration.
+
+`FOUNDRY_AUTOMATION_TARGET` behält den bisherigen Standardworker. Optional
+enthält `workers` bis zu acht zusätzliche, unterschiedliche Paare aus `deviceId`
+und `environmentId`. Diese Betriebsauswahl ersetzt weder die registrierte
+Instanz-/Betreiberzugehörigkeit noch aktuelle Device- und Automation-Freigaben.
+
+### Versionierte Factory-HTTP-API (P58a)
+
+Bei aktivierter Automation stehen dieselben Benutzeroperationen unter
+`/api/foundry/v1/automation/` zur Verfügung. Alle Aufrufe verwenden `POST` mit
+JSON. `contract` liefert den maschinenlesbaren Vertrag mit Eingabe- und
+Ausgabe-JSON-Schemas; `query`, `command`, `control`, `inbox/query`, `inbox/mark`,
+`triggers/query` und `triggers/command` rufen dieselben Services wie die UI auf.
+Die bisherigen UI-Endpunkte bleiben erhalten.
+
+Benutzeroperationen benötigen weiterhin die bestehende Foundry-Benutzersitzung samt
+Origin/CSRF-Nachweis und eine gültige Main-T3-Sitzung mit den jeweiligen Scopes.
+Der bestehende authentifizierte Clienttransport muss diese Nachweise liefern;
+ein gewöhnlicher unauthentifizierter `fetch` genügt nicht. DPoP wird für die
+tatsächlich aufgerufene URL erstellt. Der unten beschriebene Maschinen-Lesezugang
+ist davon getrennt; ein Factory-MCP-Endpunkt besteht noch nicht. Interaktive Cookies
+nicht in CI übernehmen; T3-MCP- und Worker-Credentials werden nicht in Benutzerrechte
+übersetzt.
+
+Beispielkörper für `query`:
+
+```json
+{ "op": "factories", "search": "example", "limit": 20 }
+```
+
+Der nächste Seitenaufruf verwendet `after` aus dem zurückgegebenen `next`.
+Für typisierte TypeScript-Nutzung stehen Eingabe-/Ausgabe-Schemas in
+`AutomationApiOperations` aus `@t3tools/contracts` bereit; derselbe Vertrag
+liegt der HTTP-Dekodierung zugrunde. Keine zusätzliche SDK-Laufzeit ist nötig.
+
+Mutation und Command-ID vor dem Senden speichern. Nach verlorener Antwort exakt
+dieselbe Anfrage wiederholen; eine neue Command-ID wäre eine neue Entscheidung.
+Revisionskonflikte verlangen erneutes Lesen. Ein Start bestätigt Annahme, keinen
+erfolgreichen Run; eine Rückgabe erzeugt weiterhin einen pausierten Folgelauf.
+Inbox-Markierungen sind keine Freigaben und Definitionsaktivierung startet keinen Run.
+
+Antworten werden nicht gecacht. Fehler enthalten nur `code`: HTTP 400 bei
+ungültiger Eingabe, 403 bei fehlendem Recht, 404 bei fehlendem Objekt, 503 bei
+nicht verfügbarem Service und 409 bei fachlichen Konflikten oder Sperren.
+Unbekannte API-Versionen führen keine Operation aus. Die API begrenzt JSON-Körper
+auf 3 MiB; die engeren fachlichen Größenlimits bleiben zusätzlich wirksam.
+
+### Begrenzter Maschinen-Lesezugang
+
+Unter demselben API-Präfix verwalten `credentials/issue`, `credentials/list` und
+`credentials/revoke` eigenständige Credentials. Verwaltung verlangt eine gültige
+Foundry-/T3-Benutzersitzung mit `access:write`, Ausgabe zusätzlich
+`orchestration:read`. `issue` nimmt eine vor dem Senden gespeicherte UUID `id`,
+`label`, eine explizite Liste vorhandener `factoryIds` (1–32) und `expiresAt`
+(Unix-Millisekunden, höchstens 30 Tage in der Zukunft) an. Der einzige Scope ist
+`automation:read`; Wildcards und Schreibscopes werden nicht angenommen.
+
+Die erste Antwort enthält `credential` und `token`. Das Token sicher speichern;
+PostgreSQL hält nur seinen Hash. Exakte Wiederholung derselben ID und Eingabe
+liefert dieselben Metadaten, aber `token: null`. Ein verlorenes Token lässt sich
+nicht auslesen: alte ID widerrufen und ausdrücklich mit neuer ID ausstellen.
+Geänderte Eingaben unter derselben ID ergeben 409, auch nach Ablauf/Widerruf.
+`list` nimmt `{}` an und zeigt höchstens 100 Einträge, alle aktuell gültigen zuerst,
+danach zuletzt ablaufende inaktive. Höchstens 100 Credentials dürfen gleichzeitig
+gültig sein. `revoke` nimmt `{ "id": "<credential UUID>" }` an; Wiederholung ist
+sicher, die Antwort ist `null`. Credential-Verwaltung bietet noch keine eigene UI.
+
+Maschinen senden das Token als `Authorization: Bearer <token>` an `contract` oder
+`query`. Zulässige Abfragen sind `factories`, `factory`, `workItems`, `workItem`,
+`runs`, `run`, `attempts` und `attempt`. Listen filtern vor der Pagination auf die
+freigegebenen Factories; Run-/Attempt-Zugriffe prüfen zusätzlich den Betreiber.
+Jeder Aufruf prüft Ablauf, Widerruf und Instanz-/Betreibergeneration erneut.
+Benutzer-Logout beendet diese eigenständigen Credentials nicht. Ein Maschinen-Token
+wird auch bei zusätzlich vorhandenen Benutzer-Cookies nicht zum Schreibzugang.
+
+Der Zugang umfasst weder Start/Steuerung noch Handoff, Inbox, Trigger, einzelne
+Definitionsdateien oder Live-Worker-/Archivzugriff. Vorhandene T3-MCP-Tokens werden
+nicht zu Foundry-Credentials. Factory-MCP und seine Instruktionsevals folgen separat.
+
+Ein vorgeschaltetes Access muss den nicht interaktiven API-Zugang zusätzlich erlauben.
+Der bestehende Device-Service-Zugang gilt nicht automatisch für diese API-Pfade.
+Dieses Upgrade verändert keine Access-/Domainregeln; eine Loopback-Probe belegt
+keinen öffentlichen CI-Zugang.
+
+Main benötigt Instanzschema 8; Automation bleibt bei Schema 8. Den getesteten
+unveränderlichen Build mit dem bestehenden Updater aktivieren:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-machine-credentials sha256:<digest> <commit>
+```
+
+Der Helfer hält die bestehende Deploymentsperre, sichert den bisherigen Stand und
+migriert bei gestopptem Main. `manifest.json` und `success` im ausgegebenen
+Recovery-Verzeichnis festhalten. Ein Downgrade auf Schema-7-Code benötigt den
+koordinierten Daten-/State-Restore bei gestopptem Main; kein reiner Image-Rollback.
+Nachfolgende Updates desselben Schemas verwenden wieder `update`.
+
+### Auftrag interaktiv übernehmen und zurückgeben (P51)
+
+Im Run zunächst pausieren und das bestätigte Writer-Ende abwarten. Unter „Take over
+in T3“ den Quellversuch und vorhandenen Workspace, Alternativbranch oder
+Archiv-Wiederherstellung wählen. Der neue verknüpfte Thread startet keinen Turn
+von selbst. Er benötigt weiterhin die aktuelle Foundry-/T3-Sitzung und die
+bestehenden Worker-Rechte. Im Thread führt „Back to work item“ zum Auftrag zurück.
+
+Vor der Rückgabe Änderungen committen und laufende Turns beenden. Beim Auftrag
+Prüfbericht und offene Punkte angeben und „Return to factory“ auslösen. Erst nach
+Writer-Ende, Checkpoint, Bundle- und Archivbestätigung entsteht ein pausierter
+Folgelauf desselben Auftrags mit neuer Revision und derselben Workflow-Version.
+Diesen ausdrücklich fortsetzen; der alte Run bleibt gesperrt. Der Bericht ist eine
+Benutzerangabe und ersetzt keine Workflow-Prüfung oder Freigabe. Git-Definitionen
+werden durch die Rückgabe nicht geändert oder aktiviert.
+
+Eine unbestätigte Entscheidung mit der gespeicherten Anfrage wiederholen, auch
+nach Neuladen. Bei blockierter Rückgabe erlaubt „Reopen interactive work“ weitere
+Bearbeitung, solange der Worker die Rückgabe noch nicht finalisiert hat. Danach
+kann nur die ursprüngliche Rückgabe zentral bestätigt werden. Fehlende Archive
+oder veränderte Workspaces blockieren sichtbar; ein Thread-Archiv allein ersetzt
+kein gesichertes Git-Bundle. Technische Fehler während des Öffnens halten die
+Sperre bis zur ausdrücklichen Wiederholung nach Behebung der Ursache.
+
+Während eines Handoffs bleibt der eine konfigurierte Worker für diesen Auftrag
+reserviert, auch zwischen interaktiven Turns. Worker-Updates verweigern offene
+Handoffs. P51 erweitert das lokale Reservierungsjournal; ein älteres Worker-Binary
+darf dessen Sperren nicht ignorieren. Die erste Rückkehr auf den vorherigen Stand
+benötigt deshalb eine geprüfte Wiederherstellung der gesicherten Worker-Daten,
+keinen reinen Konfigurationswechsel. Main-Recovery umfasst Automation-Schema 8.
+
+### GitHub- und Zeitplan-Eingänge
+
+Unter Factory → Triggers zunächst eine inaktive Bindung an die aktive Definition,
+das Repository und ein ausdrücklich ausgewähltes Worker-Projekt speichern. Erst
+„Authorize and activate“ erteilt unbeaufsichtigte Ausführung. Diese Autorisierung
+enthält keine alte Benutzersession; Device-, Client-Access- und Automation-Generationen
+werden weiterhin aktuell geprüft. Pause behält oder verwirft wartende Eingänge nach
+Auswahl, Widerruf sperrt die Bindung. Die technische Eingangshistorie ist getrennt von
+der persönlichen Inbox für Entscheidungen und Fragen.
+
+GitHub-Polling verwendet ausschließlich die zentrale GitHub-App-Verbindung
+`github-app`, eine erlaubte numerische Repository-ID und ein ausdrückliches Opt-in-Label.
+Bestehende Issues werden bei Aktivierung als Baseline angenommen, ohne Runs zu starten.
+Pro Binding-Generation und Issue entsteht höchstens ein fachlicher Start; spätere
+Kommentare oder Inhaltsänderungen erzeugen keinen weiteren. Polling kann kurzlebige
+Label-/Ereignisfolgen zwischen Abfragen nicht rekonstruieren.
+
+Die App-Konfiguration liegt im vorhandenen Main-SecretStore unter
+`foundry-github-app`: App-ID, Installation-ID, privater Schlüssel, Grant-Generation
+und erlaubte Repositories mit numerischer ID, `owner/name`, Factory-Bindungsschlüssel
+und Basisbranch. Der Betreiber installiert die App ausschließlich in ausgewählten
+Repositories mit Issues lesen, Contents schreiben und Pull requests schreiben
+(Metadata lesen). Keine persönlichen `gh`-Tokens in die Runtime übernehmen.
+Private Schlüssel als PEM mit erhaltenen Zeilenumbrüchen über das Secret-Verfahren
+liefern; vor Übernahme die Signaturfähigkeit der Node-Laufzeit prüfen. Niemals in Chat,
+Befehlsargumenten oder Logs ausgeben. Änderungen der Autorisierung erhöhen die Generation; Entfernen der
+Konfiguration sperrt den Zugang. Eine allgemeine Provider-/MCP-Verwaltung ist nicht enthalten.
+
+Publishing benötigt einen sauberen Commit nach bestätigtem Writer-Ende, passende
+Checkpoint-Tree-Identität, zentral bestätigte Artefakte und erfolgreiche konfigurierte
+Checks im isolierten Checkout genau dieses Commits. Check-Kommandos müssen ihre
+Dependencies dort selbst bereitstellen. Die Freigabe bindet Run-Revision und
+Ergebnisstand; sie ist keine allgemeine Push-Erlaubnis. Main überträgt das verifizierte
+Git-Bundle und reconciliert den PR über den dauerhaften Operationsschlüssel. Der
+Publish-Step führt weder Merge noch Deployment aus.
+
+Zeitpläne verwenden lokale Uhrzeit, Wochentage und eine explizite IANA-Zeitzone.
+Nicht existierende DST-Uhrzeiten entfallen; doppelte Uhrzeiten gelten nur beim ersten
+Vorkommen. Der erste Termin liegt nach Aktivierung. Verpasste Termine werden verworfen,
+nur zuletzt oder begrenzt (höchstens zehn) nachgeholt; der gespeicherte Cursor springt
+anschließend in die Zukunft. Ein Zähler dokumentiert ausgelassene Terminbereiche.
+Überlappende Runs warten oder werden gemäß Bindung übersprungen. Bestehende T3 Scheduled
+Tasks bleiben getrennt und dürfen nicht zusätzlich denselben Workflow starten.
+
+Für einen bereits über P18/P47 angelegten und freigegebenen Run nimmt der interne
+Service beziehungsweise `POST /api/foundry/automation/dispatch` den Vorgang
+`{op:"enroll",input:{factoryId,runId,projectId,model,checks,requiredArtifacts}}`
+entgegen. Er benutzt eine aktuelle Foundry- und T3-Session mit den bestehenden
+Scopes; keine Maschinen-Credentials als Benutzerlogin. `checks` bindet Test-IDs
+an ausdrücklich vorgegebene `prompt`, exakten nativen `command` und absolutes `cwd`.
+`requiredArtifacts` nennt pro `stepId` erforderliche Dateinamen. Doppelte Bindungen
+werden abgewiesen. `{op:"read",factoryId,runId}` liest den dauerhaften Zustand.
+Dies ist ein begrenzter Entwicklungsanschluss, kein öffentlicher Trigger oder MCP-API.
+
+Die Bindung pinnt Provider-Modell, Projekt, Device- und Grant-Generationen sowie
+bestehende Sessionreferenzen. Sie speichert keine Credentials und verlängert keine
+Anmeldung. Logout, Refresh, Ablauf oder Widerruf blockieren weitere Zugriffe und
+Lease-Erneuerungen; die lokale Worker-Lease bleibt maßgeblich. P19 ersetzt dabei
+keinen Writer. Wiederaufnahme benötigt aktuelle Benutzerautorisierung; alte Session- oder Grant-Generationen werden nicht wiederbelebt.
+
+Der Scheduler findet offene Arbeit nach Neustart aus PostgreSQL wieder. Claims
+werden vor Worker-/Archivzugriff committet; abgelaufene Claimgenerationen dürfen
+keine Ergebnisse bestätigen. Verlorene Antworten verwenden dieselbe Command-ID,
+Anfrage, Worker-Generation und denselben Thread. `complete=true` ist ausschließlich
+eine Archivbestätigung. Erfolg verlangt zusätzlich Writer-Ende, passenden nativen
+Run, Checkpoint, finalen Archivcursor und erforderliche Ergebnisdaten. Ein Test
+braucht einen eindeutig passenden abgeschlossenen nativen Command mit Exitcode 0;
+fehlendes CWD oder reine Agentenaussagen sind kein Nachweis. Andere Provider als
+die nachweisfähigen Adapter bleiben dadurch konservativ unbestätigt.
+
+Codeübergaben bleiben auf demselben expliziten Checkout: Der Worker vergleicht einen
+frischen Snapshot unter der Reservation mit dem Vorgänger-Checkpoint, ohne Restore.
+Erforderliche Artefakte werden vollständig mit Hash geprüft und vor dem Folgestart
+über P38a als echte Anhänge materialisiert. Ein lokaler Git-SHA ersetzt diese
+Übergabe nicht. Archive über 10.000 Ereignisse warten sichtbar mit
+`archive_result_limit`; P19 lädt keine unbegrenzt großen Resultate in Main.
+
+Gezielte Nachweise, jeweils ausschließlich gegen eigene temporäre PostgreSQL-Cluster:
+
+```sh
+FOUNDRY_TEST_PG_BIN=/path/to/postgresql/bin vp run --filter t3 test:automation-postgres
+(cd apps/server && FOUNDRY_TEST_PG_BIN=/path/to/postgresql/bin node scripts/test-automation-session-reference.ts)
+```
+
+### Modulare Definitionen v4 aktualisieren
+
+V4 verwendet getrennte Agenten-, Workflow- und MCP-Dateien sowie vollständige
+Skillverzeichnisse. Bestehende v1–v3-Definitionen werden nicht automatisch migriert.
+Die lokale Definition kann eine v4-Migration als Dateisatz für Review exportieren;
+Git-gebundene Factories übernehmen sie erst über ihren normalen PR-, Sync- und
+Aktivierungspfad. Laufende Runs behalten den vollständigen ursprünglichen Snapshot.
+
+Main benötigt Instanzschema 8 und Automation-Schema 11. Der Worker muss
+`definitionExecutionVersion: 4` melden; der Codex-Pfad verlangt mindestens CLI
+0.166.0. Ein älterer dedizierter Provider muss zuerst ohne Änderung seiner
+Anmeldedaten aktualisiert werden. Den getesteten Worker zuerst installieren,
+danach das immutable Main-Image aus demselben Revisionstand verwenden:
+
+```sh
+sudo -n python3 -I deploy/fork/updater/activate-access.py upgrade-factory-definition-v4 sha256:<digest> <commit>
+```
+
+Der Updater verlangt das aktive Schema-10-Profil, hält den gemeinsamen Lock,
+stoppt Main, sichert den koordinierten Stand und migriert die separate
+Automation-Datenbank. Migratorzugang wird anschließend wieder gesperrt.
+`manifest.json` und `success` halten vorherige und aktuelle Revision fest.
+Recovery auf Schema-10-Code benötigt den koordinierten Daten-/State-Stand;
+ein reiner Image-Downgrade reicht nicht. Updates innerhalb Schema 11 verwenden
+wieder `update`. Ein Update aktiviert keine neue Factorydefinition.
+
+Auf Hosts mit AppArmor-Usernamespace-Beschränkung kann das gebündelte Codex-`bwrap`
+trotz funktionierender CLI mit `EPERM` scheitern. Der gezielte
+[Profil-Installer](../../deploy/fork/worker/codex-apparmor.py) übernimmt die vorhandenen
+Distributionsregeln aus `/etc/apparmor.d/bwrap-userns-restrict` für genau das
+root-eigene, nicht fremd beschreibbare Binary unter
+`/opt/foundry-worker/providers/codex-<version>/node_modules/@openai/codex-linux-<arch>/vendor/<target>/codex-resources/bwrap`.
+`sudo -n python3 -I deploy/fork/worker/codex-apparmor.py install --binary <absoluter-bwrap-pfad>`
+prüft alle Pfadkomponenten, kompiliert offline und schreibt ausschließlich ein
+eigenes Profil mit eigenem Capability-entzogenen Kindprofil. Der Helfer hält den
+Deploylock intern; nicht zusätzlich einklammern. Er lädt keine Kernelpolicy.
+Anschließend den Deploylock erneut bis zum Ende der Prüfung halten, das ausgegebene
+Profil mit `sudo -n apparmor_parser -r <profilpfad>` laden und den kostenlosen
+nativen Sandbox-Command-Gate mit dem dedizierten Provider ausführen. Erst dessen
+Erfolg belegt die Sandboxfähigkeit; eine erfolgreiche Modellausgabe allein reicht
+nicht. Recovery unter demselben Lock: `sudo -n apparmor_parser -R <profilpfad>`
+entfernt nur die beiden eigenen Profile; danach löscht `remove --binary
+<absoluter-bwrap-pfad>` am Helfer die unveränderte eigene Profildatei mit internem
+Lock. Vor `remove` deshalb den äußeren Lock freigeben. Die Distributionsprofile,
+globale Usernamespace-Regeln und Provider-Anmeldedaten bleiben unverändert.
+
+MCP-Definitionen benötigen unter **Agents & skills → MCP runtime authorization**
+eine ausdrückliche Factory-Bindung an die konkrete Definition und deren Tools.
+Die Verbindung referenziert vorhandene Secret-Provider-Einträge; Secretwerte
+gehören weder ins Definitionsrepository noch in das Bindungsformular.
+Geänderte Ziele verlangen eine neue Bindung. Widerruf verhindert neue Starts;
+bereits laufende Arbeit wird über den Run-Abbruch beendet. Skillskripte werden
+beim Import nicht ausgeführt. Nur Codex mit den geprüften v4-Fähigkeiten wird
+für diesen Ausführungspfad zugelassen.
+
+Beim Auftrag werden die gepinnte Git-Basis und optional strukturierte
+Workflow-Eingaben angegeben. Die Run-Ansicht zeigt gespeicherte Conditions,
+Swarm-Zweige und Iterationen; einzelne Eingaben und Resultate werden auf Wunsch
+geladen. Technische Retries und fachliche Schleifen verwenden getrennte Budgets.
+
+Eine T3-Rückgabe erstellt einen neuen, zunächst pausierten Run mit derselben
+Workflowrevision und denselben Eingaben auf dem bestätigten Rückgabe-Checkpoint.
+Der Quellrun bleibt als übergebene Historie gesperrt. Erst explizites Fortsetzen
+autorisiert die neue Ausführung mit eigenem Budget; abgeschlossene Veröffentlichungen
+und Freigaben des Quellruns werden dabei nicht automatisch ausgeführt.

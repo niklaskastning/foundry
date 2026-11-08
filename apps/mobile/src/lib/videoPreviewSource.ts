@@ -85,7 +85,7 @@ export type VideoPreviewSource = LocalVideoPreviewSource | MediaVideoPreviewSour
 
 export function attachmentVideoPreviewSource(
   environmentId: EnvironmentId,
-  attachment: ChatFileAttachment,
+  attachment: Pick<ChatFileAttachment, "id" | "name" | "mimeType">,
   sourceIdentifier?: string,
 ): MediaVideoPreviewSource {
   const mimeType = videoMimeType(attachment) ?? attachment.mimeType;

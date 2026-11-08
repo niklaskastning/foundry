@@ -1,12 +1,12 @@
 # Foundry – Instanz-, Automation- und Ausführungsarchitektur
 
-Stand: 1. November 2026 · Planabgleich mit Fork-Stand `ba1ed2f4e` und öffentlicher Warp-Factories-Dokumentation
+Stand: 5. November 2026 · ursprünglicher Planabgleich mit Fork-Stand `ba1ed2f4e`, fortgeschrieben um die Nutzerentscheidung Factories-first
 
-Status: Zielplan, keine Implementierungs- oder Produktionsfreigabe. Technische Nachweise sind als Abnahmegates ausgewiesen. Neben dem isolierten Main-Deployment sind inzwischen Instanz-Descriptor, PostgreSQL-Anbindung und Access-Session-Bausteine unter `apps/server/src/foundry/` vorhanden. Das belegt keine vollständige G1-/Windows-Abnahme. Gateway, Factory-/Workflow-Domäne und Sandboxes bleiben geplant. Diese versionierten Entwurfsdokumente sind ausdrücklich angeforderte Projektdokumente.
+Status: Zielarchitektur, keine pauschale Implementierungs- oder Produktionsfreigabe. Instanz-/Gateway-/Worker-Grundlagen und der sequenzielle Factory-Kern sind inzwischen integriert; der aktuelle Funktionsstand und offene Abnahmen stehen ausschließlich im [Umsetzungsplan](implementation-plan.md). Sandboxes und weitere Ausbaustufen bleiben geplant. Der [Warp-Abgleich vom 5. November](warp-comparison.md) ergänzt den ursprünglichen Referenzvergleich um Code- und Browserbefunde zu Funktionen und UI. Diese versionierten Entwurfsdokumente sind ausdrücklich angeforderte Projektdokumente.
 
 ## 1. Festgelegtes Ziel
 
-Foundry ist ein dauerhafter Fork von T3 Code. Eine **selbst gehostete Instanz mit einer Hauptdomain** bietet Web und Windows-Desktop Anmeldung, ein zentrales Device-Verzeichnis, Projekte, Automation und später manuell oder automatisch provisionierte Sandboxes. Der Benutzer trägt die Instanz-URL im Client ein; nach Anmeldung erscheinen die für ihn freigegebenen Environments ohne manuelles Pairing jedes Devices in jedem Client.
+Foundry ist ein dauerhafter Fork von T3 Code mit **Factories als Home und Hauptanwendung**. Aufträge organisieren die Arbeit; Chats sind deren interaktive Arbeitsdetails und bleiben zusätzlich separat erreichbar. Eine **selbst gehostete Instanz mit einer Hauptdomain** bietet Web und Windows-Desktop Anmeldung, ein zentrales Device-Verzeichnis, Projekte, Automation und später manuell oder automatisch provisionierte Sandboxes. Der Benutzer trägt die Instanz-URL im Client ein; nach Anmeldung erscheinen die für ihn freigegebenen Environments ohne manuelles Pairing jedes Devices in jedem Client.
 
 Für den Start gelten **eine Instanz, ein Betreiber und ein Benutzer**. Teams, Gruppen, mehrere Mandanten in einem Prozess, Federation und Enterprise-RBAC sind spätere Produktarbeit. Stabile Instanz-/Benutzer-/Device-Identitäten und getrennte Berechtigungsprüfungen verhindern, dass wir später globale Admin-Tokens oder E-Mail-Adressen als Besitzmodell migrieren müssen; eine vorsorgliche Enterprise-Plattform bauen wir nicht.
 
@@ -18,7 +18,7 @@ Das bisher geplante eigene Cloudflare-Worker-/Clerk-/Hyperdrive-Connect wird ers
 
 Die Betriebs- und Verbindungsdetails einschließlich Auth-Vertrag und Abnahmegates stehen in [Deployment-Plan](deployment.md); dieses Dokument besitzt Workflow- und Ausführungssemantik. Widersprüche werden in beiden Dokumenten geändert, nicht durch angehängte konkurrierende Entwürfe aufgelöst.
 
-**Erster Durchstich:** Instanz-URL im Windows-Client eingeben → anmelden → registriertes Linux-Device automatisch sehen → normalen Thread darauf öffnen. Erst danach folgt GitHub-Issue → Analyse → Implementierung → Prüfung → freigegebener PR. Doppelzustellungen und Neustarts dürfen keine zusätzlichen Attempts oder Veröffentlichungen auslösen.
+**Technische Grundlage:** Instanz-URL im Windows-Client eingeben → anmelden → registriertes Linux-Device sehen → dessen Threadzugriff prüfen. Der Produktweg führt danach von Home zur Factory und zum Auftrag, über Analyse → Implementierung → Prüfung zum freigegebenen PR; ein Thread wird bei Bedarf aus diesem Kontext geöffnet. Doppelzustellungen und Neustarts dürfen keine zusätzlichen Attempts oder Veröffentlichungen auslösen.
 
 ### Plattformen und Grenzen
 
@@ -74,7 +74,7 @@ Ein öffentlicher Workflow-Marktplatz, beliebiger JavaScript-Code in der Steueru
 2. **Ein nachvollziehbarer Ablauf vom Verstehen bis zur Übergabe.** Je nach Workflow gehören Spezifikation, Repository-Analyse, Planung, Implementierung, Review, begrenzte Korrekturschleifen, Tests und Dokumentation dazu. Nicht jeder Auftrag braucht jeden Schritt. Ergebnis ist eine überprüfbare Änderung mit klaren Akzeptanzkriterien statt lediglich ein beendeter Agentenlauf.
 3. **Wiederverwendbare Spezialisten mit Anpassungen pro Step.** Basis-Agenten definieren Rolle, Instruktionen, Skills und benötigte Fähigkeiten. Workflow-Schritte ergänzen ihren konkreten Auftrag. Ein Reviewer, Implementer und Analyst können unterschiedliche Provider und Modelle nutzen, ohne dass sich dadurch die Workflow-Steuerung ändert.
 4. **Koordinierte Parallelität mit klaren Übergaben.** Ein Plan kann Aufgaben auf mehrere Agenten und Repositories verteilen. Abhängigkeiten, begrenzte Parallelität, Teilfehler und Zusammenführung bleiben Aufgaben der Plattform. Ein Agent kann die Aufteilung vorschlagen; die Plattform prüft Umfang und Rechte, bevor Arbeit startet.
-5. **Verhalten und Betriebszugriff bleiben getrennt.** Workflows, Agenten, Skills und Ergebnisformate sind versionierbare Definitionen. Maschinen, konkrete Repository-Zuordnungen, Konten und Secrets werden zentral gebunden. Ein Run hält seine wirksame Konfiguration fest; ein späteres Bearbeiten einer Vorlage verändert ihn nicht rückwirkend. Factory as Code ist verbindliches Produktziel: eine kanonische versionierte Definition mit Import/Export und später Git-Synchronisation. Ein externes Konfigurations-Repository bleibt optional; UI-Verwaltung verwendet dasselbe Schema.
+5. **Verhalten und Betriebszugriff bleiben getrennt.** Workflows, Agenten, Skills und Ergebnisformate sind versionierbare Definitionen. Maschinen, konkrete Repository-Zuordnungen, Konten und Secrets werden zentral gebunden. Ein Run hält seine wirksame Konfiguration fest; ein späteres Bearbeiten einer Vorlage verändert ihn nicht rückwirkend. Factory as Code ist verbindliches Produktziel: eine kanonische versionierte Definition mit Import/Export und später Git-Synchronisation. Für diese Umsetzung ist ein separates Definitions-Repository die verbindliche Quelle; UI-Verwaltung verwendet dasselbe Schema und darf keinen zweiten dauerhaften Owner bilden.
 6. **Menschen können während der Ausführung eingreifen.** Zusätzliche Anweisungen, Antworten auf Rückfragen, Pausen und Freigaben werden dem richtigen Auftrag und Step zugeordnet. Ein neuer Kommentar muss nicht automatisch den gesamten Workflow neu starten. Bereits ausgeführte Aktionen bleiben historisch sichtbar; Änderungen an Umfang oder Ausgabe können eine neue Freigabe erforderlich machen.
 7. **Der bestehende Arbeitsort bleibt nutzbar.** Bei extern ausgelösten Aufträgen bleibt das Ticket der menschliche Bezugspunkt für Ziel, Klärungen und kompakte Ergebnislinks. T3 hält die detaillierte Ausführung und Bedienung bereit. Manuelle Aufträge dürfen vollständig in T3 leben; ein künstliches GitHub-Issue oder zusätzliches Kontext-Repository ist nicht erforderlich. Synchronisation erzeugt keine zweite konkurrierende Ticket-Wahrheit.
 8. **Lückenlose Verknüpfung der aufgezeichneten Ergebnisse.** Vom Auftrag führt der Weg zu Workflow-Version, Run, Step, Agent, Maschine/Sandbox, Repository, Commit, Review, Test und PR. Nach dem Ende einer Sandbox bleiben diese Nachweise zugänglich. Jeder Step liefert explizite, prüfbare Artefakte für seine Nachfolger.
@@ -112,13 +112,25 @@ Die folgende Liste ist ein Zielumfang mit Abgleich zum bisherigen Plan, keine Be
 
 ### 3.3 Factory as Code als gemeinsame Konfigurationsquelle
 
-Vorgesehen ist ein eigenes versioniertes Foundry-Schema mit einer `factory.yaml` als Einstieg, referenzierten Workflow-Dateien sowie Markdown-Agenten/Skills. Runner-, Scorer- und Benchmark-Definitionen kommen mit ihren Fähigkeiten hinzu. Das ist eine Formatentscheidung für P47, kein Versprechen der Kompatibilität mit Warp-Dateien. Die frühere Factory-as-Code-Implementierung des Betreibers ist eine mögliche Referenz; ihr Code und Format wurden in diesem Abgleich nicht untersucht und werden nicht als wiederverwendbar vorausgesetzt.
+Das versionierte Foundry-Schema verwendet `factory.yaml` als Einstieg. V1/v2/v3 bleiben mit ihrer bisherigen Semantik erhalten. Das für Linux/Codex und Web nativ abgenommene [modulare Modell v4](https://github.com/niklaskastning/foundry-definitions/blob/main/docs/definition-model.md) registriert Workflow- und Agenten-YAMLs, vollständige Standard-Skillordner mit `SKILL.md` sowie einzelne MCP-YAMLs. Runner-, Scorer- und Benchmark-Definitionen kommen erst mit ihren Fähigkeiten hinzu. Das ist eine Formatentscheidung für P47, kein Versprechen der Kompatibilität mit Warp-Dateien. Die frühere Factory-as-Code-Implementierung des Betreibers ist eine mögliche Referenz; ihr Code und Format wurden in diesem Abgleich nicht untersucht und werden nicht als wiederverwendbar vorausgesetzt.
 
-Zwei Verwaltungsarten teilen denselben Validator: **in Foundry verwaltet** mit Formularen/Dateiansicht und exportierbaren Revisionen; **in Git verwaltet** mit Repository, Pfad, Branch und angeheftetem Commit. Im Git-Modus sind wirksame Konfigurationsfelder in der UI schreibgeschützt; Änderungen erfolgen per PR. Ein späterer UI-PR-Editor darf dasselbe Verfahren nutzen, aber keine zweite unabhängige Konfiguration erzeugen. Der Wechsel des Owners erfolgt explizit mit Versionsabgleich.
+Auf Maintainerwunsch liegen Factory-Definitionen, Workflows und versionierte Agenten/Skills im privaten Repository [niklaskastning/foundry-definitions](https://github.com/niklaskastning/foundry-definitions), getrennt von Foundry-Appcode und den bearbeiteten Code-Repositories. PostgreSQL hält aktivierte unveränderliche Snapshots, Herkunft und Laufhistorie. Der manuelle Datei-Import/Export dient der expliziten Erstübernahme mit Driftabgleich. Git-Synchronisierung und Aktivierung sind getrennte Schritte; erst die Aktivierung einer geprüften Revision überträgt die dauerhafte Ownership.
 
-Die Aktivierung prüft Schema, Referenzen, Fähigkeiten und zulässige Bindings und veröffentlicht genau einen konsistenten Snapshot. Ungültige Revisionen bleiben sichtbar abgewiesen, die letzte gültige Version aktiv. Gleichzeitige Änderungen benötigen eine erwartete Basisversion. Laufende Runs behalten ihren Snapshot. Rollback aktiviert eine frühere Definition für neue Starts und setzt weder Datenbankmigrationen noch externe Aktionen zurück.
+Das GitHub-Definitionsrepository ist der einzige dauerhafte Owner. Menschen und autorisierte Agenten lesen dieselben Dateien und schlagen Änderungen über Commits und PRs dort vor. Die App ist die Lese-, Prüf- und Bedienoberfläche für diese Definitionen; sie zeigt Repository, Pfad, Branch, konkreten Commit und aktive Revision. Ein späterer UI-Editor darf ausschließlich Änderungen/PRs im Definitionsrepository vorbereiten. Der bestehende manuelle P47/P21-Editor ist ein Entwicklungs-/Importübergang, kein zweiter dauerhafter Verwaltungsmodus. P48 übernimmt vorhandene Testdefinitionen mit explizitem Versions-/Driftabgleich und beendet für Git-gebundene Factories die direkte lokale Definitionsbearbeitung.
+
+In der App konfigurierbar bleiben Betriebsbindungen und Entscheidungen: zugeordnete Worker/Checkouts, Credential- und Grant-Bindings, ausdrückliche Trigger-Aktivierung oder Pause, Freigaben und Run-Steuerung. Diese Einstellungen überschreiben keine Workflow-Schritte, Prompts, Skills oder Evaluationskriterien aus Git. Spätere Agentenverbesserungen verwenden Beobachtungen und Evals als Belege für einen PR im Definitionsrepository (P57); Merge und Aktivierung folgen weiterhin menschlicher Prüfung und P48.
+
+Die Aktivierung prüft Schema, Referenzen und zulässigen Definitionsscope und veröffentlicht genau einen konsistenten Snapshot. Tatsächliche Worker-/Modellfähigkeiten und aktuelle Ressourcenfreigaben werden beim Start zusätzlich geprüft; ein gültiger Snapshot garantiert deren Verfügbarkeit nicht. Ungültige Revisionen bleiben sichtbar abgewiesen, die letzte gültige Version aktiv. Gleichzeitige Änderungen benötigen eine erwartete Basisversion. Laufende Runs behalten ihren Snapshot. Rollback aktiviert eine frühere Definition für neue Starts und setzt weder Datenbankmigrationen noch externe Aktionen zurück.
 
 Logische Repository-, Runner-, MCP- und Secret-Referenzen stehen in der Definition; konkrete Device-Pfade und Credential-Werte bleiben getrennte Instanzbindungen. Git-Inhalte dürfen keine Rechte erzeugen. Import validiert Pfade, Größen, referenzierte Dateien und unterstützte Schema-Versionen; Definitionen führen auf Main keinen Code aus. Spätere Ressourcen werden capability-gesteuert ergänzt, unbekannte erforderliche Ressourcen nicht stillschweigend ignoriert.
+
+V4 pinnt den vollständigen referenzierten Dateibaum einschließlich Inhaltsbytes, SHA-256 und Git-Ausführbarkeitsmodus. Der explizite Migrationsexport verändert weder aktive Factories noch alte Runs. Agentenressourcen werden additiv in der Reihenfolge Basisagent → Workflow → Step aufgelöst; die konkrete Aufgabe folgt zuletzt. Ausführungseinstellungen erben feldweise Factory → Agent → Workflow → Step. Herkunft und wirksame Konfiguration bleiben am Attempt nachvollziehbar, ohne Secrets im Snapshot.
+
+Der Codex-Adapter stellt Standard-Skills als Dateien bereit und prüft MCP-Toolrechte gegen Factory-begrenzte, versionierte Betriebsbindungen sowie das reale Providerinventar. Andere Provider und weitere HTTP-Authentifizierungsverfahren sind damit nicht unterstützt; HTTP-Auth ist zunächst auf autorisierte Bearer-Referenzen begrenzt. Deklarationen erzeugen keine Grants. Fehlerhafte oder nicht technisch durchsetzbare Fähigkeiten verhindern den Start. Diese Ressourcenbereitstellung ist keine Sandboxplattform.
+
+V4 ergänzt den vorhandenen PostgreSQL-Scheduler um persistente Scope-, Condition-, Resultat- und Iterationszustände; lokales T3-SQLite bleibt getrennt. Technisches Retry zählt als erneuter physischer Start, ein Review/Fix-Durchlauf als neue Iteration mit gespeichertem Feedback und Checkpoint. Auch `test` benötigt im aktuellen Workerpfad einen Agentenslot und zählt gegen das dauerhafte Startbudget. Container reservieren keine Slots, Resultatjoins mergen keinen Code und die Freigabe von Kapazität wartet auf Writer-Ende/Fencing. Pollende Runansichten laden kompakte Node-Seiten; vollständige Ressourcen und Resultate werden gezielt angefordert. Der Linux/Codex-/Web-Pfad ist nativ abgenommen; Aktivierung bleibt ausdrücklich und an passende Workerfähigkeiten sowie Ressourcenfreigaben gebunden. Windows-Nativ und öffentliches SSO behalten separate offene Gates, Mobile bleibt zurückgestellt. Die konkreten Nachweise und der geprüfte Build stehen im Umsetzungsplan.
+
+Strukturierte Resultatschemas begrenzen Form und erlaubte Werte, bestätigen aber nicht die Wahrheit einer Modellaussage über Dateiarbeit. Ein erfolgreicher technischer Attempt kann deshalb keine objektive Prüfung ersetzen. Checkpoints und gebundene Prüfungen müssen die für Freigabe oder Veröffentlichung entscheidenden Dateieigenschaften belegen; die native v4-Abnahme prüft diese getrennt von den zurückgegebenen JSON-Resultaten.
 
 ## 4. Zielarchitektur und Verantwortlichkeiten
 
@@ -170,9 +182,11 @@ Der Preis dieser Entscheidung ist zusätzlicher Startaufwand und ein neuer Archi
 
 ### 4.4 Persistenz und Transport
 
-Die Main Node besitzt Definitionen, Trigger-Inbox, Run-/Step-Zustände, Dispatch-Outbox und Artefaktverweise. Dauerhafte Worker besitzen ihre Thread-Ereignisse. Bei kurzlebigen Umgebungen werden diese Ereignisse zusätzlich fortlaufend zur Main Node übertragen und dort als Archiv gespeichert.
+Die Main Node besitzt Definitionen, Trigger-Inbox, Run-/Step-Zustände, Dispatch-Outbox sowie beständige Thread-Archive und Artefakte. Für alle über Foundry verwalteten Threads auf dauerhaften Workern und kurzlebigen Sandboxes werden Ereignisse fortlaufend mit bestätigtem Cursor zentral gesichert. Das lokale T3-Environment bleibt Owner der laufenden Ausführung und seiner SQLite-Daten; die zentrale Archivkopie erhält dessen Herkunft und Sequenz. Unabhängige persönliche T3-Threads werden nicht automatisch übernommen.
 
 Zunächst läuft PostgreSQL auf der VPS mit persistentem Volume und zwei logischen Datenbanken: `fork_automation` und `fork_connect`. Letzterer bestehender Name wird für Instanzverwaltung beibehalten, ohne Upstreams Relay-Schema zu übernehmen. Die Automation-Steuerung greift über einen begrenzten lokalen Connection-Pool zu; der Instanz-Service über einen eigenen lokalen Pool. Ausführungsmaschinen verwenden authentifizierte APIs und erhalten keine zentrale Datenbankverbindung. Große Transkripte, Anhänge, Git-Bundles und Testergebnisse liegen in einem getrennten Blob-Speicher: anfangs ein dauerhaftes Verzeichnis, später bei Bedarf Object Storage.
+
+Die zentrale Sicherung entsteht vor dem ersten Workflow-MVP mit P38a/P38b, nicht erst beim Sandbox-Cleanup. Thread- und Attachment-Referenzen bleiben unabhängig von einer aktiven Device-Verbindung lesbar. Gerätepfade, Gateway-Tickets und Browser-Blob-URLs sind keine dauerhaften Referenzen. Ausfälle und noch nicht bestätigte Übertragung werden sichtbar ausgewiesen; bereits zentral bestätigte Daten dürfen beim Entfernen eines Devices nicht verschwinden.
 
 Innerhalb der Automation-Datenbank werden Run-Zustand und Dispatch-Outbox atomar gespeichert. Zwischen Automation und T3 gibt es bewusst keine gemeinsame Datenbanktransaktion: Eine Outbox liefert den Auftrag mit stabilem Command-Schlüssel an den T3-Adapter; dieser bestätigt beziehungsweise gleicht den vorhandenen Thread ab. Dieses Protokoll gilt lokal ebenso wie auf entfernten Workern. Es verhindert, dass der Fork direkt in Upstream-Projektionstabellen schreiben muss.
 
@@ -326,76 +340,11 @@ Ein einzelner Agent darf mehrere Repositories bearbeiten, wenn sein Step diese a
 
 Jedes Repository erhält eigene Basis-/Ergebnis-Commits, Berechtigungen und PR-Referenzen. Multi-Repo-Checkpoints müssen über ein Ergebnismanifest zusammengesetzt werden. Git unterstützt dadurch noch keine atomare Änderung über mehrere Repositories; Veröffentlichungsreihenfolge, Teilfehler und Kompensation bleiben sichtbar.
 
-### 8.3 Beispiel für die spätere Definition
+### 8.3 Späterer Multi-Repo-Ablauf im gemeinsamen Definitionsmodell
 
-Das folgende YAML ist ein **konzeptionelles Format**, noch keine existierende API. Namen in `${...}` stehen für validierte Referenzen der zukünftigen Ausdruckssprache.
+Der geplante Ablauf untersucht die ausdrücklich gebundenen Repositories, erstellt einen gemeinsamen Plan und führt Umsetzung und Prüfung je betroffenem Repository aus. Eine Freigabe bezieht sich auf die konkreten Ergebnis-Checkpoints; die anschließenden Veröffentlichungen behalten getrennte Repository- und PR-Identitäten. Teilfehler und bereits erfolgte Veröffentlichungen bleiben nachvollziehbar.
 
-```yaml
-name: ticket-to-reviewed-changes
-version: 1
-inputSchema: ticket-with-repository-set-v1
-
-execution:
-  environment: build-machine-01
-  isolation: container
-  workspaceLifetime: per-repository-per-run
-  maxParallel: 4
-
-steps:
-  - id: investigate
-    type: agent
-    forEach: "${input.repositories}"
-    itemKey: repositoryId
-    agent: investigator@3
-    repository: "${item.repositoryId}"
-    instructions: "Prüfe die Betroffenheit anhand des Tickets."
-    outputSchema: repository-impact-v1
-
-  - id: plan
-    type: agent
-    needs: [investigate]
-    join: all-succeeded
-    agent: planner@2
-    inputs:
-      impacts: "${steps.investigate.outputs}"
-    outputSchema: cross-repository-plan-v1
-
-  - id: implement
-    type: agent
-    needs: [plan]
-    forEach: "${steps.plan.output.affectedRepositories}"
-    itemKey: repositoryId
-    agent: implementer@5
-    repository: "${item.repositoryId}"
-    inputs:
-      plan: "${steps.plan.output}"
-    outputSchema: repository-change-v1
-
-  - id: verify
-    type: script
-    needs: [implement]
-    forEach: "${steps.implement.outputs}"
-    itemKey: repositoryId
-    repository: "${item.repositoryId}"
-    revision: "${item.revision}"
-    commandRef: approved-repository-checks@1
-
-  - id: approve
-    type: approval
-    needs: [verify]
-    join: all-succeeded
-    subject: "${steps.implement.outputs}"
-
-  - id: publish
-    type: connector-action
-    needs: [approve]
-    forEach: "${steps.implement.outputs}"
-    itemKey: repositoryId
-    action: source-control.open-pull-request
-    input: "${item}"
-```
-
-`commandRef` wird pro Repository auf einen freigegebenen Befehl aufgelöst. Die Definition enthält weder Access Tokens noch frei evaluierbaren Backend-Code. Die tatsächlichen Commits und Hashes werden im Run-Snapshot gespeichert.
+Das wird später als ausdrückliche Erweiterung des gemeinsamen v4-Modells spezifiziert. V4 liefert heute endliche deklarierte Gruppen und genau eine gepinnte Repositorybasis pro Run; dynamisches Repository-Fan-out, Multi-Repo-Workspaces und ein gemeinsames Ergebnismanifest sind damit nicht zugesagt. Es gibt dafür keine zweite YAML-DSL oder zusätzliche Template-Ausdruckssprache. Gebundene Prüfungen, Betriebsberechtigungen und Secret-Referenzen bleiben getrennt von der Definition; konkrete Commits und Hashes gehören in den Run-Snapshot.
 
 ## 9. Identitäten und Berechtigungen
 
@@ -428,7 +377,7 @@ Jira erhält eine separate Verbindung mit passenden Projekt-/Ticket-Rechten und 
 
 ### 9.4 Codex, Claude und Subscription-Nutzung
 
-Foundry-Anmeldung, Cloudflare-Zugang und Provider-Anmeldung sind verschiedene Vorgänge. Ein Device kann online sein, obwohl Codex fehlt oder sein Konto abgelaufen ist; `online`, `providerReady` und `capacityAvailable` werden separat angezeigt. Für die erste Version bleiben Agent-Provider-Konten auf dem ausgewählten dauerhaften T3-Environment. Dadurch funktionieren die bestehenden Anmelde- und Nutzungsanzeigen weiter. Ein Agent-Profil referenziert eine logische Kontobindung; der Worker löst sie in eine dort autorisierte Provider-Instanz auf.
+Foundry-Anmeldung, Cloudflare-Zugang und Provider-Anmeldung sind verschiedene Vorgänge. Ein Device kann online sein, obwohl Codex fehlt oder sein Konto abgelaufen ist; `online`, `providerReady` und `capacityAvailable` werden separat angezeigt. Für den begrenzten G3-Nachweis bleiben Agent-Provider-Konten zunächst auf dem ausgewählten dauerhaften T3-Environment. Das ist ein Übergangsweg. Produktziel ist die einmalige zentrale Einrichtung von Verbindungen in Foundry: Modellprovider wie Codex/OpenAI und Claude, Source Control wie GitHub und Azure DevOps sowie später MCP-Server/Tools. Autorisierte dauerhafte Devices und kurzlebige Sandboxes erhalten daraus freigegebene Laufzeitbindungen ohne jeweils eigene manuelle Anmeldung. Foundry verwaltet Auswahl, Erneuerung, Entzug und nötige Wiederanmeldung zentral; die sichere Auslieferung erfolgt je unterstütztem Provider-Adapter. Ein Agent-Profil referenziert eine logische Kontobindung; der Worker löst sie in eine autorisierte Provider-Instanz auf. Device-Enrollment allein gewährt keine Provider-/Repository-/MCP-Rechte. [P14Z im Umsetzungsplan](implementation-plan.md#p14z--zentrale-kontoverbindungen) besitzt die schrittweise Umsetzung; diese zentrale Weitergabe ist noch nicht implementiert.
 
 Codex dokumentiert ChatGPT-Anmeldung für Subscription-Zugriff sowie separate API-Key-Anmeldung. Headless-Anmeldung ist vorgesehen. Das belegt aber keine unbegrenzte Parallelität oder beliebige Weitergabe eines persönlichen Kontos an Sandbox-Pools. Auth-Verfahren, Kontingente und tatsächliche Berechtigungen müssen für das verwendete Konto geprüft werden. [OpenAI: Codex-Authentifizierung](https://learn.chatgpt.com/docs/auth)
 
@@ -467,7 +416,11 @@ Agenten schlagen neue Einträge vor. Veröffentlichung kann je Workflow automati
 
 ### Historie nach Sandbox-Löschung
 
-Solange eine Sandbox lebt, ist ihr T3-Thread die Quelle der Ausführungshistorie. Die Main Node hält eine eindeutig als solche behandelte Archivkopie mit Herkunfts-ID und bestätigter Sequenznummer. Übertragung ist wiederholbar und lückenprüfbar; Reconnect setzt am Cursor fort. Anhänge und Artefakte bekommen eigene bestätigte Transfers.
+Solange ein Worker oder eine Sandbox lebt, ist sein T3-Thread die Quelle der Ausführungshistorie. Die Main Node hält für manuelle und Workflow-Threads innerhalb Foundrys eine eindeutig als solche behandelte Archivkopie mit Herkunfts-ID und bestätigter Sequenznummer. Manuelle Threads benötigen dafür keinen künstlichen Workflow-Run. Übertragung ist wiederholbar und lückenprüfbar; Reconnect setzt am dauerhaft bestätigten Cursor fort. Anhänge und Artefakte bekommen eigene bestätigte Transfers mit Größen- und Hashprüfung.
+
+Benutzeruploads werden zuerst unter einer beständigen Instanzreferenz in Main gespeichert, bevor eine Nachricht sie verbindlich verwendet. Der ausführende Worker erhält einen begrenzten Zugriff beziehungsweise eine lokale Arbeitskopie. Vom Worker erzeugte Ergebnisse werden vor ihrer erfolgreichen Finalisierung zentral bestätigt. Zwei Clients beziehen bestätigte Anhänge über Main; die Originalmaschine und der Browser des Uploaders müssen dafür nicht online bleiben. Beliebige Dateien im Workspace werden dadurch nicht automatisch archiviert.
+
+Der zentrale Leseweg prüft aktuelle Benutzer-/Objektrechte unabhängig vom Live-Device-Grant. Ein Device-Widerruf beendet dessen Livezugriff und weitere Übertragung, löscht aber keine bestätigte Historie des berechtigten Instanzbenutzers. Archiv- und Blob-Aufbewahrung richten sich nach ihren fachlichen Besitzern und einer expliziten Löschregel, nicht nach der Lebensdauer eines Containers. Tokens und Provider-Credentials gehören nicht in diese Archive.
 
 Vor normalem Cleanup müssen das finale Thread-Archiv, erforderliche Checkpoints/Patches, Git-Objekte, Testergebnisse und ein Abschlussmanifest bestätigt sein. Ein lokaler Git-SHA allein reicht nicht: nach Sandbox-Löschung muss auch das referenzierte Objekt verfügbar sein, etwa über einen autorisierten Remote-Ref oder ein gespeichertes Git-Bundle.
 
@@ -479,28 +432,31 @@ Die Zeitleiste kann aufgezeichnete Nachrichten, Tools, Änderungen und Entscheid
 
 ## 12. Oberfläche und alle Zugangswege
 
-Die bestehende T3-Arbeitsoberfläche erhält den Bereich **Factories** neben der interaktiven Projekt-/Thread-Arbeit. „Automations“ bezeichnet darin die auslösenden Regeln und Workflows, nicht das ganze Produkt. Instanzwahl, Devices und normale Threads bleiben direkt zugänglich. Farben, Typografie, Abstände, Icons, Themes, Fokuszustände und UI-Komponenten kommen aus T3; kein zweites Design-System.
+**Factories ist die Hauptanwendung der Foundry-Instanz.** Home, Standardstart, neue Tabs und der Einstieg nach Anmeldung führen bei vorhandener Automation-Capability zur Factory-Arbeit. Die globale Navigation priorisiert Factories, Arbeit und Entscheidungen; Runs und Ressourcen sind nachgeordnet. Chats bleiben als Arbeitsdetails eines Auftrags sowie über einen sekundären Einstieg erreichbar. Direkte Threadlinks, Tastaturbefehle und standalone T3 ohne Foundry-Fähigkeit bleiben erhalten. Capability-/Auth-Laden zeigt keinen vorläufigen Chatstart; die Entscheidung folgt dem bestehenden Instanzmodell, keiner Deployment-URL. Workflows beschreiben den Ablauf; Trigger bestimmen, wann neue Arbeit eingeht. Farben, Typografie, Icons, Themes, Fokuszustände und UI-Komponenten kommen aus T3; kein zweites Design-System.
+
+Der Factories-first-Einstieg aus PR #67 ist funktional geliefert; die v4-Ausführung aus PR #72 ist für Linux/Codex und Web funktional abgenommen. Eine Nutzer-Designabnahme folgt daraus nicht. Die erneute P49b-Überarbeitung ist in [PR #74](https://github.com/niklaskastning/foundry/pull/74) implementiert und automatisiert, im integrierten Browserpass und unabhängig geprüft. Der PR führt die Auslieferungsnachweise; die menschliche Designabnahme bleibt ausdrücklich offen.
 
 Die Aufteilung orientiert sich an der [Warp-Dashboard-Dokumentation](https://docs.warp.dev/factories/factory-dashboard/) und ihren Agenten-/Dashboard-Screenshots. Geprüft wurden die öffentlich dokumentierten Ansichten, kein angemeldeter Live-Account. Die folgende Navigation ist unser Zielentwurf, keine exakte Abschrift der aktuellen Warp-App.
 
-| Ebene / Seite                 | Inhalt und wichtigste Wege                                                                                                                                                                    |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Global: Neuer Auftrag         | Factory und Auftrag wählen; normale T3-Konversation bleibt eigener Einstieg. Koordinator erst anzeigen, wenn verfügbar.                                                                       |
-| Global: Inbox                 | Handlungsbedarf über alle Factories; filterbare Liste und seitliches Detailpanel. Direkt antworten, konkrete Revision prüfen oder zum Auftrag/Thread wechseln.                                |
-| Global: Runs                  | Filter nach Factory, Auftrag, Zustand, Agent und Device; paginierte Übersicht. WorkflowRun → Step/Attempt → bestehender T3-Thread.                                                            |
-| Global: Ressourcen            | Devices/Worker/Pools, MCPs/Apps, Secrets und Connector-Verbindungen einmal verwalten; Factories erhalten ausdrückliche Bindings darauf.                                                       |
-| Factory: Dashboard            | Überblick, offene Entscheidungen, PR-Aktivität, Durchlaufzeit, Qualität und Kosten mit Zeitraum und Links zu den zugrunde liegenden Runs.                                                     |
-| Factory: Aufträge / Aktivität | Beständige WorkItems mit Quelle, Phase, Blockern, Revisionen und Ergebnis-PRs; Detail zeigt Gespräch, Spezifikation und Ausführungshistorie.                                                  |
-| Factory: Agenten              | Koordinator und Rollen als Liste; Detail mit Instruktionen, Automationen, Einstellungen und Versionen. Defaults und wirksame Overrides verständlich anzeigen.                                 |
-| Factory: Automationen         | Triggerliste mit Aktivierungsstatus; Detail für Quelle, Filter, Workflow, Dry Run und Zustellhistorie. Tabs für Workflows und später Webhooks; Workflow-Editor zunächst geordnete Step-Liste. |
-| Factory: Runs                 | Dieselbe globale Run-Ansicht mit festem Factory-Filter; keine zweite Ausführungsverwaltung. Detail mit Timeline, Attempts, Artefakten, Tests, Kosten und Thread-Einstieg.                     |
-| Factory: Qualität             | Scorers, Benchmarks und Verbesserungsvorschläge als eigene Unterseiten. Von Aggregaten bis zu Bewertungsbeleg, Trial oder Änderungs-PR navigieren.                                            |
-| Factory: Definition           | Dateibaum, Validierungsfehler, Versionsdiff, Quelle und aktive Revision. Im Git-Modus lesbar mit Repository-/PR-Link; im Foundry-Modus bearbeitbar.                                           |
-| Factory: Einstellungen        | Name, Repository-Menge, Default-Runner, Bindings, Limits und Archivierung/Wiederherstellung. Historische Runs bleiben nachvollziehbar.                                                        |
+| Ebene / Seite                 | Inhalt und wichtigste Wege                                                                                                                                                                                              |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Global: Factories / Arbeit    | Factories auswählen und als Arbeitsplatz öffnen; Arbeit führt zur passenden Factory und deren Aufträgen. Neue Aufträge im Factory-Kontext anlegen.                                                                      |
+| Global: Entscheidungen        | Persönliche Inbox mit Handlungsbedarf über alle Factories; Kontext, Ergebnis und nächste Aktion zuerst. Direkt antworten, konkrete Revision prüfen oder zum Auftrag wechseln.                                           |
+| Global: Runs                  | Filter nach Factory, Auftrag, Zustand, Agent und Device; paginierte Übersicht. WorkflowRun → Step/Attempt → bestehender T3-Thread.                                                                                      |
+| Global: Ressourcen            | Devices/Worker/Pools, MCPs/Apps, Secrets und Connector-Verbindungen einmal verwalten; Factories erhalten ausdrückliche Bindings darauf.                                                                                 |
+| Factory: Übersicht            | Offene Entscheidungen, Arbeit, aktive Ausführung und jüngste Ergebnisse zuerst. PR-/Qualitäts-/Kostenmetriken erst mit belegten Daten und ihrer eigenen Ausbaustufe.                                                    |
+| Factory: Aufträge / Aktivität | Beständige WorkItems mit Quelle, Phase, Blockern, Revisionen und Ergebnis-PRs; Detail zeigt Gespräch, Spezifikation und Ausführungshistorie.                                                                            |
+| Factory: Agenten              | Benannte Rollen mit Aufgabe, Modell und Skills/MCP; Instruktionen und Ressourcenherkunft als Details. Grundkonfiguration, Workflow-/Step-Erweiterungen und gepinnte Run-Konfiguration bleiben unterscheidbar.           |
+| Factory: Workflows            | Eigener Tab für den Ablauf: Schritte, Abhängigkeiten, parallele Zweige, Join und begrenzte Review/Fix-Runden. Kompakter Ablaufbaum ohne Pflicht zu einem freien Canvas; effektive Einstellungen pro Schritt zugänglich. |
+| Factory: Trigger              | Quelle, Aktivierungsstatus, Zeitplan oder Filter und Zustellhistorie. Unbeaufsichtigte Ausführung wird ausdrücklich autorisiert; ihre gepinnte Definition bleibt sichtbar.                                              |
+| Factory: Runs                 | Dieselbe globale Run-Ansicht mit festem Factory-Filter; keine zweite Ausführungsverwaltung. Detail mit Timeline, Attempts, Artefakten, Tests, Kosten und Thread-Einstieg.                                               |
+| Factory: Qualität             | Scorers, Benchmarks und Verbesserungsvorschläge als eigene Unterseiten. Von Aggregaten bis zu Bewertungsbeleg, Trial oder Änderungs-PR navigieren.                                                                      |
+| Factory: Definition           | Dateibaum, Validierungsfehler, Versionsdiff, Quelle und aktive Revision. Definition aus Git lesbar mit Repository-/PR-Link; lokale Bearbeitung nur als dokumentierter Importübergang vor der Git-Übernahme.             |
+| Factory: Einstellungen        | Name, Repository-Menge, Default-Runner, Bindings, Limits und Archivierung/Wiederherstellung. Historische Runs bleiben nachvollziehbar.                                                                                  |
 
-Die Sidebar trennt globale Seiten und aufklappbare Factories; Breadcrumbs machen den aktuellen Scope sichtbar. Listen erhalten Suche/Filter und kompakte Statusanzeige, Detailseiten fachliche Tabs. Ein normaler Thread kann über einen Auftragsbezug zur Factory zurückführen. Neue Seiten werden mit ihrer Backend-Capability eingeführt; noch fehlende Funktionen erzeugen keine leeren Scheinangebote.
+Eine globale Navigation und eine kontextuelle Factory-Navigation machen den Scope sichtbar; identische Leisten werden nicht im Inhalt wiederholt. Listen erhalten Suche/Filter und kompakte Statusanzeige, Detailseiten fachliche Tabs. Bestehende UI-Primitives tragen gemeinsame Typografie, Abstände, Statusfarben und Aktionshierarchie; große verschachtelte Karten ersetzen keine Informationsordnung. Primäraktion und Ergebnis bleiben auch auf schmaler Breite erreichbar, ebenso Fokus, Labels und Rückmeldung bei Laden, Fehlern, Offlinezustand oder fehlenden Rechten. URL und History erhalten Factory, Auftrag, Run und Filter. Ein auftragsbezogener Thread führt in denselben Kontext zurück. Auftragslebenszyklus, Run-Steuerung und Inbox-Done/Undo bleiben fachlich getrennt. Neue Seiten werden mit ihrer Backend-Capability eingeführt; noch fehlende Funktionen erzeugen keine leeren Scheinangebote.
 
-Ein Run zeigt Trigger-Herkunft, Factory-/Workflow-Version, Repository-Menge, Step-Zustände, Versuche, Maschinen, Wartegründe und Ergebnisse. Von jedem Agent-Step führt ein Link in den vorhandenen Thread oder dessen Archiv. Ausgabe-Revision und zugehörige Freigabe bleiben sichtbar. Inbox-Lese-/Erledigtzustand verändert keine fachlichen Freigaben; veraltete Fragen verschwinden durch Abgleich mit ihrem Owner. Zurückgewiesene Spezifikationen bleiben überarbeitbar.
+Ein Run stellt aktuellen Fortschritt, belegtes Ergebnis und nächste Handlung vor technische Details. Swarmzweige und fachliche Review/Fix-Runden bleiben geordnet und von technischen Retries getrennt; fehlgeschlagen, übersprungen und blockiert sind keine Erfolgszustände. Trigger-Herkunft, gepinnte Factory-/Workflow-Version, wirksame Agenten-/Skill-/MCP-Konfiguration, tatsächlicher Worker und Checkpoint bleiben als Details zugänglich. Von jedem Agent-Step führt ein Link in den vorhandenen Thread oder dessen Archiv. Ausgabe-Revision und zugehörige Freigabe bleiben sichtbar. Inbox-Lese-/Erledigtzustand verändert keine fachlichen Freigaben; veraltete Fragen verschwinden durch Abgleich mit ihrem Owner. Zurückgewiesene Spezifikationen bleiben überarbeitbar.
 
 Die Übersicht lädt nur Zusammenfassungen. Transkripte, Diffs und Tool-Ausgaben werden beim Öffnen eines Steps paginiert geladen. Live-Updates sind auf sichtbare Runs begrenzt; ein Run mit hundert Agenten darf keine hundert vollständigen Chatverläufe an jeden Client senden.
 
@@ -605,7 +561,7 @@ Web-Frontend und Backend des Forks werden über eigene Deployments bereitgestell
 
 ## 14. Umsetzungsreihenfolge und Abnahmen
 
-Die PR-großen Arbeitspakete, ihre Abhängigkeiten und verbindlichen Prüfgates stehen ausschließlich im [Umsetzungsplan](implementation-plan.md). Die fachlichen Verträge dieses Dokuments bleiben dabei maßgeblich. Prüfungen an Feature-Grenzen und Betriebsvoraussetzungen dürfen nicht mit dem Merge eines Einzel-PRs als erledigt gelten.
+Die Features und ihre Reihenfolge stehen im [Umsetzungsplan](implementation-plan.md); technische Voraussetzungen, Sicherheits- und Betriebsprüfgates stehen separat in [Basic-Leitplanken](basic-leitplanken.md). Die fachlichen Verträge dieses Dokuments bleiben dabei maßgeblich. Prüfungen an Feature-Grenzen und Betriebsvoraussetzungen dürfen nicht mit dem Merge eines Einzel-PRs als erledigt gelten.
 
 ## 15. Tests und Betrieb
 
@@ -653,7 +609,7 @@ Für die erste Implementierung gelten folgende bewusst begrenzte Defaults; echte
 
 | Risiko                                                            | Behandlung / Nachweis vor Freigabe                                                                                                                                                                                         |
 | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Eine URL suggeriert fertige Connect-Kompatibilität                | Neues Instanzprotokoll und Gateway explizit; unveränderte T3-Clients/-Worker nicht als kompatibel ausgeben. Transport-Gate G2 im Umsetzungsplan prüft alle benötigten Pfade                                                |
+| Eine URL suggeriert fertige Connect-Kompatibilität                | Neues Instanzprotokoll und Gateway explizit; unveränderte T3-Clients/-Worker nicht als kompatibel ausgeben. Transport-Gate G2 im Leitplanken-Plan prüft alle benötigten Pfade                                              |
 | Gateway wird Engpass und gemeinsamer Ausfallpunkt                 | Bounded Buffers, Backpressure, getrennte Steuer-/Datenkanäle und Ressourcenlimits. Main-Ausfall trennt Instanzzugriff; Worker protokollieren lokal und gleichen Receipts ab                                                |
 | Access-Login funktioniert nur im Browser                          | Windows-Login, Cookie-/Transportkontext, Ablauf und Reconnect vor weiteren Features real prüfen. Details und zulässiger Alternativweg in Deployment-Abschnitt 3                                                            |
 | Widerruf erreicht einen offline arbeitenden Agenten nicht         | Neue Zugriffe/Dispatches sofort sperren, aktive Gateway-Sessions schließen. Lokale Lease-Regel stoppt verwaltete Arbeit; bereits verteilte externe Tokens benötigen Ablauf/Widerruf. Kein behaupteter sofortiger Fern-Kill |

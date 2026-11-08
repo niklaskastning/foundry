@@ -2,6 +2,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { FoundryOnboarding } from "@t3tools/client-runtime/connection";
 import { executeInstanceOperation } from "./onboarding";
 import { readDeviceSelection, writeDeviceSelection } from "./selection";
+import { hasConfirmedAutomationView, requiresFactoryPairing } from "./pageMode";
 
 it("keeps Main discovery when managing sign-in without a selected device, but preserves explicit disconnection", () => {
   const key = "foundry:selected-device:v1";
@@ -53,6 +54,21 @@ it("serializes shared-cookie refresh and removal across independent callers", as
     auth: { bootstrapMethods: ["one-time-token"], sessionMethods: ["browser-session-cookie"] },
   };
   const binding = FoundryOnboarding.verifyDescriptor(descriptor, window.location.origin).binding;
+  const inspected = { binding, confirmed: false, session: null, message: "Inspected" };
+  for (const view of ["factories", "work", "runs", "inbox", "resources"]) {
+    expect(hasConfirmedAutomationView(view, inspected)).toBe(false);
+    expect(hasConfirmedAutomationView(view, { ...inspected, confirmed: true })).toBe(true);
+    expect(requiresFactoryPairing(view, inspected, "unauthenticated")).toBe(false);
+    expect(requiresFactoryPairing(view, { ...inspected, confirmed: true }, "unauthenticated")).toBe(
+      true,
+    );
+    expect(requiresFactoryPairing(view, { ...inspected, confirmed: true }, "authenticated")).toBe(
+      false,
+    );
+  }
+  expect(
+    requiresFactoryPairing("instance", { ...inspected, confirmed: true }, "unauthenticated"),
+  ).toBe(false);
   localStorage.setItem(key, JSON.stringify(binding));
   const entered = deferred();
   const release = deferred();
@@ -97,4 +113,32 @@ it("serializes shared-cookie refresh and removal across independent callers", as
   expect((await remove).binding).toBeNull();
   expect(revoked).toEqual(["after-refresh"]);
   expect(localStorage.getItem(key)).toBeNull();
+});
+
+it("bounds waiting for another tab without stealing its session lock", async () => {
+  const entered = deferred();
+  const release = deferred();
+  const holder = navigator.locks.request("foundry:instance-session:v1", async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  const deadline = new AbortController();
+  using timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+  using request = vi.spyOn(window, "fetch");
+  const operation = executeInstanceOperation({ operation: "inspect" });
+  const settled = operation.catch((error: unknown) => error);
+  await using _settle = {
+    [Symbol.asyncDispose]: async () => {
+      release.resolve();
+      await Promise.allSettled([holder, settled]);
+    },
+  };
+  expect(timeout).toHaveBeenCalledWith(15000);
+  deadline.abort(new DOMException("Timed out", "TimeoutError"));
+  expect(await settled).toMatchObject({ code: "coordination_busy" });
+  expect(request).not.toHaveBeenCalled();
+  const locks = await navigator.locks.query();
+  expect(locks.held?.some((lock) => lock.name === "foundry:instance-session:v1")).toBe(true);
+  expect(locks.pending?.some((lock) => lock.name === "foundry:instance-session:v1")).toBe(false);
 });

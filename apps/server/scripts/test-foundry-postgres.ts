@@ -1,6 +1,9 @@
 import { verifyGateway } from "./foundry-gateway-integration.ts";
 import * as Schema from "effect/Schema";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Option from "effect/Option";
+import * as AutomationDatabase from "../src/automation/AutomationDatabase.ts";
+import * as AutomationMigrations from "../src/automation/AutomationMigrations.ts";
 import * as FoundryRuntime from "../src/foundry/Runtime.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- This standalone integration harness owns its temporary PostgreSQL child and filesystem.
 // @effect-diagnostics globalProcess:off -- The harness accepts a PostgreSQL binary directory, never connection credentials.
@@ -19,6 +22,7 @@ import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import * as AccessConfig from "../src/foundry/AccessConfig.ts";
 import * as AccessVerifier from "../src/foundry/AccessVerifier.ts";
 import * as FoundrySessions from "../src/foundry/FoundrySessions.ts";
+import * as MachineCredentials from "../src/foundry/MachineCredentials.ts";
 import * as AuthHttp from "../src/foundry/authHttp.ts";
 import * as InstanceOperator from "../src/foundry/InstanceOperator.ts";
 import { FoundrySession, FoundryDescriptor } from "@t3tools/contracts";
@@ -257,7 +261,7 @@ try {
     await query("UPDATE foundry_instance.schema_version SET version=99", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 503);
     await expectFailure(migrate());
-    await query("UPDATE foundry_instance.schema_version SET version=5", "foundry_migrate");
+    await query("UPDATE foundry_instance.schema_version SET version=8", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 200);
     await query("GRANT CREATE ON SCHEMA public TO foundry_runtime");
     NodeAssert.equal((await ready()).status, 503);
@@ -369,7 +373,7 @@ try {
     await expectFailure(bind("foreign-operator"));
     const operatorBefore = await query("SELECT * FROM foundry_instance.operator_binding");
     await query(
-      "DROP TABLE foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
+      "DROP TABLE foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
       "foundry_migrate",
     );
     await query("DROP TABLE foundry_instance.sessions", "foundry_migrate");
@@ -596,7 +600,7 @@ try {
     "SELECT * FROM foundry_instance.sessions ORDER BY token_hash",
   );
   await query(
-    "DROP TABLE foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
+    "DROP TABLE foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
     "foundry_migrate",
   );
   await query("UPDATE foundry_instance.schema_version SET version=2", "foundry_migrate");
@@ -701,7 +705,10 @@ try {
       "ALTER TABLE foundry_instance.devices DROP COLUMN channel_generation",
       "foundry_migrate",
     );
-    await query("DROP TABLE foundry_instance.device_grants", "foundry_migrate");
+    await query(
+      "DROP TABLE foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants",
+      "foundry_migrate",
+    );
     await query("UPDATE foundry_instance.schema_version SET version=3", "foundry_migrate");
     await expectFailure(readIdentity);
     await run(Effect.all([migrate(), migrate()], { concurrency: "unbounded" }));
@@ -722,6 +729,7 @@ try {
         environmentId: registered.environmentId,
         revoked: false,
         clientAccess: { enabled: true, generation: 1 },
+        automationExecution: { enabled: false, generation: 1 },
       },
     ]);
     NodeAssert.deepEqual(
@@ -753,11 +761,39 @@ try {
     await NodeAssert.rejects(
       grantCall((service) => service.update({ ...access, enabled: true }, operatorId)),
     );
-    for (const kind of ["automationExecution", "sandboxProvisioning"]) {
-      await NodeAssert.rejects(
-        grantCall((service) => service.update({ ...access, kind, enabled: true }, operatorId)),
-      );
-    }
+    await NodeAssert.rejects(
+      grantCall((service) =>
+        service.update({ ...access, kind: "sandboxProvisioning", enabled: true }, operatorId),
+      ),
+    );
+    const automation = initialGrants.find((grant) => grant.kind === "automationExecution")!;
+    const automationEnabled = await grantCall((service) =>
+      service.update({ ...automation, enabled: true }, operatorId),
+    );
+    NodeAssert.equal(automationEnabled.enabled, true);
+    NodeAssert.equal(automationEnabled.generation, automation.generation + 1);
+    await NodeAssert.rejects(
+      grantCall((service) => service.update({ ...automation, enabled: false }, operatorId)),
+    );
+    await NodeAssert.rejects(
+      grantCall((service) =>
+        service.update(
+          { ...automationEnabled, enabled: false },
+          "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        ),
+      ),
+    );
+    const automationDisabled = await grantCall((service) =>
+      service.update({ ...automationEnabled, enabled: false }, operatorId),
+    );
+    NodeAssert.equal(automationDisabled.generation, automationEnabled.generation + 1);
+    NodeAssert.equal(automationDisabled.enabled, false);
+    NodeAssert.equal(
+      (await grantCall((service) => service.read(registered.deviceId, operatorId))).find(
+        (grant) => grant.kind === "clientAccess",
+      )?.generation,
+      disabled.generation,
+    );
     const restored = await grantCall((service) =>
       service.update({ ...disabled, enabled: true }, operatorId),
     );
@@ -784,7 +820,9 @@ try {
       (await grantCall((service) => service.read(registered.deviceId, operatorId))).filter(
         (g) => g.kind !== "clientAccess",
       ),
-      initialGrants.filter((g) => g.kind !== "clientAccess"),
+      initialGrants
+        .filter((g) => g.kind !== "clientAccess")
+        .map((grant) => (grant.kind === "automationExecution" ? automationDisabled : grant)),
     );
     await report(
       "PASS P11 PostgreSQL: separated grant kinds, durable revoke/regrant generations, stale update rejection, operator isolation and idempotent migration",
@@ -877,6 +915,9 @@ try {
     const revoked = await deviceCall((registry) => registry.get(registered.deviceId));
     NodeAssert.equal(revoked.revoked, true);
     NodeAssert.equal(revoked.generation, 2);
+    await NodeAssert.rejects(
+      grantCall((service) => service.update({ ...automationDisabled, enabled: true }, operatorId)),
+    );
     NodeAssert.equal(
       (await deviceCall((registry) => registry.list(operatorId))).find(
         (device) => device.deviceId === registered.deviceId,
@@ -900,7 +941,243 @@ try {
   } finally {
     await deviceHandler.dispose();
   }
+  const machineOwner = {
+    instanceId,
+    operatorId: String(
+      (await query("SELECT operator_id FROM foundry_instance.operator_binding"))[0]!.operator_id,
+    ),
+  };
+  const machineLayer = MachineCredentials.layer.pipe(
+    Layer.provide(identityLayer),
+    Layer.provide(db("foundry_runtime")),
+    Layer.provide(NodeServices.layer),
+  );
+  const machineCall = <A, E>(
+    operation: (service: MachineCredentials.MachineCredentials["Service"]) => Effect.Effect<A, E>,
+  ) =>
+    run(
+      MachineCredentials.MachineCredentials.pipe(
+        Effect.flatMap(operation),
+        Effect.provide(machineLayer),
+        Effect.provide(testContext),
+      ),
+    );
+  const machineInput = {
+    id: "58000000-0000-4000-8000-000000000001",
+    label: "Isolated machine reader",
+    factoryIds: ["machine-factory-a", "machine-factory-b"],
+    expiresAt: now + 60_000,
+  };
+  const issuedMachines = await Promise.all(
+    Array.from({ length: 4 }, () =>
+      machineCall((service) => service.issue(machineOwner, machineInput)),
+    ),
+  );
+  NodeAssert.equal(issuedMachines.filter((result) => result.token !== null).length, 1);
+  const machineToken = issuedMachines.find((result) => result.token !== null)!.token!;
+  NodeAssert.match(machineToken, /^fmc_[A-Za-z0-9_-]{43}$/);
+  const persistedMachines = await query(
+    "SELECT row_to_json(c)::text AS serialized,token_hash FROM foundry_instance.machine_credentials c",
+  );
+  NodeAssert.equal(persistedMachines.length, 1);
+  NodeAssert.equal(JSON.stringify(persistedMachines).includes(machineToken), false);
+  NodeAssert.match(String(persistedMachines[0]!.token_hash), /^[A-Za-z0-9_-]{43}$/);
+  NodeAssert.deepEqual(await machineCall((service) => service.authenticate(machineToken)), {
+    ...machineOwner,
+    factoryIds: machineInput.factoryIds,
+    credentialId: machineInput.id,
+  });
+  NodeAssert.deepEqual(await machineCall((service) => service.list(machineOwner)), [
+    { ...machineInput, scope: "automation:read", revoked: false },
+  ]);
+  for (const changed of [
+    { label: "Changed label" },
+    { factoryIds: ["other-factory"] },
+    { expiresAt: machineInput.expiresAt + 1 },
+  ])
+    NodeAssert.equal(
+      await machineCall((service) =>
+        service.issue(machineOwner, { ...machineInput, ...changed }).pipe(
+          Effect.match({
+            onFailure: (error) => error.code,
+            onSuccess: () => "unexpected_success",
+          }),
+        ),
+      ),
+      "conflict",
+    );
+  for (const owner of [
+    { ...machineOwner, operatorId: "58000000-0000-4000-8000-000000000099" },
+    { ...machineOwner, instanceId: FoundryInstanceId.make("58000000-0000-4000-8000-000000000099") },
+  ]) {
+    await NodeAssert.rejects(machineCall((service) => service.issue(owner, machineInput)));
+    await NodeAssert.rejects(machineCall((service) => service.list(owner)));
+    await NodeAssert.rejects(machineCall((service) => service.revoke(owner, machineInput.id)));
+  }
+  for (const invalidToken of ["", "fmc_invalid", machineToken.slice(4), `fmc_${"A".repeat(43)}`])
+    await NodeAssert.rejects(machineCall((service) => service.authenticate(invalidToken)));
+  await expectFailure(
+    MachineCredentials.MachineCredentials.pipe(
+      Effect.flatMap((service) => service.authenticate(machineToken)),
+      Effect.provide(
+        MachineCredentials.layer.pipe(
+          Layer.provide(
+            Layer.succeed(InstancePostgres.InstancePostgres, {
+              readIdentity: Effect.succeed(
+                FoundryInstanceId.make("58000000-0000-4000-8000-000000000099"),
+              ),
+            }),
+          ),
+          Layer.provide(db("foundry_runtime")),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+      Effect.provide(testContext),
+    ),
+  );
+  await stop();
+  await start();
+  NodeAssert.equal(
+    (await machineCall((service) => service.authenticate(machineToken))).credentialId,
+    machineInput.id,
+  );
+  const beforeMachineExpiry = now;
+  now = machineInput.expiresAt;
+  await NodeAssert.rejects(machineCall((service) => service.authenticate(machineToken)));
+  NodeAssert.equal(
+    (await machineCall((service) => service.issue(machineOwner, machineInput))).token,
+    null,
+  );
+  now = beforeMachineExpiry;
+  await machineCall((service) => service.revoke(machineOwner, machineInput.id));
+  await machineCall((service) => service.revoke(machineOwner, machineInput.id));
+  await NodeAssert.rejects(machineCall((service) => service.authenticate(machineToken)));
+  const revokedRetry = await machineCall((service) => service.issue(machineOwner, machineInput));
+  NodeAssert.equal(revokedRetry.token, null);
+  NodeAssert.equal(revokedRetry.credential.revoked, true);
+  for (const expiresAt of [now, now - 1, now + 30 * 24 * 60 * 60 * 1000 + 1])
+    NodeAssert.equal(
+      await machineCall((service) =>
+        service
+          .issue(machineOwner, {
+            ...machineInput,
+            id: "58000000-0000-4000-8000-000000000002",
+            expiresAt,
+          })
+          .pipe(
+            Effect.match({
+              onFailure: (error) => error.code,
+              onSuccess: () => "unexpected_success",
+            }),
+          ),
+      ),
+      "invalid_input",
+    );
+  for (const [table, id] of [
+    ["instance", "58000000-0000-4000-8000-000000000002"],
+    ["operator_binding", "58000000-0000-4000-8000-000000000003"],
+  ]) {
+    const input = { ...machineInput, id: id!, expiresAt: now + 30 * 24 * 60 * 60 * 1000 };
+    const credential = await machineCall((service) => service.issue(machineOwner, input));
+    NodeAssert.ok(credential.token);
+    await machineCall((service) => service.authenticate(credential.token!));
+    await query(
+      `UPDATE foundry_instance.${table} SET access_generation=access_generation+1`,
+      "foundry_runtime",
+    );
+    await NodeAssert.rejects(machineCall((service) => service.authenticate(credential.token!)));
+    const retry = await machineCall((service) => service.issue(machineOwner, input));
+    NodeAssert.equal(retry.token, null);
+    NodeAssert.equal(retry.credential.revoked, true);
+  }
+  await query(`INSERT INTO foundry_instance.machine_credentials
+    (id,token_hash,instance_id,operator_id,instance_generation,operator_generation,label,factory_ids,expires_at,revoked)
+    SELECT ('58000000-0000-4000-8001-' || lpad(n::text,12,'0'))::uuid,'history-fixture-' || n,
+      i.instance_id,o.operator_id,i.access_generation,o.access_generation,'Historical reader','["machine-factory-a"]'::jsonb,
+      CASE WHEN n%2=0 THEN ${now - 1} ELSE ${now + 172_800_000} END,n%2=1
+    FROM foundry_instance.instance i JOIN foundry_instance.operator_binding o USING(singleton),generate_series(1,100) n`);
+  const replacementInput = {
+    ...machineInput,
+    id: "58000000-0000-4000-8000-000000000004",
+  };
+  const replacement = await machineCall((service) => service.issue(machineOwner, replacementInput));
+  NodeAssert.ok(replacement.token);
+  const visibleMachines = await machineCall((service) => service.list(machineOwner));
+  NodeAssert.equal(visibleMachines.length, 100);
+  NodeAssert.equal(visibleMachines[0]!.id, replacementInput.id);
+  await query(`INSERT INTO foundry_instance.machine_credentials
+    (id,token_hash,instance_id,operator_id,instance_generation,operator_generation,label,factory_ids,expires_at)
+    SELECT ('58000000-0000-4000-8002-' || lpad(n::text,12,'0'))::uuid,'active-fixture-' || n,
+      i.instance_id,o.operator_id,i.access_generation,o.access_generation,'Active reader','["machine-factory-a"]'::jsonb,${now + 172_800_000}
+    FROM foundry_instance.instance i JOIN foundry_instance.operator_binding o USING(singleton),generate_series(1,99) n`);
+  NodeAssert.equal(
+    await machineCall((service) =>
+      service
+        .issue(machineOwner, { ...machineInput, id: "58000000-0000-4000-8000-000000000005" })
+        .pipe(
+          Effect.match({ onFailure: (error) => error.code, onSuccess: () => "unexpected_success" }),
+        ),
+    ),
+    "conflict",
+  );
+  NodeAssert.equal(
+    (await machineCall((service) => service.list(machineOwner))).some(
+      (credential) => credential.id === replacementInput.id,
+    ),
+    true,
+  );
+  await machineCall((service) => service.revoke(machineOwner, replacementInput.id));
+  NodeAssert.ok(
+    (
+      await machineCall((service) =>
+        service.issue(machineOwner, {
+          ...machineInput,
+          id: "58000000-0000-4000-8000-000000000005",
+        }),
+      )
+    ).token,
+  );
+  await report(
+    "PASS machine credentials: concurrent hash-only issuance, retry/conflict, metadata-only listing, owner/instance isolation, layer and PostgreSQL restart, deterministic expiry, durable revoke, 30-day bounds, current instance/operator generations and active-only quota/list priority after 100 historical credentials",
+  );
   await NodeFSP.writeFile(NodePath.join(home, "userdata", "environment-id"), mainEnvironmentId);
+  for (const statement of [
+    "CREATE ROLE automation_migrate LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+    "CREATE ROLE automation_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+    "CREATE DATABASE fork_automation OWNER automation_migrate",
+    "REVOKE ALL ON DATABASE fork_automation FROM PUBLIC",
+    "GRANT CONNECT ON DATABASE fork_automation TO automation_runtime",
+  ])
+    await query(statement, "fixture_admin", "postgres");
+  await query("REVOKE ALL ON SCHEMA public FROM PUBLIC", "fixture_admin", "fork_automation");
+  await run(
+    AutomationMigrations.AutomationMigrations.pipe(
+      Effect.flatMap((service) => service.migrate("automation_runtime")),
+      Effect.provide(
+        AutomationMigrations.layer.pipe(
+          Layer.provide(
+            AutomationDatabase.layer({
+              path,
+              username: "automation_migrate",
+              database: "fork_automation",
+            }),
+          ),
+        ),
+      ),
+    ),
+  );
+  await query("ALTER ROLE automation_migrate NOLOGIN", "fixture_admin", "postgres");
+  NodeAssert.equal(
+    (
+      await query(
+        "SELECT version FROM foundry_automation.schema_version",
+        "automation_runtime",
+        "fork_automation",
+      )
+    )[0]?.version,
+    8,
+  );
+
   for (const [
     enabled,
     enrollmentEnabled,
@@ -908,16 +1185,40 @@ try {
     grantsEnabled,
     gatewayEnabled,
     streamsEnabled,
+    artifactsEnabled,
+    automationEnabled,
   ] of [
-    [false, false, false, false, false, false],
-    [true, false, false, false, false, false],
-    [true, true, false, false, false, false],
-    [true, true, true, false, false, false],
-    [true, true, true, true, false, false],
-    [true, true, true, true, true, false],
-    [true, true, true, true, true, true],
+    [false, false, false, false, false, false, false, false],
+    [true, false, false, false, false, false, false, false],
+    [true, true, false, false, false, false, false, false],
+    [true, true, true, false, false, false, false, false],
+    [true, true, true, true, false, false, false, false],
+    [true, true, true, true, true, false, false, false],
+    [true, true, true, true, true, true, false, false],
+    [true, true, true, true, true, true, true, false],
+    [true, true, true, true, true, true, true, true],
   ] as const) {
-    const runtimeRoutes = FoundryRuntime.layer.pipe(
+    const runtimeClients: EnvironmentAuth.IssuedBearerSession[] = [];
+    const sessionFixture = automationEnabled
+      ? Layer.effectDiscard(
+          Effect.gen(function* () {
+            const auth = yield* EnvironmentAuth.EnvironmentAuth;
+            const secrets = yield* ServerSecretStore.ServerSecretStore;
+            NodeAssert.equal(Option.isNone(yield* secrets.get("foundry-github-app")), true);
+            runtimeClients.push(
+              yield* auth.issueSession({ subject: "runtime-read", scopes: ["orchestration:read"] }),
+            );
+            runtimeClients.push(
+              yield* auth.issueSession({
+                subject: "runtime-management",
+                scopes: ["orchestration:read", "access:write"],
+              }),
+            );
+          }),
+        )
+      : Layer.empty;
+    const runtimeRoutes = Layer.merge(FoundryRuntime.layer, sessionFixture).pipe(
+      Layer.provide(ServerSecretStore.layer),
       Layer.provide(
         EnvironmentAuth.layer.pipe(
           Layer.provide(SqlitePersistence.layerMemory),
@@ -938,6 +1239,14 @@ try {
             FOUNDRY_GATEWAY_GRANTS_ENABLED: String(grantsEnabled),
             FOUNDRY_HTTP_GATEWAY_ENABLED: String(gatewayEnabled),
             FOUNDRY_STREAM_GATEWAY_ENABLED: String(streamsEnabled),
+            FOUNDRY_ARTIFACTS_ENABLED: String(artifactsEnabled),
+            FOUNDRY_AUTOMATION_ENABLED: String(automationEnabled),
+            FOUNDRY_AUTOMATION_DATABASE_URL: `postgresql://automation_runtime@localhost/fork_automation?host=${encodeURIComponent(root)}`,
+            FOUNDRY_AUTOMATION_TARGET: JSON.stringify({
+              deviceId: "99999999-9999-4999-8999-999999999999",
+              environmentId: "runtime-worker-not-connected",
+              allowedRunIds: [],
+            }),
             FOUNDRY_INSTANCE_STORE: "postgres",
             FOUNDRY_INSTANCE_DATABASE_URL: `postgresql://foundry_runtime@localhost/fork_connect?host=${encodeURIComponent(root)}`,
             FOUNDRY_ACCESS_ISSUER: accessConfig.issuer,
@@ -978,6 +1287,23 @@ try {
       );
       NodeAssert.equal(streamTicket.status, streamsEnabled ? 400 : 404);
       const descriptor = decodeDescriptor(await metadata.json());
+      NodeAssert.equal(Object.hasOwn(descriptor, "artifactTransfer"), artifactsEnabled);
+      const artifact = await runtimeHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/artifacts`, {
+          method: "POST",
+          headers: { origin: accessConfig.origin, "content-type": "application/json" },
+          body: JSON.stringify({ op: "list", input: {} }),
+        }),
+      );
+      NodeAssert.equal(artifact.status, artifactsEnabled ? 403 : 404);
+      const machineArtifact = await runtimeHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/devices/channel`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      );
+      NodeAssert.equal(machineArtifact.status, artifactsEnabled ? 400 : 404);
       NodeAssert.equal(descriptor.capabilities.includes("foundry.http-gateway"), gatewayEnabled);
       NodeAssert.equal(descriptor.capabilities.includes("foundry.rpc-streams"), streamsEnabled);
       NodeAssert.equal(descriptor.capabilities.includes("foundry.device-catalog"), streamsEnabled);
@@ -1003,6 +1329,117 @@ try {
         }),
       );
       NodeAssert.equal(enrollment.status, enrollmentEnabled ? 403 : 404);
+      const triggerQuery = await runtimeHandler.handler(
+        new Request(`${accessConfig.origin}/api/foundry/automation/triggers/query`, {
+          method: "POST",
+          headers: { origin: accessConfig.origin, "content-type": "application/json" },
+          body: JSON.stringify({ op: "bindings", limit: 50 }),
+        }),
+      );
+      NodeAssert.equal(triggerQuery.status, automationEnabled ? 409 : 404);
+      if (automationEnabled) {
+        now = Math.floor((await run(Clock.currentTimeMillis)) / 1000) * 1000;
+        const provision = HttpRouter.toWebHandler(authRoutes, { disableLogger: true });
+        let currentSession: Awaited<ReturnType<typeof issued>>;
+        try {
+          currentSession = await issued(
+            await provision.handler(
+              new Request(`${accessConfig.origin}/api/foundry/auth/login`, {
+                method: "POST",
+                headers: {
+                  origin: accessConfig.origin,
+                  "content-type": "application/json",
+                  "cf-access-jwt-assertion": await sign(),
+                },
+              }),
+              testContext,
+            ),
+          );
+        } finally {
+          await provision.dispose();
+        }
+        NodeAssert.equal(runtimeClients.length, 2);
+        const authenticated = (
+          endpoint: string,
+          payload: unknown,
+          clientIndex = 0,
+          extra: Record<string, string> = {},
+        ) =>
+          runtimeHandler.handler(
+            new Request(`${accessConfig.origin}/api/foundry/automation/${endpoint}`, {
+              method: "POST",
+              headers: {
+                origin: accessConfig.origin,
+                host: new URL(accessConfig.origin).host,
+                "x-forwarded-proto": "https",
+                "content-type": "application/json",
+                cookie: currentSession.cookie,
+                "x-foundry-csrf": currentSession.csrf,
+                authorization: `Bearer ${runtimeClients[clientIndex]!.token}`,
+                ...extra,
+              },
+              body: JSON.stringify(payload),
+            }),
+          );
+        const bindings = await authenticated("triggers/query", { op: "bindings", limit: 50 });
+        NodeAssert.equal(bindings.status, 200);
+        NodeAssert.deepEqual(await bindings.json(), { kind: "bindings", items: [], next: null });
+        const factories = await authenticated("query", { op: "factories", limit: 50 });
+        NodeAssert.equal(factories.status, 200);
+        NodeAssert.deepEqual(await factories.json(), { kind: "factories", items: [], next: null });
+        const denied = await authenticated("triggers/command", {
+          op: "revoke",
+          commandId: "runtime-denied",
+          bindingId: "missing",
+          generation: 1,
+        });
+        NodeAssert.equal(denied.status, 409);
+        NodeAssert.deepEqual(await denied.json(), {
+          _tag: "AutomationTriggerError",
+          code: "forbidden",
+        });
+        const authorized = await authenticated(
+          "triggers/command",
+          { op: "revoke", commandId: "runtime-authorized", bindingId: "missing", generation: 1 },
+          1,
+        );
+        NodeAssert.equal(authorized.status, 409);
+        NodeAssert.deepEqual(await authorized.json(), {
+          _tag: "AutomationTriggerError",
+          code: "not_found",
+        });
+        NodeAssert.equal(
+          (
+            await authenticated("triggers/query", { op: "bindings", limit: 50 }, 0, {
+              "x-foundry-csrf": "invalid",
+            })
+          ).status,
+          409,
+        );
+        NodeAssert.equal(
+          (
+            await query(
+              "SELECT count(*)::int AS count FROM foundry_automation.trigger_events",
+              "automation_runtime",
+              "fork_automation",
+            )
+          )[0]?.count,
+          0,
+        );
+        NodeAssert.equal(
+          (
+            await query(
+              "SELECT count(*)::int AS count FROM foundry_automation.runs",
+              "automation_runtime",
+              "fork_automation",
+            )
+          )[0]?.count,
+          0,
+        );
+        await report(
+          "PASS enabled production Automation runtime: separate schema-8 database and restricted roles; current Foundry/T3 sessions read empty bindings/factories; read scope cannot mutate, management scope reaches domain validation; invalid CSRF rejected; no GitHub App configuration, worker or provider execution.",
+        );
+      }
       const login = await runtimeHandler.handler(
         new Request(`${accessConfig.origin}/api/foundry/auth/login`, {
           method: "POST",
@@ -1016,7 +1453,7 @@ try {
   }
   await verifyGateway({ root, mainHome: home, databaseSocket: path });
   await report(
-    "PASS integrated gateway: two clients, real worker HTTP/RPC, idempotent Replay launch, attachment hash/resume, terminal and persistent revocation; direct T3 access preserved",
+    "PASS integrated gateway: real connector CLI with local TLS/machine headers, channel reconnect and Main service restart invalidate old grants; HTTP enrollment/retry/proof rejection, offline catalog, separate session/CSRF/origin/target checks; two clients, real worker HTTP/RPC, idempotent Replay launch, file/diff, attachment hash/resume, terminal, access revoke/regrant and registration revoke; direct T3 access preserved",
   );
   await report(
     "PASS production runtime composition: opt-in auth routes and descriptor capability, no JWKS request without an assertion",

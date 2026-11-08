@@ -22,7 +22,7 @@ sudo /usr/bin/python3 -I deploy/fork/updater/activate-access.py status
 ```
 
 This checks the actual image against the private Compose/runtime configuration,
-the pinned identities, readiness, schema 2 or 5, operator binding and disabled migration
+the pinned identities, readiness, schema 2, 5 or 6, operator binding and disabled migration
 login. Its JSON contains no credentials or operator subject. It does not stop Main,
 change the database or approve an upgrade. Configuration drift or an unsupported schema
 is rejected for explicit investigation. No installation or sudoers change is needed.
@@ -57,6 +57,22 @@ of automatic recovery is made. Keep all backup files private, and copy the bundl
 to the existing protected backup destination. Do not rerun `activate`, restore the
 activation-era empty database, or downgrade only the image.
 
+### Upgrade schema 5 to the artifact-store schema 6
+
+The current source requires instance schema 6. With the same coordinated backup,
+maintenance window and reviewed image prerequisites described above, use:
+
+```sh
+sudo /usr/bin/python3 -I deploy/fork/updater/activate-access.py upgrade-artifacts sha256:<candidate-digest> <candidate-source-sha>
+```
+
+This accepts exactly schema 5, migrates to 6 and verifies unchanged identities,
+operator, gateway configuration and disabled migration login. The backup includes
+the existing state volume where artifact files live. It does not enable artifact
+routes or claim P38a client/worker acceptance. Failure after the backup boundary
+leaves Main stopped for coordinated recovery. The existing `upgrade`, `update`
+and `gateway` commands below remain schema-5 procedures.
+
 ### Update an already activated schema-5 Main
 
 For a reviewed image that still uses schema 5, use the same maintenance window,
@@ -71,6 +87,17 @@ coordinated backup and verifies the image, readiness, identities and configurati
 but never enables the migration login or runs migrations. It does not enable
 devices or gateways. A failure after the backup boundary leaves Main stopped for
 recovery from that update's bundle; do not reuse an older upgrade backup.
+
+### Toggle the schema-5 development gateway
+
+From the reviewed checkout, `gateway enable` and `gateway disable` switch the five
+G2 flags together using the current image. `status` reports `gatewayEnabled` and
+checks the matching capabilities. This configuration-only operation saves the
+previous private runtime file, restarts Main and rolls back on start or verification
+failure, including a single Ctrl+C. It does not migrate or back up application data.
+See the [G2 procedure](g2-activation.md) for commands, interrupted-run recovery,
+machine authentication and the separate worker setup. Existing `update` preserves
+this profile; it does not enable it implicitly.
 
 ### Recover this upgrade or update
 

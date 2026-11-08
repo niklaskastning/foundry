@@ -14,6 +14,42 @@ import * as InstanceIdentityStore from "../foundry/InstanceIdentityStore.ts";
 import { authLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import { deviceCommands } from "./foundryDevices.ts";
 import { connectDeviceCommand } from "./foundryConnectDevice.ts";
+import * as AutomationDatabase from "../automation/AutomationDatabase.ts";
+import * as AutomationMigrations from "../automation/AutomationMigrations.ts";
+
+const migrateAutomation = Command.make("automation-migrate", {
+  runtimeRole: Flag.String("runtime-role"),
+  database: Flag.String("database"),
+}).pipe(
+  Command.withDescription(
+    "Migrate the explicitly selected, separate Automation database without starting runs.",
+  ),
+  Command.withHandler(
+    Effect.fn("foundry.automationMigrate")(function* (flags) {
+      const url = yield* Config.Redacted("FOUNDRY_AUTOMATION_MIGRATION_URL");
+      yield* Effect.gen(function* () {
+        const sql = yield* AutomationDatabase.AutomationDatabase;
+        const target = yield* sql<{
+          database: string;
+          separate: boolean;
+        }>`SELECT current_database() AS database, NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='foundry_instance') AS separate`;
+        if (target[0]?.database !== flags.database || !target[0].separate)
+          return yield* new AutomationMigrations.AutomationMigrationError({
+            reason: "schema_incompatible",
+          });
+        const migrations = yield* AutomationMigrations.AutomationMigrations;
+        yield* migrations.migrate(flags.runtimeRole);
+      }).pipe(
+        Effect.provide(
+          AutomationMigrations.layer.pipe(
+            Layer.provideMerge(AutomationDatabase.layer({ url, maxConnections: 1 })),
+          ),
+        ),
+      );
+      yield* Console.log("Automation schema 5 ready; no runs enrolled or started.");
+    }),
+  ),
+);
 
 const migrate = Command.make("migrate", {
   ...authLocationFlags,
@@ -80,5 +116,11 @@ const bindOperator = Command.make("bind-operator", {
 );
 
 export const foundryCommand = Command.make("foundry").pipe(
-  Command.withSubcommands([migrate, bindOperator, ...deviceCommands, connectDeviceCommand]),
+  Command.withSubcommands([
+    migrate,
+    migrateAutomation,
+    bindOperator,
+    ...deviceCommands,
+    connectDeviceCommand,
+  ]),
 );

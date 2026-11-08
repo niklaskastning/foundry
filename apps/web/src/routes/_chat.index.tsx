@@ -33,14 +33,16 @@ function ChatIndexRouteView() {
   return <IndexDraftLanding />;
 }
 
-function IndexDraftLanding() {
+export function IndexDraftLanding() {
   const projects = useProjects();
   const threads = useThreadShells();
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const handleNewThread = useNewThreadHandler();
   const router = useRouter();
   // Read at effect time; this page can stay mounted while the router is already navigating away.
-  const isStillOnIndex = useEffectEvent(() => router.state.location.pathname === "/");
+  const isStillOnIndex = useEffectEvent(() =>
+    ["/", "/chats"].includes(router.state.location.pathname),
+  );
   const startedAttemptRef = useRef<number | null>(null);
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
 

@@ -1,6 +1,7 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { Navigate, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import * as Option from "effect/Option";
 
 import ChatView from "./ChatView";
 import { BackgroundThreadContext } from "./chat/backgroundThread";
@@ -10,6 +11,7 @@ import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { useEnvironmentThreadRefs, useQuietThreadShell } from "../state/entities";
 import { useEnvironmentShellStatus } from "../state/shell";
 import { useEnvironmentThread } from "../state/threads";
+import { FactoryThreadPending } from "../foundry/FactoryThreadAccess";
 import {
   buildThreadRouteParams,
   isThreadRouteSnapshotAuthoritative,
@@ -26,9 +28,11 @@ import {
 export function ThreadRouteView({
   target,
   background = false,
+  factoryContext,
 }: {
   target: ThreadRouteTarget;
   background?: boolean;
+  factoryContext?: { factoryId: string; runId: string } | undefined;
 }) {
   const navigate = useNavigate();
   const draftId = target.kind === "draft" ? target.draftId : null;
@@ -97,11 +101,19 @@ export function ThreadRouteView({
     if (renderState === "missing") {
       const { clearPendingFileDropsForThread } = useSidebarPendingFileDropStore.getState();
       clearPendingFileDropsForThread(target.threadRef);
-      if (environmentHasAnyThreads && !background) {
+      if (environmentHasAnyThreads && !background && !factoryContext) {
         void navigate({ to: "/", replace: true });
       }
     }
-  }, [background, bootstrapComplete, environmentHasAnyThreads, navigate, renderState, target]);
+  }, [
+    background,
+    bootstrapComplete,
+    environmentHasAnyThreads,
+    factoryContext,
+    navigate,
+    renderState,
+    target,
+  ]);
 
   let view: React.ReactNode = null;
   let redirect: React.ReactNode = null;
@@ -144,6 +156,17 @@ export function ThreadRouteView({
         environmentId={target.threadRef.environmentId}
         threadId={target.threadRef.threadId}
         routeKind="server"
+      />
+    );
+  }
+
+  if (view === null && target.kind === "server" && factoryContext && !background) {
+    view = (
+      <FactoryThreadPending
+        environmentId={target.threadRef.environmentId}
+        {...factoryContext}
+        missing={renderState === "missing"}
+        error={Option.getOrNull(unlistedThreadDetail.error)}
       />
     );
   }

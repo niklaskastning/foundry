@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { FoundryArtifactManifest } from "./foundryArtifact.ts";
 
 import { NonNegativeInt, ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
 import {
@@ -33,6 +34,7 @@ export const AssetResource = Schema.Union([
   }),
   Schema.TaggedStruct("attachment", {
     attachmentId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+    foundryArtifact: Schema.optionalKey(FoundryArtifactManifest),
     fileName: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
     mimeType: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(100))),
     /** Defaults to download; viewers may request inline after checking the type is safe. */
