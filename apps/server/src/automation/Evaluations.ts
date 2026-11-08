@@ -74,7 +74,7 @@ export const layer = Layer.effect(Evaluations, Effect.gen(function* () {
       FROM foundry_automation.evaluation_results r JOIN foundry_automation.evaluation_queue q ON q.id=r.id
       WHERE q.instance_id=${identity.instanceId} AND q.operator_id=${identity.operatorId}
       AND (${filter.factoryId ?? null}::text IS NULL OR r.factory_id=${filter.factoryId ?? null})
-      AND (${filter.runId ?? null}::text IS NULL OR r.run_id=${filter.runId ?? null}) AND r.id>${filter.after ?? ""} ORDER BY r.id LIMIT 50`;
+      AND (${filter.runId ?? null}::text IS NULL OR r.run_id=${filter.runId ?? null}) AND (${filter.after ?? null}::text IS NULL OR (r.recorded_at,r.id)<((SELECT recorded_at FROM foundry_automation.evaluation_results WHERE id=${filter.after ?? null}),${filter.after ?? null})) ORDER BY r.recorded_at DESC,r.id DESC LIMIT 50`;
     return yield* Effect.forEach(rows, (row) => Schema.decodeUnknownEffect(EvaluationSummary)(row.summary));
   }, Effect.mapError(mapError));
   const read = Effect.fn("Evaluations.read")(function* (identity: Identity, factoryId: string, id: string) {
