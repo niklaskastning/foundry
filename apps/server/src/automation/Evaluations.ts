@@ -15,8 +15,8 @@ export class EvaluationError extends Schema.TaggedError<EvaluationError>()("Eval
   reason: Schema.Literals(["invalid_input", "not_found", "conflict", "forbidden", "unavailable"]),
 }) {}
 type Identity = { readonly instanceId: string; readonly operatorId: string };
-const decodeInput = Schema.decodeUnknownSync(EvaluationInput);
-const decodeResult = Schema.decodeUnknownSync(EvaluationResult);
+const decodeInput = Schema.decodeUnknownEffect(EvaluationInput);
+const decodeResult = Schema.decodeUnknownEffect(EvaluationResult);
 const mapError = (error: unknown) => Schema.is(EvaluationError)(error) ? error : new EvaluationError({ reason: "unavailable" });
 export class Evaluations extends Context.Service<Evaluations, {
   readonly enqueue: (identity: Identity, input: RequestEvaluation, mode?: "manual" | "automatic") => Effect.Effect<string, EvaluationError>;
@@ -30,8 +30,8 @@ export const layer = Layer.effect(Evaluations, Effect.gen(function* () {
   const judge = yield* EvaluationJudge.EvaluationJudge;
   const enqueue = Effect.fn("Evaluations.enqueue")(function* (identity: Identity, raw: RequestEvaluation, mode: "manual" | "automatic" = "manual") {
     const request = yield* Schema.decodeUnknownEffect(RequestEvaluation)(raw).pipe(Effect.mapError(() => new EvaluationError({ reason: "invalid_input" })));
-    const rows = yield* sql<{ definitionRevision: string; modelConfiguration: unknown; state: string }>`
-      SELECT r.factory_version_id AS "definitionRevision", d.binding->'model' AS "modelConfiguration", d.state
+    const rows = yield* sql<{ definitionRevision: string; runRevision: string; definitionSource: unknown; modelConfiguration: unknown; state: string }>`
+      SELECT r.factory_version_id AS "definitionRevision", r.revision AS "runRevision", (SELECT jsonb_build_object('contentHash',v.content_hash,'source',v.source) FROM foundry_automation.definition_versions v WHERE v.factory_id=r.factory_id AND v.factory_version_id=r.factory_version_id LIMIT 1) AS "definitionSource", d.binding->'model' AS "modelConfiguration", d.state
       FROM foundry_automation.runs r JOIN foundry_automation.dispatch_runs d ON d.run_id=r.id
       WHERE r.id=${request.runId} AND r.factory_id=${request.factoryId}
       AND d.binding->'identity'->>'instanceId'=${identity.instanceId}
@@ -49,9 +49,9 @@ export const layer = Layer.effect(Evaluations, Effect.gen(function* () {
     if (!scorer) return yield* new EvaluationError({ reason: "not_found" });
     const attempts = yield* sql<{ id: string; result: unknown; request: unknown; kind: string }>`SELECT a.command_id AS id,a.result,a.request,COALESCE((SELECT node->'definition'->>'kind' FROM jsonb_array_elements(COALESCE(d.v4_state->'nodes','[]'::jsonb)) node WHERE node->>'ordinal'=a.ordinal::text LIMIT 1),v.steps->a.ordinal->>'kind') AS kind FROM foundry_automation.step_attempts a JOIN foundry_automation.dispatch_runs d ON d.run_id=a.run_id JOIN foundry_automation.runs r ON r.id=a.run_id JOIN foundry_automation.workflow_versions v ON v.id=r.workflow_version_id WHERE a.run_id=${request.runId} ORDER BY a.ordinal,a.attempt_number LIMIT 101`;
     const evidence = yield* collectEvaluationEvidence(identity, attempts);
-    const input = decodeInput({
+    const input = yield* decodeInput({
       id: request.id, factoryId: request.factoryId, runId: request.runId,
-      definitionRevision: run.definitionRevision,
+      definitionRevision: run.definitionRevision,runRevision:run.runRevision,definitionSource:run.definitionSource ?? null,
       modelConfiguration: { binding: run.modelConfiguration ?? null, attempts: attempts.map((item) => ({ id:item.id, model: typeof item.request === "object" && item.request !== null && "model" in item.request ? item.request.model : null })) },
       scorerRevision: definition.contentHash,
       scorerSource: JSON.stringify({ factoryId: request.scorerFactoryId, versionId: request.scorerVersionId, source: definition.source }),
@@ -66,16 +66,21 @@ export const layer = Layer.effect(Evaluations, Effect.gen(function* () {
     }));
   }, Effect.mapError(mapError));
   const list = Effect.fn("Evaluations.list")(function* (identity: Identity, filter: { factoryId?: string; runId?: string; after?: string }) {
-    const rows = yield* sql<{ result: unknown }>`SELECT r.result FROM foundry_automation.evaluation_results r JOIN foundry_automation.evaluation_queue q ON q.id=r.id WHERE q.instance_id=${identity.instanceId} AND q.operator_id=${identity.operatorId} AND (${filter.factoryId ?? null}::text IS NULL OR r.factory_id=${filter.factoryId ?? null}) AND (${filter.runId ?? null}::text IS NULL OR r.run_id=${filter.runId ?? null}) AND r.id>${filter.after ?? ""} ORDER BY r.id LIMIT 50`;
-    return rows.map((row) => {
-      const result = decodeResult(row.result);
-      return { id: result.input.id, factoryId: result.input.factoryId, runId: result.input.runId, scorerId: result.input.scorer.id, scorerRevision: result.input.scorerRevision, definitionRevision: result.input.definitionRevision, status: result.status,reason: result.reason,passed: result.passed,recordedAt:result.recordedAt };
-    });
+    const rows = yield* sql<{ summary: unknown }>`SELECT jsonb_build_object(
+      'id',r.id,'factoryId',r.factory_id,'runId',r.run_id,
+      'scorerId',r.result->'input'->'scorer'->>'id','scorerRevision',r.result->'input'->>'scorerRevision',
+      'definitionRevision',r.result->'input'->>'definitionRevision','status',r.result->>'status',
+      'reason',r.result->'reason','passed',r.result->'passed','recordedAt',r.result->>'recordedAt') AS summary
+      FROM foundry_automation.evaluation_results r JOIN foundry_automation.evaluation_queue q ON q.id=r.id
+      WHERE q.instance_id=${identity.instanceId} AND q.operator_id=${identity.operatorId}
+      AND (${filter.factoryId ?? null}::text IS NULL OR r.factory_id=${filter.factoryId ?? null})
+      AND (${filter.runId ?? null}::text IS NULL OR r.run_id=${filter.runId ?? null}) AND r.id>${filter.after ?? ""} ORDER BY r.id LIMIT 50`;
+    return yield* Effect.forEach(rows, (row) => Schema.decodeUnknownEffect(EvaluationSummary)(row.summary));
   }, Effect.mapError(mapError));
   const read = Effect.fn("Evaluations.read")(function* (identity: Identity, factoryId: string, id: string) {
     const rows = yield* sql<{result:unknown}>`SELECT r.result FROM foundry_automation.evaluation_results r JOIN foundry_automation.evaluation_queue q ON q.id=r.id WHERE r.id=${id} AND r.factory_id=${factoryId} AND q.instance_id=${identity.instanceId} AND q.operator_id=${identity.operatorId}`;
     if (!rows[0]) return yield* new EvaluationError({ reason:"not_found" });
-    return decodeResult(rows[0].result);
+    return yield* decodeResult(rows[0].result);
   },Effect.mapError(mapError));
   const tick = Effect.gen(function* () {
     const automatic = yield* sql<{ factoryId: string; runId: string; scorerFactoryId: string; scorerVersionId: string; scorerId: string; instanceId: string; operatorId: string }>`
@@ -93,8 +98,8 @@ export const layer = Layer.effect(Evaluations, Effect.gen(function* () {
     // A lost judge claim becomes a visible failure; recovery never launches a second paid turn.
     const abandoned = yield* sql<{ input: unknown }>`SELECT input FROM foundry_automation.evaluation_queue WHERE state='running' AND claimed_at < now()-interval '10 minutes' LIMIT 20`;
     for (const row of abandoned) {
-      const input = decodeInput(row.input);
-      const result = decodeResult({ input,status:"failed",reason:"judge_unavailable",judgment:null,passed:null,recordedAt:DateTime.formatIso(yield* DateTime.now) });
+      const input = yield* decodeInput(row.input);
+      const result = yield* decodeResult({ input,status:"failed",reason:"judge_unavailable",judgment:null,passed:null,recordedAt:DateTime.formatIso(yield* DateTime.now) });
       yield* sql.withTransaction(Effect.gen(function* () {
         const rows = yield* sql`SELECT id FROM foundry_automation.evaluation_queue WHERE id=${input.id} AND state='running' AND claimed_at < now()-interval '10 minutes' FOR UPDATE`;
         if (!rows.length) return;
@@ -111,7 +116,7 @@ export const layer = Layer.effect(Evaluations, Effect.gen(function* () {
       return row;
     }));
     if (!claimed) return;
-    const input = decodeInput(claimed.input);
+    const input = yield* decodeInput(claimed.input);
     const preflight = evaluationPreflight(input);
     const outcome = preflight ? { ...preflight, judgment: null, passed: null } : yield* judge.judge(input).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(EvaluationJudgment)),
@@ -121,7 +126,7 @@ export const layer = Layer.effect(Evaluations, Effect.gen(function* () {
       }),
       Effect.catch((error) => Effect.succeed({ status: "failed" as const, reason: error instanceof EvaluationJudge.EvaluationJudgeError ? error.reason : "invalid_judgment" as const, judgment: null, passed: null })),
     );
-    const result = decodeResult({ input, ...outcome, recordedAt: DateTime.formatIso(yield* DateTime.now) });
+    const result = yield* decodeResult({ input, ...outcome, recordedAt: DateTime.formatIso(yield* DateTime.now) });
     yield* sql.withTransaction(Effect.gen(function* () {
       const owned = yield* sql`SELECT id FROM foundry_automation.evaluation_queue WHERE id=${input.id} AND state='running' AND claim_token=${token} FOR UPDATE`;
       if (!owned.length) return;
