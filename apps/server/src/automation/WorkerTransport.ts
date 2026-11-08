@@ -232,7 +232,9 @@ const make = Effect.gen(function* () {
   }, Effect.mapError(transportError));
   return WorkerTransport.of({
     evaluate: Effect.fn("WorkerTransport.evaluate")((identity, input) =>
-      call(identity, (client) => client["foundry.workerEvaluate"](input), undefined, true),
+      new TextEncoder().encode(JSON.stringify(input)).length > 200_000
+        ? Effect.fail(new WorkerTransportError({ reason: "unavailable" }))
+        : call(identity, (client) => client["foundry.workerEvaluate"](input), undefined, true),
     ),
     sandboxProjects: Effect.fn("WorkerTransport.sandboxProjects")(
       (target) => gateway.sandboxProjects(target),

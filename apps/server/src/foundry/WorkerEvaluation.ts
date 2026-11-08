@@ -36,10 +36,18 @@ export const layer = Layer.effect(
         function* (raw) {
           if (!enabled || !binding) return yield* new FoundryWorkerError({ code: "not_enabled" });
           const input = yield* decodeInput(raw);
+          if (new TextEncoder().encode(JSON.stringify(input)).length > 200_000)
+            return yield* new FoundryWorkerError({ code: "probe_failed" });
           const instance = yield* registry.getInstance(ProviderInstanceId.make(binding));
           if (!instance?.enabled || instance.driverKind !== "codex" || !instance.generateEvaluation)
             return yield* new FoundryWorkerError({ code: "probe_failed" });
-          return yield* instance.generateEvaluation({ cwd: config.stateDir, evaluation: input });
+          const judgment = yield* instance.generateEvaluation({
+            cwd: config.stateDir,
+            evaluation: input,
+          });
+          if (new TextEncoder().encode(JSON.stringify(judgment)).length > 200_000)
+            return yield* new FoundryWorkerError({ code: "probe_failed" });
+          return judgment;
         },
         Effect.mapError(() => new FoundryWorkerError({ code: "probe_failed" })),
       ),

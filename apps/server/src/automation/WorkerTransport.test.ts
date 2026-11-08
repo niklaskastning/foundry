@@ -181,6 +181,23 @@ it.effect("uses one serialized RPC per explicit delivery and preserves worker no
       criteria: [],
     });
     expect(calls).toBe(3);
+    const oversized = {
+      ...evaluation,
+      scorer: {
+        ...evaluation.scorer,
+        criteria: Array.from({ length: 20 }, (_, index) => ({
+          id: `criterion-${index}`,
+          instructions: "x".repeat(20_000),
+          threshold: 0.8,
+        })),
+      },
+    };
+    expect(yield* transport.evaluate(identity, oversized).pipe(Effect.result)).toMatchObject({
+      _tag: "Failure",
+      failure: { reason: "unavailable" },
+    });
+    expect(calls).toBe(3);
+    expect(opens).toBe(3);
     authorized = false;
     const denied = yield* transport.evaluate(identity, evaluation).pipe(Effect.result);
     expect(denied).toMatchObject({ _tag: "Failure", failure: { reason: "forbidden" } });
