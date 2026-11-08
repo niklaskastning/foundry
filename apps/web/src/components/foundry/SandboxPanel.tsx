@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { SandboxProviderConnection } from "./SandboxProviderConnection";
 import { randomUUID } from "../../lib/utils";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
@@ -136,7 +137,8 @@ function SandboxPanelContent({ environmentId }: { environmentId: EnvironmentId }
     setBusy(false);
   }
   return (
-    <section className="space-y-4" aria-label="Linux sandboxes">
+    <FoundryUI.Panel aria-label="Linux sandboxes">
+      <FoundryUI.Heading>Linux sandboxes</FoundryUI.Heading>
       <SandboxProviderConnection
         environmentId={environmentId}
         {...(selectedProfile ? { connectionId: selectedProfile.providerConnectionId } : {})}
@@ -146,7 +148,9 @@ function SandboxPanelContent({ environmentId }: { environmentId: EnvironmentId }
         the same profiles.
       </p>
       {!canRead ? (
-        <p role="alert">A current Main session with read permission is required.</p>
+        <FoundryUI.Notice>
+          A current Main session with read permission is required.
+        </FoundryUI.Notice>
       ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <Select
@@ -193,7 +197,10 @@ function SandboxPanelContent({ environmentId }: { environmentId: EnvironmentId }
       ) : null}
       <div className="space-y-2">
         {(canRead ? catalog : undefined)?.allocations.map((allocation) => (
-          <div key={allocation.allocationId} className="flex flex-wrap items-center gap-2">
+          <div
+            key={allocation.allocationId}
+            className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/10 p-3"
+          >
             <Button
               variant={selectedId === allocation.allocationId ? "secondary" : "outline"}
               onClick={() => setSelectedId(allocation.allocationId)}
@@ -231,6 +238,6 @@ function SandboxPanelContent({ environmentId }: { environmentId: EnvironmentId }
           onOpen={() => void openEnvironment()}
         />
       ) : null}
-    </section>
+    </FoundryUI.Panel>
   );
 }

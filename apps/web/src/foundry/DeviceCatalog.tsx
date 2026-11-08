@@ -1,3 +1,4 @@
+import { FoundryUI } from "./FoundryUI";
 import { WorkerStatus } from "./WorkerStatus";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
@@ -71,10 +72,10 @@ export function DeviceCatalog({ readinessInDetails = false }: { readinessInDetai
   }
 
   return (
-    <section className="space-y-4">
+    <FoundryUI.Panel className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">Machine access</h2>
+          <FoundryUI.Heading>Machine access</FoundryUI.Heading>
           <p className="mt-1 text-sm text-muted-foreground">
             Open a machine for interactive work or manage its factory authorization.
           </p>
@@ -92,9 +93,9 @@ export function DeviceCatalog({ readinessInDetails = false }: { readinessInDetai
             className="border-b pb-3 text-sm"
             onToggle={(event) => setReadinessOpen(event.currentTarget.open)}
           >
-            <summary className="cursor-pointer text-muted-foreground">
+            <FoundryUI.Summary className="cursor-pointer text-muted-foreground">
               Selected interactive device readiness
-            </summary>
+            </FoundryUI.Summary>
             {readinessOpen ? (
               <div className="pt-3">
                 <WorkerStatus key={selected.environmentId} environmentId={selected.environmentId} />
@@ -106,12 +107,12 @@ export function DeviceCatalog({ readinessInDetails = false }: { readinessInDetai
         )
       ) : null}
       {catalog?.devices.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-6 text-sm">
+        <FoundryUI.Empty>
           <p className="font-medium">No machines registered</p>
           <p className="mt-1 text-muted-foreground">
             Register a worker below to make its projects available to this instance.
           </p>
-        </div>
+        </FoundryUI.Empty>
       ) : null}
       {catalog && !catalog.canManage ? (
         <p className="text-sm text-muted-foreground">
@@ -120,7 +121,7 @@ export function DeviceCatalog({ readinessInDetails = false }: { readinessInDetai
         </p>
       ) : null}
       {catalog?.devices.map((device) => (
-        <article key={device.deviceId} className="space-y-3 border-b py-4">
+        <article key={device.deviceId} className="space-y-4 rounded-lg border bg-muted/10 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="text-xs text-muted-foreground">
@@ -184,7 +185,9 @@ export function DeviceCatalog({ readinessInDetails = false }: { readinessInDetai
             </Button>
           </div>
           <details className="border-t pt-3 text-sm">
-            <summary className="cursor-pointer">Access and registration</summary>
+            <FoundryUI.Summary className="cursor-pointer">
+              Access and registration
+            </FoundryUI.Summary>
             <div className="space-y-3 pt-3">
               <p className="break-all text-xs text-muted-foreground">
                 Environment: {device.environmentId} · Device ID: {device.deviceId}
@@ -250,7 +253,9 @@ export function DeviceCatalog({ readinessInDetails = false }: { readinessInDetai
         </article>
       ))}
       <details className="text-sm">
-        <summary className="cursor-pointer text-muted-foreground">Connection and sign-in</summary>
+        <FoundryUI.Summary className="cursor-pointer text-muted-foreground">
+          Connection and sign-in
+        </FoundryUI.Summary>
         <div className="pt-3">
           <div className="flex flex-wrap gap-2">
             <Button
@@ -275,8 +280,10 @@ export function DeviceCatalog({ readinessInDetails = false }: { readinessInDetai
         </div>
       </details>
       {catalog?.canManage ? (
-        <details className="border-t pt-4">
-          <summary className="cursor-pointer font-medium">Register a machine</summary>
+        <details className="rounded-lg border bg-muted/20 p-4">
+          <FoundryUI.Summary className="cursor-pointer font-medium">
+            Register a machine
+          </FoundryUI.Summary>
           <div className="space-y-3 pt-4">
             <p className="text-xs text-muted-foreground">
               Prepare a device request on the machine with the Foundry CLI. Enter its environment ID
@@ -315,6 +322,6 @@ export function DeviceCatalog({ readinessInDetails = false }: { readinessInDetai
           </div>
         </details>
       ) : null}
-    </section>
+    </FoundryUI.Panel>
   );
 }

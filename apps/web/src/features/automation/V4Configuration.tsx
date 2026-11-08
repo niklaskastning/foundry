@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { Badge } from "../../components/ui/badge";
 import type {
   CanonicalFactoryDefinitionV4,
@@ -46,7 +47,9 @@ export function V4AgentConfiguration({
         </div>
       </dl>
       <details>
-        <summary className="cursor-pointer">Instructions and their origins</summary>
+        <FoundryUI.Summary className="cursor-pointer">
+          Instructions and their origins
+        </FoundryUI.Summary>
         <ol className="space-y-3 pt-2">
           {[...new Set(agent.provenance.instructions.map((part) => part.source))].map((source) => (
             <li key={source}>
@@ -112,7 +115,7 @@ function WorkflowNodes({
           </p>
           {node.when ? (
             <details>
-              <summary className="cursor-pointer text-sm">Condition</summary>
+              <FoundryUI.Summary className="cursor-pointer text-sm">Condition</FoundryUI.Summary>
               <pre className="overflow-auto text-xs">{JSON.stringify(node.when, null, 2)}</pre>
             </details>
           ) : null}
@@ -142,7 +145,9 @@ function WorkflowNodes({
                 </p>
               ) : null}
               <details className="text-sm">
-                <summary className="cursor-pointer">Task, resources and effective settings</summary>
+                <FoundryUI.Summary className="cursor-pointer">
+                  Task, resources and effective settings
+                </FoundryUI.Summary>
                 <div className="pt-3">
                   <V4AgentConfiguration agent={resolveFactoryV4Agent(snapshot, node)} />
                 </div>
@@ -171,9 +176,9 @@ function WorkflowNodes({
                 Technical retries are counted separately.
               </p>
               <details>
-                <summary className="cursor-pointer text-sm">
+                <FoundryUI.Summary className="cursor-pointer text-sm">
                   Stop condition and carried values
-                </summary>
+                </FoundryUI.Summary>
                 <pre className="overflow-auto text-xs">
                   {JSON.stringify(
                     {
@@ -241,10 +246,10 @@ export function V4WorkflowConfiguration({
 export function V4Catalog({ definition }: { definition: CanonicalFactoryDefinitionV4 }) {
   return (
     <div className="space-y-6">
-      <section className="space-y-3" aria-label="Versioned agents">
-        <h3 className="font-medium">Agents</h3>
+      <section className="grid gap-3 lg:grid-cols-2" aria-label="Versioned agents">
+        <h3 className="font-medium lg:col-span-2">Agents</h3>
         {definition.agents.map((agent) => (
-          <article key={agent.id} className="space-y-2 border-b py-4 first:border-t">
+          <article key={agent.id} className="space-y-3 rounded-lg border bg-muted/10 p-4">
             <h4 className="font-medium">{agent.name}</h4>
             <p className="text-sm">{agent.description}</p>
             <p className="text-xs text-muted-foreground">
@@ -268,7 +273,9 @@ export function V4Catalog({ definition }: { definition: CanonicalFactoryDefiniti
                 .join(", ") || "None"}
             </p>
             <details>
-              <summary className="cursor-pointer text-sm">Instructions and source</summary>
+              <FoundryUI.Summary className="cursor-pointer text-sm">
+                Instructions and source
+              </FoundryUI.Summary>
               <p className="pt-2 text-xs text-muted-foreground">agents/{agent.id}.yaml</p>
               <p className="whitespace-pre-wrap pt-2 text-sm">{agent.instructions}</p>
             </details>
@@ -278,10 +285,10 @@ export function V4Catalog({ definition }: { definition: CanonicalFactoryDefiniti
       <section className="space-y-3" aria-label="Versioned skill bundles">
         <h3 className="font-medium">Skill bundles</h3>
         {definition.skills.map((skill) => (
-          <details key={skill.id} className="border-b py-3">
-            <summary className="cursor-pointer text-sm">
+          <details key={skill.id} className="rounded-lg border bg-muted/10 p-4">
+            <FoundryUI.Summary className="cursor-pointer text-sm">
               {skill.name} · {skill.files.length} files
-            </summary>
+            </FoundryUI.Summary>
             <p className="py-2 text-sm">{skill.description}</p>
             <ul className="space-y-1 text-xs">
               {skill.files.map((file) => (
@@ -302,7 +309,7 @@ export function V4Catalog({ definition }: { definition: CanonicalFactoryDefiniti
           Definitions request tools. Runtime bindings must authorize them before an agent can start.
         </p>
         {definition.mcp.map((mcp) => (
-          <article key={mcp.id} className="space-y-2 border-b py-3 text-sm">
+          <article key={mcp.id} className="space-y-3 rounded-lg border bg-muted/10 p-4 text-sm">
             <h4 className="font-medium">
               {mcp.name} · {mcp.transport}
             </h4>

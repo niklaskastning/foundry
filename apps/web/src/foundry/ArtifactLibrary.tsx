@@ -1,3 +1,4 @@
+import { FoundryUI } from "./FoundryUI";
 import { useState } from "react";
 import { AsyncResult } from "effect/reactivity";
 import type { FoundryArtifactManifest } from "@t3tools/contracts";
@@ -25,9 +26,9 @@ export function ArtifactLibrary() {
     setBusy(false);
   }
   return (
-    <section className="space-y-3 border-t pt-4" aria-label="Foundry files">
+    <FoundryUI.Panel aria-label="Foundry files">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-base font-medium">Files</h2>
+        <FoundryUI.Heading>Files</FoundryUI.Heading>
         <Button variant="outline" disabled={busy} onClick={() => void load()}>
           Load files
         </Button>
@@ -84,6 +85,6 @@ export function ArtifactLibrary() {
           />
         </div>
       ) : null}
-    </section>
+    </FoundryUI.Panel>
   );
 }

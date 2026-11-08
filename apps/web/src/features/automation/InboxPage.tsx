@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { useContext, useEffect, useState } from "react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
@@ -132,11 +133,18 @@ export function InboxPage({
   ]);
   const refresh = () => setGeneration((value) => value + 1);
   return (
-    <section className="space-y-4" aria-label="Personal inbox">
+    <section
+      className={
+        compact
+          ? "min-w-0 space-y-4 rounded-xl border bg-card p-4 shadow-xs sm:p-6"
+          : "min-w-0 space-y-6"
+      }
+      aria-label="Personal inbox"
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           {compact ? (
-            <h2 className="text-lg font-semibold">Needs your attention</h2>
+            <FoundryUI.Heading>Needs your attention</FoundryUI.Heading>
           ) : (
             <h1 className="text-2xl font-semibold tracking-tight">Decisions</h1>
           )}
@@ -226,7 +234,11 @@ export function InboxPage({
       >
         <div className="space-y-3">
           <ul
-            className={visibleItems.length ? "divide-y rounded-lg border" : undefined}
+            className={
+              visibleItems.length
+                ? "divide-y overflow-hidden rounded-xl border bg-card shadow-xs"
+                : undefined
+            }
             aria-label="Inbox items"
           >
             {visibleItems.map((item) => (

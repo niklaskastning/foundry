@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { Link } from "@tanstack/react-router";
 import { openWorkspaceRun } from "../../foundry/workspaceSearch";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -40,7 +41,7 @@ export function RunList({
     <section className="space-y-3" aria-label="Runs">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">{compact ? "Recent runs" : "Runs"}</h2>
+          <FoundryUI.Heading>{compact ? "Recent runs" : "Runs"}</FoundryUI.Heading>
           {!compact ? (
             <p className="text-sm text-muted-foreground">
               Follow execution, review results and resolve blocked work.
@@ -69,11 +70,11 @@ export function RunList({
           }}
         />
       ) : null}
-      {error ? <p role="alert">{error}</p> : null}
+      {error ? <FoundryUI.Notice>{error}</FoundryUI.Notice> : null}
       {loading && !result ? <p role="status">Loading runs…</p> : null}
       {result?.kind === "runs" ? (
         <>
-          <ul className="divide-y rounded-lg border bg-card">
+          <ul className="divide-y overflow-hidden rounded-xl border bg-card shadow-xs">
             {result.items.map((run) => (
               <li
                 key={run.id}
@@ -85,7 +86,7 @@ export function RunList({
                       <Link
                         to="/foundry"
                         search={openWorkspaceRun(navigation.search, run.factoryId, run.id)}
-                        className="after:absolute after:inset-0 focus-visible:underline"
+                        className="after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-ring"
                       >
                         {run.workItemTitle ?? "Work item"}
                       </Link>

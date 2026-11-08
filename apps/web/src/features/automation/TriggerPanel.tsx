@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { isDefinitiveAutomationFailure } from "./failures";
 import { useState } from "react";
@@ -75,10 +76,10 @@ export function TriggerPanel({
   }
   const items = query.result?.kind === "bindings" ? query.result.items : [];
   return (
-    <section className="space-y-4" aria-label="Workflow triggers">
+    <FoundryUI.Panel className="space-y-4" aria-label="Workflow triggers">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">Triggers</h2>
+          <FoundryUI.Heading>Triggers</FoundryUI.Heading>
           <p className="mt-1 text-sm text-muted-foreground">
             Start work from a schedule or labeled GitHub issues.
           </p>
@@ -97,8 +98,8 @@ export function TriggerPanel({
           Loading triggers…
         </p>
       ) : null}
-      {query.error ? <p role="alert">{query.error}</p> : null}
-      <ul className="divide-y border-y">
+      {query.error ? <FoundryUI.Notice>{query.error}</FoundryUI.Notice> : null}
+      <ul className="divide-y overflow-hidden rounded-lg border bg-muted/10">
         {items.map((binding) => (
           <li key={binding.id} className="space-y-3 py-4">
             <div className="flex flex-wrap items-start justify-between gap-2">
@@ -131,9 +132,9 @@ export function TriggerPanel({
               </p>
             ) : null}
             <details className="text-sm">
-              <summary className="cursor-pointer text-muted-foreground">
+              <FoundryUI.Summary className="cursor-pointer text-muted-foreground">
                 Pinned workflow and destination
-              </summary>
+              </FoundryUI.Summary>
               <dl className="space-y-2 break-all pt-2">
                 <div>
                   <dt className="text-muted-foreground">Workflow version</dt>
@@ -196,9 +197,9 @@ export function TriggerPanel({
                 </Button>
               ) : null}
               <details className="text-sm">
-                <summary className="cursor-pointer py-2 text-muted-foreground">
+                <FoundryUI.Summary className="cursor-pointer py-2 text-muted-foreground">
                   Stop or revoke…
-                </summary>
+                </FoundryUI.Summary>
                 <p className="py-2 text-xs text-muted-foreground">
                   Discard removes pending inputs. Revocation withdraws this trigger's authorization.
                 </p>
@@ -244,13 +245,13 @@ export function TriggerPanel({
         ))}
       </ul>
       {!query.loading && !query.error && items.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-6 text-sm">
+        <FoundryUI.Empty>
           <p className="font-medium">No triggers configured</p>
           <p className="mt-1 text-muted-foreground">
             You can still create work manually. Add a trigger when this factory should accept work
             unattended.
           </p>
-        </div>
+        </FoundryUI.Empty>
       ) : null}
       <div className="flex gap-2">
         <Button variant="outline" disabled={!after} onClick={() => setAfter(undefined)}>
@@ -283,7 +284,7 @@ export function TriggerPanel({
         />
       ) : null}
       <details className="rounded-lg border p-4">
-        <summary className="cursor-pointer font-medium">Add trigger</summary>
+        <FoundryUI.Summary className="cursor-pointer font-medium">Add trigger</FoundryUI.Summary>
         <p className="py-3 text-sm text-muted-foreground">
           Save an inactive trigger first, then review its destination and authorize unattended
           execution.
@@ -296,7 +297,7 @@ export function TriggerPanel({
           onCreate={execute}
         />
       </details>
-    </section>
+    </FoundryUI.Panel>
   );
 }
 
@@ -323,7 +324,7 @@ function TriggerInputs({
         Technical input history is separate from your personal Inbox. Baseline issues never start a
         run.
       </p>
-      {query.error ? <p role="alert">{query.error}</p> : null}
+      {query.error ? <FoundryUI.Notice>{query.error}</FoundryUI.Notice> : null}
       {query.result?.kind === "events" ? (
         <>
           <ul className="divide-y">
@@ -515,7 +516,9 @@ function CreateTrigger({
           <Input value={model} onChange={(e) => setModel(e.target.value)} />
         </label>
         <details className="rounded border p-3">
-          <summary className="cursor-pointer text-sm">Checks and required artifacts</summary>
+          <FoundryUI.Summary className="cursor-pointer text-sm">
+            Checks and required artifacts
+          </FoundryUI.Summary>
           <div className="space-y-3 pt-3">
             <label className="block space-y-1">
               <span>Checks (id, prompt, command, cwd)</span>
@@ -645,7 +648,7 @@ function CreateTrigger({
           Save inactive trigger
         </Button>
       </fieldset>
-      {error ? <p role="alert">{error}</p> : null}
+      {error ? <FoundryUI.Notice>{error}</FoundryUI.Notice> : null}
     </form>
   );
 }

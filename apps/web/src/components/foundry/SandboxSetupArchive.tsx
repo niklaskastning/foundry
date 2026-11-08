@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import type { FoundryArtifactManifest } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useEffectEvent, useState } from "react";
@@ -42,7 +43,7 @@ function SetupArchiveContent({ manifest, onClose }: Props) {
   const start = page * 20;
   const loading = completedGeneration !== generation;
   return (
-    <section className="space-y-3" aria-label="Setup archive files">
+    <section className="space-y-4 rounded-lg border bg-card p-4" aria-label="Setup archive files">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm font-medium">Setup archive</p>
         <Button size="sm" variant="outline" onClick={onClose}>
@@ -52,9 +53,9 @@ function SetupArchiveContent({ manifest, onClose }: Props) {
       {loading ? <p role="status">Loading verified archive index…</p> : null}
       {failed && !loading ? (
         <div className="space-y-2">
-          <p role="alert">
+          <FoundryUI.Notice>
             The archive could not be verified or downloaded. Check your Main connection.
-          </p>
+          </FoundryUI.Notice>
           <Button variant="outline" onClick={() => setGeneration((value) => value + 1)}>
             Retry archive
           </Button>

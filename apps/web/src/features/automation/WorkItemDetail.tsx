@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { isDefinitiveAutomationFailure, startFailureMessage } from "./failures";
 import { randomUUID } from "../../lib/utils";
@@ -63,7 +64,7 @@ export function WorkItemDetail({
             tab: "work",
             workItemId: undefined,
           })}
-          className="text-sm text-muted-foreground hover:text-foreground"
+          className="inline-flex min-h-9 items-center rounded-md text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         >
           ← Work items
         </Link>
@@ -72,14 +73,14 @@ export function WorkItemDetail({
         </Button>
       </div>
       {work.loading && !work.result ? <p role="status">Loading work item…</p> : null}
-      {work.error ? <p role="alert">{work.error}</p> : null}
+      {work.error ? <FoundryUI.Notice>{work.error}</FoundryUI.Notice> : null}
       {work.result?.kind === "workItem" ? (
         <>
-          <div className="space-y-3 border-b pb-5">
+          <div className="space-y-4 rounded-xl border bg-card p-4 shadow-xs sm:p-6">
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <h2 className="min-w-0 flex-1 break-words text-xl font-semibold">
+              <FoundryUI.Heading className="min-w-0 flex-1 break-words text-xl font-semibold">
                 {work.result.item.title}
-              </h2>
+              </FoundryUI.Heading>
               <Badge
                 variant={
                   work.result.item.state === "review"
@@ -109,9 +110,9 @@ export function WorkItemDetail({
                       : "This work item was cancelled. Its execution history remains available below."}
             </p>
             <details>
-              <summary className="cursor-pointer text-xs text-muted-foreground">
+              <FoundryUI.Summary className="cursor-pointer text-xs text-muted-foreground">
                 Work item reference
-              </summary>
+              </FoundryUI.Summary>
               <dl className="mt-2 space-y-1 break-all text-xs text-muted-foreground">
                 <div>
                   <dt>Source</dt>
@@ -136,8 +137,10 @@ export function WorkItemDetail({
             workItemId={workItemId}
             onOpen={onOpenRun}
           />
-          <details className="rounded-lg border p-4">
-            <summary className="cursor-pointer font-medium">Start new workflow</summary>
+          <details className="rounded-xl border border-primary/20 bg-card p-4 shadow-xs sm:p-6">
+            <FoundryUI.Summary className="cursor-pointer font-medium">
+              Start new workflow
+            </FoundryUI.Summary>
             <div className="pt-4">
               <StartWorkflow
                 key={work.result.item.id}
@@ -320,7 +323,7 @@ function StartWorkflow({
   }
   return (
     <section className="space-y-3" aria-label="Start workflow">
-      <fieldset disabled={busy || Boolean(pending)} className="space-y-3">
+      <fieldset disabled={busy || Boolean(pending)} className="space-y-5">
         <legend className="font-medium">Workflow</legend>
         <Select
           value={workflowVersionId}
@@ -341,7 +344,7 @@ function StartWorkflow({
         </Select>
         {!active ? <p>Activate a definition before starting work.</p> : null}
         {v4 && sandboxCatalog?.supported ? (
-          <label className="block space-y-1">
+          <label className="block space-y-2">
             <span>Execution environment</span>
             <Select
               value={sandboxKey}
@@ -375,16 +378,18 @@ function StartWorkflow({
           </label>
         ) : null}
         {active && workflow ? (
-          <details>
-            <summary className="cursor-pointer text-sm">
+          <details className="rounded-lg border bg-muted/10 p-4">
+            <FoundryUI.Summary className="cursor-pointer text-sm">
               Review roles and settings for this new run
-            </summary>
+            </FoundryUI.Summary>
             <WorkflowConfiguration active={active} workflowId={workflow.id} />
           </details>
         ) : null}
-        {binding.error ? <p role="alert">Worker binding unavailable: {binding.error}</p> : null}
+        {binding.error ? (
+          <FoundryUI.Notice>Worker binding unavailable: {binding.error}</FoundryUI.Notice>
+        ) : null}
         {defaultsQuery.error ? (
-          <p role="alert">Execution defaults unavailable: {defaultsQuery.error}</p>
+          <FoundryUI.Notice>Execution defaults unavailable: {defaultsQuery.error}</FoundryUI.Notice>
         ) : null}
         {parallel ? (
           <div className="space-y-2 border-l-2 pl-3 text-sm">
@@ -393,7 +398,7 @@ function StartWorkflow({
                 ? "Modular workflow · Limits and technical retries follow the pinned definition"
                 : `Parallel workflow · Up to ${execution?.maxParallelism} branches · ${execution?.maxRepairRounds} repair rounds`}
             </p>
-            <label className="block space-y-1">
+            <label className="block space-y-2">
               <span>Repository commit SHA</span>
               <Input
                 value={sandbox?.checkout.commit ?? revision}
@@ -409,8 +414,10 @@ function StartWorkflow({
           </div>
         ) : null}
         {v4 ? (
-          <details>
-            <summary className="cursor-pointer text-sm">Custom workflow inputs</summary>
+          <details className="rounded-lg border bg-muted/10 p-4">
+            <FoundryUI.Summary className="cursor-pointer text-sm">
+              Custom workflow inputs
+            </FoundryUI.Summary>
             <label className="mt-3 block space-y-1">
               <span className="text-sm">Workflow inputs (JSON object)</span>
               <Textarea
@@ -453,8 +460,10 @@ function StartWorkflow({
             future work items.
           </p>
         )}
-        <details open={!configured || undefined}>
-          <summary className="cursor-pointer text-sm">Worker and run settings</summary>
+        <details className="rounded-lg border bg-muted/20 p-4" open={!configured || undefined}>
+          <FoundryUI.Summary className="cursor-pointer text-sm">
+            Worker and run settings
+          </FoundryUI.Summary>
           <div className="space-y-3 pt-3">
             {parallel && (
               <WorkerPoolPicker
@@ -466,7 +475,10 @@ function StartWorkflow({
             <fieldset className="space-y-2">
               <legend className="text-sm">Default worker project</legend>
               {target?.projects.map((project) => (
-                <label key={project.id} className="flex items-center gap-2 text-sm">
+                <label
+                  key={project.id}
+                  className="flex items-center gap-3 rounded-lg border p-3 text-sm has-checked:border-primary/40 has-checked:bg-primary/5"
+                >
                   <input
                     type="radio"
                     name="worker-project"
@@ -482,7 +494,7 @@ function StartWorkflow({
                 </label>
               ))}
             </fieldset>
-            <label className="block space-y-1">
+            <label className="block space-y-2">
               <span className="text-sm">Fallback Codex model</span>
               {target?.status.models?.length ? (
                 <Select
@@ -515,23 +527,25 @@ function StartWorkflow({
               permissions.
             </p>
             {!parallel ? (
-              <label className="block space-y-1">
+              <label className="block space-y-2">
                 <span className="text-sm">Advanced input reference</span>
                 <Input value={revision} onChange={(event) => setRevision(event.target.value)} />
               </label>
             ) : null}
             <details>
-              <summary className="cursor-pointer text-sm">Checks and required artifacts</summary>
+              <FoundryUI.Summary className="cursor-pointer text-sm">
+                Checks and required artifacts
+              </FoundryUI.Summary>
               <div className="space-y-3 pt-3">
                 <p className="text-xs text-muted-foreground">
                   These bindings connect workflow check and artifact names to this repository.
                   Existing saved defaults are reused.
                 </p>
-                <label className="block space-y-1">
+                <label className="block space-y-2">
                   <span className="text-sm">Checks: id, prompt, command, cwd</span>
                   <Textarea value={checks} onChange={(event) => setChecks(event.target.value)} />
                 </label>
-                <label className="block space-y-1">
+                <label className="block space-y-2">
                   <span className="text-sm">Required artifacts: stepId, names</span>
                   <Textarea
                     value={artifacts}

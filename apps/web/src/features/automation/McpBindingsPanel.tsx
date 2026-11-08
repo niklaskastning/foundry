@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
@@ -29,7 +30,7 @@ export function McpBindingsPanel({
 }) {
   const query = useAutomationQuery(environmentId, { op: "mcpBindings", factoryId });
   return (
-    <section className="space-y-3" aria-label="MCP runtime authorization">
+    <FoundryUI.Panel className="space-y-3" aria-label="MCP runtime authorization">
       <h3 className="text-lg font-semibold">Tool access</h3>
       <p className="text-sm text-muted-foreground">
         Authorize the exact definition and its tools for this factory. A changed endpoint or command
@@ -43,7 +44,7 @@ export function McpBindingsPanel({
       {resources.length === 0 ? (
         <p className="text-sm text-muted-foreground">This definition does not request MCP tools.</p>
       ) : null}
-      {query.error ? <p role="alert">{query.error}</p> : null}
+      {query.error ? <FoundryUI.Notice>{query.error}</FoundryUI.Notice> : null}
       {query.result?.kind === "mcpBindings"
         ? resources.map((resource) => (
             <McpBindingEditor
@@ -60,7 +61,7 @@ export function McpBindingsPanel({
             />
           ))
         : null}
-    </section>
+    </FoundryUI.Panel>
   );
 }
 
@@ -136,12 +137,12 @@ function McpBindingEditor({
   }
   return (
     <details className="border-b py-3 text-sm">
-      <summary className="cursor-pointer">
+      <FoundryUI.Summary className="cursor-pointer">
         <span className="mr-2 font-medium">{resource.name}</span>
         <Badge variant={binding?.enabled ? "info" : "warning"}>
           {binding?.enabled ? "Binding enabled" : "Needs authorization"}
         </Badge>
-      </summary>
+      </FoundryUI.Summary>
       <div className="space-y-3 pt-3">
         <p>Tools to authorize: {resource.allowedTools.join(", ") || "None"}</p>
         <p className="break-all text-xs text-muted-foreground">
@@ -200,9 +201,9 @@ function McpBindingEditor({
           <p className="text-xs text-muted-foreground">No secret references required.</p>
         )}
         <details>
-          <summary className="cursor-pointer text-muted-foreground">
+          <FoundryUI.Summary className="cursor-pointer text-muted-foreground">
             Exact definition and binding details
-          </summary>
+          </FoundryUI.Summary>
           <p className="py-2 text-xs text-muted-foreground">
             Generation {binding?.generation ?? 0}. An enabled binding must match this exact
             definition and tool list before execution.

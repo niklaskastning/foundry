@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { SandboxRunStatus } from "../../components/foundry/SandboxRunStatus";
 import { V4AgentConfiguration } from "./V4Configuration";
 import { V4RunProgress } from "./V4RunProgress";
@@ -136,7 +137,7 @@ export function RunDetail({
           Refresh progress
         </Button>
       </div>
-      <div className="space-y-1">
+      <div className="space-y-2 border-b pb-5">
         <Link
           className="text-sm text-muted-foreground underline"
           to="/foundry"
@@ -144,7 +145,9 @@ export function RunDetail({
         >
           {detail?.factoryName ?? "Factory workspace"}
         </Link>
-        <h2 className="text-xl font-semibold">{detail?.workItem?.title ?? "Workflow run"}</h2>
+        <FoundryUI.Heading className="text-xl font-semibold">
+          {detail?.workItem?.title ?? "Workflow run"}
+        </FoundryUI.Heading>
         {detail ? (
           <Link
             className="text-sm underline"
@@ -161,7 +164,9 @@ export function RunDetail({
         ) : null}
       </div>
       {run.loading && !detail ? <p role="status">Loading run…</p> : null}
-      {run.error || attempts.error ? <p role="alert">{run.error ?? attempts.error}</p> : null}
+      {run.error || attempts.error ? (
+        <FoundryUI.Notice>{run.error ?? attempts.error}</FoundryUI.Notice>
+      ) : null}
       {detail?.executionBinding?.sandbox ? (
         <SandboxRunStatus
           environmentId={environmentId}
@@ -172,7 +177,7 @@ export function RunDetail({
       ) : null}
       {detail ? (
         <>
-          <div className="flex flex-wrap items-start justify-between gap-4 rounded-lg border bg-card p-4">
+          <div className="flex flex-wrap items-start justify-between gap-5 rounded-xl border bg-card p-4 shadow-xs sm:p-6">
             <div className="space-y-2">
               <Badge
                 size="lg"
@@ -283,7 +288,7 @@ export function RunDetail({
       ) : null}
       {topology && execution ? (
         <section
-          className="space-y-4 rounded-lg border bg-card p-4"
+          className="space-y-5 rounded-xl border bg-card p-4 shadow-xs sm:p-6"
           aria-label="Parallel execution plan"
         >
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -372,12 +377,12 @@ export function RunDetail({
                 className="scroll-mt-16 py-3"
               >
                 <details>
-                  <summary className="cursor-pointer text-sm">
+                  <FoundryUI.Summary className="cursor-pointer text-sm">
                     <span className="font-medium">
                       {index + 1}. {step.id}
                     </span>{" "}
                     · {step.kind === "agent" ? (step.resolved?.role?.name ?? "Agent") : step.kind}
-                  </summary>
+                  </FoundryUI.Summary>
                   <div className="space-y-2 pt-2 text-sm">
                     {step.kind === "agent" || step.kind === "approval" ? (
                       <p className="whitespace-pre-wrap break-words">{step.prompt}</p>
@@ -405,7 +410,9 @@ export function RunDetail({
       ) : null}
       {detail ? (
         <details className="rounded-lg border p-4" open>
-          <summary className="cursor-pointer font-medium">Take over this run in Chats</summary>
+          <FoundryUI.Summary className="cursor-pointer font-medium">
+            Take over this run in Chats
+          </FoundryUI.Summary>
           <div className="pt-4">
             <TakeOverPanel
               environmentId={environmentId}
@@ -507,9 +514,9 @@ export function RunDetail({
                         </>
                       ) : null}
                       <details>
-                        <summary className="cursor-pointer text-muted-foreground">
+                        <FoundryUI.Summary className="cursor-pointer text-muted-foreground">
                           Worker & step details
-                        </summary>
+                        </FoundryUI.Summary>
                         <div className="space-y-2 break-words pt-2">
                           <p className="break-all">
                             Worker: {attempt.workerId ?? "Not assigned"} · Environment:{" "}
@@ -606,9 +613,9 @@ export function RunDetail({
       {detail ? (
         <>
           <details className="rounded-lg border p-3">
-            <summary className="cursor-pointer text-sm">
+            <FoundryUI.Summary className="cursor-pointer text-sm">
               Run identity, revisions and pinned source
-            </summary>
+            </FoundryUI.Summary>
             <dl className="grid gap-1 pt-3 text-sm">
               <div>Run: {runId}</div>
               <div>Work item: {detail.run.workItemId}</div>
@@ -696,7 +703,7 @@ export function AttemptResult({
         </Button>
       </div>
       {loading ? <p role="status">Loading result…</p> : null}
-      {error ? <p role="alert">{error}</p> : null}
+      {error ? <FoundryUI.Notice>{error}</FoundryUI.Notice> : null}
       {result?.kind === "attempt" ? (
         <>
           {result.publish ? (
@@ -772,7 +779,9 @@ export function AttemptResult({
           <p className="text-sm">Worker run: {result.execution?.run.status ?? "No final result"}</p>
           {result.resources ? (
             <details>
-              <summary className="cursor-pointer text-sm">Effective agent, skills & MCP</summary>
+              <FoundryUI.Summary className="cursor-pointer text-sm">
+                Effective agent, skills & MCP
+              </FoundryUI.Summary>
               <div className="pt-3">
                 <V4AgentConfiguration agent={result.resources} />
               </div>
@@ -780,9 +789,9 @@ export function AttemptResult({
           ) : null}
           {result.launch ? (
             <details>
-              <summary className="cursor-pointer text-sm">
+              <FoundryUI.Summary className="cursor-pointer text-sm">
                 Actual worker launch configuration
-              </summary>
+              </FoundryUI.Summary>
               <div className="space-y-2 pt-2 text-sm">
                 <p>
                   Model: {result.launch.model} · Reasoning:{" "}
@@ -800,9 +809,9 @@ export function AttemptResult({
             </details>
           ) : null}
           <details className="text-sm">
-            <summary className="cursor-pointer">
+            <FoundryUI.Summary className="cursor-pointer">
               Checkpoint, writer shutdown & archive completeness
-            </summary>
+            </FoundryUI.Summary>
             <div className="space-y-2 break-all pt-2">
               <p className="text-sm">
                 Checkpoint: {result.execution?.run.checkpointId ?? "Unconfirmed"}
