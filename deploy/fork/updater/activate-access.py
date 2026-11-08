@@ -185,21 +185,21 @@ def active_status(expected_schema=None, expected_automation_schema=None):
         'runtimeLogin', (SELECT rolcanlogin FROM pg_roles WHERE rolname='foundry_instance_runtime'),
         'migratorLogin', (SELECT rolcanlogin FROM pg_roles WHERE rolname='foundry_instance_migrator'));
       COMMIT;"""))
-    if (database['version'] not in ([expected_schema] if expected_schema else [2, 5, 6, 7, 8, 9]) or database['instanceId'] != INSTANCE
+    if (database['version'] not in ([expected_schema] if expected_schema else [2, 5, 6, 7, 8, 9, 10]) or database['instanceId'] != INSTANCE
             or database['environmentId'] != ENVIRONMENT or database['operatorBound'] is not True
             or database['runtimeLogin'] is not True or database['migratorLogin'] is not False):
         raise RuntimeError('Unexpected instance schema, identity, operator binding or login state.')
     gateway_enabled = all(values.get(key) == 'true' for key in GATEWAY_FLAGS)
     advertised = GATEWAY_CAPABILITIES.intersection(descriptor.get('capabilities', []))
     if (advertised != (GATEWAY_CAPABILITIES if gateway_enabled else set())
-            or (gateway_enabled and database['version'] not in [5, 6, 7, 8, 9])):
+            or (gateway_enabled and database['version'] not in [5, 6, 7, 8, 9, 10])):
         raise RuntimeError('Gateway capabilities or schema differ from the configured profile.')
     artifacts_enabled = values.get(ARTIFACT_FLAG) == 'true'
     if (descriptor.get('artifactTransfer') != (ARTIFACT_TRANSFER if artifacts_enabled else None)
-            or (artifacts_enabled and (database['version'] not in [6, 7, 8, 9] or not gateway_enabled))):
+            or (artifacts_enabled and (database['version'] not in [6, 7, 8, 9, 10] or not gateway_enabled))):
         raise RuntimeError('Artifact transfer metadata or schema differs from the configured profile.')
     if descriptor.get('threadArchive') != ({'protocolVersion': '1', 'pageSize': 50}
-            if artifacts_enabled and database['version'] in [7, 8, 9] else None):
+            if artifacts_enabled and database['version'] in [7, 8, 9, 10] else None):
         raise RuntimeError('Thread archive metadata differs from the configured profile or schema.')
     automation_enabled = values.get('FOUNDRY_AUTOMATION_ENABLED') == 'true'
     if descriptor.get('automation') != ({'protocolVersion': '1'} if automation_enabled else None):
@@ -212,7 +212,7 @@ def active_status(expected_schema=None, expected_automation_schema=None):
     sandbox_enabled = values.get('FOUNDRY_SANDBOXES_ENABLED') == 'true'
     if descriptor.get('sandboxes') != ({'protocolVersion': '1'} if sandbox_enabled else None):
         raise RuntimeError('Sandbox metadata differs from its configured profile.')
-    if sandbox_enabled and (database['version'] != 9 or automation_schema != 11):
+    if sandbox_enabled and (database['version'] not in [9, 10] or automation_schema != 11):
         raise RuntimeError('Sandboxes require instance schema 9 and Automation schema 11.')
     return {'sandboxesEnabled': sandbox_enabled, 'automationSchemaVersion': automation_schema, 'automationEnabled': automation_enabled, 'gatewayEnabled': gateway_enabled, 'artifactsEnabled': artifacts_enabled, 'revision': revision, 'image': configured_image, 'schemaVersion': database['version'],
             'instanceId': INSTANCE, 'environmentId': ENVIRONMENT, 'ready': True,
@@ -229,7 +229,7 @@ def start_main():
 def gateway(enabled, *, artifacts=False, sandboxes=False):
     previous = active_status()
     schema = previous['schemaVersion']
-    if sandboxes and (schema != 9 or not previous.get('automationEnabled') or previous.get('automationSchemaVersion') != 11):
+    if sandboxes and (schema not in [9, 10] or not previous.get('automationEnabled') or previous.get('automationSchemaVersion') != 11):
         raise RuntimeError('Sandbox profile requires instance schema 9 and Automation schema 11.')
     if sandboxes and enabled:
         check_sandbox_policy()
@@ -237,7 +237,7 @@ def gateway(enabled, *, artifacts=False, sandboxes=False):
         raise RuntimeError('Archive and delete every sandbox allocation before disabling the profile.')
     if not sandboxes and not enabled and previous.get('sandboxesEnabled'):
         raise RuntimeError('Disable the sandbox profile before changing its required services.')
-    if schema not in [5, 6, 7, 8, 9] or (artifacts and (schema not in [6, 7, 8, 9] or not previous['gatewayEnabled'])):
+    if schema not in [5, 6, 7, 8, 9, 10] or (artifacts and (schema not in [6, 7, 8, 9, 10] or not previous['gatewayEnabled'])):
         raise RuntimeError('This profile requires the migrated gateway; artifacts require schema 6, 7 or 8.')
     if not artifacts and not enabled and previous['artifactsEnabled']:
         raise RuntimeError('Disable artifact publication on workers and Main before disabling the gateway.')
@@ -294,12 +294,16 @@ def gateway(enabled, *, artifacts=False, sandboxes=False):
     print(json.dumps({**result, 'configurationChanged': True, 'configurationRecovery': str(recovery)}, indent=2))
 
 
-def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archive_schema=False, automation_schema=False, machine_schema=False, agent_schema=False, parallel_schema=False, definition_schema=False, sandbox_schema=False, development=False):
+def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archive_schema=False, automation_schema=False, machine_schema=False, agent_schema=False, parallel_schema=False, definition_schema=False, sandbox_schema=False, machine_control_schema=False, development=False):
     if not re.fullmatch(r'sha256:[a-f0-9]{64}', digest) or not re.fullmatch(r'[a-f0-9]{40}', revision):
         raise ValueError('Use an immutable image digest and its exact reviewed source SHA.')
-    if sum([same_schema, artifact_schema, archive_schema, automation_schema, machine_schema, agent_schema, parallel_schema, definition_schema, sandbox_schema]) > 1:
+    if sum([same_schema, artifact_schema, archive_schema, automation_schema, machine_schema, agent_schema, parallel_schema, definition_schema, sandbox_schema, machine_control_schema]) > 1:
         raise ValueError('A schema upgrade cannot be a same-schema update.')
-    if sandbox_schema:
+    if machine_control_schema:
+        previous = active_status(expected_schema=9, expected_automation_schema=11)
+        if not previous.get('automationEnabled'):
+            raise RuntimeError('Machine control requires the active schema-9/11 profile.')
+    elif sandbox_schema:
         previous = active_status(expected_schema=8, expected_automation_schema=11)
         if not previous.get('automationEnabled'):
             raise RuntimeError('Sandboxes require the active Automation schema-11 profile.')
@@ -323,10 +327,10 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archi
         previous = active_status(expected_schema=7, expected_automation_schema=7) if automation_schema else active_status(expected_schema=None if same_schema else 6 if archive_schema else 5 if artifact_schema else 2)
     if automation_schema and not previous.get('automationEnabled'):
         raise RuntimeError('Automation schema upgrade requires the active schema-7 profile.')
-    if same_schema and previous['schemaVersion'] not in [5, 6, 7, 8, 9]:
+    if same_schema and previous['schemaVersion'] not in [5, 6, 7, 8, 9, 10]:
         raise RuntimeError('Same-schema updates require gateway schema 5, 6, 7 or 8.')
     target_automation_schema = 11 if definition_schema else 10 if parallel_schema else 9 if agent_schema else 8 if automation_schema else previous.get('automationSchemaVersion')
-    target_schema = previous['schemaVersion'] if same_schema or automation_schema or agent_schema or parallel_schema or definition_schema else 9 if sandbox_schema else 8 if machine_schema else 7 if archive_schema else 6 if artifact_schema else 5
+    target_schema = previous['schemaVersion'] if same_schema or automation_schema or agent_schema or parallel_schema or definition_schema else 10 if machine_control_schema else 9 if sandbox_schema else 8 if machine_schema else 7 if archive_schema else 6 if artifact_schema else 5
     image = REGISTRY + '@' + digest
     docker('pull', image)
     candidate = json.loads(docker('image', 'inspect', image))[0]
@@ -376,7 +380,7 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archi
                 print(f"Migrating schema {previous['schemaVersion']} to {target_schema} with Main stopped; operator and identities are preserved.", flush=True)
                 run_cli(image, migration_file, 'migrate', '--base-dir', '/var/lib/foundry',
                         '--runtime-role', 'foundry_instance_runtime')
-                if (machine_schema or sandbox_schema) and sql('SELECT version FROM foundry_instance.schema_version;') != str(target_schema):
+                if (machine_schema or sandbox_schema or machine_control_schema) and sql('SELECT version FROM foundry_instance.schema_version;') != str(target_schema):
                     raise RuntimeError('Instance migration did not confirm its target schema.')
             finally:
                 try:
@@ -730,11 +734,11 @@ def main(args):
     development = bool(args and args[-1] == '--development')
     if development:
         args = args[:-1]
-        if not args or args[0] not in ['update', 'upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'upgrade-machine-credentials', 'upgrade-factory-agents', 'upgrade-factory-parallel', 'upgrade-factory-definition-v4', 'upgrade-sandboxes']:
+        if not args or args[0] not in ['update', 'upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'upgrade-machine-credentials', 'upgrade-factory-agents', 'upgrade-factory-parallel', 'upgrade-factory-definition-v4', 'upgrade-sandboxes', 'upgrade-machine-control']:
             raise ValueError('--development is only supported for updates/upgrades.')
 
-    if not (len(args) == 4 and args[:2] == ['automation', 'enable']) and args not in [['preflight'], ['status'], ['gateway', 'enable'], ['gateway', 'disable'], ['artifacts', 'enable'], ['artifacts', 'disable'], ['sandboxes', 'enable'], ['sandboxes', 'disable']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'upgrade-machine-credentials', 'upgrade-factory-agents', 'upgrade-factory-parallel', 'upgrade-factory-definition-v4', 'upgrade-sandboxes', 'update']):
-        raise ValueError('Usage: foundry-activate-access status | preflight | gateway|artifacts|sandboxes enable|disable | activate|upgrade|upgrade-artifacts|upgrade-archive|upgrade-automation|upgrade-machine-credentials|upgrade-factory-agents|upgrade-factory-parallel|upgrade-factory-definition-v4|upgrade-sandboxes|update sha256:<digest> <source-sha>')
+    if not (len(args) == 4 and args[:2] == ['automation', 'enable']) and args not in [['preflight'], ['status'], ['gateway', 'enable'], ['gateway', 'disable'], ['artifacts', 'enable'], ['artifacts', 'disable'], ['sandboxes', 'enable'], ['sandboxes', 'disable']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'upgrade-machine-credentials', 'upgrade-factory-agents', 'upgrade-factory-parallel', 'upgrade-factory-definition-v4', 'upgrade-sandboxes', 'upgrade-machine-control', 'update']):
+        raise ValueError('Usage: foundry-activate-access status | preflight | gateway|artifacts|sandboxes enable|disable | activate|upgrade|upgrade-artifacts|upgrade-archive|upgrade-automation|upgrade-machine-credentials|upgrade-factory-agents|upgrade-factory-parallel|upgrade-factory-definition-v4|upgrade-sandboxes|upgrade-machine-control|update sha256:<digest> <source-sha>')
     if os.geteuid() != 0:
         raise RuntimeError('This operation requires the administrator; no sudo grant is installed.')
     os.umask(0o077)
@@ -749,8 +753,8 @@ def main(args):
         elif args == ['preflight']:
             preflight()
             print('PASS pinned Docker Main, private PostgreSQL, empty fork_connect, absent login roles, stable IDs.')
-        elif args[0] in ['upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'upgrade-machine-credentials', 'upgrade-factory-agents', 'upgrade-factory-parallel', 'upgrade-factory-definition-v4', 'upgrade-sandboxes', 'update']:
-            upgrade(*args[1:], development=development, same_schema=args[0] == 'update', artifact_schema=args[0] == 'upgrade-artifacts', archive_schema=args[0] == 'upgrade-archive', automation_schema=args[0] == 'upgrade-automation', machine_schema=args[0] == 'upgrade-machine-credentials', agent_schema=args[0] == 'upgrade-factory-agents', parallel_schema=args[0] == 'upgrade-factory-parallel', definition_schema=args[0] == 'upgrade-factory-definition-v4', sandbox_schema=args[0] == 'upgrade-sandboxes')
+        elif args[0] in ['upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'upgrade-machine-credentials', 'upgrade-factory-agents', 'upgrade-factory-parallel', 'upgrade-factory-definition-v4', 'upgrade-sandboxes', 'upgrade-machine-control', 'update']:
+            upgrade(*args[1:], development=development, same_schema=args[0] == 'update', artifact_schema=args[0] == 'upgrade-artifacts', archive_schema=args[0] == 'upgrade-archive', automation_schema=args[0] == 'upgrade-automation', machine_schema=args[0] == 'upgrade-machine-credentials', agent_schema=args[0] == 'upgrade-factory-agents', parallel_schema=args[0] == 'upgrade-factory-parallel', definition_schema=args[0] == 'upgrade-factory-definition-v4', sandbox_schema=args[0] == 'upgrade-sandboxes', machine_control_schema=args[0] == 'upgrade-machine-control')
         else:
             activate(*args[1:])
 

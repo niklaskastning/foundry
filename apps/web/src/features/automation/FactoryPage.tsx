@@ -3,9 +3,9 @@ import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime"
 import { isDefinitiveAutomationFailure } from "./failures";
 import { randomUUID } from "../../lib/utils";
 import { useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useWorkspaceNavigation } from "../../foundry/useWorkspaceNavigation";
-import { factoryTabs } from "../../foundry/workspaceSearch";
+import { openWorkspaceRun, workspaceRunReturn, factoryTabs } from "../../foundry/workspaceSearch";
 import { AgentCatalog, WorkflowCatalog } from "./AgentCatalog";
 import { InboxPage } from "./InboxPage";
 import { useAtomValue } from "@effect/atom-react";
@@ -42,12 +42,13 @@ export function FactoryPage({
   initialWorkItemId?: string;
 }) {
   const { search, update } = useWorkspaceNavigation();
+  const navigate = useNavigate({ from: "/foundry" });
   const selected = search.factoryId ?? initialFactoryId;
   const runId = search.runId ?? initialRunId;
   const view = search.view ?? initialView;
   const run = selected && runId ? { factoryId: selected, runId } : null;
   function openRun(factoryId: string, runId: string) {
-    update({ view: "factories", factoryId, runId, attemptId: undefined, attemptsAfter: undefined });
+    void navigate({ search: openWorkspaceRun(search, factoryId, runId) });
   }
   return (
     <div className="mx-auto w-full max-w-7xl space-y-6 p-4 sm:p-6 lg:p-8">
@@ -57,14 +58,7 @@ export function FactoryPage({
           environmentId={environmentId}
           factoryId={run.factoryId}
           runId={run.runId}
-          onBack={() =>
-            update({
-              runId: undefined,
-              attemptId: undefined,
-              attemptsAfter: undefined,
-              tab: search.workItemId ? "work" : "runs",
-            })
-          }
+          onBack={() => void navigate({ search: workspaceRunReturn(search) })}
         />
       ) : view === "runs" && !selected ? (
         <RunList environmentId={environmentId} onOpen={openRun} />
@@ -182,27 +176,7 @@ function FactoryList({
           </Button>
         ) : null}
       </div>
-      <div
-        className={
-          workView
-            ? "space-y-4"
-            : "grid items-start gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]"
-        }
-      >
-        {!workView ? (
-          <div className="min-w-0 xl:order-last">
-            <InboxPage
-              environmentId={environmentId}
-              compact
-              onNavigateRun={(factoryId, runId) =>
-                navigation.update({ view: "factories", factoryId, runId, tab: "runs" })
-              }
-              onNavigateWorkItem={(factoryId, workItemId) =>
-                navigation.update({ view: "factories", factoryId, workItemId, tab: "work" })
-              }
-            />
-          </div>
-        ) : null}
+      <div className="space-y-4">
         <div className="min-w-0 space-y-4">
           <h2 className="text-lg font-semibold">
             {workView ? "Choose a factory" : "Your factories"}
@@ -238,13 +212,25 @@ function FactoryList({
                 {result.items.map((factory) => (
                   <li
                     key={factory.id}
-                    className="flex min-w-0 flex-wrap items-center justify-between gap-3 p-4"
+                    className="relative flex min-w-0 flex-wrap items-center justify-between gap-3 p-4 hover:bg-accent/40"
                   >
                     <div className="min-w-0 flex-1 space-y-1">
                       <Badge variant={factory.archived ? "secondary" : "outline"}>
                         {factory.archived ? "Archived" : "Factory"}
                       </Badge>
-                      <h2 className="break-words text-sm font-semibold">{factory.name}</h2>
+                      <h2 className="break-words text-sm font-semibold">
+                        <Link
+                          to="/foundry"
+                          search={{
+                            view: "factories",
+                            factoryId: factory.id,
+                            tab: workView ? "work" : "overview",
+                          }}
+                          className="after:absolute after:inset-0 focus-visible:underline"
+                        >
+                          {factory.name}
+                        </Link>
+                      </h2>
                     </div>
                     <Button
                       variant="outline"
@@ -264,7 +250,7 @@ function FactoryList({
                   <p className="mt-2 text-sm text-muted-foreground">
                     {filter
                       ? "Try another name or clear the search."
-                      : "Give your factory a name and choose which repositories it can work on."}
+                      : "Add a Factory through your definitions repository, then synchronize and activate its definition."}
                   </p>
                 </div>
               ) : null}
@@ -282,16 +268,15 @@ function FactoryList({
               </div>
             </>
           ) : null}
-          <details
-            className="rounded-xl border p-4"
-            open={
-              result?.kind === "factories" && result.items.length === 0 && !filter
-                ? true
-                : undefined
-            }
-          >
-            <summary className="cursor-pointer font-medium">Create factory</summary>
+          <details className="rounded-xl border p-4">
+            <summary className="cursor-pointer font-medium">
+              Advanced: create a locally managed factory
+            </summary>
             <div className="mt-4 space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Git-managed Factories belong in the definitions repository. This creates a separate
+                local Factory; it does not edit or synchronize a Git definition.
+              </p>
               <fieldset disabled={busy || !canManage || Boolean(pending)} className="space-y-3">
                 <legend className="sr-only">Factory details</legend>
                 <label className="block space-y-1">
@@ -769,9 +754,20 @@ function WorkItems({
   return (
     <ul className="divide-y rounded-xl border bg-card">
       {items.map((item) => (
-        <li key={item.id} className="flex flex-wrap items-center justify-between gap-3 p-4">
+        <li
+          key={item.id}
+          className="relative flex flex-wrap items-center justify-between gap-3 p-4 hover:bg-accent/40"
+        >
           <div className="min-w-0 flex-1 space-y-1">
-            <h3 className="break-words font-medium">{item.title}</h3>
+            <h3 className="break-words font-medium">
+              <button
+                type="button"
+                onClick={() => onOpen(item.id)}
+                className="text-left after:absolute after:inset-0 focus-visible:underline"
+              >
+                {item.title}
+              </button>
+            </h3>
             <p className="break-words text-xs text-muted-foreground">{item.repository}</p>
           </div>
           <Badge

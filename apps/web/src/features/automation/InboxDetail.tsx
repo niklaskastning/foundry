@@ -342,8 +342,8 @@ export function InboxDetail({
         </summary>
         <div className="space-y-3 pt-3">
           <p className="text-sm text-muted-foreground">
-            Marking done only organizes your inbox. It does not approve a result or answer a
-            question.
+            Hiding an item only organizes your personal inbox. Pending questions and approvals
+            remain active until explicitly answered or decided.
           </p>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -358,7 +358,7 @@ export function InboxDetail({
               disabled={busy || !canMark}
               onClick={() => void changeMark(item.isDone ? "reopen" : "done")}
             >
-              {item.isDone ? "Undo done" : "Mark done"}
+              {item.isDone ? "Return to my inbox" : "Hide from my inbox"}
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">

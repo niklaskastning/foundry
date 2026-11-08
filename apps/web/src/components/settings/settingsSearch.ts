@@ -127,7 +127,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
     ],
   },
   {
-    heading: "Agents",
+    heading: "Machine & agent runtime",
     paths: [
       "/settings/providers",
       "/settings/threads",
@@ -137,11 +137,11 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
     ],
   },
   {
-    heading: "Code",
+    heading: "Interactive projects",
     paths: ["/settings/projects", "/settings/source-control", "/settings/worktrees"],
   },
   {
-    heading: "Connections",
+    heading: "Connections & access",
     paths: [
       "/settings/connections",
       "/settings/access",

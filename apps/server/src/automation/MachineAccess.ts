@@ -34,6 +34,11 @@ const mapError = (error: unknown) =>
 export class MachineAccess extends Context.Service<
   MachineAccess,
   {
+    readonly write: (
+      request: Request,
+      factoryId: string,
+      scope: "automation:start" | "automation:control",
+    ) => Effect.Effect<ReadIdentity, AutomationMachineCredentialError>;
     readonly read: (
       request: Request,
     ) => Effect.Effect<ReadIdentity, AutomationMachineCredentialError>;
@@ -67,12 +72,40 @@ const make = Effect.gen(function* () {
       const path = request.url.split("?", 1)[0];
       if (
         request.method !== "POST" ||
-        (path !== `${AUTOMATION_API_V1}/query` && path !== `${AUTOMATION_API_V1}/contract`)
+        ![
+          `${AUTOMATION_API_V1}/query`,
+          `${AUTOMATION_API_V1}/contract`,
+          `${AUTOMATION_API_V1}/command`,
+          `${AUTOMATION_API_V1}/control`,
+          `${AUTOMATION_API_V1}/mcp`,
+        ].includes(path ?? "")
       )
         return yield* new AutomationMachineCredentialError({ code: "forbidden" });
       return yield* credentials.authenticate(token);
     }
     return yield* gateway.identityForRead(request);
+  }, Effect.mapError(mapError));
+  const write = Effect.fn("MachineAccess.write")(function* (
+    request: Request,
+    factoryId: string,
+    scope: "automation:start" | "automation:control",
+  ) {
+    const token = MachineCredentials.machineBearerToken(request.headers.authorization);
+    if (token === undefined)
+      return yield* gateway.identityForWrite(request, "orchestration:operate");
+    const path = request.url.split("?", 1)[0];
+    if (
+      request.method !== "POST" ||
+      ![
+        `${AUTOMATION_API_V1}/${scope === "automation:start" ? "command" : "control"}`,
+        `${AUTOMATION_API_V1}/mcp`,
+      ].includes(path ?? "")
+    )
+      return yield* new AutomationMachineCredentialError({ code: "forbidden" });
+    const identity = yield* credentials.authenticate(token);
+    if (identity.scope !== scope || !identity.factoryIds.includes(factoryId))
+      return yield* new AutomationMachineCredentialError({ code: "forbidden" });
+    return identity;
   }, Effect.mapError(mapError));
   const manage = Effect.fn("MachineAccess.manage")(function* (request: Request) {
     if (MachineCredentials.machineBearerToken(request.headers.authorization) !== undefined)
@@ -110,6 +143,6 @@ const make = Effect.gen(function* () {
     yield* credentials.revoke(yield* manage(request), input.id);
     return null;
   }, Effect.mapError(mapError));
-  return MachineAccess.of({ read, issue, list, revoke });
+  return MachineAccess.of({ write, read, issue, list, revoke });
 });
 export const layer = Layer.effect(MachineAccess, make);

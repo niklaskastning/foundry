@@ -91,7 +91,7 @@ export const layer = Layer.unwrap(
           ArtifactHttp.layer,
           AutomationRuntime.layer.pipe(
             Layer.provide(MachineCredentials.layer),
-            Layer.provide(GatewayGrants.layer),
+            Layer.provide(GatewayGrants.layer.pipe(Layer.provide(MachineCredentials.layer))),
             Layer.provide(DeviceGrants.layer),
             Layer.provide(DeviceChannel.layer),
           ),
