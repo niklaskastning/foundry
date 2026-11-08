@@ -393,7 +393,8 @@ class ActivationTest(unittest.TestCase):
                 activate.gateway(enabled, artifacts=artifacts)
 
     def test_upgrade_keeps_the_current_backup_and_disables_migration_login_on_failure(self):
-        for same_schema, artifact_schema, archive_schema, automation_schema, machine_schema, current_schema, failure in (
+        for development, same_schema, artifact_schema, archive_schema, automation_schema, machine_schema, current_schema, failure in [
+            (development, *case) for development in [False, True] for case in (
             [(False, artifact, False, False, False, 5 if artifact else 2, f) for artifact in [False, True] for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
             + [(True, False, False, False, False, schema, f) for schema in [5, 6, 7, 8, 9] for f in [None, 'source', 'backup', 'connections', 'start', 'verify']]
             + [(True, False, False, version, False, 8, f) for version in [10, 11] for f in [None, 'source', 'backup', 'connections', 'start', 'verify']]
@@ -401,8 +402,8 @@ class ActivationTest(unittest.TestCase):
             + [(False, False, False, version, False, 7 if version == 8 else 8, f) for version in [8, 9, 10, 11] for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'start', 'verify']]
             + [(False, False, False, False, True, 7, f) for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'schema', 'start', 'verify']]
             + [(False, False, False, False, 'sandbox', 8, f) for f in [None, 'source', 'backup', 'connections', 'migrate', 'disable', 'schema', 'start', 'verify']]
-        ):
-            with self.subTest(same_schema=same_schema, artifact_schema=artifact_schema, machine_schema=machine_schema, failure=failure), tempfile.TemporaryDirectory() as directory:
+        ) if not (development and case[-1] == 'backup')]:
+            with self.subTest(development=development, same_schema=same_schema, artifact_schema=artifact_schema, machine_schema=machine_schema, failure=failure), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 target_schema = current_schema if same_schema or automation_schema else 9 if machine_schema == 'sandbox' else 8 if machine_schema else 7 if archive_schema else 6 if artifact_schema else 5
                 config, state = root / 'config', root / 'state'
@@ -449,7 +450,7 @@ class ActivationTest(unittest.TestCase):
                             self.assertIn('migrate', args)
                             self.assertNotIn('automation-migrate', args)
                         recovery = next(state.iterdir())
-                        self.assertTrue((recovery / 'backup-complete').is_file())
+                        self.assertEqual((recovery / 'backup-complete').is_file(), not development)
                         self.assertEqual((recovery / 'access-runtime.env').read_text(), 'original-access-runtime.env')
                         if failure == 'migrate':
                             raise RuntimeError('migration failed')
@@ -476,9 +477,9 @@ class ActivationTest(unittest.TestCase):
                      patch('sys.stderr', new=io.StringIO()):
                     if failure:
                         with self.assertRaises(RuntimeError):
-                            activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, parallel_schema=automation_schema == 10 and not same_schema, machine_schema=machine_schema is True, sandbox_schema=machine_schema == 'sandbox', **({"definition_schema": True} if automation_schema == 11 and not same_schema else {}))
+                            activate.upgrade(DIGEST, REVISION, development=development, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, parallel_schema=automation_schema == 10 and not same_schema, machine_schema=machine_schema is True, sandbox_schema=machine_schema == 'sandbox', **({"definition_schema": True} if automation_schema == 11 and not same_schema else {}))
                     else:
-                        activate.upgrade(DIGEST, REVISION, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, parallel_schema=automation_schema == 10 and not same_schema, machine_schema=machine_schema is True, sandbox_schema=machine_schema == 'sandbox', **({"definition_schema": True} if automation_schema == 11 and not same_schema else {}))
+                        activate.upgrade(DIGEST, REVISION, development=development, same_schema=same_schema, artifact_schema=artifact_schema, archive_schema=archive_schema, automation_schema=automation_schema == 8, agent_schema=automation_schema == 9, parallel_schema=automation_schema == 10 and not same_schema, machine_schema=machine_schema is True, sandbox_schema=machine_schema == 'sandbox', **({"definition_schema": True} if automation_schema == 11 and not same_schema else {}))
                 self.assertEqual(actions[0], ('status', None if same_schema else current_schema if automation_schema else 8 if machine_schema == 'sandbox' else 7 if machine_schema else None if same_schema else 6 if archive_schema else 5 if artifact_schema else 2))
                 self.assertEqual(running, failure in [None, 'source', 'backup', 'connections'])
                 altered = any(a[0] == 'sql' and 'LOGIN PASSWORD' in a[1] for a in actions)
@@ -492,10 +493,15 @@ class ActivationTest(unittest.TestCase):
                     else:
                         self.assertIn(('sql', 'ALTER ROLE foundry_automation_migrator NOLOGIN PASSWORD NULL;' if automation_schema else 'ALTER ROLE foundry_instance_migrator NOLOGIN PASSWORD NULL;'), actions)
                     if automation_schema or machine_schema:
-                        self.assertTrue((next(state.iterdir()) / 'fork_automation.dump').exists())
+                        self.assertEqual((next(state.iterdir()) / 'fork_automation.dump').exists(), not development)
                         self.assertFalse((next(state.iterdir()) / 'migration.env').exists())
                     recovery = next(state.iterdir())
                     manifest = json.loads((recovery / 'manifest.json').read_text())
+                    self.assertEqual(manifest['backupPolicy'], 'development-no-data-backup' if development else 'coordinated')
+                    if development:
+                        self.assertFalse(any(a[0] == 'cp' or (a[0] == 'exec' and any(v in a for v in ['pg_dump', 'pg_dumpall', 'pg_restore'])) for a in actions))
+                        self.assertFalse(any(recovery.glob('*.tar')))
+                        self.assertFalse(any(recovery.glob('*.dump')))
                     self.assertEqual(manifest['targetSchema'], target_schema)
                     if machine_schema:
                         self.assertEqual(manifest['targetAutomationSchema'], 11 if machine_schema == 'sandbox' else 8)
@@ -638,9 +644,22 @@ class ActivationTest(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs['env'], activate.ENV)
         self.assertEqual(run.call_args.args[0][1:3], ['--host', 'unix:///var/run/docker.sock'])
 
+    def test_development_cli_preserves_sandbox_and_same_schema_update_modes(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(activate, 'STATE', Path(directory)), \
+             patch.object(activate.os, 'geteuid', return_value=0), \
+             patch.object(activate.os, 'umask'), \
+             patch.object(activate, 'upgrade') as upgrade:
+            for command in ['upgrade-sandboxes', 'update']:
+                activate.main([command, DIGEST, REVISION, '--development'])
+                self.assertEqual(upgrade.call_args.args, (DIGEST, REVISION))
+                self.assertTrue(upgrade.call_args.kwargs['development'])
+                self.assertEqual(upgrade.call_args.kwargs['sandbox_schema'], command == 'upgrade-sandboxes')
+                self.assertEqual(upgrade.call_args.kwargs['same_schema'], command == 'update')
+
     def test_invalid_arguments_cannot_reach_docker(self):
         with patch.object(activate, 'docker') as docker:
-            for args in [['activate'], ['activate', DIGEST, REVISION, 'extra'], ['restore'], ['preflight', 'extra']]:
+            for args in [['activate'], ['activate', DIGEST, REVISION, 'extra'], ['restore'], ['preflight', 'extra'], ['status', '--development'], ['sandboxes', 'enable', '--development'], ['update', DIGEST, REVISION, '--development', 'extra']]:
                 with self.assertRaises(ValueError):
                     activate.main(args)
             for digest, revision in [('latest', REVISION), (DIGEST, 'main'), (DIGEST + '; command', REVISION)]:

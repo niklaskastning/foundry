@@ -294,7 +294,7 @@ def gateway(enabled, *, artifacts=False, sandboxes=False):
     print(json.dumps({**result, 'configurationChanged': True, 'configurationRecovery': str(recovery)}, indent=2))
 
 
-def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archive_schema=False, automation_schema=False, machine_schema=False, agent_schema=False, parallel_schema=False, definition_schema=False, sandbox_schema=False):
+def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archive_schema=False, automation_schema=False, machine_schema=False, agent_schema=False, parallel_schema=False, definition_schema=False, sandbox_schema=False, development=False):
     if not re.fullmatch(r'sha256:[a-f0-9]{64}', digest) or not re.fullmatch(r'[a-f0-9]{40}', revision):
         raise ValueError('Use an immutable image digest and its exact reviewed source SHA.')
     if sum([same_schema, artifact_schema, archive_schema, automation_schema, machine_schema, agent_schema, parallel_schema, definition_schema, sandbox_schema]) > 1:
@@ -338,6 +338,8 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archi
     backup = Path(tempfile.mkdtemp(prefix='upgrade-', dir=STATE))
     write_private(backup / 'manifest.json', json.dumps({
         'previous': previous, 'candidateImage': image, 'revision': revision,
+        'backupPolicy': 'development-no-data-backup' if development else 'coordinated',
+        'recovery': 'Rebuild/redeploy the pinned artifact; reconcile schemas and reset only disposable development data if needed. Preserve credentials and provider sessions.' if development else 'Restore coordinated backup before downgrading.',
         'targetSchema': target_schema, 'targetAutomationSchema': target_automation_schema, 'instanceId': INSTANCE, 'environmentId': ENVIRONMENT,
     }, indent=2) + '\n')
     for name in ['access-runtime.env', 'access-compose.json']:
@@ -345,19 +347,21 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archi
     print(f'Recovery directory: {backup}', flush=True)
     docker('stop', '--time', '60', MAIN)
     try:
-        save(backup / 'state.tar', 'cp', f'{MAIN}:/var/lib/foundry/.', '-')
-        save(backup / 'workspaces.tar', 'cp', f'{MAIN}:/workspaces/.', '-')
-        save(backup / 'fork_connect.dump', 'exec', POSTGRES, 'pg_dump', '-U', 'foundry_admin', '-Fc', 'fork_connect')
+        if not development:
+            save(backup / 'state.tar', 'cp', f'{MAIN}:/var/lib/foundry/.', '-')
+            save(backup / 'workspaces.tar', 'cp', f'{MAIN}:/workspaces/.', '-')
+            save(backup / 'fork_connect.dump', 'exec', POSTGRES, 'pg_dump', '-U', 'foundry_admin', '-Fc', 'fork_connect')
+            if previous.get('automationEnabled'):
+                save(backup / 'fork_automation.dump', 'exec', POSTGRES, 'pg_dump', '-U', 'foundry_admin', '-Fc', 'fork_automation')
+                docker('exec', '-i', POSTGRES, 'pg_restore', '--list', data=(backup / 'fork_automation.dump').read_bytes())
+            save(backup / 'roles.sql', 'exec', POSTGRES, 'pg_dumpall', '-U', 'foundry_admin', '--roles-only')
+            docker('exec', '-i', POSTGRES, 'pg_restore', '--list', data=(backup / 'fork_connect.dump').read_bytes())
+            write_private(backup / 'backup-complete', 'Coordinated pre-upgrade backup completed.\n')
         if previous.get('automationEnabled'):
-            save(backup / 'fork_automation.dump', 'exec', POSTGRES, 'pg_dump', '-U', 'foundry_admin', '-Fc', 'fork_automation')
-            docker('exec', '-i', POSTGRES, 'pg_restore', '--list', data=(backup / 'fork_automation.dump').read_bytes())
             if sql("SELECT count(*) FROM pg_stat_activity WHERE datname='fork_automation' AND pid<>pg_backend_pid();", database='fork_automation') != '0':
                 raise RuntimeError('Another connection is using fork_automation; no migration performed.')
-        save(backup / 'roles.sql', 'exec', POSTGRES, 'pg_dumpall', '-U', 'foundry_admin', '--roles-only')
-        docker('exec', '-i', POSTGRES, 'pg_restore', '--list', data=(backup / 'fork_connect.dump').read_bytes())
         if sql("SELECT count(*) FROM pg_stat_activity WHERE datname='fork_connect' AND pid<>pg_backend_pid();") != '0':
             raise RuntimeError('Another connection is using fork_connect; no migration performed.')
-        write_private(backup / 'backup-complete', 'Coordinated pre-upgrade backup completed.\n')
     except BaseException:
         docker('start', MAIN)
         raise
@@ -407,7 +411,7 @@ def upgrade(digest, revision, *, same_schema=False, artifact_schema=False, archi
         print(json.dumps({**result, 'upgradePerformed': True, 'backup': str(backup)}, indent=2))
     except BaseException:
         docker('stop', '--time', '60', MAIN)
-        print(f'Main stays stopped. Restore the coordinated backup {backup}; never downgrade only the image.', file=sys.stderr)
+        print(f'Main stays stopped. Recovery record: {backup}. ' + ('Rebuild/redeploy the pinned artifact; reconcile schemas before any development-data reset. Preserve credentials and provider sessions.' if development else 'Restore the coordinated backup; never downgrade only the image.'), file=sys.stderr)
         raise
 
 
@@ -723,6 +727,12 @@ def enable_automation(device_id, environment_id):
         raise
 
 def main(args):
+    development = bool(args and args[-1] == '--development')
+    if development:
+        args = args[:-1]
+        if not args or args[0] not in ['update', 'upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'upgrade-machine-credentials', 'upgrade-factory-agents', 'upgrade-factory-parallel', 'upgrade-factory-definition-v4', 'upgrade-sandboxes']:
+            raise ValueError('--development is only supported for updates/upgrades.')
+
     if not (len(args) == 4 and args[:2] == ['automation', 'enable']) and args not in [['preflight'], ['status'], ['gateway', 'enable'], ['gateway', 'disable'], ['artifacts', 'enable'], ['artifacts', 'disable'], ['sandboxes', 'enable'], ['sandboxes', 'disable']] and not (len(args) == 3 and args[0] in ['activate', 'upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'upgrade-machine-credentials', 'upgrade-factory-agents', 'upgrade-factory-parallel', 'upgrade-factory-definition-v4', 'upgrade-sandboxes', 'update']):
         raise ValueError('Usage: foundry-activate-access status | preflight | gateway|artifacts|sandboxes enable|disable | activate|upgrade|upgrade-artifacts|upgrade-archive|upgrade-automation|upgrade-machine-credentials|upgrade-factory-agents|upgrade-factory-parallel|upgrade-factory-definition-v4|upgrade-sandboxes|update sha256:<digest> <source-sha>')
     if os.geteuid() != 0:
@@ -740,7 +750,7 @@ def main(args):
             preflight()
             print('PASS pinned Docker Main, private PostgreSQL, empty fork_connect, absent login roles, stable IDs.')
         elif args[0] in ['upgrade', 'upgrade-artifacts', 'upgrade-archive', 'upgrade-automation', 'upgrade-machine-credentials', 'upgrade-factory-agents', 'upgrade-factory-parallel', 'upgrade-factory-definition-v4', 'upgrade-sandboxes', 'update']:
-            upgrade(*args[1:], same_schema=args[0] == 'update', artifact_schema=args[0] == 'upgrade-artifacts', archive_schema=args[0] == 'upgrade-archive', automation_schema=args[0] == 'upgrade-automation', machine_schema=args[0] == 'upgrade-machine-credentials', agent_schema=args[0] == 'upgrade-factory-agents', parallel_schema=args[0] == 'upgrade-factory-parallel', definition_schema=args[0] == 'upgrade-factory-definition-v4', sandbox_schema=args[0] == 'upgrade-sandboxes')
+            upgrade(*args[1:], development=development, same_schema=args[0] == 'update', artifact_schema=args[0] == 'upgrade-artifacts', archive_schema=args[0] == 'upgrade-archive', automation_schema=args[0] == 'upgrade-automation', machine_schema=args[0] == 'upgrade-machine-credentials', agent_schema=args[0] == 'upgrade-factory-agents', parallel_schema=args[0] == 'upgrade-factory-parallel', definition_schema=args[0] == 'upgrade-factory-definition-v4', sandbox_schema=args[0] == 'upgrade-sandboxes')
         else:
             activate(*args[1:])
 
