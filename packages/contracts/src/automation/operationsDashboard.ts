@@ -1,3 +1,4 @@
+import { TurnTokenUsage } from "../providerRuntime.ts";
 import * as Schema from "effect/Schema";
 
 export const OperationsDashboardQuery = Schema.Struct({
@@ -56,11 +57,22 @@ export const OperationsDashboard = Schema.Struct({
     environmentId: Schema.String,
     sequence: Schema.Number,
     providerTurnId: Schema.String,
-    usedTokens: Schema.Number,
+    usedTokens: Schema.NullOr(Schema.Number),
+    turnUsage: Schema.NullOr(TurnTokenUsage),
     updatedAt: Schema.String,
   })),
   usageStatus: Schema.Literals(["measured", "missing", "stale"]),
   usageNote: Schema.String,
+  costEvidence: Schema.Array(Schema.Struct({
+    threadId: Schema.String,
+    environmentId: Schema.String,
+    providerThreadId: Schema.String,
+    sequence: Schema.Number,
+    amount: Schema.Number,
+    currency: Schema.String,
+    observedAt: Schema.String,
+    attribution: Schema.Literal("thread_cumulative_unallocated"),
+  })),
   usagePartial: Schema.Boolean,
   usageTruncated: Schema.Boolean,
   usageAttemptLimit: Schema.Number,

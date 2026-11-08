@@ -3,6 +3,7 @@ import { AutomationApplicationError, FoundryArchiveOwner, type FoundryInstanceId
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as ThreadArchive from "../foundry/ThreadArchive.ts";
+import * as DateTime from "effect/DateTime";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -55,6 +56,7 @@ const make = Effect.gen(function* () {
       ORDER BY d.enrolled_at DESC NULLS LAST,r.id LIMIT 1001`;
     const usageEvidence: Array<import("@t3tools/contracts").OperationsDashboard["usageEvidence"][number]> = [];
     const archiveCoverage: Array<import("@t3tools/contracts").OperationsDashboard["archiveCoverage"][number]> = [];
+    const costs = new Map<string, import("@t3tools/contracts").OperationsDashboard["costEvidence"][number]>();
     let usageTruncated = false;
     if (input.runId && rows.length) {
       const attempts = yield* sql<{ commandId: string; owner: unknown; cursor: number }>`SELECT a.command_id AS "commandId",jsonb_build_object('threadId',a.receipt->'receipt'->>'threadId','environmentId',COALESCE(a.worker_binding->'identity'->>'environmentId',d.binding->'identity'->>'environmentId')) AS owner,a.archive_cursor AS cursor FROM foundry_automation.step_attempts a JOIN foundry_automation.dispatch_runs d ON d.run_id=a.run_id WHERE a.run_id=${input.runId} AND a.receipt IS NOT NULL ORDER BY a.ordinal DESC,a.attempt_number DESC LIMIT 6`;
@@ -76,11 +78,16 @@ const make = Effect.gen(function* () {
         const turns = new Map<string, typeof page.value.events[number]>();
         for (const event of page.value.events) {
           if (event.event.type === "provider-turn.updated") turns.set(event.event.payload.id, event);
+          if (event.event.type === "provider-thread.updated" && event.event.payload.contextUsage?.cost) {
+            const cost = event.event.payload.contextUsage.cost;
+            const key = JSON.stringify([owner.value.environmentId, owner.value.threadId, event.event.payload.id]);
+            if (!costs.has(key) || costs.get(key)!.sequence < event.sequence) costs.set(key, { threadId: owner.value.threadId, environmentId: owner.value.environmentId, providerThreadId: event.event.payload.id, sequence: event.sequence, amount: cost.amount, currency: cost.currency, observedAt: DateTime.formatIso(event.event.occurredAt), attribution: "thread_cumulative_unallocated" });
+          }
         }
         for (const event of turns.values()) {
-          if (event.event.type !== "provider-turn.updated" || !event.event.payload.tokenUsage) continue;
+          if (event.event.type !== "provider-turn.updated" || (!event.event.payload.tokenUsage && !event.event.payload.turnTokenUsage)) continue;
           const usage = event.event.payload.tokenUsage;
-          usageEvidence.push({ commandId: attempt.commandId, threadId: owner.value.threadId, environmentId: owner.value.environmentId, sequence: event.sequence, providerTurnId: event.event.payload.id, usedTokens: usage.usedTokens, updatedAt: usage.updatedAt });
+          usageEvidence.push({ commandId: attempt.commandId, threadId: owner.value.threadId, environmentId: owner.value.environmentId, sequence: event.sequence, providerTurnId: event.event.payload.id, usedTokens: usage?.usedTokens ?? null, turnUsage: event.event.payload.turnTokenUsage ?? null, updatedAt: usage?.updatedAt ?? DateTime.formatIso(event.event.occurredAt) });
         }
       }
     }
@@ -92,10 +99,11 @@ const make = Effect.gen(function* () {
       comparison: summarizeOperations(items, 2 * input.from - input.to, input.from),
       items, truncated: rows.length > 1000, unassignedTime: items.filter((item) => item.enrolledAt === null).length,
       cycleTime: missing("Run completion timestamps are not persisted in Automation. Enrollment is not completion; cycle time is unavailable."),
-      costs: (["inference", "compute", "platform"] as const).map((category) => ({ category, ...missing("No monetary evidence is persisted for this category. Archive cursor counts are not usage or money.") })),
+      costs: (["inference", "compute", "platform"] as const).map((category) => ({ category, ...missing("No complete period-attributed monetary evidence for this category. Any provider thread snapshots below are cumulative and unallocated; archive cursors are not usage or money.") })),
       costPerPullRequest: missing("Requires complete, currency-compatible cost evidence for every selected run, including retries, failed work and work without a PR. Denominator: distinct published PR URLs in the enrollment cohort. Shared infrastructure has no allocation evidence."),
       costCoverage: null,
       usageEvidence: latestOperationsUsage(usageEvidence),
+      costEvidence: [...costs.values()],
       usagePartial: true,
       usageTruncated,
       usageAttemptLimit: 5,

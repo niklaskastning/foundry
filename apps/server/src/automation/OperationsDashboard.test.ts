@@ -22,7 +22,7 @@ describe("operations enrollment cohorts", () => {
 });
 
 it("deduplicates reused threads and keeps latest snapshots instead of summing cumulative usage", () => {
-  const base = { commandId: "first", threadId: "thread", environmentId: "worker", sequence: 2, providerTurnId: "turn", usedTokens: 100, updatedAt: "2026-11-08T00:00:00Z" };
+  const base = { commandId: "first", threadId: "thread", environmentId: "worker", sequence: 2, providerTurnId: "turn", usedTokens: 100, turnUsage: null, updatedAt: "2026-11-08T00:00:00Z" };
   const latest = { ...base, commandId: "retry", sequence: 3, usedTokens: 150 };
   expect(latestOperationsUsage([base, latest, base])).toEqual([latest]);
   expect(latestOperationsUsage([base, { ...base, environmentId: "other" }])).toHaveLength(2);
