@@ -35,18 +35,28 @@ const Provision = Schema.Struct({
     Schema.isMaxLength(64),
   ),
 });
-const IsolationPolicy = Schema.Struct({
+const IsolationPolicyV1 = Schema.Struct({
   version: Schema.Literal("1"),
   seccompSha256: Schema.Literal("3c8cf53ee38d309e4bd3691b306184c5226e48d60ed593d1d94d00104e534c44"),
   apparmorSha256: Schema.Literal(
     "0c874446ada466bcdc6e01dec906d61a4261788bfa50127cb36da21947fd7e3e",
   ),
 });
+const IsolationPolicy = Schema.Union([
+  IsolationPolicyV1,
+  Schema.Struct({
+    ...IsolationPolicyV1.fields,
+    version: Schema.Literal("2"),
+    apparmorSha256: Schema.Literal(
+      "e58cacfe81b9256679c73a9d4d6bbdfd0effaad9b182639a78dd52e68f2c1bc4",
+    ),
+  }),
+]);
 const decodeIsolationPolicy = Schema.decodeEffect(Schema.fromJsonString(IsolationPolicy));
-const isolationOptions = [
+const isolationOptions = (version: "1" | "2") => [
   "no-new-privileges:true",
   "seccomp=/usr/local/lib/foundry/sandbox/codex-seccomp-v1.json",
-  "apparmor=foundry-sandbox-codex-v1",
+  `apparmor=foundry-sandbox-codex-v${version}`,
 ];
 const Container = Schema.Struct({
   Id: Schema.String,
@@ -298,11 +308,12 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
       );
       if (provision.isolationPolicy) {
         const actual = container.HostConfig?.SecurityOpt ?? [];
+        const expected = isolationOptions(provision.isolationPolicy.version);
         const seccomp = actual.find((option) => option.startsWith("seccomp="))?.slice(8);
         if (
           actual.length !== 3 ||
-          !actual.includes(isolationOptions[0]!) ||
-          !actual.includes(isolationOptions[2]!) ||
+          !actual.includes(expected[0]!) ||
+          !actual.includes(expected[2]!) ||
           !seccomp ||
           NodeCrypto.createHash("sha256").update(seccomp).digest("hex") !==
             "66afc99a69034d14dde94501463451ef45efe7b678c40653ca067fe2c291d93c"
@@ -383,11 +394,18 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
       return yield* new OciError({ operation: "network", reason: "network-policy" });
     return policy.dns;
   });
-  const verifyIsolation = Effect.fn("OciSupervisor.verifyIsolation")(function* () {
+  const verifyIsolation = Effect.fn("OciSupervisor.verifyIsolation")(function* (
+    version: "1" | "2" = "2",
+  ) {
     const result = yield* runner
       .run({
         command: "/usr/bin/python3",
-        args: ["/usr/local/lib/foundry/sandbox/isolation-policy.py", "inspect"],
+        args: [
+          "/usr/local/lib/foundry/sandbox/isolation-policy.py",
+          "inspect",
+          "--version",
+          version,
+        ],
         cwd: "/",
         timeout: 10000,
         maxOutputBytes: 4096,
@@ -399,11 +417,14 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
       );
     if (result.code !== 0 || result.timedOut || result.stdoutTruncated)
       return yield* new OciError({ operation: "validate", reason: "isolation-policy" });
-    return yield* decodeIsolationPolicy(result.stdout).pipe(
+    const policy = yield* decodeIsolationPolicy(result.stdout).pipe(
       Effect.mapError(
         (cause) => new OciError({ operation: "validate", reason: "isolation-policy", cause }),
       ),
     );
+    if (policy.version !== version)
+      return yield* new OciError({ operation: "validate", reason: "isolation-policy" });
+    return policy;
   });
   const containerArguments = (
     spec: typeof Provision.Type,
@@ -414,7 +435,7 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
     interactive = false,
     dns: string | null = null,
     control: typeof ControlTls.Type | null = null,
-    isolationPolicy?: typeof IsolationPolicy.Type,
+    isolationPolicy?: { readonly version: "1" | "2" },
   ) => [
     "container",
     "create",
@@ -425,9 +446,10 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
     "--user=1000:1000",
     "--read-only",
     "--cap-drop=ALL",
-    ...(isolationPolicy ? isolationOptions : ["no-new-privileges:true"]).map(
-      (option) => `--security-opt=${option}`,
-    ),
+    ...(isolationPolicy
+      ? isolationOptions(isolationPolicy.version)
+      : ["no-new-privileges:true"]
+    ).map((option) => `--security-opt=${option}`),
     "--init",
     "--restart=no",
     `--cpus=${spec.cpuMillis / 1000}`,
@@ -515,8 +537,11 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
           ),
         )
       : null;
-    const isolationPolicy =
-      previous && !previous.isolationPolicy ? undefined : yield* verifyIsolation();
+    const verifiedIsolation =
+      previous && !previous.isolationPolicy
+        ? undefined
+        : yield* verifyIsolation(previous?.isolationPolicy?.version);
+    const isolationPolicy = previous ? previous.isolationPolicy : verifiedIsolation;
     const dns = yield* verifyNetwork(network, controlTls);
     const fingerprint = NodeCrypto.createHash("sha256")
       .update(
@@ -675,7 +700,7 @@ const make = Effect.fn("OciSupervisor.make")(function* (configuration: Configura
         (current.image !== undefined && current.image !== spec.image)
       )
         return yield* new OciError({ operation: "inspect", reason: "ownership" });
-      if (spec.isolationPolicy) yield* verifyIsolation();
+      if (spec.isolationPolicy) yield* verifyIsolation(spec.isolationPolicy.version);
       const verifiedDns = yield* verifyNetwork(spec.resolvedNetwork, spec.controlTls);
       if (verifiedDns !== spec.resolvedDns)
         return yield* new OciError({ operation: "network", reason: "network-policy" });

@@ -1117,7 +1117,7 @@ Deployment-Lock installieren und unmittelbar mit dem gepinnten Sandboximage prü
 
 ```sh
 sudo -n install -d -o root -g root -m 0755 /usr/local/lib/foundry/sandbox
-sudo -n install -o root -g root -m 0644 deploy/fork/sandbox/codex-seccomp-v1.json deploy/fork/sandbox/codex-apparmor-v1 /usr/local/lib/foundry/sandbox/
+sudo -n install -o root -g root -m 0644 deploy/fork/sandbox/codex-seccomp-v1.json deploy/fork/sandbox/codex-apparmor-v1 deploy/fork/sandbox/codex-apparmor-v2 /usr/local/lib/foundry/sandbox/
 sudo -n install -o root -g root -m 0755 deploy/fork/sandbox/isolation-policy.py /usr/local/lib/foundry/sandbox/
 sudo -n /usr/local/lib/foundry/sandbox/isolation-policy.py install
 sudo -n python3 deploy/fork/sandbox/test-isolation-policy.py --image '<repository>@sha256:<digest>'
@@ -1128,7 +1128,10 @@ nicht den Inhalt einer zuvor unter demselben Namen geladenen Kernelpolicy; daher
 gehören Installation und reale Probe in denselben Lockabschnitt. Die Probe prüft
 ohne Modellturn Schreibrechte, Geschwisterpfade und einen Remountversuch. Kein
 privileged-Modus, zusätzliche Host-Capability oder globaler Hostschalter ist nötig.
-Bestehende Allocations behalten ihre gespeicherte OCI-Policy bis zum Löschen.
+Neue Allocations verwenden AppArmor v2 mit einer auf den verschachtelten
+Workspace beschränkten Worktree-Remount-Regel. Bestehende Allocations und
+Archivfinalizer behalten ihre gespeicherte Policyversion; die v1-Datei und das
+geladene v1-Profil bis zu deren Löschung erhalten.
 Normale Agenten-Toolaufrufe verlangen keine interaktive Zustimmung; explizite
 v4-Dateirechte bleiben technisch durchgesetzt. Container teilen weiterhin den
 Hostkernel und sind keine VM-Mandantengrenze.

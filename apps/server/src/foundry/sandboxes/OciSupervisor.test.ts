@@ -31,9 +31,9 @@ const seccompPolicy = JSON.stringify(
 );
 
 const isolationPolicy = {
-  version: "1",
+  version: "2",
   seccompSha256: "3c8cf53ee38d309e4bd3691b306184c5226e48d60ed593d1d94d00104e534c44",
-  apparmorSha256: "0c874446ada466bcdc6e01dec906d61a4261788bfa50127cb36da21947fd7e3e",
+  apparmorSha256: "e58cacfe81b9256679c73a9d4d6bbdfd0effaad9b182639a78dd52e68f2c1bc4",
 };
 
 const fixture = (controlTls?: { hostname: string; bridgeAddress: string; publicCaPem: string }) => {
@@ -65,6 +65,13 @@ const fixture = (controlTls?: { hostname: string; bridgeAddress: string; publicC
         if (command.args[0]?.endsWith("/isolation-policy.py")) {
           stdout = JSON.stringify({
             ...isolationPolicy,
+            ...(command.args.at(-1) === "1"
+              ? {
+                  version: "1",
+                  apparmorSha256:
+                    "0c874446ada466bcdc6e01dec906d61a4261788bfa50127cb36da21947fd7e3e",
+                }
+              : {}),
             ...(isolationValid ? {} : { seccompSha256: "tampered" }),
           });
         } else if (command.command === "/usr/bin/python3") {
@@ -364,7 +371,7 @@ it.effect(
         const supervisor = yield* OciSupervisor.OciSupervisor;
         const started = yield* supervisor.ensure(input);
         const resource = f.resources.get(`container:${started.containerName}`)!;
-        expect(resource.HostConfig.SecurityOpt).toContain("apparmor=foundry-sandbox-codex-v1");
+        expect(resource.HostConfig.SecurityOpt).toContain("apparmor=foundry-sandbox-codex-v2");
         const originalOptions = resource.HostConfig.SecurityOpt;
         resource.HostConfig.SecurityOpt = originalOptions.map((option) =>
           option.startsWith("seccomp=") ? 'seccomp={"defaultAction":"SCMP_ACT_ALLOW"}' : option,
@@ -385,6 +392,32 @@ it.effect("preserves legacy policy for inspection, restart and archive finalizat
       const started = yield* supervisor.ensure(input);
       const resource = f.resources.get(`container:${started.containerName}`)!;
       const stored = JSON.parse(resource.Labels["com.foundry.provision"]!);
+      stored.isolationPolicy.version = "1";
+      stored.isolationPolicy.apparmorSha256 =
+        "0c874446ada466bcdc6e01dec906d61a4261788bfa50127cb36da21947fd7e3e";
+      const originalPolicy = JSON.stringify(stored);
+      for (const item of f.resources.values()) {
+        item.Labels["com.foundry.provision"] = originalPolicy;
+        item.Labels["com.foundry.spec"] = NodeCrypto.createHash("sha256")
+          .update(originalPolicy)
+          .digest("hex");
+      }
+      resource.HostConfig.SecurityOpt = resource.HostConfig.SecurityOpt.map((option) =>
+        option === "apparmor=foundry-sandbox-codex-v2"
+          ? "apparmor=foundry-sandbox-codex-v1"
+          : option,
+      );
+      yield* supervisor.ensure(input);
+      expect(resource.Labels["com.foundry.provision"]).toBe(originalPolicy);
+      yield* supervisor.stop(input);
+      yield* supervisor.finalize(input, {
+        argv: ["node", "/app/foundry-sandbox-bootstrap.mjs", "read-archive"],
+      });
+      const originalFinalizer = f.invocations
+        .filter((args) => args[0] === "container" && args[1] === "create")
+        .at(-1)!;
+      expect(originalFinalizer).toContain("--security-opt=apparmor=foundry-sandbox-codex-v1");
+      expect(originalFinalizer).not.toContain("--security-opt=apparmor=foundry-sandbox-codex-v2");
       delete stored.isolationPolicy;
       const legacy = JSON.stringify(stored);
       const fingerprint = NodeCrypto.createHash("sha256").update(legacy).digest("hex");
@@ -405,7 +438,7 @@ it.effect("preserves legacy policy for inspection, restart and archive finalizat
       const create = f.invocations
         .filter((args) => args[0] === "container" && args[1] === "create")
         .at(-1)!;
-      expect(create).not.toContain("--security-opt=apparmor=foundry-sandbox-codex-v1");
+      expect(create).not.toContain("--security-opt=apparmor=foundry-sandbox-codex-v2");
       yield* supervisor.remove(input);
       expect(f.resources.size).toBe(0);
     }).pipe(Effect.provide(f.layer));

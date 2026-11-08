@@ -9,10 +9,10 @@ import stat
 import subprocess
 
 DIRECTORY = Path('/usr/local/lib/foundry/sandbox')
-PROFILE = 'foundry-sandbox-codex-v1'
 EXPECTED = {
     'codex-seccomp-v1.json': '3c8cf53ee38d309e4bd3691b306184c5226e48d60ed593d1d94d00104e534c44',
     'codex-apparmor-v1': '0c874446ada466bcdc6e01dec906d61a4261788bfa50127cb36da21947fd7e3e',
+    'codex-apparmor-v2': 'e58cacfe81b9256679c73a9d4d6bbdfd0effaad9b182639a78dd52e68f2c1bc4',
 }
 
 
@@ -25,11 +25,12 @@ def trusted(path):
         raise RuntimeError('policy is not a regular file')
 
 
-def verify_files():
+def verify_files(version="2"):
     if Path(__file__).absolute() != DIRECTORY / 'isolation-policy.py':
         raise RuntimeError('helper must be installed at its fixed path')
     trusted(Path(__file__).absolute())
-    for name, digest in EXPECTED.items():
+    for name in ["codex-seccomp-v1.json", f"codex-apparmor-v{version}"]:
+        digest = EXPECTED[name]
         path = DIRECTORY / name
         trusted(path)
         if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
@@ -43,18 +44,19 @@ def verify_files():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('action', choices=['inspect', 'install'])
+    parser.add_argument('--version', choices=['1', '2'], default='2')
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise RuntimeError('root required')
-    verify_files()
+    verify_files(args.version)
     if args.action == 'install':
-        subprocess.run(['/usr/sbin/apparmor_parser', '-r', str(DIRECTORY / 'codex-apparmor-v1')],
+        subprocess.run(['/usr/sbin/apparmor_parser', '-r', str(DIRECTORY / f"codex-apparmor-v{args.version}")],
                        check=True, timeout=15)
     profiles = Path('/sys/kernel/security/apparmor/profiles').read_text().splitlines()
-    if f'{PROFILE} (enforce)' not in profiles:
+    if f"foundry-sandbox-codex-v{args.version} (enforce)" not in profiles:
         raise RuntimeError('required enforcing AppArmor profile unavailable')
-    print(json.dumps({'version': '1', 'seccompSha256': EXPECTED['codex-seccomp-v1.json'],
-                      'apparmorSha256': EXPECTED['codex-apparmor-v1']}))
+    print(json.dumps({'version': args.version, 'seccompSha256': EXPECTED['codex-seccomp-v1.json'],
+                      'apparmorSha256': EXPECTED[f"codex-apparmor-v{args.version}"]}))
 
 
 if __name__ == '__main__':
