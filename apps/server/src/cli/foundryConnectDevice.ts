@@ -57,6 +57,7 @@ export const connectDeviceCommand = Command.make("connect-device", {
   gatewayOrigin: Flag.String("gateway-origin").pipe(Flag.optional),
   streams: Flag.Boolean("streams"),
   developmentLoopback: Flag.Boolean("development-loopback").pipe(
+    Flag.withDefault(false),
     Flag.withDescription(
       "Allow HTTP only on an explicit literal loopback port, without Access credentials, for isolated development.",
     ),
