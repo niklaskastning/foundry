@@ -159,7 +159,7 @@ function ThemeLibraryCard({
               {variantNavigation ? (
                 <div
                   aria-label="Light and dark theme variants"
-                  className="relative h-20"
+                  className="relative h-28"
                   role="group"
                   onBlurCapture={(event) => {
                     const nextTarget = event.relatedTarget;
@@ -177,7 +177,7 @@ function ThemeLibraryCard({
                 >
                   {radialModeGroups.map(({ mode, options, selected }) => {
                     if (!selected) return null;
-                    const rootOffsetX = mode === "light" ? -52 : 52;
+                    const rootOffsetX = mode === "light" ? -60 : 60;
                     const isOpen = radialModeOpen === mode;
                     const isActive = selected.option.activeModes.includes(mode);
                     const modeLabel = mode === "light" ? "Light" : "Dark";
@@ -191,7 +191,7 @@ function ThemeLibraryCard({
                                 : `Use ${mode} variant, currently ${selected.option.label}`
                             }
                             aria-pressed={isActive}
-                            className="absolute left-1/2 top-2 z-20 flex size-14 items-center justify-center rounded-full outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-5 focus-visible:outline-foreground/60"
+                            className="absolute left-1/2 top-2 z-20 flex h-20 w-28 items-center justify-center rounded-md outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-5 focus-visible:outline-foreground/60"
                             style={{
                               transform: `translateX(calc(-50% + ${rootOffsetX}px))`,
                             }}
@@ -857,7 +857,12 @@ export function ThemeLibrary({
           </Button>
         </div>
       </div>
-      {renderPairGrid()}
+      <details>
+        <summary className="cursor-pointer px-3 text-sm font-medium sm:px-4">
+          Browse theme library
+        </summary>
+        {renderPairGrid()}
+      </details>
       <ThemeImportDialog
         onImportedMany={(importedThemes, { updated }) => {
           if (updated) refreshTheme();

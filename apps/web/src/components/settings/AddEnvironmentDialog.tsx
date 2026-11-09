@@ -404,16 +404,19 @@ export function AddEnvironmentDialog({
             spellCheck={false}
           />
         </label>
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-foreground">Pairing code</span>
-          <Input
-            value={savedBackendPairingCode}
-            onChange={(event) => setSavedBackendPairingCode(event.target.value)}
-            placeholder="PAIRCODE"
-            disabled={isAddingSavedBackend}
-            spellCheck={false}
-          />
-        </label>
+        <details open={savedBackendPairingCode.length > 0}>
+          <summary className="cursor-pointer text-xs">Enter code manually</summary>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-foreground">Pairing code</span>
+            <Input
+              value={savedBackendPairingCode}
+              onChange={(event) => setSavedBackendPairingCode(event.target.value)}
+              placeholder="PAIRCODE"
+              disabled={isAddingSavedBackend}
+              spellCheck={false}
+            />
+          </label>
+        </details>
       </div>
       <div>
         <span className="mt-1 block text-2xs text-muted-foreground">

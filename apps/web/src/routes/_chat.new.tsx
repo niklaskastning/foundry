@@ -1,5 +1,6 @@
 import { parseNewThreadLink } from "@t3tools/shared/promptLinks";
 import { createFileRoute, Link, useLocation } from "@tanstack/react-router";
+import { openCommandPalette } from "../commandPaletteBus";
 import { Button } from "../components/ui/button";
 import { NewThreadLinkView } from "../components/promptLinks/NewThreadLinkView";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
@@ -17,6 +18,9 @@ function NewThreadLinkRoute() {
             <EmptyTitle>Could not open the link</EmptyTitle>
             <EmptyDescription>{parsed.error}</EmptyDescription>
           </EmptyHeader>
+          <Button onClick={() => openCommandPalette({ open: "new-thread-in" })}>
+            Start a new chat
+          </Button>
           <Button render={<Link to="/" />} variant="outline">
             Return to workspace
           </Button>

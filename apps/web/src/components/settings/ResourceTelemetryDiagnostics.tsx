@@ -1225,73 +1225,78 @@ function ResourceTelemetryDiagnosticsBody({
         </div>
       </SettingsSection>
 
-      <SettingsSection
-        title="Resource timeline"
-        icon={<HardDriveIcon className="size-4 text-muted-foreground" />}
-        headerAction={
-          <div className="flex items-center gap-2">
-            <HistoryWindowSelector selectedWindowMs={windowMs} onSelect={setWindowMs} />
-            <Button
-              size="icon-micro"
-              variant="ghost"
-              disabled={history.isPending}
-              onClick={history.refresh}
-              aria-label="Refresh resource history"
-            >
-              <RefreshIcon size="xs" refreshing={history.isPending} />
-            </Button>
-          </div>
-        }
-      >
-        <div className="overflow-hidden rounded-[inherit]">
-          {history.error ? (
-            <div className="flex items-start gap-2 border-b border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive sm:px-5">
-              <AlertTriangleIcon className="size-3.5 h-lh shrink-0" />
-              <span>{history.error}</span>
+      <details>
+        <summary className="cursor-pointer text-sm font-medium">
+          Resource history and process details
+        </summary>
+        <SettingsSection
+          title="Resource timeline"
+          icon={<HardDriveIcon className="size-4 text-muted-foreground" />}
+          headerAction={
+            <div className="flex items-center gap-2">
+              <HistoryWindowSelector selectedWindowMs={windowMs} onSelect={setWindowMs} />
+              <Button
+                size="icon-micro"
+                variant="ghost"
+                disabled={history.isPending}
+                onClick={history.refresh}
+                aria-label="Refresh resource history"
+              >
+                <RefreshIcon size="xs" refreshing={history.isPending} />
+              </Button>
             </div>
-          ) : null}
-          <ResourceHistoryChart buckets={history.data?.buckets ?? []} />
-          <HistoryProcessTable processes={history.data?.topProcesses ?? []} />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        title="Live process tree"
-        icon={<CpuIcon className="size-4 text-muted-foreground" />}
-        headerAction={
-          snapshot ? (
-            <span className="text-3xs text-muted-foreground/55">
-              Identity: <span className="font-mono">PID + start time</span>
-            </span>
-          ) : null
-        }
-      >
-        <div className="overflow-hidden rounded-[inherit]">
-          <ProcessTable
-            processes={snapshot?.processes ?? []}
-            canMaintainEnvironment={canMaintainEnvironment}
-            signalingKeys={signalingKeys}
-            onSignal={signalProcess}
-          />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        title="Instrumented application I/O"
-        icon={<DatabaseIcon className="size-4 text-muted-foreground" />}
-        headerAction={
-          <span className="text-3xs text-muted-foreground/55">Logical bytes by operation</span>
-        }
-      >
-        <div className="overflow-hidden rounded-[inherit]">
-          <div className="bg-muted/15 px-4 py-3 text-2xs leading-relaxed text-muted-foreground sm:px-5">
-            Native counters identify which process is reading or writing. These application-level
-            counters identify known T3 operations so process spikes can be correlated with specific
-            persistence and logging paths.
+          }
+        >
+          <div className="overflow-hidden rounded-[inherit]">
+            {history.error ? (
+              <div className="flex items-start gap-2 border-b border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive sm:px-5">
+                <AlertTriangleIcon className="size-3.5 h-lh shrink-0" />
+                <span>{history.error}</span>
+              </div>
+            ) : null}
+            <ResourceHistoryChart buckets={history.data?.buckets ?? []} />
+            <HistoryProcessTable processes={history.data?.topProcesses ?? []} />
           </div>
-          <AttributionTable entries={snapshot?.attribution.entries ?? []} />
-        </div>
-      </SettingsSection>
+        </SettingsSection>
+
+        <SettingsSection
+          title="Live process tree"
+          icon={<CpuIcon className="size-4 text-muted-foreground" />}
+          headerAction={
+            snapshot ? (
+              <span className="text-3xs text-muted-foreground/55">
+                Identity: <span className="font-mono">PID + start time</span>
+              </span>
+            ) : null
+          }
+        >
+          <div className="overflow-hidden rounded-[inherit]">
+            <ProcessTable
+              processes={snapshot?.processes ?? []}
+              canMaintainEnvironment={canMaintainEnvironment}
+              signalingKeys={signalingKeys}
+              onSignal={signalProcess}
+            />
+          </div>
+        </SettingsSection>
+
+        <SettingsSection
+          title="Instrumented application I/O"
+          icon={<DatabaseIcon className="size-4 text-muted-foreground" />}
+          headerAction={
+            <span className="text-3xs text-muted-foreground/55">Logical bytes by operation</span>
+          }
+        >
+          <div className="overflow-hidden rounded-[inherit]">
+            <div className="bg-muted/15 px-4 py-3 text-2xs leading-relaxed text-muted-foreground sm:px-5">
+              Native counters identify which process is reading or writing. These application-level
+              counters identify known T3 operations so process spikes can be correlated with
+              specific persistence and logging paths.
+            </div>
+            <AttributionTable entries={snapshot?.attribution.entries ?? []} />
+          </div>
+        </SettingsSection>
+      </details>
     </>
   );
 }

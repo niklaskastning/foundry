@@ -1,9 +1,5 @@
 import { MoonIcon, SunIcon } from "lucide-react";
-import type { CSSProperties } from "react";
-import {
-  STANDARD_THEME_PREVIEW_COLORS as SHARED_STANDARD_THEME_PREVIEW_COLORS,
-  THEME_PREVIEW_RENDER_SPECS,
-} from "@t3tools/shared/themePreview";
+import { STANDARD_THEME_PREVIEW_COLORS as SHARED_STANDARD_THEME_PREVIEW_COLORS } from "@t3tools/shared/themePreview";
 import { cn } from "../../lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -95,23 +91,6 @@ export function getThemeCardDefinition(theme: ThemeDefinition): ThemeCardDefinit
   };
 }
 
-function getThemePreviewStyle(
-  colors: ThemeCardPreviewColors,
-  mode: ThemeAppearance,
-): CSSProperties {
-  const spec = THEME_PREVIEW_RENDER_SPECS[mode];
-  const modeBase = `color-mix(in oklab, ${colors.canvas} ${spec.baseWeight * 100}%, ${spec.baseTarget})`;
-  const accentPosition = `${spec.accent.center[0] * 100}% ${spec.accent.center[1] * 100}%`;
-  const actionPosition = `${spec.action.center[0] * 100}% ${spec.action.center[1] * 100}%`;
-  return {
-    backgroundColor: modeBase,
-    backgroundImage: [
-      `radial-gradient(circle at ${accentPosition} in oklab, ${colors.accent} 0%, color-mix(in oklab, ${colors.accent} ${spec.accent.middleOpacity * 100}%, transparent) ${spec.accent.middleOffset * 100}%, transparent ${spec.accent.endOffset * 100}%)`,
-      `radial-gradient(circle at ${actionPosition} in oklab, color-mix(in oklab, ${colors.messageAction} ${spec.action.startOpacity * 100}%, transparent) 0%, transparent ${spec.action.endOffset * 100}%)`,
-    ].join(", "),
-  };
-}
-
 function themePreviewEdgeShadow(mode: ThemeAppearance): string {
   return mode === "dark"
     ? "inset 0 0 0 1px rgb(255 255 255 / 0.14), 0 1px 2px rgb(0 0 0 / 0.18)"
@@ -131,19 +110,29 @@ export function ThemePreviewCircle({
     <span
       aria-hidden
       className={cn(
-        "relative block size-14 shrink-0 overflow-hidden rounded-full border-2 border-background",
+        "relative block h-20 w-28 shrink-0 overflow-hidden rounded-md border-2 border-background",
         className,
       )}
       style={{ boxShadow: themePreviewEdgeShadow(mode) }}
     >
       <span
-        className="absolute inset-0 rounded-full"
-        style={{
-          ...getThemePreviewStyle(colors, mode),
-          filter: `blur(${THEME_PREVIEW_RENDER_SPECS[mode].blurAt56Px}px)`,
-          transform: `scale(${THEME_PREVIEW_RENDER_SPECS[mode].scale})`,
-        }}
-      />
+        className="absolute inset-0 flex"
+        style={{ backgroundColor: colors.canvas, color: mode === "dark" ? "#fff" : "#111" }}
+      >
+        <span className="w-7 p-1 text-4xs" style={{ backgroundColor: colors.sidebar }}>
+          ☰<br />
+          Chats
+        </span>
+        <span className="flex flex-1 flex-col gap-1 p-1.5 text-3xs text-left">
+          <span>Workspace</span>
+          <span className="rounded p-1" style={{ backgroundColor: colors.messageSurface }}>
+            Review changes
+          </span>
+          <span className="rounded border px-1" style={{ borderColor: colors.accent }}>
+            Message…
+          </span>
+        </span>
+      </span>
     </span>
   );
 }
@@ -172,7 +161,7 @@ export function ThemePreviewCircles({
                   aria-label={`Use ${label} ${mode} mode`}
                   aria-pressed={isPicked}
                   className={cn(
-                    "relative flex size-[68px] shrink-0 transform-gpu cursor-pointer items-center justify-center rounded-full p-1.5 outline-none transition-transform hover:scale-105 focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-5 focus-visible:outline-foreground/60",
+                    "relative flex h-24 w-32 shrink-0 transform-gpu cursor-pointer items-center justify-center rounded-lg p-1.5 outline-none transition-transform hover:scale-105 focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-5 focus-visible:outline-foreground/60",
                     isPicked && "hover:scale-100",
                   )}
                   onClick={(event) => {
@@ -186,7 +175,7 @@ export function ThemePreviewCircles({
                     <>
                       <span
                         aria-hidden
-                        className="pointer-events-none absolute inset-0 rounded-full"
+                        className="pointer-events-none absolute inset-0 rounded-lg"
                         style={{ boxShadow: "inset 0 0 0 2px var(--ring)" }}
                       />
                       <span
