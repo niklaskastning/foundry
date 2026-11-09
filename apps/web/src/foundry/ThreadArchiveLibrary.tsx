@@ -63,7 +63,7 @@ export function ThreadArchiveLibrary({
     let currentCursor = after;
     let pages = 0;
     try {
-      while (pages < 200) {
+      while (pages < 4) {
         const result = await read({ owner, after: currentCursor });
         if (!AsyncResult.isSuccess(result)) {
           setMessage("This archive could not be read. Verify your current access and try again.");
@@ -92,14 +92,21 @@ export function ThreadArchiveLibrary({
     }
     setBusy(false);
   }
-  const openInitial = useEffectEvent((owner: FoundryArchiveOwner | undefined) => {
-    if (owner) void open(owner);
-  });
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Synchronize the selected archive with the external authenticated archive service.
+  const initialEnvironmentId = initialOwner?.environmentId;
+  const initialThreadId = initialOwner?.threadId;
+  const openInitial = useEffectEvent(
+    (
+      environmentId: FoundryArchiveOwner["environmentId"] | undefined,
+      threadId: FoundryArchiveOwner["threadId"] | undefined,
+    ) => {
+      if (environmentId && threadId) void open({ environmentId, threadId });
+    },
+  );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Synchronize the linked archive with the external authenticated archive service.
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect -- The archive request exposes its loading state.
-    openInitial(initialOwner);
-  }, [initialOwner]);
+    openInitial(initialEnvironmentId, initialThreadId);
+  }, [initialEnvironmentId, initialThreadId]);
   return (
     <FoundryUI.Panel aria-label="Foundry thread archives">
       <div className="flex items-center justify-between gap-3">
@@ -112,6 +119,11 @@ export function ThreadArchiveLibrary({
         Confirmed history stays available from Main when its device is offline or removed.
         Continuing work requires an available writer and workspace.
       </p>
+      {selected && !status && message ? (
+        <Button disabled={busy} onClick={() => void open(selected)}>
+          Retry linked archive
+        </Button>
+      ) : null}
       {initialOwner && !selected ? (
         <Button disabled={busy} onClick={() => void open(initialOwner)}>
           Open linked thread archive
