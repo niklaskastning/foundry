@@ -17,7 +17,7 @@ import { Textarea } from "../../components/ui/textarea";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { automationCommands } from "./commands";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { isDefinitiveAutomationFailure } from "./failures";
+import { inboxDetailMessage, isDefinitiveAutomationFailure } from "./failures";
 import { randomUUID } from "../../lib/utils";
 
 const answerText = (value: unknown) => (typeof value === "string" ? value : "");
@@ -128,7 +128,7 @@ export function InboxDetail({
   return (
     <aside
       className="min-w-0 space-y-4 rounded-lg border bg-card p-4"
-      aria-label="Inbox item details"
+      aria-label="Decision details"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 space-y-2">
@@ -155,11 +155,13 @@ export function InboxDetail({
           Close
         </Button>
       </div>
-      <p className="whitespace-pre-wrap break-words text-sm">
-        {item.detail === "iterations_exhausted"
-          ? "The workflow used all available review rounds without meeting its completion condition. Inspect the last result and decide how to continue."
-          : item.detail}
-      </p>
+      <p className="whitespace-pre-wrap break-words text-sm">{inboxDetailMessage(item.detail)}</p>
+      {item.kind === "error" || item.kind === "blocker" ? (
+        <p className="text-sm text-muted-foreground">
+          Review the latest execution evidence, then open the run to inspect its current state and
+          available next actions.
+        </p>
+      ) : null}
       <div className="space-y-3">
         <Button variant="outline" size="multiline" onClick={() => setShowEvidence(!showEvidence)}>
           {showEvidence ? "Hide evidence" : "Review tests, changes and artifacts"}
@@ -336,14 +338,11 @@ export function InboxDetail({
           You can review this item, but your current session cannot make run decisions.
         </p>
       ) : null}
-      <details className="border-t pt-3">
-        <summary className="cursor-pointer text-sm text-muted-foreground">
-          Personal inbox organization
-        </summary>
+      <section className="border-t pt-3" aria-label="Personal organization">
+        <h3 className="text-sm font-medium">Personal organization</h3>
         <div className="space-y-3 pt-3">
           <p className="text-sm text-muted-foreground">
-            Hiding an item only organizes your personal inbox. Pending questions and approvals
-            remain active until explicitly answered or decided.
+            These actions only organize Decisions. They do not change the run or resolve requests.
           </p>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -358,15 +357,18 @@ export function InboxDetail({
               disabled={busy || !canMark}
               onClick={() => void changeMark(item.isDone ? "reopen" : "done")}
             >
-              {item.isDone ? "Return to my inbox" : "Hide from my inbox"}
+              {item.isDone ? "Show in Decisions" : "Hide from Decisions"}
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            {item.active ? "Current request" : "Resolved or superseded"} · Run revision{" "}
+          <details className="text-xs text-muted-foreground">
+            <summary className="cursor-pointer">Technical details</summary>
+            <p>Reason: {item.detail}</p>
+            <p>Step: {item.stepId ?? "Not specified"}</p>
+            {item.active ? "Active item" : "Resolved or superseded"} · Run revision{" "}
             {item.expectedRevision} · Result revision {item.resultRevision}
-          </p>
+          </details>
         </div>
-      </details>
+      </section>
       {message ? (
         <p role="status" className="text-sm">
           {message}
