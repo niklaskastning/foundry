@@ -28,7 +28,7 @@ export function OperationsDashboardPanel({
   });
   const data = result?.kind === "operationsDashboard" ? result : null;
   return (
-    <section className="space-y-4" aria-label="Operations dashboard">
+    <section className="min-w-0 space-y-4 wrap-anywhere" aria-label="Operations dashboard">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-semibold">Operations</h2>
         <div className="flex flex-wrap gap-2">
@@ -202,12 +202,14 @@ export function OperationsDashboardPanel({
             {data.items.map((item) => (
               <li key={item.runId} className="p-4 space-y-2">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    onClick={() => setSelection({ factoryId, runId: item.runId })}
-                  >
-                    {item.title}
-                  </Button>
+                  <div className="grid min-w-0 max-w-full grid-cols-1">
+                    <Button
+                      variant="ghost"
+                      onClick={() => setSelection({ factoryId, runId: item.runId })}
+                    >
+                      <span className="truncate">{item.title}</span>
+                    </Button>
+                  </div>
                   <Badge variant="outline">{item.state}</Badge>
                   {onOpenRun ? (
                     <Button variant="ghost" onClick={() => onOpenRun(factoryId, item.runId)}>

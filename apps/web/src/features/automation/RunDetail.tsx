@@ -124,7 +124,7 @@ export function RunDetail({
       );
   }
   return (
-    <section className="space-y-4" aria-label="Run detail">
+    <section className="min-w-0 space-y-4 wrap-anywhere" aria-label="Run detail">
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="ghost" onClick={onBack}>
           {navigation.search.workItemId ? "Back to work item" : "Back to runs"}
