@@ -307,6 +307,7 @@ const makeBundleOperations = Effect.gen(function* () {
         ? []
         : [`${manifest.headCommit} HEAD`]),
       `${manifest.checkpointCommit} ${checkpointRef(manifest)}`,
+      ...(manifest.indexTree ? [`${manifest.indexTree} ${checkpointRef(manifest)}-index`] : []),
     ].sort();
     if (stableStringify(heads) !== stableStringify(expectedHeads))
       return yield* new FoundrySandboxArchiveError({ code: "changed" });
@@ -319,9 +320,18 @@ const makeBundleOperations = Effect.gen(function* () {
         ? []
         : ["+HEAD:refs/foundry/archive-head"]),
       `+${checkpointRef(manifest)}:refs/foundry/archive-checkpoint`,
+      ...(manifest.indexTree
+        ? [`+${checkpointRef(manifest)}-index:refs/foundry/archive-index`]
+        : []),
     ]);
     if (manifest.remoteBase?.commit === manifest.headCommit)
       yield* run(repository, ["update-ref", "refs/foundry/archive-head", manifest.headCommit]);
+    if (
+      manifest.indexTree &&
+      (yield* run(repository, ["rev-parse", "refs/foundry/archive-index^{tree}"])) !==
+        manifest.indexTree
+    )
+      return yield* new FoundrySandboxArchiveError({ code: "changed" });
     if (
       (yield* run(repository, ["rev-parse", "refs/foundry/archive-checkpoint^{tree}"])) !==
       manifest.checkpointTree
@@ -350,6 +360,7 @@ const make = Effect.gen(function* () {
         return yield* new FoundrySandboxArchiveError({ code: "invalid_request" });
       const base = yield* remoteBase(input.cwd);
       const headCommit = yield* run(input.cwd, ["rev-parse", "--verify", "HEAD^{commit}"]);
+      const indexTree = yield* run(input.cwd, ["write-tree"]);
       const checkpointCommit = yield* run(input.cwd, [
         "rev-parse",
         "--verify",
@@ -369,6 +380,7 @@ const make = Effect.gen(function* () {
           shared.headCommit !== headCommit ||
           shared.checkpointCommit !== checkpointCommit ||
           shared.checkpointTree !== checkpointTree ||
+          shared.indexTree !== indexTree ||
           stableStringify(shared.remoteBase) !== stableStringify(base)
         )
           return yield* new FoundrySandboxArchiveError({ code: "changed" });
@@ -381,9 +393,18 @@ const make = Effect.gen(function* () {
       }
       const ref = checkpointRef(input);
       yield* run(input.cwd, ["update-ref", ref, checkpointCommit]);
+      yield* run(input.cwd, ["update-ref", `${ref}-index`, indexTree]);
       const temporary = yield* makeTemporary();
       const bundlePath = path.join(temporary, "sandbox.bundle");
-      yield* run(input.cwd, ["bundle", "create", bundlePath, "HEAD", ref, `^${base.commit}`]);
+      yield* run(input.cwd, [
+        "bundle",
+        "create",
+        bundlePath,
+        "HEAD",
+        ref,
+        `${ref}-index`,
+        `^${base.commit}`,
+      ]);
       if ((yield* fs.stat(bundlePath)).size > BigInt(FOUNDRY_SANDBOX_BUNDLE_MAX_BYTES))
         return yield* new FoundrySandboxArchiveError({ code: "incomplete" });
       const publish = Effect.fn("SandboxArchive.publishBundlePart")(function* (
@@ -461,6 +482,7 @@ const make = Effect.gen(function* () {
         headCommit,
         checkpointCommit,
         checkpointTree,
+        indexTree,
         bundleSizeBytes: sizeBytes,
         bundle: root,
       });
@@ -472,6 +494,7 @@ const make = Effect.gen(function* () {
         final.confirmedCursor !== manifest.finalCursor ||
         final.confirmedSourceSequence !== manifest.finalSourceSequence ||
         (yield* run(input.cwd, ["rev-parse", "HEAD"])) !== headCommit ||
+        (yield* run(input.cwd, ["write-tree"])) !== indexTree ||
         (yield* workspaceTree(input.cwd, checkpointCommit)) !== checkpointTree
       )
         return yield* new FoundrySandboxArchiveError({ code: "changed" });
@@ -517,12 +540,18 @@ const make = Effect.gen(function* () {
         repository,
         "+refs/foundry/archive-head:refs/foundry/archive-head",
         "+refs/foundry/archive-checkpoint:refs/foundry/archive-checkpoint",
+        ...(manifest.indexTree ? ["+refs/foundry/archive-index:refs/foundry/archive-index"] : []),
       ]);
       if (manifest.remoteBase)
         yield* run(input.cwd, ["remote", "add", "origin", manifest.remoteBase.url]);
       yield* run(input.cwd, ["checkout", "--detach", manifest.headCommit]);
       yield* run(input.cwd, ["read-tree", "--reset", "-u", manifest.checkpointCommit]);
-      yield* run(input.cwd, ["reset", "--mixed", manifest.headCommit]);
+      yield* run(
+        input.cwd,
+        manifest.indexTree
+          ? ["read-tree", manifest.indexTree]
+          : ["reset", "--mixed", manifest.headCommit],
+      );
       if ((yield* workspaceTree(input.cwd, manifest.checkpointCommit)) !== manifest.checkpointTree)
         return yield* new FoundrySandboxArchiveError({ code: "changed" });
       return {

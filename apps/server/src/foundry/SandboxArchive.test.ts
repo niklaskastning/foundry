@@ -95,6 +95,10 @@ it.live(
       const checkpoint = yield* run(["commit-tree", tree, "-p", head, "-m", "Checkpoint"]);
       yield* run(["update-ref", "refs/t3/checkpoint", checkpoint]);
       yield* run(["reset", "--mixed", "HEAD"]);
+      yield* fs.writeFileString(`${cwd}/file.txt`, "staged\n");
+      yield* run(["add", "file.txt", "new.txt"]);
+      yield* fs.writeFileString(`${cwd}/file.txt`, "changed\n");
+      const indexTree = yield* run(["write-tree"]);
       const owner = {
         environmentId: EnvironmentId.make("sandbox-source"),
         threadId: ThreadId.make("sandbox-thread"),
@@ -582,6 +586,14 @@ it.live(
         const restored = `${root}/restored`;
         yield* fs.makeDirectory(restored);
         const provenance = yield* service.restore({ receipt, cwd: restored });
+        assert.equal(
+          (yield* git.execute({
+            cwd: restored,
+            operation: "sandbox.archive.test",
+            args: ["write-tree"],
+          })).stdout.trim(),
+          indexTree,
+        );
         assert.deepEqual(provenance.source, owner);
         assert.equal(yield* fs.readFileString(`${restored}/file.txt`), "changed\n");
         assert.equal(yield* fs.readFileString(`${restored}/new.txt`), "untracked work\n");
@@ -639,6 +651,7 @@ it.live(
         const legacyManifest = {
           ...manifest,
           remoteBase: undefined,
+          indexTree: undefined,
           bundleSizeBytes: legacyBytes.length,
           bundle: legacyBundle,
         };

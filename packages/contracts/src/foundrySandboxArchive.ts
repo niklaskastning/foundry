@@ -40,6 +40,7 @@ export const FoundrySandboxArchiveManifest = Schema.Struct({
   headCommit: Commit,
   checkpointCommit: Commit,
   checkpointTree: Commit,
+  indexTree: Schema.optional(Commit),
   bundleSizeBytes: Schema.optional(PositiveInt),
   bundle: FoundryArtifactManifest,
 });
