@@ -65,10 +65,10 @@ it.each(["factories", "runs", "inbox"])(
     await vi.waitFor(() => {
       const result = registry.get(connectionAtomRuntime);
       expect(AsyncResult.isFailure(result) && String(Cause.squash(result.cause))).toContain(
-        "This standalone page has no environment connection.",
+        "Saved Foundry identity could not be verified.",
       );
     });
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalled();
     expect(socket).not.toHaveBeenCalled();
   },
 );

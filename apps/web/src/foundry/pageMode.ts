@@ -1,15 +1,20 @@
 import { initialState } from "./onboarding";
 
+const workspaceViews = new Set(["factories", "work", "resources", "runs", "inbox"]);
+
+export function isFoundrySignInPage(pathname: string, search: string): boolean {
+  return (
+    pathname === "/foundry" && !workspaceViews.has(new URLSearchParams(search).get("view") ?? "")
+  );
+}
+
 export function hasConfirmedAutomationView(
   view: string | null | undefined,
   state: ReturnType<typeof initialState>,
 ): boolean {
   return (
-    (view === "factories" ||
-      view === "work" ||
-      view === "resources" ||
-      view === "runs" ||
-      view === "inbox") &&
+    typeof view === "string" &&
+    workspaceViews.has(view) &&
     state.confirmed &&
     state.binding !== null &&
     state.session !== null &&
