@@ -1691,40 +1691,6 @@ function ScheduledTaskEditorForm({
                     payload once when the window from the first delivery closes. Empty keys run
                     normally.
                   </p>
-                  <Field label="Prompt" htmlFor="scheduled-task-prompt">
-                    <Textarea
-                      id="scheduled-task-prompt"
-                      className="max-h-64 overflow-y-auto"
-                      placeholder="What should the agent do each time this runs?"
-                      value={draft.prompt}
-                      onChange={(event) =>
-                        setDraft((current) => ({ ...current, prompt: event.target.value }))
-                      }
-                    />
-                  </Field>
-
-                  <Field label="Model">
-                    <div>
-                      <ProviderModelPicker
-                        environmentId={environmentId}
-                        disabled={saving || !connected}
-                        activeInstanceId={activeInstanceId}
-                        model={activeModel}
-                        lockedProvider={null}
-                        instanceEntries={instanceEntries}
-                        modelOptionsByInstance={modelOptionsByInstance}
-                        isComposerOwned={false}
-                        triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                        onInstanceModelChange={(instanceId, model) =>
-                          setDraft((current) => ({
-                            ...current,
-                            modelKey: `${instanceId}:${model}`,
-                          }))
-                        }
-                      />
-                    </div>
-                  </Field>
-
                   <div className="flex items-center justify-between gap-4">
                     <div className="min-w-0 space-y-1">
                       <Label htmlFor="scheduled-task-signature">Require signature</Label>
@@ -1865,6 +1831,40 @@ function ScheduledTaskEditorForm({
               </div>
             )}
           </div>
+
+          <Field label="Prompt" htmlFor="scheduled-task-prompt">
+            <Textarea
+              id="scheduled-task-prompt"
+              className="max-h-64 overflow-y-auto"
+              placeholder="What should the agent do each time this runs?"
+              value={draft.prompt}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, prompt: event.target.value }))
+              }
+            />
+          </Field>
+
+          <Field label="Model">
+            <div>
+              <ProviderModelPicker
+                environmentId={environmentId}
+                disabled={saving || !connected}
+                activeInstanceId={activeInstanceId}
+                model={activeModel}
+                lockedProvider={null}
+                instanceEntries={instanceEntries}
+                modelOptionsByInstance={modelOptionsByInstance}
+                isComposerOwned={false}
+                triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                onInstanceModelChange={(instanceId, model) =>
+                  setDraft((current) => ({
+                    ...current,
+                    modelKey: `${instanceId}:${model}`,
+                  }))
+                }
+              />
+            </div>
+          </Field>
 
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0 space-y-1">
