@@ -142,7 +142,7 @@ export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl
   maximized: boolean;
   onToggle: () => void;
 }) {
-  const label = maximized ? "Restore panel size" : "Maximize panel";
+  const label = maximized ? "Back to chat" : "Maximize panel";
   return (
     <Tooltip>
       <TooltipTrigger

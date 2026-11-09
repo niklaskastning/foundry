@@ -287,7 +287,7 @@ export const ChatHeader = memo(function ChatHeader({
     >
       <WorkspaceBreadcrumb
         ariaLabel="Thread breadcrumb"
-        className="flex-1 overflow-clip [overflow-clip-margin:2px]"
+        className="flex-1 overflow-clip [overflow-clip-margin:2px] max-sm:[&_ol]:flex-col max-sm:[&_ol]:items-start max-sm:[&_ol]:gap-0 max-sm:[&_[data-slot=workspace-breadcrumb-separator]]:hidden"
       >
         {activeProject ? (
           <>
