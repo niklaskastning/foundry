@@ -65,7 +65,7 @@ export function EvaluationsPanel({
       <div className="flex items-center justify-between gap-3">
         <h2>Evaluations</h2>
         <Button variant="outline" onClick={history.refresh}>
-          Refresh
+          Refresh evaluations
         </Button>
       </div>
       <p>
@@ -81,40 +81,47 @@ export function EvaluationsPanel({
             void evaluate();
           }}
         >
-          {!runId && (
+          <EvaluationSelection
+            environmentId={environmentId}
+            factoryId={factoryId}
+            runId={runId}
+            selectedRun={selectedRun}
+            onRun={setSelectedRun}
+            onScorer={(version, id) => {
+              setScorerFactory(factoryId);
+              setScorerVersion(version);
+              setScorerId(id);
+            }}
+            scorerId={scorerId}
+          />
+          <details>
+            <summary>Advanced: use another scorer revision</summary>
+            <p className="text-sm text-muted-foreground">
+              Use this only when you have the exact identifiers of a registered scorer revision.
+            </p>
             <label className="block">
-              Completed run
+              Scorer factory
               <Input
-                required
-                value={selectedRun}
-                onChange={(event) => setSelectedRun(event.target.value)}
+                value={scorerFactory}
+                onChange={(event) => setScorerFactory(event.target.value)}
               />
             </label>
-          )}
-          <label className="block">
-            Scorer Factory (defaults to this Factory)
-            <Input
-              value={scorerFactory}
-              onChange={(event) => setScorerFactory(event.target.value)}
-            />
-          </label>
-          <label className="block">
-            Scorer definition version
-            <Input
-              required
-              value={scorerVersion}
-              onChange={(event) => setScorerVersion(event.target.value)}
-            />
-          </label>
-          <label className="block">
-            Scorer ID
-            <Input
-              required
-              value={scorerId}
-              onChange={(event) => setScorerId(event.target.value)}
-            />
-          </label>
-          <Button type="submit" disabled={!allowed || busy}>
+            <label className="block">
+              Scorer definition version
+              <Input
+                value={scorerVersion}
+                onChange={(event) => setScorerVersion(event.target.value)}
+              />
+            </label>
+            <label className="block">
+              Scorer ID
+              <Input value={scorerId} onChange={(event) => setScorerId(event.target.value)} />
+            </label>
+          </details>
+          <Button
+            type="submit"
+            disabled={!allowed || busy || !(runId || selectedRun) || !scorerVersion || !scorerId}
+          >
             Evaluate run
           </Button>
         </form>
@@ -165,6 +172,84 @@ export function EvaluationsPanel({
         />
       )}
     </section>
+  );
+}
+
+function EvaluationSelection({
+  environmentId,
+  factoryId,
+  runId,
+  selectedRun,
+  onRun,
+  onScorer,
+  scorerId,
+}: {
+  environmentId: EnvironmentId;
+  factoryId: string;
+  runId: string | undefined;
+  selectedRun: string;
+  onRun: (id: string) => void;
+  onScorer: (version: string, id: string) => void;
+  scorerId: string;
+}) {
+  const runs = useAutomationQuery(environmentId, {
+    op: "runs",
+    factoryId,
+    state: "succeeded",
+    limit: 50,
+  });
+  const factory = useAutomationQuery(environmentId, { op: "factory", factoryId });
+  const active = factory.result?.kind === "factory" ? factory.result.active : null;
+  const scorers = active?.definition.schemaVersion === 4 ? (active.definition.scorers ?? []) : [];
+  return (
+    <div className="space-y-3">
+      {!runId ? (
+        <label className="block space-y-1">
+          Completed run
+          <select
+            required
+            className="block w-full rounded-md border bg-background p-2"
+            value={selectedRun}
+            onChange={(event) => onRun(event.target.value)}
+          >
+            <option value="">Choose a successful run</option>
+            {runs.result?.kind === "runs"
+              ? runs.result.items.map((run) => (
+                  <option key={run.id} value={run.id}>
+                    {run.workItemTitle ?? run.repository} · {run.id}
+                  </option>
+                ))
+              : null}
+          </select>
+          <span className="text-xs text-muted-foreground">
+            Up to 50 successful runs. Open a run to evaluate it directly.
+          </span>
+        </label>
+      ) : null}
+      <label className="block space-y-1">
+        Scorer from the active definition
+        <select
+          className="block w-full rounded-md border bg-background p-2"
+          value={scorerId}
+          onChange={(event) => onScorer(active?.factoryVersionId ?? "", event.target.value)}
+        >
+          <option value="">Choose a scorer</option>
+          {scorers.map((scorer) => (
+            <option key={scorer.id} value={scorer.id}>
+              {scorer.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {factory.loading || runs.loading ? <p role="status">Loading evaluation choices…</p> : null}
+      {factory.error || runs.error ? <p role="alert">{factory.error ?? runs.error}</p> : null}
+      {!factory.loading && !factory.error && !scorers.length ? (
+        <p className="text-sm text-muted-foreground">
+          No scorers in the active definition. Configure a scorer in your definitions repository, or
+          select a known revision under Advanced.
+        </p>
+      ) : null}
+    </div>
   );
 }
 
