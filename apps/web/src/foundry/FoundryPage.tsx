@@ -2,7 +2,7 @@ import { FoundryUI } from "./FoundryUI";
 import { instanceReturnPath } from "./home";
 import { useFoundrySession } from "./useFoundrySession";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { Link, useSearch, useNavigate } from "@tanstack/react-router";
+import { useSearch, useNavigate } from "@tanstack/react-router";
 import { FactoryNavigation, useAutomationCapability } from "./FactoryNavigation";
 import { hasConfirmedAutomationView } from "./pageMode";
 import { lazy, Suspense, useState } from "react";
@@ -14,7 +14,13 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { DeviceCatalog } from "./DeviceCatalog";
 import { useSandboxProfiles } from "./useSandboxProfiles";
 import { WorkerCapacity } from "../features/automation/WorkerCapacity";
-import { instanceCommand, instanceEntry, initialState, type Operation } from "./onboarding";
+import {
+  instanceCommand,
+  instanceEntry,
+  instanceOriginMismatch,
+  initialState,
+  type Operation,
+} from "./onboarding";
 
 const ThreadArchiveLibrary = lazy(() =>
   import("./ThreadArchiveLibrary").then((module) => ({ default: module.ThreadArchiveLibrary })),
@@ -39,11 +45,13 @@ const InboxPage = lazy(() =>
 export function FoundryPage() {
   const search = useSearch({ from: "/foundry" });
   const navigate = useNavigate({ from: "/foundry" });
+  const [resourceSection, setResourceSection] = useState("machines");
   const [origin, setOrigin] = useState(window.location.origin);
   const [state, setState] = useFoundrySession();
   const capability = useAutomationCapability(state.binding?.instanceId);
   const sandboxes = useSandboxProfiles(state.binding?.mainEnvironmentId);
   const [message, setMessage] = useState(state.message);
+  const [mismatch, setMismatch] = useState<ReturnType<typeof instanceOriginMismatch>>();
   const [busy, setBusy] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -69,11 +77,13 @@ export function FoundryPage() {
         );
         return;
       }
+      setMismatch(undefined);
       setState(result.value);
       setOrigin(result.value.binding?.origin ?? window.location.origin);
       setMessage(result.value.message);
     } else {
       setState({ ...initialState(), session: null });
+      setMismatch(instanceOriginMismatch());
       const failure = squashAtomCommandFailure(result);
       setMessage(
         failure instanceof Error ? failure.message : "The operation failed. Retry verification.",
@@ -92,7 +102,13 @@ export function FoundryPage() {
     }
   }
 
-  if (hasConfirmedAutomationView(search.view, state) && capability !== "available") {
+  const archiveRequested = Boolean(search.archiveEnvironmentId && search.archiveThreadId);
+  const workspaceReady = hasConfirmedAutomationView(
+    archiveRequested ? "resources" : search.view,
+    state,
+  );
+
+  if (workspaceReady && capability !== "available") {
     return (
       <main className="min-w-0 flex-1 p-8 pt-20" aria-label="Factory workspace">
         <h1 className="text-xl font-semibold">Factories</h1>
@@ -111,7 +127,7 @@ export function FoundryPage() {
       </main>
     );
   }
-  if (capability === "available" && state.binding && hasConfirmedAutomationView(search.view, state))
+  if (capability === "available" && state.binding && workspaceReady)
     return (
       <main
         id="foundry-content"
@@ -121,72 +137,56 @@ export function FoundryPage() {
       >
         <div className="mx-auto max-w-7xl">
           <Suspense fallback={<p>Loading…</p>}>
-            {search.view === "resources" ? (
-              <div className="space-y-8 p-4 sm:p-6 lg:p-8">
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                    Instance
-                  </p>
-                  <h1 className="mt-1 text-2xl font-semibold">Resources</h1>
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    Instance-wide worker inventory and execution capacity. Configure interactive
-                    connections in Settings → Connections; configure workflow access in each
-                    Factory.
-                  </p>
-                </div>
-                <FoundryUI.Panel aria-label="Resource settings">
-                  <FoundryUI.Heading>Configuration by scope</FoundryUI.Heading>
-                  <div className="grid gap-5 text-sm sm:grid-cols-3">
-                    <div className="space-y-2">
-                      <h3 className="font-medium">Instance & machines</h3>
-                      <p className="leading-6 text-muted-foreground">
-                        Manage registered machines and execution capacity below.
-                      </p>
-                      <Link
-                        className="inline-flex min-h-9 items-center rounded-md underline underline-offset-4 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
-                        to="/settings/connections"
-                      >
-                        Interactive connections
-                      </Link>
-                    </div>
-                    <div className="space-y-2">
-                      <h3 className="font-medium">Factory</h3>
-                      <p className="leading-6 text-muted-foreground">
-                        Definitions, workflows and authorized MCP bindings belong to their Factory.
-                      </p>
-                      <Link
-                        className="inline-flex min-h-9 items-center rounded-md underline underline-offset-4 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
-                        to="/foundry"
-                        search={{ view: "factories" }}
-                      >
-                        Choose a Factory
-                      </Link>
-                    </div>
-                    <div className="space-y-2">
-                      <h3 className="font-medium">Interactive work</h3>
-                      <p className="leading-6 text-muted-foreground">
-                        Provider and project settings apply to the selected environment.
-                      </p>
-                      <Link
-                        className="inline-flex min-h-9 items-center rounded-md underline underline-offset-4 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
-                        to="/settings/providers"
-                      >
-                        Provider settings
-                      </Link>
-                    </div>
-                  </div>
-                </FoundryUI.Panel>
-                {sandboxes?.supported ? (
+            {archiveRequested ? (
+              <div className="space-y-4 p-4 sm:p-6 lg:p-8">
+                <Button
+                  variant="outline"
+                  onClick={() => void navigate({ search: { view: "resources" } })}
+                >
+                  Back to resources
+                </Button>
+                <ThreadArchiveLibrary
+                  initialOwner={{
+                    environmentId: EnvironmentId.make(search.archiveEnvironmentId!),
+                    threadId: ThreadId.make(search.archiveThreadId!),
+                  }}
+                />
+              </div>
+            ) : search.view === "resources" ? (
+              <div className="space-y-6 p-4 sm:p-6 lg:p-8">
+                <h1 className="text-2xl font-semibold">Resources</h1>
+                <nav aria-label="Resource sections" className="flex flex-wrap gap-2">
+                  {["machines", "sandboxes", "connections", "archives", "files"].map((section) => (
+                    <Button
+                      key={section}
+                      variant={resourceSection === section ? "secondary" : "outline"}
+                      onClick={() => setResourceSection(section)}
+                    >
+                      {section.charAt(0).toUpperCase() + section.slice(1)}
+                    </Button>
+                  ))}
+                </nav>
+                {resourceSection === "machines" ? (
+                  <>
+                    <WorkerCapacity environmentId={state.binding.mainEnvironmentId} />
+                    <DeviceCatalog readinessInDetails />
+                  </>
+                ) : resourceSection === "sandboxes" ? (
+                  sandboxes?.supported ? (
+                    <SandboxPanel
+                      environmentId={state.binding.mainEnvironmentId}
+                      showConnection={false}
+                    />
+                  ) : (
+                    <p>Sandboxes are not available on this instance.</p>
+                  )
+                ) : resourceSection === "connections" ? (
                   <CentralConnections environmentId={state.binding.mainEnvironmentId} />
-                ) : null}
-                <WorkerCapacity environmentId={state.binding.mainEnvironmentId} />
-                <DeviceCatalog readinessInDetails />
-                {sandboxes?.supported ? (
-                  <SandboxPanel
-                    environmentId={state.binding.mainEnvironmentId}
-                    showConnection={false}
-                  />
-                ) : null}
+                ) : resourceSection === "archives" ? (
+                  <ThreadArchiveLibrary />
+                ) : (
+                  <ArtifactLibrary />
+                )}
               </div>
             ) : search.view === "inbox" ? (
               <div className="p-4 sm:p-6 lg:p-8">
@@ -237,6 +237,19 @@ export function FoundryPage() {
         <p role="status" className="text-sm">
           {busy ? "Checking instance…" : message}
         </p>
+        {mismatch ? (
+          <div className="space-y-2 text-sm">
+            <p>Current address: {mismatch.current}</p>
+            <p>Configured address: {mismatch.configured}</p>
+            <a className="underline" href={instanceEntry(mismatch.configured)}>
+              Open configured instance
+            </a>
+            <p className="text-muted-foreground">
+              Your saved identity remains unchanged. Confirm this address with your operator before
+              continuing.
+            </p>
+          </div>
+        ) : null}
         <div className="space-y-2">
           <p className="break-all text-sm text-muted-foreground">{window.location.origin}</p>
           <details open={nativeTransport || undefined}>
@@ -403,23 +416,6 @@ export function FoundryPage() {
               permissions are managed separately for each machine.
             </p>
           </div>
-        ) : null}
-        {state?.session && state.artifactsAvailable && !nativeTransport ? (
-          <Suspense fallback={<p className="text-sm">Loading files…</p>}>
-            <ArtifactLibrary />
-            {state.archivesAvailable ? (
-              <ThreadArchiveLibrary
-                {...(search.archiveEnvironmentId && search.archiveThreadId
-                  ? {
-                      initialOwner: {
-                        environmentId: EnvironmentId.make(search.archiveEnvironmentId),
-                        threadId: ThreadId.make(search.archiveThreadId),
-                      },
-                    }
-                  : {})}
-              />
-            ) : null}
-          </Suspense>
         ) : null}
       </section>
     </div>

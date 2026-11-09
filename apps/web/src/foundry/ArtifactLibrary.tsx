@@ -11,6 +11,7 @@ import { artifactListCommand } from "./artifacts";
 export function ArtifactLibrary() {
   const run = useAtomCommand(artifactListCommand, { reportFailure: false });
   const [items, setItems] = useState<ReadonlyArray<FoundryArtifactManifest>>([]);
+  const [showInternal, setShowInternal] = useState(false);
   const [next, setNext] = useState<string | null>(null);
   const [selected, setSelected] = useState<FoundryArtifactManifest | null>(null);
   const [busy, setBusy] = useState(false);
@@ -25,6 +26,9 @@ export function ArtifactLibrary() {
     } else setMessage("Files could not be loaded. Verify your instance connection and try again.");
     setBusy(false);
   }
+  const internal = (item: FoundryArtifactManifest) =>
+    /^foundry-sandbox-bundle-part-\d+$/.test(item.name);
+  const internalCount = items.filter(internal).length;
   return (
     <FoundryUI.Panel aria-label="Foundry files">
       <div className="flex items-center justify-between gap-3">
@@ -36,25 +40,39 @@ export function ArtifactLibrary() {
       <p className="text-sm text-muted-foreground">
         Confirmed files are available here even when their original device is offline.
       </p>
+      {internalCount > 0 ? (
+        <div className="space-y-2">
+          <p className="text-sm text-muted-foreground">
+            {internalCount} internal sandbox archive transfer parts hidden. Open the logical archive
+            from its sandbox to inspect or resume it.
+          </p>
+          <Button variant="outline" onClick={() => setShowInternal(!showInternal)}>
+            {showInternal ? "Hide transfer parts" : "Show technical transfer parts"}
+          </Button>
+        </div>
+      ) : null}
       {items.length > 0 ? (
         <ul className="space-y-2">
-          {items.map((item) => (
-            <li key={item.reference.artifactId} className="flex items-center gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm">{item.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  {formatAttachmentSize(item.sizeBytes)}
-                </p>
-              </div>
-              <Button
-                variant="outline"
-                onClick={() => setSelected(item)}
-                aria-label={`Open ${item.name}`}
-              >
-                Open
-              </Button>
-            </li>
-          ))}
+          {items
+            .filter((item) => showInternal || !internal(item))
+            .map((item) => (
+              <li key={item.reference.artifactId} className="flex items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm">{item.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {formatAttachmentSize(item.sizeBytes)} · Source:{" "}
+                    {item.reference.owner.environmentId}
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={() => setSelected(item)}
+                  aria-label={`Open ${item.name}`}
+                >
+                  Open
+                </Button>
+              </li>
+            ))}
         </ul>
       ) : null}
       {next ? (

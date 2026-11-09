@@ -5,7 +5,7 @@ import { SandboxSetupArchive } from "./SandboxSetupArchive";
 import type { FoundrySandboxDetail, FoundrySandboxMutation, ThreadId } from "@t3tools/contracts";
 import { useState } from "react";
 import { Button } from "../ui/button";
-import { ThreadArchiveLibrary } from "../../foundry/ThreadArchiveLibrary";
+import { useNavigate } from "@tanstack/react-router";
 
 export function SandboxAllocationDetail({
   detail,
@@ -25,51 +25,65 @@ export function SandboxAllocationDetail({
   onOpen: () => void;
 }) {
   const [showSetupArchive, setShowSetupArchive] = useState(false);
-  const [archiveThread, setArchiveThread] = useState<ThreadId>();
+  const navigate = useNavigate();
   const { allocation, archiveReceipt, setupLog } = detail;
   const threads = archiveReceipt && "threads" in archiveReceipt ? archiveReceipt.threads : [];
   const setupArtifact =
     archiveReceipt && "archive" in archiveReceipt && archiveReceipt.archive.kind === "setup"
       ? archiveReceipt.archive.artifact
       : null;
-  const selected = threads.find((thread) => thread.manifest.owner.threadId === archiveThread);
   const terminal = allocation.state === "deleted";
   const maxExpiry = allocation.createdAt + allocation.profile.maxLifetimeSeconds * 1000;
   const extension = Math.min(maxExpiry, allocation.expiresAt + 60 * 60 * 1000);
   return (
     <section className="space-y-5 rounded-lg border bg-muted/10 p-4" aria-label="Sandbox details">
-      <dl className="grid gap-1 text-sm">
-        <div>
-          <dt className="inline font-medium">Allocation: </dt>
-          <dd className="inline break-all">{allocation.allocationId}</dd>
-        </div>
-        <div>
-          <dt className="inline font-medium">Profile revision: </dt>
-          <dd className="inline break-all">{allocation.profile.revision}</dd>
-        </div>
-        <div>
-          <dt className="inline font-medium">
-            {allocation.request.resumeAllocationId ? "Profile checkout baseline: " : "Checkout: "}
-          </dt>
-          <dd className="inline break-all">{allocation.profile.checkout.commit}</dd>
-        </div>
-        <div>
-          <dt className="inline font-medium">Expires: </dt>
-          <dd className="inline">{new Date(allocation.expiresAt).toLocaleString()}</dd>
-        </div>
-        {allocation.request.resumeAllocationId ? (
+      <div>
+        <h3 className="font-medium">{allocation.profile.label}</h3>
+        <p className="text-sm text-muted-foreground">
+          {allocation.state} · {allocation.request.owner.kind} · Created{" "}
+          {new Date(allocation.createdAt).toLocaleString()}
+        </p>
+      </div>
+      {allocation.request.owner.kind === "workflow" ? (
+        <p className="text-sm">
+          Factory: {allocation.request.owner.factoryId} · Run: {allocation.request.owner.runId}
+        </p>
+      ) : null}
+      <details>
+        <FoundryUI.Summary>Technical details</FoundryUI.Summary>
+        <dl className="grid gap-1 text-sm">
           <div>
-            <dt className="inline font-medium">Continued from: </dt>
-            <dd className="inline">{allocation.request.resumeAllocationId}</dd>
-            {allocation.request.resumeThreadId ? (
-              <>
-                <dt className="font-medium">Source thread</dt>
-                <dd className="break-all">{allocation.request.resumeThreadId}</dd>
-              </>
-            ) : null}
+            <dt className="inline font-medium">Allocation: </dt>
+            <dd className="inline break-all">{allocation.allocationId}</dd>
           </div>
-        ) : null}
-      </dl>
+          <div>
+            <dt className="inline font-medium">Profile revision: </dt>
+            <dd className="inline break-all">{allocation.profile.revision}</dd>
+          </div>
+          <div>
+            <dt className="inline font-medium">
+              {allocation.request.resumeAllocationId ? "Profile checkout baseline: " : "Checkout: "}
+            </dt>
+            <dd className="inline break-all">{allocation.profile.checkout.commit}</dd>
+          </div>
+          <div>
+            <dt className="inline font-medium">Expires: </dt>
+            <dd className="inline">{new Date(allocation.expiresAt).toLocaleString()}</dd>
+          </div>
+          {allocation.request.resumeAllocationId ? (
+            <div>
+              <dt className="inline font-medium">Continued from: </dt>
+              <dd className="inline">{allocation.request.resumeAllocationId}</dd>
+              {allocation.request.resumeThreadId ? (
+                <>
+                  <dt className="font-medium">Source thread</dt>
+                  <dd className="break-all">{allocation.request.resumeThreadId}</dd>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+        </dl>
+      </details>
       {allocation.failure ? (
         <FoundryUI.Notice>
           {allocation.failure === "capacity"
@@ -77,59 +91,61 @@ export function SandboxAllocationDetail({
             : `Sandbox failed: ${allocation.failure}.`}
         </FoundryUI.Notice>
       ) : null}
-      <div className="flex flex-wrap gap-2">
-        <Button
-          disabled={busy || allocation.state !== "ready" || !allocation.deviceId}
-          onClick={onOpen}
-        >
-          Open environment
-        </Button>
-        <Button
-          variant="outline"
-          disabled={
-            busy ||
-            !canOperate ||
-            !["requested", "provisioning", "setup", "ready"].includes(allocation.state)
-          }
-          onClick={() => onCommand({ action: "stop", allocationId: allocation.allocationId })}
-        >
-          Stop
-        </Button>
-        <Button
-          variant="outline"
-          disabled={busy || !canOperate || allocation.state !== "failed"}
-          onClick={() => onCommand({ action: "retry", allocationId: allocation.allocationId })}
-        >
-          {allocation.deleteRequested ? "Retry archive and cleanup" : "Retry setup"}
-        </Button>
-        <Button
-          variant="outline"
-          disabled={
-            busy ||
-            !canOperate ||
-            !["requested", "provisioning", "setup", "ready"].includes(allocation.state) ||
-            terminal ||
-            allocation.deleteRequested ||
-            extension <= allocation.expiresAt
-          }
-          onClick={() =>
-            onCommand({
-              action: "extend",
-              allocationId: allocation.allocationId,
-              expiresAt: extension,
-            })
-          }
-        >
-          Extend up to one hour
-        </Button>
-        <Button
-          variant="destructive-outline"
-          disabled={busy || !canOperate || terminal || allocation.deleteRequested}
-          onClick={() => onCommand({ action: "delete", allocationId: allocation.allocationId })}
-        >
-          Archive and delete
-        </Button>
-      </div>
+      {!terminal ? (
+        <div className="flex flex-wrap gap-2">
+          <Button
+            disabled={busy || allocation.state !== "ready" || !allocation.deviceId}
+            onClick={onOpen}
+          >
+            Open environment
+          </Button>
+          <Button
+            variant="outline"
+            disabled={
+              busy ||
+              !canOperate ||
+              !["requested", "provisioning", "setup", "ready"].includes(allocation.state)
+            }
+            onClick={() => onCommand({ action: "stop", allocationId: allocation.allocationId })}
+          >
+            Stop
+          </Button>
+          <Button
+            variant="outline"
+            disabled={busy || !canOperate || allocation.state !== "failed"}
+            onClick={() => onCommand({ action: "retry", allocationId: allocation.allocationId })}
+          >
+            {allocation.deleteRequested ? "Retry archive and cleanup" : "Retry setup"}
+          </Button>
+          <Button
+            variant="outline"
+            disabled={
+              busy ||
+              !canOperate ||
+              !["requested", "provisioning", "setup", "ready"].includes(allocation.state) ||
+              terminal ||
+              allocation.deleteRequested ||
+              extension <= allocation.expiresAt
+            }
+            onClick={() =>
+              onCommand({
+                action: "extend",
+                allocationId: allocation.allocationId,
+                expiresAt: extension,
+              })
+            }
+          >
+            Extend up to one hour
+          </Button>
+          <Button
+            variant="destructive-outline"
+            disabled={busy || !canOperate || terminal || allocation.deleteRequested}
+            onClick={() => onCommand({ action: "delete", allocationId: allocation.allocationId })}
+          >
+            Archive and delete
+          </Button>
+        </div>
+      ) : null}
       {allocation.deleteRequested && !terminal ? (
         <p role="status">
           Deletion requested. The environment is retained until its archive is confirmed.
@@ -162,7 +178,16 @@ export function SandboxAllocationDetail({
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => setArchiveThread(manifest.owner.threadId)}
+                onClick={() =>
+                  void navigate({
+                    to: "/foundry",
+                    search: {
+                      view: "resources",
+                      archiveEnvironmentId: manifest.owner.environmentId,
+                      archiveThreadId: manifest.owner.threadId,
+                    },
+                  })
+                }
               >
                 Open archive
               </Button>
@@ -191,12 +216,6 @@ export function SandboxAllocationDetail({
             <SandboxSetupArchive
               manifest={setupArtifact}
               onClose={() => setShowSetupArchive(false)}
-            />
-          ) : null}
-          {selected ? (
-            <ThreadArchiveLibrary
-              key={selected.manifest.owner.threadId}
-              initialOwner={selected.manifest.owner}
             />
           ) : null}
         </div>

@@ -32,6 +32,9 @@ async function request(
   return FoundryOnboarding.readResponse(response);
 }
 
+let originMismatch: { current: string; configured: string } | undefined;
+export const instanceOriginMismatch = () => originMismatch;
+
 export async function executeInstanceOperation(input: {
   operation: Operation;
   candidate?: FoundryOnboarding.InstanceBinding;
@@ -59,6 +62,8 @@ export async function executeInstanceOperation(input: {
         });
     });
   } catch (error) {
+    originMismatch =
+      error instanceof FoundryOnboarding.OnboardingError ? error.originMismatch : undefined;
     sessionState =
       input.operation === "login" &&
       isAuthError(error) &&
@@ -92,7 +97,7 @@ export const instanceCommand = createRuntimeCommand(appAtomRuntime, {
 });
 
 export function instanceEntry(raw: string): string {
-  return `${FoundryOnboarding.normalizeOrigin(raw, import.meta.env.DEV)}/foundry`;
+  return `${FoundryOnboarding.normalizeOrigin(raw, true)}/foundry`;
 }
 
 let sessionState: OnboardingResult | undefined;

@@ -35,7 +35,11 @@ export class OnboardingError extends Error {
     | "coordination"
     | "coordination_busy";
 
-  constructor(code: OnboardingError["code"]) {
+  readonly originMismatch: { current: string; configured: string } | undefined;
+  constructor(
+    code: OnboardingError["code"],
+    originMismatch?: { current: string; configured: string },
+  ) {
     super(
       {
         address: "Enter an HTTPS instance origin without credentials, a path, query or fragment.",
@@ -60,6 +64,7 @@ export class OnboardingError extends Error {
       }[code],
     );
     this.code = code;
+    this.originMismatch = originMismatch;
   }
 }
 
@@ -113,7 +118,18 @@ export function verifyDescriptor(
     auth.publicOrigin !== origin ||
     normalizeOrigin(auth.issuer, auth.bootstrapMethods.includes("password")) !== auth.issuer
   )
-    throw new OnboardingError("identity");
+    throw new OnboardingError(
+      "identity",
+      auth.publicOrigin !== origin
+        ? {
+            current: origin,
+            configured: normalizeOrigin(
+              auth.publicOrigin,
+              auth.bootstrapMethods.includes("password"),
+            ),
+          }
+        : undefined,
+    );
   const binding = {
     origin,
     issuer: auth.issuer,
