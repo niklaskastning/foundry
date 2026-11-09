@@ -109,6 +109,7 @@ describe("AddEnvironmentDialog", () => {
       page.getByRole("textbox", { name: "Pairing link or host" }),
       "devbox.example.com",
     );
+    await userEvent.click(page.getByText("Enter code manually", { exact: true }));
     await userEvent.type(page.getByPlaceholder("PAIRCODE"), "PAIRCODE");
     await userEvent.click(sshCard());
     await userEvent.type(page.getByPlaceholder("Search hosts or type devbox"), "devbox");

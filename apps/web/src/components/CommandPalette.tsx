@@ -1077,6 +1077,7 @@ function OpenCommandPaletteDialog(props: {
         kind: "submenu",
         value: `action:add-project:${environmentId}:more-sources`,
         title: "Set up another source",
+        addonIcon: <FolderGit2Icon className={ADDON_ICON_CLASS} />,
         description: "Connect additional repository services",
         searchTerms: ["setup", "connect", "github", "gitlab", "azure", "bitbucket"],
         icon: <FolderGit2Icon className={ITEM_ICON_CLASS} />,
