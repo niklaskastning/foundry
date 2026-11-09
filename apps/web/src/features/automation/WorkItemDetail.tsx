@@ -323,7 +323,7 @@ function StartWorkflow({
   }
   return (
     <section className="space-y-3" aria-label="Start workflow">
-      <fieldset disabled={busy || Boolean(pending)} className="space-y-5">
+      <fieldset disabled={busy || Boolean(pending)} className="min-w-0 space-y-5">
         <legend className="font-medium">Workflow</legend>
         <Select
           value={workflowVersionId}
@@ -472,7 +472,7 @@ function StartWorkflow({
                 onChange={(value) => setWorkers(value ?? null)}
               />
             )}
-            <fieldset className="space-y-2">
+            <fieldset className="min-w-0 space-y-2">
               <legend className="text-sm">Default worker project</legend>
               {target?.projects.map((project) => (
                 <label

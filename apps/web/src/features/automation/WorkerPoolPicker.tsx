@@ -113,7 +113,7 @@ export function WorkerPoolPicker({
               ? ` · ${target.status.free} of ${target.status.capacity} slots free`
               : " · Capacity unknown"}
           </p>
-          <div className="flex flex-wrap gap-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {target.projects.map((project) => (
               <Button
                 key={project.id}
@@ -138,7 +138,7 @@ export function WorkerPoolPicker({
                   ])
                 }
               >
-                Add {project.title}
+                <span className="truncate">Add {project.title}</span>
               </Button>
             ))}
           </div>
