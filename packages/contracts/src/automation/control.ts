@@ -21,7 +21,7 @@ export const AutomationControlCommand = Schema.Union([
   Schema.Struct({
     ...Base,
     action: Schema.Literal("answer"),
-    requestId: Key,
+    requestId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(500)),
     attemptCommandId: Schema.optional(Key),
     questionRevision: Schema.optional(Key),
     resultRevision: Revision,

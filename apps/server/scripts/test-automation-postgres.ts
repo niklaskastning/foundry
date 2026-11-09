@@ -2276,6 +2276,8 @@ try {
       "PASS P20 PostgreSQL: atomic persistent manual admission; conflicting start binding; four concurrent command retries; stale revision/conflicting command; pause suppresses prepare; restart receipt; revoked auth and old generations; cancel before delivery and lost-response sending; positive writer-stop fence; revision-bound approval invalidation; explicit retry retains failed history and creates exactly one new attempt.",
     ),
   );
+  const questionRequestId =
+    "runtime-request:provider:codex:provider-turn:provider-turn%3Aprovider%3Acodex%3Anative-turn%3Acfd47b8e-b711-4622-8522-e0bd9257dba0:native-request:acceptance-question:2fd1e9c6-00df-4a67-bc47-a8254c069ae5";
   const questionEvents = Schema.decodeSync(Schema.Array(FoundryArchiveEvent))([
     {
       sequence: 1,
@@ -2286,7 +2288,7 @@ try {
         occurredAt: "2026-11-04T00:00:00Z",
         type: "runtime-request.updated",
         payload: {
-          id: "p20-question",
+          id: questionRequestId,
           nodeId: "q-node",
           providerTurnId: null,
           nativeRequestRef: null,
@@ -2322,7 +2324,7 @@ try {
           completedAt: null,
           updatedAt: "2026-11-04T00:00:00Z",
           type: "user_input_request",
-          requestId: "p20-question",
+          requestId: questionRequestId,
           questions: [
             {
               id: "choice",
@@ -2364,7 +2366,7 @@ try {
     commandId: "answer-1",
     expectedRevision: questionRevision.revision,
     action: "answer" as const,
-    requestId: "p20-question",
+    requestId: questionRequestId,
     resultRevision: questionRevision.resultRevision,
     answers: { choice: "yes" },
   };
@@ -2394,7 +2396,7 @@ try {
   await start();
   await executeControl(answerCommand);
   NodeAssert.equal((await dispatchCall((s) => s.answers("p20-retry"))).length, 1);
-  await dispatchCall((s) => s.answerDelivered("p20-retry", "p20-question"));
+  await dispatchCall((s) => s.answerDelivered("p20-retry", questionRequestId));
   NodeAssert.equal((await dispatchCall((s) => s.answers("p20-retry"))).length, 0);
   const rollbackRevision = await readControl("p20-retry");
   await query(
@@ -2424,7 +2426,7 @@ try {
     ),
   );
   await query(
-    "INSERT INTO foundry_automation.run_questions(run_id,request_id,thread_id,payload,status,source_sequence) SELECT run_id,'old-question',thread_id,jsonb_set(payload,'{request,id}','\"old-question\"'),'pending',source_sequence+1 FROM foundry_automation.run_questions WHERE run_id='p20-retry' AND request_id='p20-question'",
+    `INSERT INTO foundry_automation.run_questions(run_id,request_id,thread_id,payload,status,source_sequence) SELECT run_id,'old-question',thread_id,jsonb_set(payload,'{request,id}','"old-question"'),'pending',source_sequence+1 FROM foundry_automation.run_questions WHERE run_id='p20-retry' AND request_id='${questionRequestId}'`,
     "automation_migrator",
   );
   await dispatchCall((store) =>
