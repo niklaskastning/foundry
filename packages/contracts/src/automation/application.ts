@@ -262,6 +262,8 @@ export const AutomationApplicationResult = Schema.Union([
       Schema.Struct({
         ...AutomationRun.fields,
         workItemTitle: Schema.optional(Schema.String),
+        pullRequests: Schema.optional(Schema.Array(Schema.String)),
+        factoryName: Schema.optional(Schema.String),
         workflowName: Schema.optional(Schema.NullOr(Schema.String)),
         enrolledAt: Schema.optional(Schema.NullOr(Schema.String)),
       }),
@@ -271,6 +273,16 @@ export const AutomationApplicationResult = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("run"),
     factoryName: Schema.optional(Schema.String),
+    decisions: Schema.optional(
+      Schema.Array(
+        Schema.Struct({
+          stepId: Schema.String,
+          revision: Schema.Int,
+          resultRevision: Schema.Int,
+          approved: Schema.Boolean,
+        }),
+      ),
+    ),
     workItem: Schema.optional(AutomationWorkItem),
     executionBinding: Schema.optional(
       Schema.NullOr(

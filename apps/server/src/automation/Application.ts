@@ -423,7 +423,7 @@ const make = Effect.gen(function* () {
         }
         case "factories": {
           const rows =
-            yield* sql<AutomationFactory>`SELECT id,name,archived FROM foundry_automation.factories WHERE (${allowed ? sql.json(allowed) : null}::jsonb IS NULL OR ${allowed ? sql.json(allowed) : null}::jsonb ? id) AND id>${input.after ?? ""} AND (${input.search ?? ""}='' OR position(lower(${input.search ?? ""}) in lower(name))>0) ORDER BY id LIMIT ${input.limit + 1}`;
+            yield* sql<AutomationFactory>`SELECT id,name,archived,ARRAY(SELECT DISTINCT unnest(v.repositories) FROM foundry_automation.versions v WHERE v.factory_id=f.id ORDER BY 1) AS repositories,(SELECT count(*)::int FROM foundry_automation.work_items w WHERE w.factory_id=f.id AND w.state NOT IN ('completed','cancelled')) AS "openWorkItems" FROM foundry_automation.factories f WHERE (${allowed ? sql.json(allowed) : null}::jsonb IS NULL OR ${allowed ? sql.json(allowed) : null}::jsonb ? id) AND id>${input.after ?? ""} AND (${input.search ?? ""}='' OR position(lower(${input.search ?? ""}) in lower(name))>0) ORDER BY id LIMIT ${input.limit + 1}`;
           const items = rows.slice(0, input.limit);
           return {
             kind: "factories" as const,
@@ -436,7 +436,7 @@ const make = Effect.gen(function* () {
         case "workItems": {
           yield* factories.readFactory(input.factoryId);
           const rows =
-            yield* sql<AutomationWorkItem>`SELECT id,factory_id AS "factoryId",version_id AS "versionId",repository,title,source,state FROM foundry_automation.work_items WHERE factory_id=${input.factoryId} AND (NOT ${input.activeOnly ?? false} OR state NOT IN ('completed','cancelled')) AND id>${input.after ?? ""} ORDER BY id LIMIT ${input.limit + 1}`;
+            yield* sql<AutomationWorkItem>`SELECT w.id,w.factory_id AS "factoryId",w.version_id AS "versionId",w.repository,w.title,w.source,w.state,(SELECT jsonb_build_object('id',r.id,'hasResult',EXISTS(SELECT 1 FROM foundry_automation.step_attempts a WHERE a.run_id=r.id AND a.result IS NOT NULL),'state',CASE WHEN c.mode IS NOT NULL AND c.mode<>'active' THEN c.mode ELSE d.state END,'enrolledAt',to_char(d.enrolled_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) FROM foundry_automation.runs r JOIN foundry_automation.dispatch_runs d ON d.run_id=r.id LEFT JOIN foundry_automation.run_controls c ON c.run_id=r.id WHERE r.factory_id=w.factory_id AND r.work_item_id=w.id AND d.binding->'identity'->>'instanceId'=${identity.instanceId} AND d.binding->'identity'->>'operatorId'=${identity.operatorId} ORDER BY d.enrolled_at DESC,r.id DESC LIMIT 1) AS "latestRun" FROM foundry_automation.work_items w WHERE factory_id=${input.factoryId} AND (NOT ${input.activeOnly ?? false} OR state NOT IN ('completed','cancelled')) AND id>${input.after ?? ""} ORDER BY id LIMIT ${input.limit + 1}`;
           const items = rows.slice(0, input.limit);
           return {
             kind: "workItems" as const,
@@ -453,10 +453,12 @@ const make = Effect.gen(function* () {
           const rows = yield* sql<
             AutomationRun & {
               workItemTitle: string;
+              pullRequests: readonly string[];
+              factoryName: string;
               workflowName: string | null;
               enrolledAt: string | null;
             }
-          >`SELECT w.title AS "workItemTitle",COALESCE(v.v4->'workflow'->>'id',(SELECT entry->>'id' FROM foundry_automation.definition_versions definition CROSS JOIN LATERAL jsonb_array_elements(definition.workflow_versions) entry WHERE definition.factory_id=r.factory_id AND definition.factory_version_id=r.factory_version_id AND entry->>'versionId'=r.workflow_version_id LIMIT 1)) AS "workflowName",to_char(d.enrolled_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "enrolledAt",r.id,r.factory_id AS "factoryId",r.work_item_id AS "workItemId",r.workflow_version_id AS "workflowVersionId",r.factory_version_id AS "factoryVersionId",r.repository,r.revision,CASE WHEN c.mode IS NOT NULL AND c.mode<>'active' THEN c.mode ELSE COALESCE(d.state,r.state) END AS state FROM foundry_automation.runs r JOIN foundry_automation.work_items w ON w.factory_id=r.factory_id AND w.id=r.work_item_id JOIN foundry_automation.workflow_versions v ON v.factory_id=r.factory_id AND v.id=r.workflow_version_id LEFT JOIN foundry_automation.dispatch_runs d ON d.run_id=r.id LEFT JOIN foundry_automation.run_controls c ON c.run_id=r.id WHERE (${allowed ? sql.json(allowed) : null}::jsonb IS NULL OR ${allowed ? sql.json(allowed) : null}::jsonb ? r.factory_id) AND (CASE WHEN ${input.recent ?? false} THEN d.enrolled_at IS NOT NULL AND (${input.after ?? null}::text IS NULL OR (d.enrolled_at,r.id)<((SELECT enrolled_at FROM foundry_automation.dispatch_runs WHERE run_id=${input.after ?? null}),${input.after ?? null})) ELSE r.id>${input.after ?? ""} END) AND (d.run_id IS NULL OR (d.binding->'identity'->>'instanceId'=${identity.instanceId} AND d.binding->'identity'->>'operatorId'=${identity.operatorId})) AND (${input.factoryId ?? null}::text IS NULL OR r.factory_id=${input.factoryId ?? null}) AND (${input.workItemId ?? null}::text IS NULL OR r.work_item_id=${input.workItemId ?? null}) AND (${input.state ?? null}::text IS NULL OR CASE WHEN c.mode IS NOT NULL AND c.mode<>'active' THEN c.mode ELSE COALESCE(d.state,r.state) END=${input.state ?? null}) ORDER BY CASE WHEN ${input.recent ?? false} THEN d.enrolled_at END DESC,CASE WHEN ${input.recent ?? false} THEN r.id END DESC,r.id LIMIT ${input.limit + 1}`;
+          >`SELECT COALESCE((SELECT jsonb_agg(DISTINCT p.result->>'url') FROM foundry_automation.publish_operations p WHERE p.run_id=r.id AND p.state='published' AND p.result->>'url' IS NOT NULL),'[]'::jsonb) AS "pullRequests",f.name AS "factoryName",w.title AS "workItemTitle",COALESCE(v.v4->'workflow'->>'id',(SELECT entry->>'id' FROM foundry_automation.definition_versions definition CROSS JOIN LATERAL jsonb_array_elements(definition.workflow_versions) entry WHERE definition.factory_id=r.factory_id AND definition.factory_version_id=r.factory_version_id AND entry->>'versionId'=r.workflow_version_id LIMIT 1)) AS "workflowName",to_char(d.enrolled_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "enrolledAt",r.id,r.factory_id AS "factoryId",r.work_item_id AS "workItemId",r.workflow_version_id AS "workflowVersionId",r.factory_version_id AS "factoryVersionId",r.repository,r.revision,CASE WHEN c.mode IS NOT NULL AND c.mode<>'active' THEN c.mode ELSE COALESCE(d.state,r.state) END AS state FROM foundry_automation.runs r JOIN foundry_automation.factories f ON f.id=r.factory_id JOIN foundry_automation.work_items w ON w.factory_id=r.factory_id AND w.id=r.work_item_id JOIN foundry_automation.workflow_versions v ON v.factory_id=r.factory_id AND v.id=r.workflow_version_id LEFT JOIN foundry_automation.dispatch_runs d ON d.run_id=r.id LEFT JOIN foundry_automation.run_controls c ON c.run_id=r.id WHERE (${allowed ? sql.json(allowed) : null}::jsonb IS NULL OR ${allowed ? sql.json(allowed) : null}::jsonb ? r.factory_id) AND (CASE WHEN ${input.recent ?? false} THEN d.enrolled_at IS NOT NULL AND (${input.after ?? null}::text IS NULL OR (d.enrolled_at,r.id)<((SELECT enrolled_at FROM foundry_automation.dispatch_runs WHERE run_id=${input.after ?? null}),${input.after ?? null})) ELSE r.id>${input.after ?? ""} END) AND (d.run_id IS NULL OR (d.binding->'identity'->>'instanceId'=${identity.instanceId} AND d.binding->'identity'->>'operatorId'=${identity.operatorId})) AND (${input.factoryId ?? null}::text IS NULL OR r.factory_id=${input.factoryId ?? null}) AND (${input.workItemId ?? null}::text IS NULL OR r.work_item_id=${input.workItemId ?? null}) AND (${input.state ?? null}::text IS NULL OR CASE WHEN c.mode IS NOT NULL AND c.mode<>'active' THEN c.mode ELSE COALESCE(d.state,r.state) END=${input.state ?? null}) ORDER BY CASE WHEN ${input.recent ?? false} THEN d.enrolled_at END DESC,CASE WHEN ${input.recent ?? false} THEN r.id END DESC,r.id LIMIT ${input.limit + 1}`;
           const items = rows.slice(0, input.limit);
           return {
             kind: "runs" as const,
@@ -489,6 +491,12 @@ const make = Effect.gen(function* () {
           return {
             kind: "run" as const,
             factoryName: (yield* factories.readFactory(run.factoryId)).name,
+            decisions: yield* sql<{
+              stepId: string;
+              revision: number;
+              resultRevision: number;
+              approved: boolean;
+            }>`SELECT step_id AS "stepId",revision,result_revision AS "resultRevision",approved FROM foundry_automation.run_decisions WHERE run_id=${run.id} ORDER BY revision DESC LIMIT 100`,
             workItem: yield* factories.readWorkItem(run.factoryId, run.workItemId),
             executionBinding: yield* runBinding(run.id),
             definition: publicOrigin(yield* runDefinition(run.factoryId, run.factoryVersionId)),

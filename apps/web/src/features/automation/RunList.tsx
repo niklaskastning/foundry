@@ -31,13 +31,12 @@ export function RunList({
   const { result, error, loading, refresh } = useAutomationQuery(environmentId, {
     op: "runs",
     limit: compact ? 5 : 20,
-    ...(compact ? { recent: true } : {}),
+    recent: true,
     ...(filterFactory ? { factoryId: filterFactory } : {}),
     ...(state !== "all" ? { state } : {}),
     ...(workItemId ? { workItemId } : {}),
     ...(after ? { after } : {}),
   });
-  const factories = useAutomationQuery(environmentId, { op: "factories", limit: 50 });
   return (
     <section className="space-y-3" aria-label="Runs">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -45,7 +44,7 @@ export function RunList({
           <FoundryUI.Heading>{compact ? "Recent runs" : "Runs"}</FoundryUI.Heading>
           {!compact && !workItemId ? (
             <p className="text-sm text-muted-foreground">
-              Follow execution, review results and resolve blocked work.
+              Newest queued runs first. Follow execution, review results and resolve blocked work.
             </p>
           ) : null}
         </div>
@@ -98,13 +97,7 @@ export function RunList({
                   </div>
                   <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                     {!factoryId ? (
-                      <span>
-                        Factory:{" "}
-                        {factories.result?.kind === "factories"
-                          ? (factories.result.items.find((factory) => factory.id === run.factoryId)
-                              ?.name ?? "Name unavailable")
-                          : "Loading name…"}
-                      </span>
+                      <span>Factory: {run.factoryName ?? "Name unavailable"}</span>
                     ) : null}
                     <span>Run {run.id.slice(0, 8)}</span>
                     {run.workflowName ? <span>{run.workflowName}</span> : null}
@@ -123,6 +116,17 @@ export function RunList({
                       </time>
                     ) : null}
                   </div>
+                  {run.pullRequests?.map((url) => (
+                    <a
+                      key={url}
+                      className="relative z-10 block text-sm underline"
+                      href={url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Review pull request
+                    </a>
+                  ))}
                   {run.state === "succeeded" ||
                   run.state === "cancelled" ||
                   run.state === "failed" ? (

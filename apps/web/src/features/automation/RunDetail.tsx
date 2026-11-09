@@ -209,8 +209,8 @@ export function RunDetail({
                   ? "A failed branch is queued for a bounded repair attempt. The join waits for successful branch results."
                   : detail.control?.reason === "repair_exhausted"
                     ? "Automatic repair rounds are exhausted. Inspect failed attempts before deciding how to continue."
-                    : detail.control?.reason
-                      ? runReasonLabel(detail.control.reason)
+                    : (detail.control?.reason ?? detail.runtimeState?.reason)
+                      ? runReasonLabel(detail.control?.reason ?? detail.runtimeState?.reason ?? "")
                       : undefined) ??
                   (state === "succeeded"
                     ? "Execution completed. Review the step results below."
@@ -219,7 +219,7 @@ export function RunDetail({
                         ? "Execution failed. Inspect the result and exhausted budgets. A new run requires an explicit start."
                         : "Execution failed. Inspect the failed attempt before retrying."
                       : state === "paused"
-                        ? "Execution is paused. Resume allows the scheduler to continue pending work; completed steps alone do not confirm run completion. Review the workflow and decisions before resuming."
+                        ? "Run control has paused scheduling. Resume allows the scheduler to continue pending work; completed steps alone do not confirm run completion. Review the workflow and decisions before resuming."
                         : state === "waiting"
                           ? "Execution is waiting. Review the current decisions and blockers."
                           : state === "cancel_requested"
@@ -296,6 +296,22 @@ export function RunDetail({
         <p role="status" className="text-sm">
           {message}
         </p>
+      ) : null}
+      {detail?.decisions?.length ? (
+        <section className="space-y-2" aria-label="Recorded decisions">
+          <h3 className="font-semibold">Recorded decisions</h3>
+          <p className="text-xs text-muted-foreground">
+            Latest 100 recorded decisions. Approval applies to its recorded result revision.
+          </p>
+          <ul>
+            {detail.decisions.map((decision) => (
+              <li key={decision.revision} className="text-sm">
+                {decision.stepId}: {decision.approved ? "Approved" : "Rejected"} · Decision revision{" "}
+                {decision.revision} · Result revision {decision.resultRevision}
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
       {detail && !selected && attempts.result?.kind === "attempts" ? (
         <section className="space-y-3" aria-label="Recorded result">
@@ -388,16 +404,6 @@ export function RunDetail({
             aggregate of all attempts.
           </p>
         </section>
-      ) : null}
-      {detail ? (
-        <>
-          <OperationsDashboardPanel
-            environmentId={environmentId}
-            factoryId={factoryId}
-            runId={runId}
-          />
-          <EvaluationsPanel environmentId={environmentId} factoryId={factoryId} runId={runId} />
-        </>
       ) : null}
       {detail?.runtimeWorkflow ? (
         <V4RunProgress
@@ -724,6 +730,17 @@ export function RunDetail({
             workItemId={detail.run.workItemId}
           />
         </>
+      ) : null}
+      {detail ? (
+        <details>
+          <FoundryUI.Summary>Operations and evaluations</FoundryUI.Summary>
+          <OperationsDashboardPanel
+            environmentId={environmentId}
+            factoryId={factoryId}
+            runId={runId}
+          />
+          <EvaluationsPanel environmentId={environmentId} factoryId={factoryId} runId={runId} />
+        </details>
       ) : null}
     </section>
   );

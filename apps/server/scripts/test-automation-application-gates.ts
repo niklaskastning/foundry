@@ -377,6 +377,8 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
       ["p21-a"],
     );
     NodeAssert.equal(page.next, "p21-a");
+    NodeAssert.deepEqual(page.items[0]?.repositories, ["fixture-repo"]);
+    NodeAssert.equal(page.items[0]?.openWorkItems, 0);
     const next = yield* app.query(operate, {
       op: "factories",
       search: "P21",
@@ -607,16 +609,32 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
       },
     ];
     yield* sql`UPDATE foundry_automation.dispatch_runs SET binding=binding || ${sql.json({ workers: publicWorkers.map(({ projectId, ...target }) => ({ identity: { ...identity, ...target, deviceGeneration: 1, accessGeneration: 1, automationGeneration: 1, clientSessionId: "fixture-session", foundrySessionHash: "a".repeat(43) }, projectId })) })}::jsonb WHERE run_id='a-newer-run'`;
+    yield* sql`INSERT INTO foundry_automation.run_decisions(command_id,run_id,step_id,revision,result_revision,approved) VALUES('p21-work','a-newer-run','review',1,0,true)`;
     for (const runId of ["a-newer-run", "z-older-run"]) {
       const detail = yield* app.query(operate, { op: "run", factoryId: "p21-a", runId });
       NodeAssert.equal(detail.kind, "run");
       if (detail.kind === "run") {
+        NodeAssert.deepEqual(
+          detail.decisions,
+          runId === "a-newer-run"
+            ? [{ stepId: "review", revision: 1, resultRevision: 0, approved: true }]
+            : [],
+        );
         NodeAssert.deepEqual(
           detail.executionBinding?.workers,
           runId === "a-newer-run" ? publicWorkers : undefined,
         );
       }
     }
+    const summaries = yield* app.query(operate, { op: "workItems", factoryId: "p21-a", limit: 1 });
+    if (summaries.kind === "workItems")
+      NodeAssert.deepEqual(summaries.items[0]?.latestRun, {
+        id: "a-newer-run",
+        state: "running",
+        enrolledAt: "2026-01-02T00:00:00.000Z",
+        hasResult: false,
+      });
+    yield* sql`INSERT INTO foundry_automation.publish_operations(operation_key,run_id,step_id,commit_sha,result_revision,repository,request,state,result) VALUES('ux-published','a-newer-run','publish','fixture',0,'fixture-repo','{}','published','{"url":"https://github.com/example/fixture/pull/1"}')`;
     const recent = yield* app.query(operate, {
       op: "runs",
       factoryId: "p21-a",
@@ -624,9 +642,18 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
       limit: 1,
     });
     if (recent.kind === "runs") {
+      NodeAssert.deepEqual(recent.items[0]?.pullRequests, [
+        "https://github.com/example/fixture/pull/1",
+      ]);
       NodeAssert.deepEqual(
-        recent.items.map((run) => [run.id, run.workItemTitle, run.workflowName, run.enrolledAt]),
-        [["a-newer-run", "Fixture work", "main", "2026-01-02T00:00:00.000Z"]],
+        recent.items.map((run) => [
+          run.id,
+          run.workItemTitle,
+          run.workflowName,
+          run.enrolledAt,
+          run.factoryName,
+        ]),
+        [["a-newer-run", "Fixture work", "main", "2026-01-02T00:00:00.000Z", "P21 alpha"]],
       );
       NodeAssert.equal(recent.next, "a-newer-run");
       const nextRecent = yield* app.query(operate, {

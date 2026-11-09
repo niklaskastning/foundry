@@ -255,7 +255,16 @@ function FactoryList({
                             {factory.name}
                           </Link>
                         </FoundryUI.Heading>
-                        <p className="break-all text-xs text-muted-foreground">{factory.id}</p>
+                        <p className="break-words text-xs text-muted-foreground">
+                          {factory.repositories?.join(" · ") || "Repository context unavailable"}
+                          {factory.openWorkItems !== undefined
+                            ? ` · ${factory.openWorkItems} open work items`
+                            : ""}
+                        </p>
+                        <details className="text-xs text-muted-foreground">
+                          <summary>Factory ID</summary>
+                          {factory.id}
+                        </details>
                       </div>
                       <Button
                         variant="outline"
@@ -872,6 +881,20 @@ function WorkItems({
               </button>
             </h3>
             <p className="break-words text-xs text-muted-foreground">{item.repository}</p>
+            {item.latestRun ? (
+              <p className="text-xs text-muted-foreground">
+                Latest run: {item.latestRun.state.replaceAll("_", " ")} ·{" "}
+                {item.latestRun.hasResult
+                  ? "Recorded evidence available"
+                  : "No execution report recorded"}{" "}
+                · Queued {new Date(item.latestRun.enrolledAt).toLocaleString()} · Execution state,
+                separate from work item acceptance
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                No recorded run in your execution scope
+              </p>
+            )}
           </div>
           <Badge
             variant={
