@@ -136,11 +136,12 @@ export function ThreadArchiveLibrary({
             key={`${item.owner.environmentId}:${item.owner.threadId}`}
           >
             <span className="min-w-0 flex-1 truncate text-sm">
-              Source: {item.owner.environmentId} ·{" "}
+              {item.title || "Untitled archived thread"} ·{" "}
               {item.complete ? "Reported history and files archived" : "Transfer incomplete"}
             </span>
             <details className="text-xs text-muted-foreground">
               <FoundryUI.Summary>Source details</FoundryUI.Summary>
+              <p className="break-all">{item.owner.environmentId}</p>
               <p className="break-all">{item.owner.threadId}</p>
               <p>
                 Archived events: {item.confirmedCursor} · Source head: {item.sourceHead}

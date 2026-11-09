@@ -614,6 +614,7 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
       const detail = yield* app.query(operate, { op: "run", factoryId: "p21-a", runId });
       NodeAssert.equal(detail.kind, "run");
       if (detail.kind === "run") {
+        NodeAssert.equal(detail.latestResultCommandId, null);
         NodeAssert.deepEqual(
           detail.decisions,
           runId === "a-newer-run"
@@ -626,13 +627,34 @@ export const applicationGates = Effect.fn("Application.postgresGates")(function 
         );
       }
     }
+    yield* sql`INSERT INTO foundry_automation.step_attempts(command_id,run_id,ordinal,attempt_number,request,result) VALUES ('z-first-report','a-newer-run',0,0,'{}','{}'),('a-latest-report','a-newer-run',1,1,'{}','{}'),('b-unfinished','a-newer-run',2,0,'{}',NULL)`;
+    const resultDetail = yield* app.query(operate, {
+      op: "run",
+      factoryId: "p21-a",
+      runId: "a-newer-run",
+    });
+    NodeAssert.equal(
+      resultDetail.kind === "run" && resultDetail.latestResultCommandId,
+      "a-latest-report",
+    );
+    const resultPage = yield* app.query(operate, {
+      op: "attempts",
+      factoryId: "p21-a",
+      runId: "a-newer-run",
+      after: "b-unfinished",
+      limit: 1,
+    });
+    NodeAssert.equal(
+      resultPage.kind === "attempts" && resultPage.items[0]?.commandId,
+      "z-first-report",
+    );
     const summaries = yield* app.query(operate, { op: "workItems", factoryId: "p21-a", limit: 1 });
     if (summaries.kind === "workItems")
       NodeAssert.deepEqual(summaries.items[0]?.latestRun, {
         id: "a-newer-run",
         state: "running",
         enrolledAt: "2026-01-02T00:00:00.000Z",
-        hasResult: false,
+        hasResult: true,
       });
     yield* sql`INSERT INTO foundry_automation.publish_operations(operation_key,run_id,step_id,commit_sha,result_revision,repository,request,state,result) VALUES('ux-published','a-newer-run','publish','fixture',0,'fixture-repo','{}','published','{"url":"https://github.com/example/fixture/pull/1"}')`;
     const recent = yield* app.query(operate, {

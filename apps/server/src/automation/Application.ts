@@ -490,6 +490,11 @@ const make = Effect.gen(function* () {
             : undefined;
           return {
             kind: "run" as const,
+            latestResultCommandId:
+              (yield* sql<{
+                commandId: string;
+              }>`SELECT command_id AS "commandId" FROM foundry_automation.step_attempts WHERE run_id=${run.id} AND result IS NOT NULL ORDER BY ordinal DESC,attempt_number DESC LIMIT 1`)[0]
+                ?.commandId ?? null,
             factoryName: (yield* factories.readFactory(run.factoryId)).name,
             decisions: yield* sql<{
               stepId: string;

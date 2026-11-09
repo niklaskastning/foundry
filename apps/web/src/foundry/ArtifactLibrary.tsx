@@ -8,7 +8,7 @@ import { AttachmentFilePreview } from "../components/files/AttachmentFilePreview
 import { useAtomCommand } from "../state/use-atom-command";
 import { artifactListCommand } from "./artifacts";
 
-export function ArtifactLibrary() {
+export function ArtifactLibrary({ onOpenSandboxes }: { onOpenSandboxes: () => void }) {
   const run = useAtomCommand(artifactListCommand, { reportFailure: false });
   const [items, setItems] = useState<ReadonlyArray<FoundryArtifactManifest>>([]);
   const [showInternal, setShowInternal] = useState(false);
@@ -40,6 +40,9 @@ export function ArtifactLibrary() {
       <p className="text-sm text-muted-foreground">
         Confirmed files are available here even when their original device is offline.
       </p>
+      <Button variant="outline" onClick={onOpenSandboxes}>
+        Open sandboxes & archives
+      </Button>
       {internalCount > 0 ? (
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">

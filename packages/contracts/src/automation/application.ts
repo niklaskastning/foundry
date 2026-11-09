@@ -303,6 +303,7 @@ export const AutomationApplicationResult = Schema.Union([
         source: FactoryDefinitionVersion.fields.source,
       }),
     ),
+    latestResultCommandId: Schema.optional(Schema.NullOr(Schema.String)),
     run: AutomationRun,
     workflow: Schema.Struct({
       id: AutomationWorkflowVersion.fields.id,

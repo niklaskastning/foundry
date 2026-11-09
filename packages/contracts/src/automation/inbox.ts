@@ -28,6 +28,8 @@ export type AutomationInboxMark = typeof AutomationInboxMark.Type;
 export const AutomationInboxEntry = Schema.Struct({
   id: Key,
   factoryId: Key,
+  factoryName: Schema.optional(Schema.String),
+  workItemTitle: Schema.optional(Schema.String),
   workItemId: Key,
   runId: Key,
   kind: AutomationInboxKind,

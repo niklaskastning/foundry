@@ -367,6 +367,8 @@ export const v4Gates = Effect.fn("V4.postgresGates")(function* <E, E2>(
     (item) => item.runId === claim.run.id && item.stepId === "improve/exhausted-approval",
   );
   NodeAssert.ok(pending);
+  NodeAssert.equal(pending.factoryName, "V4");
+  NodeAssert.equal(pending.workItemTitle, "V4");
   yield* Effect.gen(function* () {
     const sql = yield* Database.AutomationDatabase;
     yield* sql`INSERT INTO foundry_automation.inbox_entries(id,instance_id,operator_id,factory_id,work_item_id,run_id,kind,source_revision,source,active)

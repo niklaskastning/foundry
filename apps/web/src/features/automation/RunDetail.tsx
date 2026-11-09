@@ -70,15 +70,7 @@ export function RunDetail({
   const topology = detail ? runTopology(detail.workflow) : null;
   const execution = detail?.workflow.execution;
   const state = detail?.control?.state ?? detail?.run.state;
-  const latestReport =
-    attempts.result?.kind === "attempts"
-      ? attempts.result.items
-          .filter((attempt) => attempt.hasResult)
-          .toSorted(
-            (left, right) =>
-              right.ordinal - left.ordinal || right.attemptNumber - left.attemptNumber,
-          )[0]
-      : undefined;
+  const latestReport = detail?.latestResultCommandId;
   const terminal = state === "succeeded" || state === "cancelled";
   const available = {
     pause: !terminal && state !== "paused" && state !== "failed" && state !== "cancel_requested",
@@ -313,24 +305,23 @@ export function RunDetail({
           </ul>
         </section>
       ) : null}
-      {detail && !selected && attempts.result?.kind === "attempts" ? (
+      {detail && !selected ? (
         <section className="space-y-3" aria-label="Recorded result">
           <h3 className="text-lg font-semibold">Recorded result</h3>
           <p className="text-xs text-muted-foreground">
-            Last reported workflow step on this history page. Execution success is separate from
-            work item acceptance.
+            Last reported workflow step in this run. Execution success is separate from work item
+            acceptance.
           </p>
           {latestReport ? (
             <AttemptResult
               environmentId={environmentId}
               factoryId={factoryId}
               runId={runId}
-              commandId={latestReport.commandId}
+              commandId={latestReport}
             />
           ) : (
             <p className="text-sm text-muted-foreground">
-              No execution report on this page. Review workflow decisions and other history pages
-              below.
+              No execution report recorded for this run. Review workflow decisions below.
             </p>
           )}
         </section>

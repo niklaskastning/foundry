@@ -7,7 +7,6 @@ import { AsyncResult } from "effect/reactivity";
 import { useWorkspaceNavigation } from "../../foundry/useWorkspaceNavigation";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { useAutomationQuery } from "./useAutomationQuery";
 import { inboxDetailMessage, inboxFailureMessage } from "./failures";
 import { ListFilters } from "./ListFilters";
 import {
@@ -34,8 +33,6 @@ export function InboxPage({
   onNavigateRun?: (factoryId: string, runId: string) => void;
   onNavigateWorkItem?: (factoryId: string, workItemId: string) => void;
 }) {
-  const factoriesQuery = useAutomationQuery(environmentId, { op: "factories", limit: 100 });
-  const factories = factoriesQuery.result?.kind === "factories" ? factoriesQuery.result.items : [];
   const registry = useContext(RegistryContext);
   const session = useAtomValue(environmentSession.sessionStateAtom(environmentId));
   const canRead = useAtomValue(automationCommands.inboxQuery.permissionAtom(environmentId));
@@ -259,8 +256,8 @@ export function InboxPage({
                   <div className="min-w-0 flex-1 space-y-1">
                     <p className="break-words text-sm font-medium">{item.title}</p>
                     <p className="text-xs text-muted-foreground">
-                      {factories.find((factory) => factory.id === item.factoryId)?.name ??
-                        "Factory name unavailable"}
+                      {item.factoryName ?? "Factory name unavailable"}
+                      {item.workItemTitle ? ` · ${item.workItemTitle}` : null}
                     </p>
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge

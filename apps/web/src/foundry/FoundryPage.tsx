@@ -185,7 +185,7 @@ export function FoundryPage() {
                 ) : resourceSection === "archives" ? (
                   <ThreadArchiveLibrary />
                 ) : (
-                  <ArtifactLibrary />
+                  <ArtifactLibrary onOpenSandboxes={() => setResourceSection("sandboxes")} />
                 )}
               </div>
             ) : search.view === "inbox" ? (
