@@ -17,7 +17,10 @@ vi.mock("@effect/atom-react", async () => {
   const { createContext } = await import("react");
   return { RegistryContext: createContext(null), useAtomValue: () => mocks.allowed };
 });
-vi.mock("@t3tools/client-runtime/state/runtime", () => ({ runAtomCommand: mocks.command }));
+vi.mock("@t3tools/client-runtime/state/runtime", () => ({
+  runAtomCommand: mocks.command,
+  squashAtomCommandFailure: () => null,
+}));
 vi.mock("../../state/session", () => ({
   environmentSession: { sessionStateAtom: () => null },
   sessionHasScope: () => mocks.readable,
@@ -28,6 +31,7 @@ vi.mock("../../foundry/useWorkspaceNavigation", () => ({
 vi.mock("./commands", () => ({
   automationCommands: { inboxQuery: { permissionAtom: () => null } },
 }));
+vi.mock("./useAutomationQuery", () => ({ useAutomationQuery: () => ({ result: null }) }));
 vi.mock("./ListFilters", () => ({ ListFilters: () => null }));
 vi.mock("./InboxDetail", () => ({ InboxDetail: () => null }));
 
@@ -49,9 +53,9 @@ it.each([
       <InboxPage environmentId={EnvironmentId.make("main")} compact />,
     );
     await expect
-      .element(screen.getByText("Connect to Main with read permission to open your inbox."))
+      .element(screen.getByText("Connect to Main with read permission to open Decisions."))
       .toBeVisible();
-    await expect.element(screen.getByText("Loading inbox…")).not.toBeInTheDocument();
+    await expect.element(screen.getByText("Loading decisions…")).not.toBeInTheDocument();
     expect(mocks.command).not.toHaveBeenCalled();
   },
 );

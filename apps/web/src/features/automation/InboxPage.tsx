@@ -1,12 +1,14 @@
 import { FoundryUI } from "../../foundry/FoundryUI";
 import { useContext, useEffect, useState } from "react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
+import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { AutomationInboxEntry, AutomationInboxQuery, EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { useWorkspaceNavigation } from "../../foundry/useWorkspaceNavigation";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { useAutomationQuery } from "./useAutomationQuery";
+import { inboxDetailMessage, inboxFailureMessage } from "./failures";
 import { ListFilters } from "./ListFilters";
 import {
   Select,
@@ -32,6 +34,8 @@ export function InboxPage({
   onNavigateRun?: (factoryId: string, runId: string) => void;
   onNavigateWorkItem?: (factoryId: string, workItemId: string) => void;
 }) {
+  const factoriesQuery = useAutomationQuery(environmentId, { op: "factories", limit: 100 });
+  const factories = factoriesQuery.result?.kind === "factories" ? factoriesQuery.result.items : [];
   const registry = useContext(RegistryContext);
   const session = useAtomValue(environmentSession.sessionStateAtom(environmentId));
   const canRead = useAtomValue(automationCommands.inboxQuery.permissionAtom(environmentId));
@@ -101,7 +105,7 @@ export function InboxPage({
       } else {
         setItems([]);
         setNextCursor(null);
-        setMessage("Inbox could not be loaded. Check your Main connection and refresh.");
+        setMessage(inboxFailureMessage(squashAtomCommandFailure(result)));
       }
     };
     void load();
@@ -139,12 +143,12 @@ export function InboxPage({
           ? "min-w-0 space-y-4 rounded-xl border bg-card p-4 shadow-xs sm:p-6"
           : "min-w-0 space-y-6"
       }
-      aria-label="Personal inbox"
+      aria-label="Decisions"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           {compact ? (
-            <FoundryUI.Heading>Needs your attention</FoundryUI.Heading>
+            <FoundryUI.Heading>Decisions</FoundryUI.Heading>
           ) : (
             <h1 className="text-2xl font-semibold tracking-tight">Decisions</h1>
           )}
@@ -174,12 +178,17 @@ export function InboxPage({
               : {})}
             state={status}
             states={["open", "done", "all"] as const}
+            stateLabels={{
+              open: "Active in Decisions",
+              done: "Hidden or resolved",
+              all: "All decisions",
+            }}
             onStateChange={(value) => {
               navigation.update({ inboxStatus: value, inboxCursor: undefined, inboxId: undefined });
             }}
           />
-          <label className="space-y-1">
-            <span className="text-xs text-muted-foreground">Type</span>
+          <div className="space-y-1">
+            <span className="block text-xs text-muted-foreground">Type</span>
             <Select
               value={kind ?? "all"}
               onValueChange={(value) => {
@@ -202,9 +211,9 @@ export function InboxPage({
                 <SelectItem value="error">Errors</SelectItem>
               </SelectContent>
             </Select>
-          </label>
+          </div>
 
-          <label className="flex items-center gap-2 text-sm">
+          <label className="flex min-h-9 items-center gap-2 text-sm sm:min-h-8">
             <input
               type="checkbox"
               checked={unreadOnly}
@@ -222,7 +231,7 @@ export function InboxPage({
       ) : null}
       {!canRead || !sessionHasScope(session, "orchestration:read") ? (
         <p role="status" className="text-sm">
-          Connect to Main with read permission to open your inbox.
+          Connect to Main with read permission to open Decisions.
         </p>
       ) : null}
       <div
@@ -239,7 +248,7 @@ export function InboxPage({
                 ? "divide-y overflow-hidden rounded-xl border bg-card shadow-xs"
                 : undefined
             }
-            aria-label="Inbox items"
+            aria-label="Decisions"
           >
             {visibleItems.map((item) => (
               <li
@@ -249,6 +258,10 @@ export function InboxPage({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1 space-y-1">
                     <p className="break-words text-sm font-medium">{item.title}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {factories.find((factory) => factory.id === item.factoryId)?.name ??
+                        "Factory name unavailable"}
+                    </p>
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge
                         variant={
@@ -264,9 +277,7 @@ export function InboxPage({
                       {!item.isRead ? <span className="text-xs font-medium">Unread</span> : null}
                     </div>
                     <p className="line-clamp-2 break-words text-sm text-muted-foreground">
-                      {item.detail === "iterations_exhausted"
-                        ? "Review rounds reached their limit. Inspect the last result before continuing."
-                        : item.detail}
+                      {inboxDetailMessage(item.detail)}
                     </p>
                     <p className="text-xs text-muted-foreground">
                       {item.status === "answered"
@@ -278,7 +289,7 @@ export function InboxPage({
                             : item.status === "superseded"
                               ? "Superseded"
                               : item.isDone
-                                ? "Hidden from your inbox · still pending"
+                                ? "Hidden from Decisions · still pending"
                                 : item.active
                                   ? item.kind === "approval"
                                     ? "Approval required"
@@ -286,7 +297,6 @@ export function InboxPage({
                                       ? "Answer required"
                                       : "Needs attention"
                                   : "Superseded"}
-                      {item.stepId ? ` · Step ${item.stepId}` : ""}
                     </p>
                   </div>
                   <Button
@@ -343,9 +353,26 @@ export function InboxPage({
           />
         ) : null}
       </div>
+      {message && !compact ? (
+        <Button
+          variant="outline"
+          onClick={() =>
+            navigation.update({
+              inboxStatus: "open",
+              inboxKind: undefined,
+              inboxUnread: undefined,
+              filterFactory: undefined,
+              inboxCursor: undefined,
+              inboxId: undefined,
+            })
+          }
+        >
+          Reset filters
+        </Button>
+      ) : null}
       {readable && (!current || message) ? (
         <p role={message ? "alert" : "status"} className="text-sm text-muted-foreground">
-          {!current ? "Loading inbox…" : message}
+          {!current ? "Loading decisions…" : message}
         </p>
       ) : null}
     </section>

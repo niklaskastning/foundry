@@ -179,7 +179,7 @@ const make = Effect.gen(function* () {
   const read = Effect.fn("Inbox.read")(function* (owner: Identity, id: string) {
     const rows = yield* sql<{ entry: unknown }>`
       SELECT e.source || jsonb_build_object('id',e.id,'sourceRevision',e.source_revision,'active',e.active,
-        'isRead',COALESCE(m.is_read,false),'isDone',(COALESCE(m.is_done,false) OR (e.kind<>'answer' AND e.source->>'status' IN ('answered','resolved')))) AS entry
+        'isRead',COALESCE(m.is_read,false),'isDone',(COALESCE(m.is_done,false) OR (e.kind<>'answer' AND COALESCE(e.source->>'status' IN ('answered','resolved'),false)))) AS entry
       FROM foundry_automation.inbox_entries e
       LEFT JOIN foundry_automation.inbox_marks m ON m.item_id=e.id AND m.operator_id=e.operator_id AND m.source_revision=e.source_revision
       WHERE e.id=${id} AND e.instance_id=${owner.instanceId} AND e.operator_id=${owner.operatorId}`;
@@ -195,15 +195,15 @@ const make = Effect.gen(function* () {
         const limit = input.limit ?? 30;
         const rows = yield* sql<{ entry: unknown }>`
         SELECT e.source || jsonb_build_object('id',e.id,'sourceRevision',e.source_revision,'active',e.active,
-          'isRead',COALESCE(m.is_read,false),'isDone',(COALESCE(m.is_done,false) OR (e.kind<>'answer' AND e.source->>'status' IN ('answered','resolved')))) AS entry
+          'isRead',COALESCE(m.is_read,false),'isDone',(COALESCE(m.is_done,false) OR (e.kind<>'answer' AND COALESCE(e.source->>'status' IN ('answered','resolved'),false)))) AS entry
         FROM foundry_automation.inbox_entries e
         LEFT JOIN foundry_automation.inbox_marks m ON m.item_id=e.id AND m.operator_id=e.operator_id AND m.source_revision=e.source_revision
         WHERE e.instance_id=${owner.instanceId} AND e.operator_id=${owner.operatorId}
           AND (${input.factoryId ?? null}::text IS NULL OR e.factory_id=${input.factoryId ?? null})
           AND (${input.kind ?? null}::text IS NULL OR e.kind=${input.kind ?? null})
           AND (${input.cursor ?? null}::text IS NULL OR e.id>${input.cursor ?? null})
-          AND (${input.status ?? "open"}='all' OR (${input.status ?? "open"}='done' AND (COALESCE(m.is_done,false) OR (e.kind<>'answer' AND e.source->>'status' IN ('answered','resolved'))))
-            OR (${input.status ?? "open"}='open' AND e.active AND NOT COALESCE(m.is_done,false) AND (e.kind='answer' OR e.source->>'status' NOT IN ('answered','resolved'))))
+          AND (${input.status ?? "open"}='all' OR (${input.status ?? "open"}='done' AND (COALESCE(m.is_done,false) OR (e.kind<>'answer' AND COALESCE(e.source->>'status' IN ('answered','resolved'),false))))
+            OR (${input.status ?? "open"}='open' AND e.active AND NOT COALESCE(m.is_done,false) AND (e.kind='answer' OR COALESCE(e.source->>'status' NOT IN ('answered','resolved'),true))))
           AND (NOT ${input.unreadOnly ?? false} OR NOT COALESCE(m.is_read,false))
         ORDER BY e.id LIMIT ${limit + 1}`;
         const entries = yield* Effect.forEach(rows.slice(0, limit), (row) =>

@@ -60,3 +60,31 @@ export function startFailureMessage(failure: unknown) {
   }
   return "The operation was not confirmed. Retry uses the same command and run ID. Check the worker binding and permissions before starting new work.";
 }
+
+export function inboxDetailMessage(detail: string) {
+  switch (detail) {
+    case "worker_failed":
+      return "Execution on the worker failed. Review the latest output and checks to identify the cause.";
+    case "iterations_exhausted":
+      return "Review rounds reached their limit without meeting the completion condition. Review the last result before continuing.";
+    default:
+      return detail;
+  }
+}
+
+export function inboxFailureMessage(failure: unknown) {
+  if (isInboxError(failure)) {
+    switch (failure.reason) {
+      case "forbidden":
+        return "Your session cannot read Decisions. Check your access or sign in again.";
+      case "stale_revision":
+      case "command_conflict":
+        return "This decision changed. Refresh to review its current state.";
+      case "not_found":
+        return "This decision is no longer available. Refresh or reset the filters.";
+      case "unavailable":
+        return "Decisions are unavailable. Refresh or reset the filters. If history still fails to load, check Main diagnostics.";
+    }
+  }
+  return "Decisions could not be loaded. Refresh or reset the filters.";
+}
