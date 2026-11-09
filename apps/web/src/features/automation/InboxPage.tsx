@@ -197,7 +197,9 @@ export function InboxPage({
               }}
             >
               <SelectTrigger aria-label="Filter by decision type">
-                <SelectValue />
+                <SelectValue>
+                  {kind ? `${kind.charAt(0).toUpperCase()}${kind.slice(1)}s` : "All types"}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All types</SelectItem>

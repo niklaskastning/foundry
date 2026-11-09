@@ -28,7 +28,7 @@ export function ListFilters<State extends string>({
   onStateChange: (value: State) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-end gap-4 rounded-lg border bg-muted/20 p-3">
+    <div className="flex flex-wrap items-end gap-3">
       {onFactoryChange ? (
         <FactoryFilter environmentId={environmentId} value={factoryId} onChange={onFactoryChange} />
       ) : null}
