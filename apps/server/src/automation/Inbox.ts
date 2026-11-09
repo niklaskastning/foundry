@@ -179,9 +179,11 @@ const make = Effect.gen(function* () {
   });
   const read = Effect.fn("Inbox.read")(function* (owner: Identity, id: string) {
     const rows = yield* sql<{ entry: unknown }>`
-      SELECT e.source || jsonb_build_object('id',e.id,'sourceRevision',e.source_revision,'active',e.active,
+      SELECT e.source || jsonb_strip_nulls(jsonb_build_object('factoryName',f.name,'workItemTitle',w.title)) || jsonb_build_object('id',e.id,'sourceRevision',e.source_revision,'active',e.active,
         'isRead',COALESCE(m.is_read,false),'isDone',(COALESCE(m.is_done,false) OR (e.kind<>'answer' AND COALESCE(e.source->>'status' IN ('answered','resolved'),false)))) AS entry
       FROM foundry_automation.inbox_entries e
+      LEFT JOIN foundry_automation.factories f ON f.id=e.factory_id
+      LEFT JOIN foundry_automation.work_items w ON w.factory_id=e.factory_id AND w.id=e.work_item_id
       LEFT JOIN foundry_automation.inbox_marks m ON m.item_id=e.id AND m.operator_id=e.operator_id AND m.source_revision=e.source_revision
       WHERE e.id=${id} AND e.instance_id=${owner.instanceId} AND e.operator_id=${owner.operatorId}`;
     if (!rows[0]) return yield* new AutomationInboxError({ reason: "not_found" });
@@ -195,9 +197,11 @@ const make = Effect.gen(function* () {
         yield* reconcile(owner);
         const limit = input.limit ?? 30;
         const rows = yield* sql<{ entry: unknown }>`
-        SELECT e.source || jsonb_build_object('id',e.id,'sourceRevision',e.source_revision,'active',e.active,
+        SELECT e.source || jsonb_strip_nulls(jsonb_build_object('factoryName',f.name,'workItemTitle',w.title)) || jsonb_build_object('id',e.id,'sourceRevision',e.source_revision,'active',e.active,
           'isRead',COALESCE(m.is_read,false),'isDone',(COALESCE(m.is_done,false) OR (e.kind<>'answer' AND COALESCE(e.source->>'status' IN ('answered','resolved'),false)))) AS entry
         FROM foundry_automation.inbox_entries e
+      LEFT JOIN foundry_automation.factories f ON f.id=e.factory_id
+      LEFT JOIN foundry_automation.work_items w ON w.factory_id=e.factory_id AND w.id=e.work_item_id
         LEFT JOIN foundry_automation.inbox_marks m ON m.item_id=e.id AND m.operator_id=e.operator_id AND m.source_revision=e.source_revision
         WHERE e.instance_id=${owner.instanceId} AND e.operator_id=${owner.operatorId}
           AND (${input.factoryId ?? null}::text IS NULL OR e.factory_id=${input.factoryId ?? null})

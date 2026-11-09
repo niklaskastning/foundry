@@ -372,7 +372,7 @@ export const v4Gates = Effect.fn("V4.postgresGates")(function* <E, E2>(
   yield* Effect.gen(function* () {
     const sql = yield* Database.AutomationDatabase;
     yield* sql`INSERT INTO foundry_automation.inbox_entries(id,instance_id,operator_id,factory_id,work_item_id,run_id,kind,source_revision,source,active)
-      SELECT 'legacy-inbox-history',instance_id,operator_id,factory_id,work_item_id,run_id,kind,source_revision,source-'status',false
+      SELECT 'legacy-inbox-history',instance_id,operator_id,factory_id,work_item_id,run_id,kind,source_revision,source-'status'-'factoryName'-'workItemTitle',false
       FROM foundry_automation.inbox_entries WHERE id=${pending.id}`;
   }).pipe(Effect.provide(database));
   yield* Inbox.Inbox.pipe(
@@ -382,6 +382,8 @@ export const v4Gates = Effect.fn("V4.postgresGates")(function* <E, E2>(
         const legacy = history.items.find((item) => item.id === "legacy-inbox-history");
         NodeAssert.ok(legacy);
         NodeAssert.equal(legacy.isDone, false);
+        NodeAssert.equal(legacy.factoryName, pending.factoryName);
+        NodeAssert.equal(legacy.workItemTitle, pending.workItemTitle);
         const marked = yield* inbox.mark(request, {
           commandId: "legacy-inbox-read",
           itemId: legacy.id,
