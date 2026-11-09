@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  EventId,
   FoundryArchiveEvent,
   FoundryArchiveError,
   FoundryInstanceId,
@@ -204,7 +205,7 @@ try {
     "archive_migrator",
   );
   await query(
-    "DROP TABLE foundry_instance.archive_artifacts,foundry_instance.archive_events,foundry_instance.archive_threads",
+    "DROP TABLE foundry_instance.archive_artifacts,foundry_instance.archive_events,foundry_instance.archive_threads,foundry_instance.machine_credentials,foundry_instance.sandbox_allocations,foundry_instance.sandbox_profiles,foundry_instance.provider_connections,foundry_instance.native_operator",
     "archive_migrator",
   );
   await query("UPDATE foundry_instance.schema_version SET version=6", "archive_migrator");
@@ -215,7 +216,7 @@ try {
   );
   NodeAssert.equal(
     (await query("SELECT version FROM foundry_instance.schema_version"))[0]?.version,
-    7,
+    11,
   );
   const gap = await call((s) => s.ingest(machine, input([created, message(3, 30)])));
   NodeAssert.equal(gap.confirmedCursor, 1);
@@ -362,7 +363,7 @@ try {
     sourceSequence: 30,
     event: {
       ...oldCreated.event,
-      id: "event:renamed",
+      id: EventId.make("event:renamed"),
       type: "thread.metadata-updated",
       payload: { ...oldCreated.event.payload, title: "Renamed archived work" },
     },
@@ -386,7 +387,7 @@ try {
     sourceSequence: 20,
     event: {
       ...oldCreated.event,
-      id: "event:middle",
+      id: EventId.make("event:middle"),
       type: "thread.metadata-updated",
       payload: { ...oldCreated.event.payload, title: "Intermediate title" },
     },
