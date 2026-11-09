@@ -60,7 +60,7 @@ it.effect.each([
       mode === "native-production" || mode === "insecure-other"
         ? nativeHttpPolicy
         : {
-            allowLoopback: mode === "loopback" || mode === "insecure-other",
+            allowLoopback: mode === "loopback",
           },
     ).pipe(
       Effect.provide(
