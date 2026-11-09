@@ -1,3 +1,4 @@
+import { FoundryMain } from "@t3tools/client-runtime/connection";
 import { FoundryArchive } from "@t3tools/client-runtime/connection";
 import {
   FoundryArchiveError,
@@ -15,7 +16,7 @@ export const archiveListCommand = createRuntimeCommand(appAtomRuntime, {
   execute: Effect.fn("FoundryArchive.list")(function* (input: FoundryArchiveList) {
     const binding = initialState().binding;
     if (!binding) return yield* new FoundryArchiveError({ code: "forbidden" });
-    const client = yield* FoundryArchive.make({ allowLoopback: import.meta.env.DEV });
+    const client = yield* FoundryArchive.make({ ...FoundryMain.nativeHttpPolicy });
     return yield* client.list(binding, input);
   }, Effect.provide(layerFoundryInstanceSession)),
 });
@@ -24,7 +25,7 @@ export const archiveReadCommand = createRuntimeCommand(appAtomRuntime, {
   execute: Effect.fn("FoundryArchive.read")(function* (input: FoundryArchiveRead) {
     const binding = initialState().binding;
     if (!binding) return yield* new FoundryArchiveError({ code: "forbidden" });
-    const client = yield* FoundryArchive.make({ allowLoopback: import.meta.env.DEV });
+    const client = yield* FoundryArchive.make({ ...FoundryMain.nativeHttpPolicy });
     return yield* client.read(binding, input);
   }, Effect.provide(layerFoundryInstanceSession)),
 });

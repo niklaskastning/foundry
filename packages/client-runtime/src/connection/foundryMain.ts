@@ -174,3 +174,5 @@ export const make = Effect.fn("FoundryMain.make")(function* (
   });
   return { prepare };
 });
+
+export const nativeHttpPolicy = { allowLoopback: true };
