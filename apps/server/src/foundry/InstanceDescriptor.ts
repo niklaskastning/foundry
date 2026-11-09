@@ -103,7 +103,11 @@ const make = Effect.gen(function* () {
             instanceAuth: {
               publicOrigin: Option.getOrThrow(access).origin,
               issuer: Option.getOrThrow(access).issuer,
-              bootstrapMethods: ["cloudflare-access-jwt"] as const,
+              bootstrapMethods: [
+                Option.getOrThrow(access).mode === "native"
+                  ? ("password" as const)
+                  : ("cloudflare-access-jwt" as const),
+              ],
               sessionMethods: ["foundry-session-cookie"] as const,
             },
           }

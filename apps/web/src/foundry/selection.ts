@@ -35,3 +35,16 @@ export function devicePlatformRegistrations(
     window.location.origin,
   );
 }
+
+export function writeDeviceRegistrations(
+  registrations: ReadonlyArray<PlatformConnectionRegistration>,
+) {
+  sessionStorage.setItem(
+    key,
+    JSON.stringify(
+      registrations
+        .filter((entry) => entry._tag === "FoundryConnectionRegistration")
+        .map((entry) => entry.target),
+    ),
+  );
+}

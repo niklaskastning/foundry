@@ -316,6 +316,8 @@ const make = Effect.gen(function* () {
       "foundry",
       "sandbox-archive",
       "capture-setup",
+      "--base-dir",
+      "/workspace/.foundry/t3",
       "--allocation-id",
       allocation.allocationId,
       "--cwd",

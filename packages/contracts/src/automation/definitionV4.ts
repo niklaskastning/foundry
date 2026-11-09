@@ -1,3 +1,5 @@
+import { FactoryV4Scorer } from "./scorer.ts";
+import { AutomationTriggerSource, AutomationTriggerTarget } from "./triggerConfiguration.ts";
 import * as Schema from "effect/Schema";
 import { FactoryAgentExecution } from "./agentExecution.ts";
 
@@ -250,6 +252,7 @@ export const FactoryV4Node = Schema.Union([
 ]);
 export const FactoryV4Workflow = Schema.Struct({
   id: FactoryV4Id,
+  name: Schema.optional(Name),
   agentDefaults: Schema.optional(
     Schema.Struct({
       extend: Schema.optional(FactoryV4Extend),
@@ -264,10 +267,23 @@ export const FactoryV4Workflow = Schema.Struct({
 });
 export type FactoryV4Workflow = typeof FactoryV4Workflow.Type;
 const Registration = Schema.Struct({ id: FactoryV4Id, file: FactoryV4Path });
+export const FactoryV4DefinitionTrigger = Schema.Struct({
+  id: FactoryV4Id,
+  name: Name,
+  workflow: FactoryV4Id,
+  repository: Name,
+  source: AutomationTriggerSource,
+  target: AutomationTriggerTarget,
+});
 export const FactoryV4Manifest = Schema.Struct({
   schemaVersion: Schema.Literal(4),
   factoryId: Name,
+  name: Schema.optional(Name),
+  triggers: Schema.optional(
+    Schema.Array(FactoryV4DefinitionTrigger).check(Schema.isMaxLength(100)),
+  ),
   repositories: Schema.Array(Name).check(Schema.isMinLength(1), Schema.isMaxLength(100)),
+  scorers: Schema.optional(Schema.Array(Registration).check(Schema.isMaxLength(100))),
   workflows: Schema.Array(Registration).check(Schema.isMinLength(1), Schema.isMaxLength(100)),
   agents: Schema.Array(Registration).check(Schema.isMaxLength(100)),
   skills: Schema.Array(Schema.Struct({ id: FactoryV4Id, directory: FactoryV4Path })).check(
@@ -279,7 +295,12 @@ export const FactoryV4Manifest = Schema.Struct({
 export const CanonicalFactoryDefinitionV4 = Schema.Struct({
   schemaVersion: Schema.Literal(4),
   factoryId: Name,
+  name: Schema.optional(Name),
+  triggers: Schema.optional(
+    Schema.Array(FactoryV4DefinitionTrigger).check(Schema.isMaxLength(100)),
+  ),
   repositories: Schema.Array(Name),
+  scorers: Schema.optional(Schema.Array(FactoryV4Scorer)),
   workflows: Schema.Array(FactoryV4Workflow),
   agents: Schema.Array(FactoryV4Agent),
   skills: Schema.Array(FactoryV4Skill),

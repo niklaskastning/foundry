@@ -36,6 +36,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.foundryWorkerFollow]: AuthOrchestrationReadScope,
   [WS_METHODS.foundryWorkerRead]: AuthOrchestrationReadScope,
   [WS_METHODS.foundryWorkerStatus]: AuthOrchestrationReadScope,
+  [WS_METHODS.foundryWorkerEvaluate]: AuthOrchestrationOperateScope,
   [WS_METHODS.assetsReadChunk]: AuthOrchestrationReadScope,
   [WS_METHODS.attachmentsWriteChunk]: AuthOrchestrationOperateScope,
   [WS_METHODS.attachmentsChunkStatus]: AuthOrchestrationOperateScope,

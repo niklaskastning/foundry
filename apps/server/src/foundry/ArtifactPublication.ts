@@ -40,6 +40,7 @@ import {
   parseThreadSegmentFromAttachmentId,
   PENDING_ATTACHMENT_THREAD_SEGMENT,
 } from "../attachmentStore.ts";
+import { isDevelopmentLoopbackOrigin } from "./AccessConfig.ts";
 import * as ArchiveTransport from "./ArchiveTransport.ts";
 import { signArchiveRequest } from "./ThreadArchiveProof.ts";
 import { signArtifactRequest } from "./ArtifactProof.ts";
@@ -154,9 +155,14 @@ export const layer = Layer.unwrap(
           Effect.mapError(unavailable),
         )
       : undefined;
+    const developmentLoopback = yield* Config.Boolean("FOUNDRY_WORKER_DEVELOPMENT_LOOPBACK").pipe(
+      Config.withDefault(false),
+    );
+    const loopback = developmentLoopback && isDevelopmentLoopbackOrigin(binding.origin);
     if (
       !URL.canParse(binding.origin) ||
-      new URL(binding.origin).protocol !== "https:" ||
+      (!loopback && new URL(binding.origin).protocol !== "https:") ||
+      (loopback && access !== undefined) ||
       new URL(binding.origin).origin !== binding.origin ||
       device.environmentId !== (yield* environment.getEnvironmentId) ||
       device.revoked ||

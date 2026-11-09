@@ -10,7 +10,12 @@ vi.mock("../../lib/utils", () => ({
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
-vi.mock("./commands", () => ({ automationCommands: { control: { permissionAtom: () => null } } }));
+vi.mock("./commands", () => ({
+  automationCommands: {
+    control: { permissionAtom: () => null },
+    command: { permissionAtom: () => null },
+  },
+}));
 vi.mock("./useAutomationQuery", () => ({ useAutomationQuery: mocks.query }));
 vi.mock("../../foundry/useWorkspaceNavigation", () => ({
   useWorkspaceNavigation: mocks.navigation,

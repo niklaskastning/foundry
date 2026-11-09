@@ -234,6 +234,33 @@ it.effect(
     }).pipe(Effect.scoped),
 );
 
+it.live("authenticates an explicitly enabled loopback development transport", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    const address = new URL(f.url.replace(/^ws/, "http"));
+    address.hostname = "127.0.0.1";
+    const origin = address.origin;
+    const denied = yield* DeviceConnector.makeSocket(origin).pipe(Effect.result);
+    expect(denied).toMatchObject({ _tag: "Failure", failure: { code: "configuration" } });
+    const socket = yield* DeviceConnector.makeSocket(origin, undefined, true);
+    const io = yield* openFrames(socket);
+    const challenge = yield* io.read;
+    if (challenge.type !== "challenge") return yield* Effect.die("challenge missing");
+    yield* io.send(signChannel(challenge, f.device, f.key.privateKey));
+    expect(yield* io.read).toMatchObject({ type: "ready" });
+    const credential = yield* DeviceConnector.makeSocket(
+      origin,
+      {
+        origin,
+        clientId: Redacted.make("fixture-id"),
+        clientSecret: Redacted.make("fixture-secret"),
+      },
+      true,
+    ).pipe(Effect.result);
+    expect(credential).toMatchObject({ _tag: "Failure", failure: { code: "configuration" } });
+  }).pipe(Effect.scoped),
+);
+
 it.effect("refuses an Access credential bound to another origin before dialing", () =>
   Effect.gen(function* () {
     const result = yield* DeviceConnector.makeSocket("https://other.example.test", {

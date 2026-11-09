@@ -19,6 +19,7 @@ export class AccessEnabled extends Context.Reference<boolean>(
 export class AccessConfig extends Context.Service<
   AccessConfig,
   {
+    readonly mode?: "access" | "native";
     readonly issuer: string;
     readonly audience: string;
     readonly origin: string;
@@ -31,9 +32,15 @@ const isOrigin = Schema.is(HttpsOrigin);
 export const layer = Layer.effect(
   AccessConfig,
   Effect.gen(function* () {
+    const mode = yield* Config.String("FOUNDRY_AUTH_MODE").pipe(Config.withDefault("access"));
+    if (mode !== "access" && mode !== "native") return yield* new AccessConfigurationError({});
+    const origin = yield* Config.String("FOUNDRY_PUBLIC_ORIGIN");
+    if (mode === "native") {
+      if (!isNativeOrigin(origin)) return yield* new AccessConfigurationError({});
+      return AccessConfig.of({ mode, origin, issuer: origin, audience: "foundry-native" });
+    }
     const issuer = yield* Config.String("FOUNDRY_ACCESS_ISSUER");
     const audience = yield* Config.String("FOUNDRY_ACCESS_AUDIENCE");
-    const origin = yield* Config.String("FOUNDRY_PUBLIC_ORIGIN");
     const publicUrl = yield* decodeUrl(origin).pipe(
       Effect.mapError(() => new AccessConfigurationError({})),
     );
@@ -49,3 +56,27 @@ export const layer = Layer.effect(
     return AccessConfig.of({ issuer, audience, origin });
   }),
 );
+
+export function isNativeOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.origin === value &&
+      !url.username &&
+      !url.password &&
+      (url.protocol === "https:" ||
+        (url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function isDevelopmentLoopbackOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return isNativeOrigin(value) && url.protocol === "http:" && url.port !== "";
+  } catch {
+    return false;
+  }
+}

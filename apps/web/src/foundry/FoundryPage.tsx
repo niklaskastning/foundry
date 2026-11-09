@@ -1,5 +1,8 @@
+import { FoundryUI } from "./FoundryUI";
+import { instanceReturnPath } from "./home";
+import { useFoundrySession } from "./useFoundrySession";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useSearch, useNavigate } from "@tanstack/react-router";
+import { Link, useSearch, useNavigate } from "@tanstack/react-router";
 import { FactoryNavigation, useAutomationCapability } from "./FactoryNavigation";
 import { hasConfirmedAutomationView } from "./pageMode";
 import { lazy, Suspense, useState } from "react";
@@ -12,16 +15,13 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { DeviceCatalog } from "./DeviceCatalog";
 import { useSandboxProfiles } from "./useSandboxProfiles";
 import { WorkerCapacity } from "../features/automation/WorkerCapacity";
-import {
-  instanceCommand,
-  instanceEntry,
-  initialState,
-  type OnboardingResult,
-  type Operation,
-} from "./onboarding";
+import { instanceCommand, instanceEntry, initialState, type Operation } from "./onboarding";
 
 const ThreadArchiveLibrary = lazy(() =>
   import("./ThreadArchiveLibrary").then((module) => ({ default: module.ThreadArchiveLibrary })),
+);
+const CentralConnections = lazy(() =>
+  import("./CentralConnections").then((module) => ({ default: module.CentralConnections })),
 );
 const SandboxPanel = lazy(() =>
   import("../components/foundry/SandboxPanel").then((module) => ({ default: module.SandboxPanel })),
@@ -41,22 +41,33 @@ export function FoundryPage() {
   const search = useSearch({ from: "/foundry" });
   const navigate = useNavigate({ from: "/foundry" });
   const [origin, setOrigin] = useState(window.location.origin);
-  const [state, setState] = useState<OnboardingResult>(initialState);
+  const [state, setState] = useFoundrySession();
   const capability = useAutomationCapability(state.binding?.instanceId);
   const sandboxes = useSandboxProfiles(state.binding?.mainEnvironmentId);
   const [message, setMessage] = useState(state.message);
   const [busy, setBusy] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const run = useAtomCommand(instanceCommand, { reportFailure: false });
 
   async function operate(operation: Operation) {
     setBusy(true);
     const result = await run({
       operation,
+      ...(operation === "login" ? { credentials: { username, password } } : {}),
       ...(state?.binding ? { candidate: state.binding } : {}),
     });
+    setPassword("");
     if (AsyncResult.isSuccess(result)) {
-      if (!state.confirmed && hasConfirmedAutomationView(search.view, result.value)) {
-        window.location.assign(window.location.href);
+      if (result.value.session && !state.session) {
+        window.location.assign(
+          instanceReturnPath(
+            search.returnTo ??
+              (search.view === "instance"
+                ? undefined
+                : window.location.pathname + window.location.search),
+          ),
+        );
         return;
       }
       setState(result.value);
@@ -107,12 +118,12 @@ export function FoundryPage() {
         id="foundry-content"
         aria-label="Factory workspace"
         tabIndex={-1}
-        className="h-dvh min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both bg-background text-foreground pt-12"
+        className="h-dvh min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both bg-muted/20 text-foreground pt-12"
       >
         <div className="mx-auto max-w-7xl">
           <Suspense fallback={<p>Loading…</p>}>
             {search.view === "resources" ? (
-              <div className="space-y-6 p-4 sm:p-6 lg:p-8">
+              <div className="space-y-8 p-4 sm:p-6 lg:p-8">
                 <div>
                   <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     Instance
@@ -124,10 +135,58 @@ export function FoundryPage() {
                     Factory.
                   </p>
                 </div>
+                <FoundryUI.Panel aria-label="Resource settings">
+                  <FoundryUI.Heading>Configuration by scope</FoundryUI.Heading>
+                  <div className="grid gap-5 text-sm sm:grid-cols-3">
+                    <div className="space-y-2">
+                      <h3 className="font-medium">Instance & machines</h3>
+                      <p className="leading-6 text-muted-foreground">
+                        Manage registered machines and execution capacity below.
+                      </p>
+                      <Link
+                        className="inline-flex min-h-9 items-center rounded-md underline underline-offset-4 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                        to="/settings/connections"
+                      >
+                        Interactive connections
+                      </Link>
+                    </div>
+                    <div className="space-y-2">
+                      <h3 className="font-medium">Factory</h3>
+                      <p className="leading-6 text-muted-foreground">
+                        Definitions, workflows and authorized MCP bindings belong to their Factory.
+                      </p>
+                      <Link
+                        className="inline-flex min-h-9 items-center rounded-md underline underline-offset-4 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                        to="/foundry"
+                        search={{ view: "factories" }}
+                      >
+                        Choose a Factory
+                      </Link>
+                    </div>
+                    <div className="space-y-2">
+                      <h3 className="font-medium">Interactive work</h3>
+                      <p className="leading-6 text-muted-foreground">
+                        Provider and project settings apply to the selected environment.
+                      </p>
+                      <Link
+                        className="inline-flex min-h-9 items-center rounded-md underline underline-offset-4 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                        to="/settings/providers"
+                      >
+                        Provider settings
+                      </Link>
+                    </div>
+                  </div>
+                </FoundryUI.Panel>
+                {sandboxes?.supported ? (
+                  <CentralConnections environmentId={state.binding.mainEnvironmentId} />
+                ) : null}
                 <WorkerCapacity environmentId={state.binding.mainEnvironmentId} />
                 <DeviceCatalog readinessInDetails />
                 {sandboxes?.supported ? (
-                  <SandboxPanel environmentId={state.binding.mainEnvironmentId} />
+                  <SandboxPanel
+                    environmentId={state.binding.mainEnvironmentId}
+                    showConnection={false}
+                  />
                 ) : null}
               </div>
             ) : search.view === "inbox" ? (
@@ -178,9 +237,9 @@ export function FoundryPage() {
         </div>
         <div className="space-y-2">
           <details open={nativeTransport || undefined}>
-            <summary className="cursor-pointer text-sm">
+            <FoundryUI.Summary className="cursor-pointer text-sm">
               {nativeTransport ? "Instance URL" : "Use another instance"}
-            </summary>
+            </FoundryUI.Summary>
             <label htmlFor="foundry-origin" className="text-sm font-medium">
               Instance URL
             </label>
@@ -207,17 +266,17 @@ export function FoundryPage() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            The browser opens the chosen origin for Access sign-in. Remove the current Foundry
-            session before switching. No credentials are forwarded to another origin.
+            Sign in at the verified instance. Remove the current Foundry session before switching.
+            No credentials are forwarded to another origin.
           </p>
         </div>
         {state?.binding ? (
           <div className="space-y-3 text-sm">
             <p className="break-all font-medium">{state.binding.origin}</p>
             <details className="rounded-lg border p-3">
-              <summary className="cursor-pointer text-muted-foreground">
+              <FoundryUI.Summary className="cursor-pointer text-muted-foreground">
                 Verified instance identity
-              </summary>
+              </FoundryUI.Summary>
               <div className="space-y-1 break-all pt-3 text-xs text-muted-foreground">
                 <p>Instance ID: {state.binding.instanceId}</p>
                 <p>Issuer: {state.binding.issuer}</p>
@@ -236,18 +295,58 @@ export function FoundryPage() {
         {state?.confirmed ? (
           <div className="flex flex-wrap gap-2">
             {!state.session ? (
-              <Button disabled={busy} onClick={() => void operate("login")}>
-                Sign in to Foundry
-              </Button>
+              <form
+                className="grid w-full max-w-sm gap-4 rounded-xl border bg-card p-4 sm:p-6"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!busy) void operate("login");
+                }}
+              >
+                {state.nativeLoginAvailable ? (
+                  <fieldset disabled={busy} className="space-y-4">
+                    <legend className="sr-only">Foundry account</legend>
+                    <div className="space-y-2">
+                      <label htmlFor="foundry-username" className="text-sm font-medium">
+                        Account
+                      </label>
+                      <Input
+                        id="foundry-username"
+                        name="username"
+                        autoComplete="username"
+                        required
+                        value={username}
+                        onChange={(event) => setUsername(event.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="foundry-password" className="text-sm font-medium">
+                        Password
+                      </label>
+                      <Input
+                        id="foundry-password"
+                        name="password"
+                        type="password"
+                        autoComplete="current-password"
+                        required
+                        value={password}
+                        onChange={(event) => setPassword(event.target.value)}
+                      />
+                    </div>
+                  </fieldset>
+                ) : null}
+                <Button type="submit" disabled={busy}>
+                  {busy ? "Signing in…" : "Sign in to Foundry"}
+                </Button>
+              </form>
             ) : (
               <Button onClick={() => window.location.assign("/foundry?view=factories")}>
                 Open factories
               </Button>
             )}
             <details className="w-full rounded-lg border p-3">
-              <summary className="cursor-pointer text-sm text-muted-foreground">
+              <FoundryUI.Summary className="cursor-pointer text-sm text-muted-foreground">
                 Session controls
-              </summary>
+              </FoundryUI.Summary>
               <div className="flex flex-wrap gap-2 pt-3">
                 <Button variant="outline" disabled={busy} onClick={() => void operate("session")}>
                   Check session
@@ -271,7 +370,9 @@ export function FoundryPage() {
           </p>
         ) : (
           <details className="text-sm">
-            <summary className="cursor-pointer text-muted-foreground">Connection recovery</summary>
+            <FoundryUI.Summary className="cursor-pointer text-muted-foreground">
+              Connection recovery
+            </FoundryUI.Summary>
             <div className="pt-2">
               <Button
                 variant="ghost"
@@ -303,9 +404,8 @@ export function FoundryPage() {
               Open connection settings
             </Button>
             <p className="text-xs text-muted-foreground">
-              A Main T3 session is still required in addition to Foundry sign-in. Device selection
-              uses the existing connection manager; a Foundry session alone does not grant device
-              access.
+              Authorized machines are loaded automatically. Interactive access and Factory execution
+              permissions are managed separately for each machine.
             </p>
           </div>
         ) : null}

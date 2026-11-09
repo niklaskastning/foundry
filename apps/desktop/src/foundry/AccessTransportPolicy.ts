@@ -12,7 +12,12 @@ export function isInstanceRequest(origin: string, address: string): boolean {
     const url = new URL(address);
     if (url.username || url.password) return false;
     if (url.protocol === "wss:") url.protocol = "https:";
-    return url.protocol === "https:" && url.origin === origin;
+    if (url.protocol === "ws:") url.protocol = "http:";
+    return (
+      (url.protocol === "https:" ||
+        (url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) &&
+      url.origin === origin
+    );
   } catch {
     return false;
   }

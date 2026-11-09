@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { McpBindingsPanel } from "./McpBindingsPanel";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { isDefinitiveAutomationFailure } from "./failures";
@@ -22,7 +23,9 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { automationCommands } from "./commands";
 import { useAutomationQuery } from "./useAutomationQuery";
 import { TriggerPanel } from "./TriggerPanel";
-import { DefinitionSourcePanel } from "./DefinitionSourcePanel";
+import { SourceFeaturePanel } from "./SourceFeaturePanel";
+import { OperationsDashboardPanel } from "./OperationsDashboardPanel";
+import { EvaluationsPanel } from "./EvaluationsPanel";
 import { DefinitionEditor } from "./DefinitionEditor";
 import { RunDetail } from "./RunDetail";
 import { RunList } from "./RunList";
@@ -51,7 +54,7 @@ export function FactoryPage({
     void navigate({ search: openWorkspaceRun(search, factoryId, runId) });
   }
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-6 p-4 sm:p-6 lg:p-8">
+    <div className="mx-auto w-full max-w-7xl space-y-8 p-4 sm:p-6 lg:p-8">
       {run ? (
         <RunDetail
           key={run.runId}
@@ -178,9 +181,7 @@ function FactoryList({
       </div>
       <div className="space-y-4">
         <div className="min-w-0 space-y-4">
-          <h2 className="text-lg font-semibold">
-            {workView ? "Choose a factory" : "Your factories"}
-          </h2>
+          <FoundryUI.Heading>{workView ? "Choose a factory" : "Your factories"}</FoundryUI.Heading>
           <form
             className="flex flex-wrap gap-2"
             onSubmit={(event) => {
@@ -204,21 +205,21 @@ function FactoryList({
               Refresh
             </Button>
           </form>
-          {error ? <p role="alert">{error}</p> : null}
+          {error ? <FoundryUI.Notice>{error}</FoundryUI.Notice> : null}
           {loading ? <p role="status">Loading factories…</p> : null}
           {result?.kind === "factories" ? (
             <>
-              <ul className="divide-y rounded-lg border bg-card">
+              <ul className="divide-y overflow-hidden rounded-xl border bg-card shadow-xs">
                 {result.items.map((factory) => (
                   <li
                     key={factory.id}
-                    className="relative flex min-w-0 flex-wrap items-center justify-between gap-3 p-4 hover:bg-accent/40"
+                    className="relative flex min-w-0 flex-wrap items-center justify-between gap-4 p-5 hover:bg-accent/40"
                   >
                     <div className="min-w-0 flex-1 space-y-1">
                       <Badge variant={factory.archived ? "secondary" : "outline"}>
                         {factory.archived ? "Archived" : "Factory"}
                       </Badge>
-                      <h2 className="break-words text-sm font-semibold">
+                      <FoundryUI.Heading className="break-words text-sm font-semibold">
                         <Link
                           to="/foundry"
                           search={{
@@ -226,11 +227,11 @@ function FactoryList({
                             factoryId: factory.id,
                             tab: workView ? "work" : "overview",
                           }}
-                          className="after:absolute after:inset-0 focus-visible:underline"
+                          className="after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-ring"
                         >
                           {factory.name}
                         </Link>
-                      </h2>
+                      </FoundryUI.Heading>
                     </div>
                     <Button
                       variant="outline"
@@ -244,9 +245,9 @@ function FactoryList({
               </ul>
               {result.items.length === 0 ? (
                 <div className="rounded-xl border border-dashed p-8 text-center">
-                  <h2 className="font-medium">
+                  <FoundryUI.Heading className="font-medium">
                     {filter ? "No matching factories" : "Your first factory starts here"}
-                  </h2>
+                  </FoundryUI.Heading>
                   <p className="mt-2 text-sm text-muted-foreground">
                     {filter
                       ? "Try another name or clear the search."
@@ -269,9 +270,9 @@ function FactoryList({
             </>
           ) : null}
           <details className="rounded-xl border p-4">
-            <summary className="cursor-pointer font-medium">
+            <FoundryUI.Summary className="cursor-pointer font-medium">
               Advanced: create a locally managed factory
-            </summary>
+            </FoundryUI.Summary>
             <div className="mt-4 space-y-3">
               <p className="text-sm text-muted-foreground">
                 Git-managed Factories belong in the definitions repository. This creates a separate
@@ -398,12 +399,12 @@ function FactoryDetail({
   return (
     <section className="space-y-6">
       {loading ? <p role="status">Loading factory…</p> : null}
-      {error ? <p role="alert">{error}</p> : null}
-      <div className="space-y-3">
+      {error ? <FoundryUI.Notice>{error}</FoundryUI.Notice> : null}
+      <div className="space-y-4 border-b pb-6">
         <Link
           to="/foundry"
           search={{ view: "factories" }}
-          className="text-sm text-muted-foreground hover:text-foreground"
+          className="inline-flex min-h-9 items-center rounded-md text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         >
           ← All factories
         </Link>
@@ -461,7 +462,10 @@ function FactoryDetail({
           Read-only session. You can inspect this factory; creating work requires operate access.
         </p>
       ) : null}
-      <nav aria-label="Selected factory" className="flex gap-1 overflow-x-auto border-b pb-2">
+      <nav
+        aria-label="Selected factory"
+        className="flex gap-1 overflow-x-auto rounded-lg border bg-card p-1"
+      >
         {factoryTabs.map((value) => (
           <Button
             key={value}
@@ -497,7 +501,9 @@ function FactoryDetail({
           {!detail?.active && detail ? (
             <section className="flex flex-wrap items-center justify-between gap-4 rounded-xl border p-5">
               <div>
-                <h2 className="font-semibold">Prepare this factory</h2>
+                <FoundryUI.Heading className="font-semibold">
+                  Prepare this factory
+                </FoundryUI.Heading>
                 <p className="mt-1 text-sm text-muted-foreground">
                   Import or create a definition, then activate it to make workflows available.
                 </p>
@@ -515,10 +521,13 @@ function FactoryDetail({
               onNavigateRun={onOpenRun}
               onNavigateWorkItem={(_, id) => setWorkItemId(id)}
             />
-            <section className="space-y-3" aria-label="Open work">
+            <section
+              className="space-y-4 rounded-xl border bg-card p-4 shadow-xs sm:p-6"
+              aria-label="Open work"
+            >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <h2 className="text-lg font-semibold">Open work</h2>
+                  <FoundryUI.Heading>Open work</FoundryUI.Heading>
                   <p className="text-sm text-muted-foreground">
                     Outcomes to deliver, across their workflow runs.
                   </p>
@@ -532,7 +541,7 @@ function FactoryDetail({
                   All work items
                 </Button>
               </div>
-              {works.error ? <p role="alert">{works.error}</p> : null}
+              {works.error ? <FoundryUI.Notice>{works.error}</FoundryUI.Notice> : null}
               {works.loading && !works.result ? <p role="status">Loading open work…</p> : null}
               {works.result?.kind === "workItems" ? (
                 <WorkItems
@@ -549,6 +558,12 @@ function FactoryDetail({
             </section>
           </div>
           <RunList environmentId={environmentId} factoryId={factoryId} onOpen={onOpenRun} compact />
+          <OperationsDashboardPanel
+            environmentId={environmentId}
+            factoryId={factoryId}
+            onOpenRun={onOpenRun}
+          />
+          <EvaluationsPanel environmentId={environmentId} factoryId={factoryId} />
         </div>
       ) : null}
       {tab === "workflows" ? <WorkflowCatalog active={detail?.active ?? null} /> : null}
@@ -568,7 +583,7 @@ function FactoryDetail({
         <div className="space-y-5">
           {source.error ? (
             <div className="space-y-2">
-              <p role="alert">{source.error}</p>
+              <FoundryUI.Notice>{source.error}</FoundryUI.Notice>
               <Button variant="outline" onClick={source.refresh}>
                 Retry definition connection
               </Button>
@@ -577,12 +592,9 @@ function FactoryDetail({
           {source.loading ? <p role="status">Loading definition ownership…</p> : null}
           {source.result?.kind === "definitionSource" && !source.error ? (
             <>
-              <DefinitionSourcePanel
+              <SourceFeaturePanel
                 environmentId={environmentId}
                 factoryId={factoryId}
-                scopeVersionId={detail.active?.scopeVersionId ?? detail.versions[0]?.id ?? ""}
-                active={detail.active}
-                binding={source.result.binding}
                 onChanged={() => {
                   source.refresh();
                   refresh();
@@ -682,7 +694,7 @@ function FactoryDetail({
               </form>
             ) : null}
             <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-              <h2 className="text-lg font-semibold">Work items</h2>
+              <FoundryUI.Heading>Work items</FoundryUI.Heading>
               <div className="flex gap-1" aria-label="Work item filter">
                 <Button
                   variant={navigation.search.workStatus !== "active" ? "secondary" : "ghost"}
@@ -701,7 +713,7 @@ function FactoryDetail({
               </div>
             </div>
             {works.loading && !works.result ? <p role="status">Loading work…</p> : null}
-            {works.error ? <p role="alert">{works.error}</p> : null}
+            {works.error ? <FoundryUI.Notice>{works.error}</FoundryUI.Notice> : null}
             {works.result?.kind === "workItems" ? (
               <>
                 <WorkItems
@@ -763,7 +775,7 @@ function WorkItems({
               <button
                 type="button"
                 onClick={() => onOpen(item.id)}
-                className="text-left after:absolute after:inset-0 focus-visible:underline"
+                className="text-left after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-ring"
               >
                 {item.title}
               </button>

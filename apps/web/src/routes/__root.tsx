@@ -1,7 +1,10 @@
+import { useFoundrySession } from "../foundry/useFoundrySession";
+import { executeInstanceOperation, initialState } from "../foundry/onboarding";
 import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
   Outlet,
+  Navigate,
   Link,
   redirect,
   createRootRoute,
@@ -11,7 +14,7 @@ import {
   useRouter,
 } from "@tanstack/react-router";
 import { Check, Copy } from "lucide";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 
 import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
@@ -74,6 +77,37 @@ export const Route = createRootRoute({
       ))
     ) {
       throw redirect({ to: "/foundry", search: { view: "factories" }, replace: true });
+    }
+    if (
+      !initialState().binding &&
+      location.pathname !== "/foundry" &&
+      ![GUEST_PAGE_PATH, "/pair", "/connect", "/connect-agent"].includes(location.pathname) &&
+      !isElectron &&
+      !isLocalEnvironmentDisabled() &&
+      !isHostedStaticApp(new URL(window.location.href)) &&
+      (await discoverFactoryHome(
+        resolvePrimaryEnvironmentHttpUrl("/.well-known/foundry", { protocolVersion: "1" }),
+      ))
+    )
+      throw redirect({
+        to: "/foundry",
+        search: { view: "instance", returnTo: location.href },
+        replace: true,
+      });
+    if (
+      initialState().binding &&
+      location.pathname !== GUEST_PAGE_PATH &&
+      !isHostedStaticApp(new URL(window.location.href))
+    ) {
+      const session = await executeInstanceOperation({ operation: "session" }).catch(
+        () => undefined,
+      );
+      if (!session?.session && location.pathname !== "/foundry")
+        throw redirect({
+          to: "/foundry",
+          search: { view: "instance", returnTo: location.href },
+          replace: true,
+        });
     }
     // Guest links open on the owner's tunnel host in a browser with no T3 session, and must
     // not trigger pairing or an environment connection.
@@ -150,10 +184,37 @@ function RootRouteView() {
   return (
     <ToastProvider>
       <AnchoredToastProvider>
-        <RootRouteBranch />
+        <FoundrySessionBoundary>
+          <RootRouteBranch />
+        </FoundrySessionBoundary>
       </AnchoredToastProvider>
     </ToastProvider>
   );
+}
+
+function FoundrySessionBoundary({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  if (
+    !initialState().binding ||
+    ["/foundry", GUEST_PAGE_PATH, "/pair", "/connect", "/connect-agent"].includes(location.pathname)
+  )
+    return children;
+  return (
+    <AuthenticatedFoundrySurface returnTo={location.href}>{children}</AuthenticatedFoundrySurface>
+  );
+}
+
+function AuthenticatedFoundrySurface({
+  children,
+  returnTo,
+}: {
+  children: ReactNode;
+  returnTo: string;
+}) {
+  const [state] = useFoundrySession();
+  if (!state.session)
+    return <Navigate to="/foundry" search={{ view: "instance", returnTo }} replace />;
+  return children;
 }
 
 function RootRouteBranch() {

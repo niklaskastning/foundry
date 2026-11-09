@@ -1,3 +1,4 @@
+import * as WorkerEvaluation from "./foundry/WorkerEvaluation.ts";
 import { FoundryProviderConnectionError } from "@t3tools/contracts";
 import * as WorkerHandoff from "./foundry/WorkerHandoff.ts";
 import { FoundryWorkerHandoffError } from "@t3tools/contracts";
@@ -1361,6 +1362,7 @@ export const layerWsRpc = (
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const workerLaunch = yield* WorkerLaunch.WorkerLaunch;
+      const workerEvaluation = yield* WorkerEvaluation.WorkerEvaluation;
       const workerHandoff = yield* WorkerHandoff.WorkerHandoff;
       const workerReadiness = yield* WorkerReadiness.WorkerReadiness;
       const assetTransfer = yield* AssetTransfer.AssetTransfer;
@@ -2930,6 +2932,7 @@ export const layerWsRpc = (
         [WS_METHODS.foundryWorkerRenew]: (input) => workerLaunch.renew(input),
         [WS_METHODS.foundryWorkerFollow]: (input) => workerLaunch.follow(input),
         [WS_METHODS.foundryWorkerRead]: (input) => workerLaunch.read(input),
+        [WS_METHODS.foundryWorkerEvaluate]: (input) => workerEvaluation.evaluate(input),
         [WS_METHODS.foundryWorkerStatus]: ({ projectId }) => workerReadiness.read(projectId),
         [WS_METHODS.assetsReadChunk]: (input) => assetTransfer.read(input),
         [WS_METHODS.attachmentsWriteChunk]: (input) => assetTransfer.write(input),
@@ -3404,21 +3407,25 @@ export const layer = Layer.unwrap(
             Effect.provideService(RpcServer.Protocol, withTerminalOutputWindow(protocol)),
             Effect.provide(
               Layer.merge(
-                RpcAuthorization.layer(session.scopes, (method, payload) => {
-                  // Anonymous product signal: the feature and its enum variant,
-                  // credited to the connecting client's surface only.
-                  const usage = featureUsage(method, payload);
-                  return usage === undefined
-                    ? Effect.void
-                    : analytics
-                        .record("feature.used", {
-                          ...usage,
-                          ...(clientAnalyticsProps.surface === undefined
-                            ? {}
-                            : { surface: clientAnalyticsProps.surface }),
-                        })
-                        .pipe(Effect.ignore);
-                }),
+                RpcAuthorization.layer(
+                  session.scopes,
+                  (method, payload) => {
+                    // Anonymous product signal: the feature and its enum variant,
+                    // credited to the connecting client's surface only.
+                    const usage = featureUsage(method, payload);
+                    return usage === undefined
+                      ? Effect.void
+                      : analytics
+                          .record("feature.used", {
+                            ...usage,
+                            ...(clientAnalyticsProps.surface === undefined
+                              ? {}
+                              : { surface: clientAnalyticsProps.surface }),
+                          })
+                          .pipe(Effect.ignore);
+                  },
+                  session.subject,
+                ),
                 rpcInstrumentationLayer,
               ),
             ),

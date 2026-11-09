@@ -33,6 +33,9 @@ const baseTarget = new FoundryConnectionTarget({
 
 it.effect.each([
   "ok",
+  "loopback",
+  "loopback-disabled",
+  "insecure-other",
   "dpop",
   "bearer",
   "identity",
@@ -47,6 +50,14 @@ it.effect.each([
   Effect.gen(function* () {
     const target = new FoundryConnectionTarget({
       ...baseTarget,
+      binding: {
+        ...baseTarget.binding,
+        ...(mode === "loopback" || mode === "loopback-disabled"
+          ? { origin: "http://localhost:15174", issuer: "http://localhost:15174" }
+          : mode === "insecure-other"
+            ? { origin: "http://main.example.test:15174" }
+            : {}),
+      },
       scopes: mode === "ok" ? [...baseTarget.scopes, "orchestration:operate"] : baseTarget.scopes,
     });
     const now = yield* Clock.currentTimeMillis;
@@ -79,7 +90,7 @@ it.effect.each([
           instanceAuth: {
             publicOrigin: target.binding.origin,
             issuer: target.binding.issuer,
-            bootstrapMethods: ["cloudflare-access-jwt"],
+            bootstrapMethods: [mode === "loopback" ? "password" : "cloudflare-access-jwt"],
             sessionMethods: ["foundry-session-cookie"],
           },
           auth: {
@@ -130,7 +141,9 @@ it.effect.each([
         expiresAt: mode === "expired" ? now : now + 10000,
       });
     }) satisfies typeof fetch);
-    const gateway = yield* FoundryGateway.make().pipe(
+    const gateway = yield* FoundryGateway.make({
+      allowLoopback: mode === "loopback" || mode === "insecure-other",
+    }).pipe(
       Effect.provide(
         Layer.mergeAll(
           http,
@@ -158,13 +171,14 @@ it.effect.each([
       ),
     );
     const first = yield* gateway.prepare(target).pipe(Effect.result);
-    if (mode !== "ok" && mode !== "dpop" && mode !== "bearer") {
+    if (mode !== "ok" && mode !== "loopback" && mode !== "dpop" && mode !== "bearer") {
       expect(first._tag).toBe("Failure");
       expect(tickets).toBe(mode === "expired" ? 1 : 0);
       return;
     }
     if (first._tag !== "Success") return yield* Effect.die("prepare failed");
     const second = yield* gateway.prepare(target);
+    expect(new URL(second.socketUrl).protocol).toBe(mode === "loopback" ? "ws:" : "wss:");
     expect(first.success.socketUrl).not.toEqual(second.socketUrl);
     expect(grants).toBe(2);
     expect(second.httpAuthorization).toBeNull();

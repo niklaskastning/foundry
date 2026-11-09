@@ -287,11 +287,19 @@ it.live("revokes the local session when a pending HTTP request is cancelled", ()
   }).pipe(Effect.scoped),
 );
 
-it.live(
-  "opens the real local RPC socket with a proof-bound grant and revokes its session on close",
-  () =>
+it.live.each([
+  { purpose: undefined, seconds: 60 },
+  { purpose: "evaluation" as const, seconds: 180 },
+])(
+  "opens a scoped local RPC socket for $purpose and revokes its session on close",
+  ({ purpose, seconds }) =>
     Effect.gen(function* () {
       const f = yield* fixture;
+      const grant = {
+        ...f.grant,
+        ...(purpose ? { purpose } : {}),
+        expiresAt: (yield* Clock.currentTimeMillis) + seconds * 1000,
+      };
       f.setMode("protocol");
       expect((yield* f.adapter.openStream(f.grant, 1).pipe(Effect.result))._tag).toBe("Failure");
       expect(yield* f.sessions.listActive()).toHaveLength(0);
@@ -303,7 +311,7 @@ it.live(
       });
       yield* Effect.gen(function* () {
         const socket = yield* f.adapter.openStream(
-          { ...f.grant, scopes: ["orchestration:read", "terminal:read"] },
+          { ...grant, scopes: ["orchestration:read", "terminal:read"] },
           1,
         );
         const writer = yield* socket.writer;

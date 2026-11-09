@@ -14,6 +14,7 @@ export * as FoundryOnboarding from "./foundry.ts";
 export * as FoundryArtifacts from "./foundryArtifacts.ts";
 export {
   createDeviceCatalogClient,
+  authorizedDeviceRegistrations,
   restoreDeviceSelection,
   resolveDevicePlatformRegistrations,
 } from "./foundryCatalog.ts";

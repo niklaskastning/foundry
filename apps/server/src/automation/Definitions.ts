@@ -183,6 +183,21 @@ const make = Effect.gen(function* () {
           workflowVersions.push({ id: workflow.id, versionId });
         }
         yield* sql`INSERT INTO foundry_automation.definition_versions(id,command_id,factory_id,factory_version_id,scope_version_id,content_hash,source,definition,workflow_versions) VALUES(${id},${input.commandId},${input.factoryId},${factoryVersionId},${input.scopeVersionId},${contentHash},${sql.json(input.source)},${sql.json(definition)},${sql.json(workflowVersions)})`;
+        if (input.source.kind === "github") {
+          const owner = yield* sql<{
+            instanceId: string;
+            operatorId: string;
+          }>`SELECT instance_id AS "instanceId",operator_id AS "operatorId" FROM foundry_automation.definition_sources WHERE factory_id=${input.factoryId}`;
+          if (!owner[0]) return yield* new DefinitionError({ reason: "version_conflict" });
+          yield* sql`UPDATE foundry_automation.trigger_bindings SET state='paused',reason='definition_changed' WHERE factory_id=${input.factoryId} AND state<>'revoked'`;
+          for (const trigger of definition.schemaVersion === 4 ? (definition.triggers ?? []) : []) {
+            const workflowVersionId = workflowVersions.find(
+              (workflow) => workflow.id === trigger.workflow,
+            )!.versionId;
+            const triggerId = `${id}:trigger:${trigger.id}`;
+            yield* sql`INSERT INTO foundry_automation.trigger_bindings(id,factory_id,instance_id,operator_id,definition_version_id,workflow_version_id,repository,source,target) VALUES(${triggerId},${input.factoryId},${owner[0].instanceId},${owner[0].operatorId},${id},${workflowVersionId},${trigger.repository},${sql.json(trigger.source)},${sql.json(trigger.target)})`;
+          }
+        }
         yield* sql`INSERT INTO foundry_automation.definition_heads(factory_id,version_id) VALUES(${input.factoryId},${id}) ON CONFLICT(factory_id) DO UPDATE SET version_id=EXCLUDED.version_id`;
         return yield* readVersion(input.factoryId, id);
       }),
@@ -216,10 +231,23 @@ const make = Effect.gen(function* () {
           files: FactoryDefinitionFiles;
           commitSha: string;
           contentHash: string;
-        }>`SELECT files,commit_sha AS "commitSha",content_hash AS "contentHash" FROM foundry_automation.definition_git_revisions WHERE factory_id=${input.factoryId} AND id=${input.revisionId} AND valid`;
+          location: FactoryDefinitionGitLocation | null;
+        }>`SELECT location,files,commit_sha AS "commitSha",content_hash AS "contentHash" FROM foundry_automation.definition_git_revisions WHERE factory_id=${input.factoryId} AND id=${input.revisionId} AND valid`;
         const binding = bindings[0];
         const revision = revisions[0];
-        if (!binding || !revision)
+        if (
+          !binding ||
+          !revision ||
+          !revision.location ||
+          revision.location.repositoryId !== binding.location.repositoryId ||
+          revision.location.repository !== binding.location.repository ||
+          revision.location.connectionId !== binding.location.connectionId ||
+          revision.location.branch !== binding.location.branch ||
+          revision.location.path !== binding.location.path ||
+          revision.location.commitSha !== binding.location.commitSha ||
+          (binding.location.commitSha !== undefined &&
+            revision.commitSha !== binding.location.commitSha)
+        )
           return yield* new DefinitionError({ reason: "version_conflict" });
         const current = yield* active(input.factoryId);
         if ((Option.getOrNull(current)?.id ?? null) !== input.expectedVersionId)
@@ -236,6 +264,7 @@ const make = Effect.gen(function* () {
           id: string;
         }>`SELECT id FROM foundry_automation.definition_versions WHERE factory_id=${input.factoryId} AND source->>'kind'='github' AND source->>'reference'=${input.revisionId}`;
         if (existing[0]) {
+          yield* sql`UPDATE foundry_automation.trigger_bindings SET state='paused',reason='definition_changed' WHERE factory_id=${input.factoryId} AND state<>'revoked'`;
           yield* sql`UPDATE foundry_automation.definition_heads SET version_id=${existing[0].id} WHERE factory_id=${input.factoryId}`;
           return yield* readVersion(input.factoryId, existing[0].id);
         }
@@ -248,10 +277,10 @@ const make = Effect.gen(function* () {
           source: {
             kind: "github",
             reference: input.revisionId,
-            repositoryId: binding.location.repositoryId,
-            repository: binding.location.repository,
-            branch: binding.location.branch,
-            path: binding.location.path,
+            repositoryId: revision.location.repositoryId,
+            repository: revision.location.repository,
+            branch: revision.location.branch,
+            path: revision.location.path,
             commitSha: revision.commitSha,
           },
         });

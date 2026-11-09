@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import type {
@@ -50,6 +51,7 @@ export function InboxDetail({
   const canMark = useAtomValue(automationCommands.inboxMark.permissionAtom(environmentId));
   const canDecide = useAtomValue(automationCommands.control.permissionAtom(environmentId));
   const [showEvidence, setShowEvidence] = useState(false);
+  const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({});
   const [answers, setAnswers] = useState<ProviderUserInputAnswers>({});
   const [busy, setBusy] = useState(false);
   const [pendingAction, setPendingAction] = useState<AutomationControlCommand["action"] | null>(
@@ -84,7 +86,7 @@ export function InboxDetail({
       );
     }
   }
-  async function decide(action: "approve" | "reject" | "answer") {
+  async function decide(action: "approve" | "reject" | "answer" | "cancel") {
     if (inFlight.current || (pendingControl.current && pendingControl.current.action !== action))
       return;
     const base = {
@@ -97,10 +99,34 @@ export function InboxDetail({
     const input =
       pendingControl.current ??
       (action === "answer" && item.requestId
-        ? { ...base, action, requestId: item.requestId, answers }
-        : action !== "answer" && item.stepId
-          ? { ...base, action, stepId: item.stepId }
-          : null);
+        ? {
+            ...base,
+            action,
+            requestId: item.requestId,
+            answers: Object.fromEntries(
+              item.questions.map((question) => {
+                const selected = answers[question.id];
+                return [
+                  question.id,
+                  question.multiSelect
+                    ? [
+                        ...(Array.isArray(selected) ? selected : []),
+                        ...(customAnswers[question.id]?.trim()
+                          ? [customAnswers[question.id]!]
+                          : []),
+                      ]
+                    : (selected ?? ""),
+                ];
+              }),
+            ),
+            ...(item.attemptCommandId ? { attemptCommandId: item.attemptCommandId } : {}),
+            ...(item.questionRevision ? { questionRevision: item.questionRevision } : {}),
+          }
+        : action === "cancel"
+          ? { ...base, action }
+          : action !== "answer" && item.stepId
+            ? { ...base, action, stepId: item.stepId }
+            : null);
     if (!input) return;
     inFlight.current = true;
     setBusy(true);
@@ -127,32 +153,30 @@ export function InboxDetail({
   }
   return (
     <aside
-      className="min-w-0 space-y-4 rounded-lg border bg-card p-4"
+      className="min-w-0 space-y-5 rounded-xl border bg-card p-4 shadow-xs sm:p-6"
       aria-label="Inbox item details"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 space-y-2">
           <Badge variant={item.active ? "warning" : "secondary"}>
-            {item.active
-              ? item.kind === "answer"
-                ? "Answer received"
-                : "Needs review"
-              : "Resolved or superseded"}
+            {item.status ?? (item.active ? "pending" : "superseded")}
           </Badge>
-          <h2 className="break-words text-lg font-semibold">{item.title}</h2>
+          <FoundryUI.Heading className="break-words text-lg font-semibold">
+            {item.title}
+          </FoundryUI.Heading>
           <p className="text-sm text-muted-foreground">
             {runContext?.factoryName ?? "Factory"} ·{" "}
             {runContext?.workItem?.title ??
               (context.loading ? "Loading work item context…" : "Work item context unavailable")}
           </p>
           {context.error ? (
-            <p role="alert" className="text-sm">
+            <FoundryUI.Notice className="text-sm">
               Work item context is unavailable. {context.error}
-            </p>
+            </FoundryUI.Notice>
           ) : null}
         </div>
         <Button variant="ghost" onClick={onClose}>
-          Close
+          Close details
         </Button>
       </div>
       <p className="whitespace-pre-wrap break-words text-sm">
@@ -160,6 +184,14 @@ export function InboxDetail({
           ? "The workflow used all available review rounds without meeting its completion condition. Inspect the last result and decide how to continue."
           : item.detail}
       </p>
+      {item.kind === "question" ? (
+        <p className="text-sm text-muted-foreground">
+          {item.stepId ? `Step ${item.stepId} · ` : ""}
+          {item.active
+            ? "This execution is waiting for your answer. Sending it lets the waiting step continue when the workflow allows it."
+            : "This question no longer accepts answers."}
+        </p>
+      ) : null}
       <div className="space-y-3">
         <Button variant="outline" size="multiline" onClick={() => setShowEvidence(!showEvidence)}>
           {showEvidence ? "Hide evidence" : "Review tests, changes and artifacts"}
@@ -229,7 +261,7 @@ export function InboxDetail({
               {question.options.map((option) => (
                 <label
                   key={option.value ?? option.label}
-                  className="flex items-start gap-2 text-sm"
+                  className="flex items-start gap-3 rounded-lg border p-3 text-sm has-checked:border-primary/40 has-checked:bg-primary/5"
                 >
                   <input
                     type={question.multiSelect ? "checkbox" : "radio"}
@@ -266,9 +298,15 @@ export function InboxDetail({
                 <label className="block space-y-1">
                   <span className="text-sm">Your answer</span>
                   <Textarea
-                    value={answerText(answers[question.id])}
+                    value={
+                      question.multiSelect
+                        ? (customAnswers[question.id] ?? "")
+                        : answerText(answers[question.id])
+                    }
                     onChange={(event) =>
-                      setAnswers({ ...answers, [question.id]: event.target.value })
+                      question.multiSelect
+                        ? setCustomAnswers({ ...customAnswers, [question.id]: event.target.value })
+                        : setAnswers({ ...answers, [question.id]: event.target.value })
                     }
                   />
                 </label>
@@ -284,7 +322,10 @@ export function InboxDetail({
               item.questions.some(
                 (question) =>
                   question.required !== false &&
-                  (answers[question.id] === undefined || answers[question.id] === ""),
+                  !(question.multiSelect && customAnswers[question.id]?.trim()) &&
+                  ![answers[question.id]]
+                    .flat()
+                    .some((value) => typeof value === "string" && value.trim().length > 0),
               )
             }
           >
@@ -292,7 +333,16 @@ export function InboxDetail({
           </Button>
         </form>
       ) : null}
-      {item.kind === "answer" && item.answer ? (
+      {item.kind === "question" && !item.active ? (
+        <div className="space-y-2">
+          {item.questions.map((question) => (
+            <p key={question.id} className="text-sm">
+              <strong>{question.header}</strong> · {question.question}
+            </p>
+          ))}
+        </div>
+      ) : null}
+      {item.answer ? (
         <dl className="space-y-2 text-sm">
           {Object.entries(item.answer).map(([key, answer]) => (
             <div key={key}>
@@ -336,10 +386,32 @@ export function InboxDetail({
           You can review this item, but your current session cannot make run decisions.
         </p>
       ) : null}
+      {item.active && item.kind !== "answer" ? (
+        <div className="space-y-2 border-t pt-3">
+          <p className="text-sm text-muted-foreground">
+            Closing details leaves this question waiting. Cancel workflow requests a stop for the
+            whole run; cancellation completes after its writers confirm they have stopped.
+          </p>
+          <Button
+            variant="destructive"
+            disabled={busy || !canDecide || (pendingAction !== null && pendingAction !== "cancel")}
+            onClick={() => {
+              if (
+                window.confirm(
+                  "Cancel this entire workflow? Pending questions will no longer accept answers.",
+                )
+              )
+                void decide("cancel");
+            }}
+          >
+            Cancel workflow
+          </Button>
+        </div>
+      ) : null}
       <details className="border-t pt-3">
-        <summary className="cursor-pointer text-sm text-muted-foreground">
+        <FoundryUI.Summary className="cursor-pointer text-sm text-muted-foreground">
           Personal inbox organization
-        </summary>
+        </FoundryUI.Summary>
         <div className="space-y-3 pt-3">
           <p className="text-sm text-muted-foreground">
             Hiding an item only organizes your personal inbox. Pending questions and approvals
@@ -355,14 +427,16 @@ export function InboxDetail({
             </Button>
             <Button
               variant="outline"
-              disabled={busy || !canMark}
+              disabled={
+                busy || !canMark || item.status === "answered" || item.status === "resolved"
+              }
               onClick={() => void changeMark(item.isDone ? "reopen" : "done")}
             >
               {item.isDone ? "Return to my inbox" : "Hide from my inbox"}
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            {item.active ? "Current request" : "Resolved or superseded"} · Run revision{" "}
+            {item.status ?? (item.active ? "Current request" : "Superseded")} · Run revision{" "}
             {item.expectedRevision} · Result revision {item.resultRevision}
           </p>
         </div>
@@ -407,7 +481,9 @@ function InboxEvidence({
       <p className="text-sm">
         Decision revision {item.expectedRevision} · Result revision {item.resultRevision}
       </p>
-      {run.error || attempts.error ? <p role="alert">{run.error ?? attempts.error}</p> : null}
+      {run.error || attempts.error ? (
+        <FoundryUI.Notice>{run.error ?? attempts.error}</FoundryUI.Notice>
+      ) : null}
       {detail ? (
         <p className="text-sm" role={matches ? "status" : "alert"}>
           {matches

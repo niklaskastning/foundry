@@ -26,3 +26,15 @@ export async function discoverFactoryHome(
   if (response.headers.get("content-type")?.includes("text/html")) return false;
   return decodeDescriptor(await response.json()).automation?.protocolVersion === "1";
 }
+
+export function instanceReturnPath(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    !/^\/(?:foundry(?:\?|$)|chats(?:[/?]|$)|settings(?:[/?]|$)|threads(?:[/?]|$)|environments(?:[/?]|$))/.test(
+      value,
+    ) ||
+    value.includes("\\")
+  )
+    return "/foundry?view=factories";
+  return value;
+}

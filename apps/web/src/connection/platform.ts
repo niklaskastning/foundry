@@ -430,6 +430,7 @@ const layerCapabilities = Layer.effectContext(
       Context.add(ClientCapabilities.PrimaryEnvironmentAuth, primaryAuth),
       Context.add(ClientCapabilities.RelayDeviceIdentity, identity),
       Context.add(ClientCapabilities.ClientPresentation, presentation),
+      Context.add(ClientCapabilities.FoundryDevelopmentLoopback, import.meta.env.DEV),
       Context.add(ClientCapabilities.SshEnvironmentGateway, ssh),
     );
   }),

@@ -1,3 +1,7 @@
+import * as MainSessionAuthority from "../src/foundry/MainSessionAuthority.ts";
+import * as ParentSessionAuthority from "../src/auth/ParentSessionAuthority.ts";
+import * as MainBrowserSession from "../src/foundry/MainBrowserSession.ts";
+import * as NativeOperator from "../src/foundry/NativeOperator.ts";
 import { verifyGateway } from "./foundry-gateway-integration.ts";
 import * as Schema from "effect/Schema";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -261,7 +265,7 @@ try {
     await query("UPDATE foundry_instance.schema_version SET version=99", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 503);
     await expectFailure(migrate());
-    await query("UPDATE foundry_instance.schema_version SET version=10", "foundry_migrate");
+    await query("UPDATE foundry_instance.schema_version SET version=11", "foundry_migrate");
     NodeAssert.equal((await ready()).status, 200);
     await query("GRANT CREATE ON SCHEMA public TO foundry_runtime");
     NodeAssert.equal((await ready()).status, 503);
@@ -312,6 +316,7 @@ try {
   const testContext = Context.make(Clock.Clock, {
     ...clock,
     sleep: clock.sleep.bind(clock),
+    monotonicTimeNanosUnsafe: clock.monotonicTimeNanosUnsafe.bind(clock),
     currentTimeMillis: Effect.sync(() => now),
     currentTimeMillisUnsafe: () => now,
     currentTimeNanos: Effect.sync(() => BigInt(now) * 1_000_000n),
@@ -326,20 +331,30 @@ try {
       .setIssuedAt(now / 1000)
       .setExpirationTime(now / 1000 + seconds)
       .sign(keys.privateKey);
-  const authRoutes = AuthHttp.layer.pipe(
-    Layer.provide(FoundrySessions.layer),
-    Layer.provide(AccessVerifier.layer),
-    Layer.provide(
-      Layer.succeed(
-        AccessVerifier.AccessSigningKeys,
-        createLocalJWKSet({ keys: [{ ...jwk, kid: "fixture", alg: "RS256" }] }),
+  const authRoutesFor = (config: AccessConfig.AccessConfig["Service"]) =>
+    AuthHttp.layer.pipe(
+      Layer.provide(MainBrowserSession.layer),
+      Layer.provide(FoundrySessions.layer),
+      Layer.provide(NativeOperator.layer),
+      Layer.provide(EnvironmentAuth.layer),
+      Layer.provide(MainSessionAuthority.layerAuthority),
+      Layer.provide(SqlitePersistence.layerMemory),
+      Layer.provide(ServerSecretStore.layer),
+      Layer.provide(environment),
+      Layer.provide(ServerConfig.layerTest(root, home)),
+      Layer.provide(AccessVerifier.layer),
+      Layer.provide(
+        Layer.succeed(
+          AccessVerifier.AccessSigningKeys,
+          createLocalJWKSet({ keys: [{ ...jwk, kid: "fixture", alg: "RS256" }] }),
+        ),
       ),
-    ),
-    Layer.provide(Layer.succeed(AccessConfig.AccessConfig, accessConfig)),
-    Layer.provide(identityLayer),
-    Layer.provide(db("foundry_runtime")),
-    Layer.provide(NodeServices.layer),
-  );
+      Layer.provide(Layer.succeed(AccessConfig.AccessConfig, config)),
+      Layer.provide(identityLayer),
+      Layer.provide(db("foundry_runtime")),
+      Layer.provide(NodeServices.layer),
+    );
+  const authRoutes = authRoutesFor(accessConfig);
   let authHandler = HttpRouter.toWebHandler(authRoutes, { disableLogger: true });
   const post = (operation: string, headers: Record<string, string> = {}) =>
     authHandler.handler(
@@ -358,7 +373,10 @@ try {
     NodeAssert.match(cookie, /SameSite=Strict/i);
     NodeAssert.match(cookie, /Path=\//);
     NodeAssert.doesNotMatch(cookie, /Domain=/i);
-    const credential = cookie.split(";", 1)[0]!;
+    const credential = response.headers
+      .getSetCookie()
+      .find((value) => value.startsWith(`${FoundrySessions.FOUNDRY_SESSION_COOKIE}=`))!
+      .split(";", 1)[0]!;
     const body = decodeSession(await response.json());
     NodeAssert.equal(body.instanceId, instanceId);
     NodeAssert.equal(JSON.stringify(body).includes(credential.split("=", 2)[1]!), false);
@@ -373,7 +391,7 @@ try {
     await expectFailure(bind("foreign-operator"));
     const operatorBefore = await query("SELECT * FROM foundry_instance.operator_binding");
     await query(
-      "DROP TABLE foundry_instance.provider_connections, foundry_instance.sandbox_allocations, foundry_instance.sandbox_profiles, foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
+      "DROP TABLE foundry_instance.native_operator, foundry_instance.provider_connections, foundry_instance.sandbox_allocations, foundry_instance.sandbox_profiles, foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
       "foundry_migrate",
     );
     await query("DROP TABLE foundry_instance.sessions", "foundry_migrate");
@@ -553,7 +571,9 @@ try {
                 cookie,
                 ...(csrf ? { "x-foundry-csrf": csrf } : {}),
               });
-          const issuedCookie = response.headers.get("set-cookie");
+          const issuedCookie = response.headers
+            .getSetCookie()
+            .find((value) => value.startsWith(`${FoundrySessions.FOUNDRY_SESSION_COOKIE}=`));
           if (issuedCookie) cookie = issuedCookie.split(";", 1)[0]!;
           return FoundryOnboarding.readResponse(response);
         },
@@ -596,11 +616,138 @@ try {
   } finally {
     await authHandler.dispose();
   }
+  const nativeConfig = {
+    mode: "native" as const,
+    origin: "http://localhost:5173",
+    issuer: "http://localhost:5173",
+    audience: "foundry-native",
+  };
+  await run(
+    Effect.gen(function* () {
+      const native = yield* NativeOperator.NativeOperator;
+      const parent = yield* ParentSessionAuthority.ParentSessionAuthority;
+      const sessions = yield* FoundrySessions.FoundrySessions;
+      const credentials = {
+        username: "native-test-operator",
+        password: "isolated-integration-password",
+      };
+      yield* native.bootstrap(credentials.username, credentials.password);
+      NodeAssert.equal(
+        (yield* native.bootstrap(credentials.username, credentials.password).pipe(Effect.result))
+          ._tag,
+        "Failure",
+      );
+      NodeAssert.equal(
+        (yield* sessions
+          .login(undefined, undefined, { ...credentials, password: "incorrect" })
+          .pipe(Effect.result))._tag,
+        "Failure",
+      );
+      const login = yield* sessions.login(undefined, undefined, credentials);
+      NodeAssert.equal(login.session.expiresAt, now + 15 * 60_000);
+      const reference = `foundry:${yield* sessions.reference(login.token)}`;
+      NodeAssert.equal(yield* parent.validate(reference), true);
+      const refreshed = yield* sessions.refresh(login.token, login.session.csrfToken, undefined);
+      NodeAssert.equal((yield* sessions.inspect(login.token).pipe(Effect.result))._tag, "Failure");
+      NodeAssert.equal(yield* parent.validate(reference), false);
+      const refreshedReference = `foundry:${yield* sessions.reference(refreshed.token)}`;
+      yield* sessions.logout(refreshed.token, refreshed.session.csrfToken);
+      NodeAssert.equal(yield* parent.validate(refreshedReference), false);
+      for (const table of ["instance", "operator_binding"]) {
+        const active = yield* sessions.login(undefined, undefined, credentials);
+        const activeReference = `foundry:${yield* sessions.reference(active.token)}`;
+        NodeAssert.equal(yield* parent.validate(activeReference), true);
+        yield* Effect.promise(() =>
+          query(
+            `UPDATE foundry_instance.${table} SET access_generation=access_generation+1`,
+            "foundry_runtime",
+          ),
+        );
+        NodeAssert.equal(yield* parent.validate(activeReference), false);
+      }
+      const expiring = yield* sessions.login(undefined, undefined, credentials);
+      const expiringReference = `foundry:${yield* sessions.reference(expiring.token)}`;
+      now += 15 * 60_000;
+      NodeAssert.equal(yield* parent.validate(expiringReference), false);
+      NodeAssert.equal(
+        (yield* sessions.inspect(refreshed.token).pipe(Effect.result))._tag,
+        "Failure",
+      );
+    }).pipe(
+      Effect.provide(
+        FoundrySessions.layer.pipe(
+          Layer.provideMerge(MainSessionAuthority.layerAuthority),
+          Layer.provideMerge(NativeOperator.layer),
+          Layer.provide(AccessVerifier.layer),
+          Layer.provide(
+            Layer.succeed(
+              AccessVerifier.AccessSigningKeys,
+              createLocalJWKSet({ keys: [{ ...jwk, kid: "fixture", alg: "RS256" }] }),
+            ),
+          ),
+          Layer.provide(Layer.succeed(AccessConfig.AccessConfig, nativeConfig)),
+          Layer.provide(identityLayer),
+          Layer.provide(db("foundry_runtime")),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+      Effect.provide(testContext),
+    ),
+  );
+  NodeAssert.equal(
+    (await query("SELECT issuer FROM foundry_instance.operator_binding"))[0]?.issuer,
+    accessConfig.issuer,
+  );
+  await report(
+    "PASS native operator: atomic bootstrap, wrong password, existing actor preserved, session rotation and logout without Access assertion",
+  );
+  const nativeHandler = HttpRouter.toWebHandler(authRoutesFor(nativeConfig), {
+    disableLogger: true,
+  });
+  try {
+    const nativeRequest = (operation: string, body?: unknown, cookie?: string, csrf?: string) =>
+      nativeHandler.handler(
+        new Request(`${nativeConfig.origin}/api/foundry/auth/${operation}`, {
+          method: "POST",
+          headers: {
+            origin: nativeConfig.origin,
+            "content-type": "application/json",
+            ...(cookie ? { cookie } : {}),
+            ...(csrf ? { "x-foundry-csrf": csrf } : {}),
+          },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        }),
+        testContext,
+      );
+    NodeAssert.equal((await nativeRequest("session")).status, 401);
+    const response = await nativeRequest("login", {
+      username: "native-test-operator",
+      password: "isolated-integration-password",
+    });
+    NodeAssert.equal(response.status, 200);
+    const nativeSession = decodeSession(await response.json());
+    const cookies = response.headers
+      .getSetCookie()
+      .map((value) => value.split(";", 1)[0]!)
+      .join("; ");
+    NodeAssert.equal((await nativeRequest("session", undefined, cookies)).status, 200);
+    NodeAssert.equal((await nativeRequest("logout", undefined, cookies, "wrong")).status, 403);
+    NodeAssert.equal(
+      (await nativeRequest("logout", undefined, cookies, nativeSession.csrfToken)).status,
+      204,
+    );
+    NodeAssert.equal((await nativeRequest("session", undefined, cookies)).status, 401);
+    await report(
+      "PASS native localhost HTTP: real password login, linked cookies, Origin/CSRF and logout without Access headers or database session fixtures",
+    );
+  } finally {
+    await nativeHandler.dispose();
+  }
   const sessionsBeforeUpgrade = await query(
     "SELECT * FROM foundry_instance.sessions ORDER BY token_hash",
   );
   await query(
-    "DROP TABLE foundry_instance.provider_connections, foundry_instance.sandbox_allocations, foundry_instance.sandbox_profiles, foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
+    "DROP TABLE foundry_instance.native_operator, foundry_instance.provider_connections, foundry_instance.sandbox_allocations, foundry_instance.sandbox_profiles, foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants, foundry_instance.device_enrollments, foundry_instance.devices",
     "foundry_migrate",
   );
   await query("UPDATE foundry_instance.schema_version SET version=2", "foundry_migrate");
@@ -706,7 +853,7 @@ try {
       "foundry_migrate",
     );
     await query(
-      "DROP TABLE foundry_instance.provider_connections, foundry_instance.sandbox_allocations, foundry_instance.sandbox_profiles, foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants",
+      "DROP TABLE foundry_instance.native_operator, foundry_instance.provider_connections, foundry_instance.sandbox_allocations, foundry_instance.sandbox_profiles, foundry_instance.machine_credentials, foundry_instance.archive_artifacts, foundry_instance.archive_events, foundry_instance.archive_threads, foundry_instance.artifact_uploads, foundry_instance.device_grants",
       "foundry_migrate",
     );
     await query("UPDATE foundry_instance.schema_version SET version=3", "foundry_migrate");
@@ -1049,13 +1196,14 @@ try {
     "ALTER TABLE foundry_instance.machine_credentials DROP COLUMN scope",
     "foundry_migrate",
   );
+  await query("DROP TABLE foundry_instance.native_operator", "foundry_migrate");
   await query("UPDATE foundry_instance.schema_version SET version=9", "foundry_migrate");
   await expectFailure(readIdentity);
   await run(migrate());
   await run(migrate());
   NodeAssert.equal(
     (await query("SELECT version FROM foundry_instance.schema_version"))[0]?.version,
-    10,
+    11,
   );
   NodeAssert.equal(
     (await machineCall((service) => service.authenticate(machineToken))).scope,
@@ -1264,7 +1412,7 @@ try {
         "fork_automation",
       )
     )[0]?.version,
-    11,
+    12,
   );
 
   await NodeFSP.writeFile(
@@ -1583,7 +1731,7 @@ try {
           0,
         );
         await report(
-          "PASS enabled production Automation runtime: separate schema-11 database and restricted roles; current Foundry/T3 sessions read empty bindings/factories; read scope cannot mutate, management scope reaches domain validation; invalid CSRF rejected; no GitHub App configuration, worker or provider execution.",
+          "PASS enabled production Automation runtime: separate schema-12 database and restricted roles; current Foundry/T3 sessions read empty bindings/factories; read scope cannot mutate, management scope reaches domain validation; invalid CSRF rejected; no GitHub App configuration, worker or provider execution.",
         );
       }
       const login = await runtimeHandler.handler(

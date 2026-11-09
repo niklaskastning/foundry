@@ -1,4 +1,5 @@
 import { FoundryAuthError, type FoundrySession } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -6,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { base64UrlEncode, signPayload, timingSafeEqualBase64Url } from "../auth/utils.ts";
+import * as NativeOperator from "./NativeOperator.ts";
 import * as AccessConfig from "./AccessConfig.ts";
 import * as AccessVerifier from "./AccessVerifier.ts";
 import * as InstanceDatabase from "./InstanceDatabase.ts";
@@ -20,6 +22,7 @@ export class FoundrySessions extends Context.Service<
     readonly login: (
       assertion: string | undefined,
       previousToken?: string,
+      credentials?: unknown,
     ) => Effect.Effect<
       { readonly token: string; readonly session: FoundrySession },
       FoundryAuthError
@@ -54,6 +57,7 @@ const make = Effect.gen(function* () {
   const sql = yield* InstanceDatabase.InstanceDatabase;
   const identity = yield* InstancePostgres.InstancePostgres;
   const access = yield* AccessVerifier.AccessVerifier;
+  const native = yield* Effect.serviceOption(NativeOperator.NativeOperator);
   const config = yield* AccessConfig.AccessConfig;
   const crypto = yield* Crypto.Crypto;
   const hash = Effect.fn("FoundrySessions.hash")(function* (token: string) {
@@ -88,7 +92,7 @@ const make = Effect.gen(function* () {
       JOIN foundry_instance.instance i ON i.instance_id = s.instance_id AND i.access_generation = s.instance_generation
       JOIN foundry_instance.operator_binding o ON o.operator_id = s.operator_id AND o.access_generation = s.operator_generation
       WHERE s.token_hash = ${digest} AND s.expires_at > ${now} AND s.instance_id = ${instanceId}
-        AND o.issuer = ${config.issuer} AND s.audience = ${config.audience}`;
+        AND (${config.mode === "native"} OR o.issuer = ${config.issuer}) AND s.audience = ${config.audience}`;
       if (!rows[0]) return yield* new FoundryAuthError({ code: "invalid_session" });
       return {
         instanceId,
@@ -118,8 +122,16 @@ const make = Effect.gen(function* () {
       assertion: string | undefined,
       previousToken: string | undefined,
       renewing: boolean,
+      credentials?: unknown,
     ) {
-      const proof = yield* access.verify(assertion);
+      const proof =
+        config.mode !== "native"
+          ? yield* access.verify(assertion)
+          : renewing
+            ? undefined
+            : Option.isSome(native)
+              ? yield* native.value.verify(credentials)
+              : yield* new FoundryAuthError({ code: "unavailable" });
       const instanceId = yield* identity.readIdentity;
       const token = base64UrlEncode(yield* crypto.randomBytes(32).pipe(Effect.orDie));
       const digest = yield* hash(token);
@@ -127,7 +139,7 @@ const make = Effect.gen(function* () {
       return yield* sql.withTransaction(
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
-          const expiresAt = Math.min(now + 15 * 60 * 1000, proof.expiresAt);
+          const expiresAt = Math.min(now + 15 * 60 * 1000, proof?.expiresAt ?? Infinity);
           if (expiresAt <= now) return yield* new FoundryAuthError({ code: "invalid_access" });
           const operators = yield* sql<{
             operator_id: string;
@@ -140,7 +152,7 @@ const make = Effect.gen(function* () {
         WHERE i.instance_id = ${instanceId} FOR SHARE OF i, o`;
           const operator = operators[0];
           if (!operator) return yield* new FoundryAuthError({ code: "operator_unbound" });
-          if (operator.issuer !== proof.issuer || operator.subject !== proof.subject)
+          if (proof && (operator.issuer !== proof.issuer || operator.subject !== proof.subject))
             return yield* new FoundryAuthError({ code: "operator_mismatch" });
           if (renewing) {
             const old =
@@ -174,8 +186,8 @@ const make = Effect.gen(function* () {
   );
 
   const login = Effect.fn("FoundrySessions.login")(
-    (assertion: string | undefined, previousToken?: string) =>
-      issue(assertion, previousToken, false),
+    (assertion: string | undefined, previousToken?: string, credentials?: unknown) =>
+      issue(assertion, previousToken, false, credentials),
   );
   const refresh = Effect.fn("FoundrySessions.refresh")(function* (
     token: string | undefined,

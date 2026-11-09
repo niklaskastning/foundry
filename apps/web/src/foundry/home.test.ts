@@ -1,5 +1,5 @@
 import { expect, it } from "vite-plus/test";
-import { discoverFactoryHome, factoryReturnPath } from "./home";
+import { discoverFactoryHome, factoryReturnPath, instanceReturnPath } from "./home";
 
 it("chooses the advertised factory home and preserves standalone T3", async () => {
   const descriptor = {
@@ -51,4 +51,23 @@ it("keeps factory work and run context through pairing without accepting externa
     "/foundry\\other",
   ])
     expect(factoryReturnPath(target)).toBe("/");
+});
+
+it("keeps authenticated local destinations and rejects external login return targets", () => {
+  for (const path of [
+    "/foundry?view=runs&runId=r",
+    "/chats",
+    "/settings/connections",
+    "/environments/e/threads/t",
+  ])
+    expect(instanceReturnPath(path)).toBe(path);
+  for (const path of [
+    undefined,
+    "https://other.example/chats",
+    "//other.example/chats",
+    "/chats\\other",
+    "javascript:alert(1)",
+    "/unknown",
+  ])
+    expect(instanceReturnPath(path)).toBe("/foundry?view=factories");
 });

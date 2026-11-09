@@ -1,3 +1,4 @@
+import * as ParentSessionAuthority from "./ParentSessionAuthority.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentId } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
@@ -111,6 +112,59 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
         expect(yield* Deferred.isDone(ownerInvalidated)).toBe(false);
         yield* sessions.awaitInvalidation(client.sessionId);
       }).pipe(Effect.scoped, Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
+  );
+
+  it.effect(
+    "checks parent authority for HTTP credentials, WebSocket tickets and live connections",
+    () =>
+      Effect.gen(function* () {
+        const invalidated = yield* Deferred.make<void>();
+        let valid = true;
+        const authority = {
+          validate: (subject: string) =>
+            Effect.sync(() => !subject.startsWith("foundry:") || valid),
+          awaitInvalidation: () => Deferred.await(invalidated),
+        };
+        yield* Effect.gen(function* () {
+          const sessions = yield* SessionStore.SessionStore;
+          const linked = yield* sessions.issue({ subject: "foundry:parent-reference" });
+          const independent = yield* sessions.issue({ subject: "personal" });
+          const ticket = yield* sessions.issueWebSocketToken(linked.sessionId);
+          expect((yield* sessions.verify(linked.token)).sessionId).toBe(linked.sessionId);
+          expect((yield* sessions.verifyWebSocketToken(ticket.token)).sessionId).toBe(
+            linked.sessionId,
+          );
+          const closed = yield* Deferred.make<void>();
+          yield* sessions
+            .awaitInvalidation(linked.sessionId)
+            .pipe(
+              Effect.andThen(Deferred.succeed(closed, undefined)),
+              Effect.forkScoped({ startImmediately: true }),
+            );
+          valid = false;
+          yield* Deferred.succeed(invalidated, undefined);
+          yield* Deferred.await(closed);
+          expect((yield* sessions.verify(linked.token).pipe(Effect.result))._tag).toBe("Failure");
+          expect(
+            (yield* sessions.issueWebSocketToken(linked.sessionId).pipe(Effect.result))._tag,
+          ).toBe("Failure");
+          expect(
+            (yield* sessions.listActive()).some((entry) => entry.sessionId === linked.sessionId),
+          ).toBe(false);
+          expect(
+            (yield* sessions.verifyWebSocketToken(ticket.token).pipe(Effect.result))._tag,
+          ).toBe("Failure");
+          expect((yield* sessions.verify(independent.token)).sessionId).toBe(independent.sessionId);
+        }).pipe(
+          Effect.provide(
+            layerSessionStore().pipe(
+              Layer.provide(
+                Layer.succeed(ParentSessionAuthority.ParentSessionAuthority, authority),
+              ),
+            ),
+          ),
+        );
+      }),
   );
 
   it.effect("expires a connected session at its credential deadline", () =>

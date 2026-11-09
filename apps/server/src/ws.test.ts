@@ -1,3 +1,4 @@
+import * as WorkerEvaluation from "./foundry/WorkerEvaluation.ts";
 import { FoundryWorkerError } from "@t3tools/contracts";
 import * as WorkerLaunch from "./foundry/WorkerLaunch.ts";
 import * as WorkerReadiness from "./foundry/WorkerReadiness.ts";
@@ -556,6 +557,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(WorkspaceEntries.WorkspaceEntries)({}),
   Layer.mock(WorkspaceFileSystem.WorkspaceFileSystem)({}),
   Layer.mock(WorkerLaunch.WorkerLaunch)({}),
+  Layer.mock(WorkerEvaluation.WorkerEvaluation)({}),
   Layer.succeed(WorkerReadiness.WorkerReadiness, {
     read: () => Effect.fail(new FoundryWorkerError({ code: "not_enabled" })),
   }),

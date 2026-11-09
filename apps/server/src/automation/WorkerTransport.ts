@@ -1,3 +1,4 @@
+import { EvaluationInput, type EvaluationJudgment } from "@t3tools/contracts";
 import {
   FoundryWorkerHandoffError,
   type FoundryWorkerHandoffOpen,
@@ -58,10 +59,15 @@ export class WorkerTransportError extends Schema.TaggedError<WorkerTransportErro
 export const WorkerIdentity = GatewayGrants.AutomationGatewayIdentity;
 export type WorkerIdentity = typeof WorkerIdentity.Type;
 type Target = Pick<WorkerIdentity, "deviceId" | "environmentId">;
+const encodeEvaluationInput = Schema.encodeEffect(Schema.fromJsonString(EvaluationInput));
 
 export class WorkerTransport extends Context.Service<
   WorkerTransport,
   {
+    readonly evaluate: (
+      identity: WorkerIdentity,
+      input: EvaluationInput,
+    ) => Effect.Effect<EvaluationJudgment, WorkerTransportError>;
     readonly handoffOpen: (
       identity: WorkerIdentity,
       input: FoundryWorkerHandoffOpen,
@@ -189,12 +195,13 @@ const make = Effect.gen(function* () {
       gateway.authorizeAutomation(request, target),
     Effect.mapError(transportError),
   );
-  const call = Effect.fn("WorkerTransport.call")(
-    function* <A, E>(
-      identity: WorkerIdentity,
-      operation: (client: Client) => Effect.Effect<A, E>,
-      scope?: { commandId: string; projectId?: string; previousCommandId?: string },
-    ) {
+  const call = Effect.fn("WorkerTransport.call")(function* <A, E>(
+    identity: WorkerIdentity,
+    operation: (client: Client) => Effect.Effect<A, E>,
+    scope?: { commandId: string; projectId?: string; previousCommandId?: string },
+    evaluation = false,
+  ) {
+    return yield* Effect.gen(function* () {
       const authorization = GatewayGrants.isUnattendedIdentity(identity)
         ? Option.isSome(unattended)
           ? unattended.value.validate(identity, scope)
@@ -218,16 +225,29 @@ const make = Effect.gen(function* () {
       return yield* operation(client).pipe(
         Effect.raceFirst(
           gateway
-            .openAutomation(identity, sockets.gateway, authorization)
+            .openAutomation(
+              identity,
+              sockets.gateway,
+              authorization,
+              evaluation ? "evaluation" : undefined,
+            )
             .pipe(Effect.andThen(Effect.fail(new FoundryGatewayError({ code: "unavailable" })))),
         ),
       );
-    },
-    Effect.scoped,
-    Effect.timeout("20 seconds"),
-    Effect.mapError(transportError),
-  );
+    }).pipe(Effect.scoped, Effect.timeout(evaluation ? "3 minutes" : "20 seconds"));
+  }, Effect.mapError(transportError));
   return WorkerTransport.of({
+    evaluate: Effect.fn("WorkerTransport.evaluate")(function* (identity, input) {
+      const encoded = yield* encodeEvaluationInput(input).pipe(Effect.mapError(transportError));
+      if (new TextEncoder().encode(encoded).length > 200_000)
+        return yield* new WorkerTransportError({ reason: "unavailable" });
+      return yield* call(
+        identity,
+        (client) => client["foundry.workerEvaluate"](input),
+        undefined,
+        true,
+      );
+    }),
     sandboxProjects: Effect.fn("WorkerTransport.sandboxProjects")(
       (target) => gateway.sandboxProjects(target),
       Effect.mapError(transportError),

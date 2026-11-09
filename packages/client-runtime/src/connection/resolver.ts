@@ -300,7 +300,9 @@ const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(funct
 
 /** @public */
 export const make = Effect.gen(function* () {
-  const foundry = yield* FoundryGateway.make();
+  const foundry = yield* FoundryGateway.make({
+    allowLoopback: yield* ClientCapabilities.FoundryDevelopmentLoopback,
+  });
   const primary = yield* makePrimaryBroker();
   const bearer = yield* makeBearerBroker();
   const relay = yield* makeRelayBroker();

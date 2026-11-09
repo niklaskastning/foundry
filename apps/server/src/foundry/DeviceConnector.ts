@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Socket from "effect/socket/Socket";
+import { isDevelopmentLoopbackOrigin } from "./AccessConfig.ts";
 import { signChannel } from "./DeviceProof.ts";
 import { openFrames } from "./DeviceChannelProtocol.ts";
 
@@ -25,11 +26,14 @@ export const makeSocket = Effect.fn("DeviceConnector.makeSocket")(function* (
     readonly clientId: Redacted.Redacted<string>;
     readonly clientSecret: Redacted.Redacted<string>;
   },
+  developmentLoopback = false,
 ) {
+  const loopback = developmentLoopback && isDevelopmentLoopbackOrigin(origin);
   if (
     !URL.canParse(origin) ||
     new URL(origin).origin !== origin ||
-    new URL(origin).protocol !== "https:" ||
+    (!loopback && new URL(origin).protocol !== "https:") ||
+    (loopback && access !== undefined) ||
     (access && access.origin !== origin)
   )
     return yield* new FoundryDeviceError({ code: "configuration" });
@@ -37,7 +41,7 @@ export const makeSocket = Effect.fn("DeviceConnector.makeSocket")(function* (
     Effect.acquireRelease(
       Effect.sync(() => {
         const ws = new NodeWS.WebSocket(
-          `${origin.replace(/^https:/, "wss:")}/api/foundry/devices/channel`,
+          `${origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:")}/api/foundry/devices/channel`,
           {
             followRedirects: false,
             handshakeTimeout: 10000,

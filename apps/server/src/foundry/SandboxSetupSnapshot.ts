@@ -4,6 +4,7 @@ import {
   FoundrySandboxSetupLocalIndex,
   FoundrySandboxArchiveError,
 } from "@t3tools/contracts";
+import * as Git from "../vcs/GitVcsDriver.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -29,6 +30,7 @@ export class SandboxSetupSnapshot extends Context.Service<
       readonly cwd: string;
       readonly setupLog: string;
       readonly output: string;
+      readonly selectedPaths?: ReadonlyArray<string>;
     }) => Effect.Effect<
       { readonly sizeBytes: number; readonly sha256: string },
       FoundrySandboxArchiveError
@@ -43,6 +45,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const git = yield* Git.GitVcsDriver;
     return SandboxSetupSnapshot.of({
       capture: Effect.fn("SandboxSetupSnapshot.capture")(
         function* (input) {
@@ -53,6 +56,8 @@ export const layer = Layer.effect(
           const parts: Array<{ sizeBytes: number; sha256: string }> = [];
           let entries: string[] = [];
           let size = 0;
+          let totalBytes = 0;
+          let entryCount = 0;
           const prefix = '{"format":"foundry-setup-part-2","entries":[';
           const flush = Effect.fn("SandboxSetupSnapshot.flush")(function* () {
             if (!entries.length) return;
@@ -71,6 +76,9 @@ export const layer = Layer.effect(
           ) {
             const text = yield* encodeEntry(entry);
             const bytes = new TextEncoder().encode(text).byteLength;
+            totalBytes += bytes;
+            if (++entryCount > 10000 || totalBytes > 128 * 1024 * 1024)
+              return yield* new FoundrySandboxArchiveError({ code: "incomplete" });
             if (bytes + prefix.length + 2 > FOUNDRY_SETUP_PART_BYTES)
               return yield* new FoundrySandboxArchiveError({ code: "incomplete" });
             if (size + bytes + entries.length + prefix.length + 2 > FOUNDRY_SETUP_PART_BYTES)
@@ -78,8 +86,62 @@ export const layer = Layer.effect(
             entries.push(text);
             size += bytes;
           });
+          const selected = new Set(input.selectedPaths ?? []);
+          if (yield* fs.exists(input.cwd)) {
+            const listed = yield* git.execute({
+              cwd: input.cwd,
+              operation: "sandbox.setup.select",
+              args: ["ls-files", "-z", "--modified", "--others", "--exclude-standard"],
+            });
+            const staged = yield* git.execute({
+              cwd: input.cwd,
+              operation: "sandbox.setup.selectStaged",
+              args: ["diff", "--cached", "--name-only", "--no-renames", "-z"],
+            });
+            for (const name of `${listed.stdout}\0${staged.stdout}`.split("\0").filter(Boolean)) {
+              if (
+                !name
+                  .split("/")
+                  .some((part) =>
+                    [
+                      "node_modules",
+                      "build",
+                      "dist",
+                      ".cache",
+                      ".next",
+                      ".turbo",
+                      "coverage",
+                    ].includes(part),
+                  )
+              )
+                selected.add(name);
+            }
+          }
+          if (selected.size > 10000)
+            return yield* new FoundrySandboxArchiveError({ code: "incomplete" });
+          for (const name of selected) {
+            if (
+              path.isAbsolute(name) ||
+              name
+                .split(/[\\/]/)
+                .some((part) => !part || part === "." || part === ".." || part === ".git")
+            )
+              return yield* new FoundrySandboxArchiveError({ code: "invalid_request" });
+            let parent = path.dirname(name);
+            while (parent !== ".") {
+              if (
+                Option.isSome(yield* fs.readLink(path.join(input.cwd, parent)).pipe(Effect.option))
+              )
+                return yield* new FoundrySandboxArchiveError({ code: "invalid_request" });
+              parent = path.dirname(parent);
+            }
+          }
           const queue = [
-            { physical: input.cwd, logical: "repo", depth: 0 },
+            ...[...selected].map((name) => ({
+              physical: path.join(input.cwd, name),
+              logical: `repo/${name}`,
+              depth: 0,
+            })),
             { physical: input.setupLog, logical: "setup.log", depth: 0 },
           ];
           while (queue.length > 0) {

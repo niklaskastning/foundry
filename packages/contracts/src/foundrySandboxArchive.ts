@@ -30,9 +30,18 @@ export const FoundrySandboxArchiveManifest = Schema.Struct({
   ),
   finalCursor: PositiveInt,
   finalSourceSequence: PositiveInt,
+  remoteBase: Schema.optional(
+    Schema.Struct({
+      format: Schema.Literal("foundry-remote-delta-2"),
+      url: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2048)),
+      commit: Commit,
+    }),
+  ),
   headCommit: Commit,
   checkpointCommit: Commit,
   checkpointTree: Commit,
+  indexTree: Schema.optional(Commit),
+  bundleSizeBytes: Schema.optional(PositiveInt),
   bundle: FoundryArtifactManifest,
 });
 export type FoundrySandboxArchiveManifest = typeof FoundrySandboxArchiveManifest.Type;
@@ -51,6 +60,7 @@ export class FoundrySandboxArchiveError extends Schema.TaggedError<FoundrySandbo
       "foreign_archive",
       "destination_not_empty",
       "unavailable",
+      "remote_base_unavailable",
     ]),
   },
 ) {

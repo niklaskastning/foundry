@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, FoundrySandboxDetail, ManualStart } from "@t3tools/contracts";
@@ -123,8 +124,10 @@ export function SandboxRunStatus({
       <p className="break-all text-sm text-muted-foreground">
         Pinned profile: {target.profileId} · {target.revision}
       </p>
-      {current?.error ? <p role="alert">{current.error}</p> : null}
-      {allocation?.failure ? <p role="alert">Sandbox failure: {allocation.failure}</p> : null}
+      {current?.error ? <FoundryUI.Notice>{current.error}</FoundryUI.Notice> : null}
+      {allocation?.failure ? (
+        <FoundryUI.Notice>Sandbox failure: {allocation.failure}</FoundryUI.Notice>
+      ) : null}
       {allocation ? (
         <p className="break-all text-sm">Allocation: {allocation.allocationId}</p>
       ) : null}
@@ -133,7 +136,7 @@ export function SandboxRunStatus({
       ) : null}
       {detail?.setupLog ? (
         <details>
-          <summary>Sandbox setup log</summary>
+          <FoundryUI.Summary>Sandbox setup log</FoundryUI.Summary>
           <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">
             {detail.setupLog}
           </pre>
