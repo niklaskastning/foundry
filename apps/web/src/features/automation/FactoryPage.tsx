@@ -258,7 +258,7 @@ function FactoryList({
                         <p className="break-words text-xs text-muted-foreground">
                           {factory.repositories?.join(" · ") || "Repository context unavailable"}
                           {factory.openWorkItems !== undefined
-                            ? ` · ${factory.openWorkItems} open work items`
+                            ? ` · ${factory.openWorkItems} open work ${factory.openWorkItems === 1 ? "item" : "items"}`
                             : ""}
                         </p>
                         <details className="text-xs text-muted-foreground">

@@ -161,7 +161,9 @@ function SidebarFactories({
                 )}
               >
                 <span className="block truncate">{factory.name}</span>
-                <span className="block truncate text-xs text-muted-foreground">{factory.id}</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {factory.repositories?.join(", ") || "Repository scope not available"}
+                </span>
               </Link>
             ))
         : null}
