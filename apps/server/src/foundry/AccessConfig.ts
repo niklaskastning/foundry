@@ -71,3 +71,12 @@ export function isNativeOrigin(value: string): boolean {
     return false;
   }
 }
+
+export function isDevelopmentLoopbackOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return isNativeOrigin(value) && url.protocol === "http:" && url.port !== "";
+  } catch {
+    return false;
+  }
+}

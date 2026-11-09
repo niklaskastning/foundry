@@ -114,8 +114,14 @@ Disable publication on workers before `activate-access.py artifacts disable`.
 This retains confirmed metadata and blobs. The helper refuses to disable the
 gateway while artifacts remain enabled. A schema upgrade failure still requires
 the coordinated restore procedure; a profile change is not a schema downgrade.
-Development builds alone may explicitly use HTTP on loopback for the artifact
-client, matching local instance verification; deployed clients require HTTPS.
+The development Web client may use HTTP on loopback, matching local instance
+verification; deployed Web clients require HTTPS. For an isolated native-auth
+Main, run the worker connector with `--development-loopback` and set
+`FOUNDRY_WORKER_DEVELOPMENT_LOOPBACK=true` on its artifact publisher. Both options
+default off and accept only an exact HTTP origin with a literal loopback host and
+explicit port. Access machine credentials remain forbidden on HTTP; device
+signatures and application permissions still apply. Sandbox supervision and
+deployed worker profiles retain their HTTPS requirement.
 
 With schema 7, `/foundry` also lists confirmed thread archives after session
 verification. Open a thread and load further history as needed; messages, tool
