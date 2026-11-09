@@ -10,7 +10,6 @@ import { AsyncResult } from "effect/reactivity";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { StandalonePage } from "../components/ui/standalone-page";
 import { useAtomCommand } from "../state/use-atom-command";
 import { DeviceCatalog } from "./DeviceCatalog";
 import { useSandboxProfiles } from "./useSandboxProfiles";
@@ -221,21 +220,25 @@ export function FoundryPage() {
       </main>
     );
   return (
-    <StandalonePage>
-      <div className="space-y-5">
-        <FactoryNavigation />
+    <div className="flex h-dvh flex-1 items-center-safe justify-center overflow-y-auto scrollbar-gutter-both bg-background p-4 sm:p-6">
+      <section className="w-full max-w-xl space-y-4 rounded-xl border bg-card p-5 sm:p-6">
+        {state.session ? <FactoryNavigation /> : null}
         <div>
           <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Instance access
+            Foundry
           </p>
           <h1 className="text-2xl font-semibold tracking-tight">
             {state.session ? "Connected to Foundry" : "Connect to your factory workspace"}
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Verify your instance, then sign in to open its factories and connected workers.
+            Sign in to open your factories and work.
           </p>
         </div>
+        <p role="status" className="text-sm">
+          {busy ? "Checking instance…" : message}
+        </p>
         <div className="space-y-2">
+          <p className="break-all text-sm text-muted-foreground">{window.location.origin}</p>
           <details open={nativeTransport || undefined}>
             <FoundryUI.Summary className="cursor-pointer text-sm">
               {nativeTransport ? "Instance URL" : "Use another instance"}
@@ -262,20 +265,15 @@ export function FoundryPage() {
           </details>
           <div className="flex flex-wrap gap-2">
             <Button onClick={() => void operate("inspect")} disabled={busy}>
-              Verify current origin
+              Check instance
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Sign in at the verified instance. Remove the current Foundry session before switching.
-            No credentials are forwarded to another origin.
-          </p>
         </div>
         {state?.binding ? (
           <div className="space-y-3 text-sm">
-            <p className="break-all font-medium">{state.binding.origin}</p>
             <details className="rounded-lg border p-3">
               <FoundryUI.Summary className="cursor-pointer text-muted-foreground">
-                Verified instance identity
+                Connection details
               </FoundryUI.Summary>
               <div className="space-y-1 break-all pt-3 text-xs text-muted-foreground">
                 <p>Instance ID: {state.binding.instanceId}</p>
@@ -296,14 +294,14 @@ export function FoundryPage() {
           <div className="flex flex-wrap gap-2">
             {!state.session ? (
               <form
-                className="grid w-full max-w-sm gap-4 rounded-xl border bg-card p-4 sm:p-6"
+                className="grid w-full gap-3"
                 onSubmit={(event) => {
                   event.preventDefault();
                   if (!busy) void operate("login");
                 }}
               >
                 {state.nativeLoginAvailable ? (
-                  <fieldset disabled={busy} className="space-y-4">
+                  <fieldset disabled={busy} className="space-y-3">
                     <legend className="sr-only">Foundry account</legend>
                     <div className="space-y-2">
                       <label htmlFor="foundry-username" className="text-sm font-medium">
@@ -371,7 +369,7 @@ export function FoundryPage() {
         ) : (
           <details className="text-sm">
             <FoundryUI.Summary className="cursor-pointer text-muted-foreground">
-              Connection recovery
+              Recover connection
             </FoundryUI.Summary>
             <div className="pt-2">
               <Button
@@ -391,9 +389,6 @@ export function FoundryPage() {
             </div>
           </details>
         )}
-        <p role="status" className="text-sm">
-          {busy ? "Checking instance…" : message}
-        </p>
         {state?.session ? (
           <div className="space-y-2 border-t pt-4">
             <p className="text-sm">
@@ -426,7 +421,7 @@ export function FoundryPage() {
             ) : null}
           </Suspense>
         ) : null}
-      </div>
-    </StandalonePage>
+      </section>
+    </div>
   );
 }

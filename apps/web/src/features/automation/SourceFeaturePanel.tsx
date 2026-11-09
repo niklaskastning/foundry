@@ -93,89 +93,94 @@ export function SourceFeaturePanel({
           ? `Run ${runId} keeps its immutable definition pin.`
           : "Existing runs keep their immutable definition pins."}
       </p>
-      <form
-        className="space-y-3"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          if (!allowed || busy || !scopeVersionId) return;
-          setBusy(true);
-          const response = await command({
-            environmentId,
-            input: {
-              op: "configureDefinitionSource",
-              commandId: randomUUID(),
-              factoryId,
-              scopeVersionId,
-              ...(binding ? { expectedGeneration: binding.generation } : {}),
-              expectedVersionId: detail.active?.id ?? null,
-              expectedContentHash: detail.active?.contentHash ?? null,
-              location: {
-                connectionId: "github-app",
-                repository: repository ?? binding?.repository ?? "",
-                repositoryId: Number(repositoryId ?? binding?.repositoryId),
-                branch: (branch ?? binding?.branch ?? "main").trim(),
-                path: (path ?? binding?.path ?? factoryId).trim(),
-                ...((commitSha ?? binding?.commitSha)
-                  ? { commitSha: (commitSha ?? binding?.commitSha ?? "").trim() }
-                  : {}),
+      <details open={!binding && !detail.active}>
+        <summary className="cursor-pointer font-medium">
+          {binding ? "Edit source configuration" : "Connect definitions from Git"}
+        </summary>
+        <form
+          className="space-y-3"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (!allowed || busy || !scopeVersionId) return;
+            setBusy(true);
+            const response = await command({
+              environmentId,
+              input: {
+                op: "configureDefinitionSource",
+                commandId: randomUUID(),
+                factoryId,
+                scopeVersionId,
+                ...(binding ? { expectedGeneration: binding.generation } : {}),
+                expectedVersionId: detail.active?.id ?? null,
+                expectedContentHash: detail.active?.contentHash ?? null,
+                location: {
+                  connectionId: "github-app",
+                  repository: repository ?? binding?.repository ?? "",
+                  repositoryId: Number(repositoryId ?? binding?.repositoryId),
+                  branch: (branch ?? binding?.branch ?? "main").trim(),
+                  path: (path ?? binding?.path ?? factoryId).trim(),
+                  ...((commitSha ?? binding?.commitSha)
+                    ? { commitSha: (commitSha ?? binding?.commitSha ?? "").trim() }
+                    : {}),
+                },
               },
-            },
-          });
-          setBusy(false);
-          setMessage(
-            AsyncResult.isSuccess(response)
-              ? "Source saved. Sync and validation do not activate a revision."
-              : "Source change unconfirmed. Refresh before retrying.",
-          );
-          refresh();
-        }}
-      >
-        <fieldset disabled={busy || !allowed} className="grid gap-3 sm:grid-cols-2">
-          <label>
-            Repository
-            <Input
-              placeholder={binding?.repository ?? "owner/repository"}
-              value={repository ?? binding?.repository ?? ""}
-              onChange={(e) => setRepository(e.target.value)}
-            />
-          </label>
-          <label>
-            Repository ID
-            <Input
-              type="number"
-              min="1"
-              placeholder={String(binding?.repositoryId ?? "")}
-              value={repositoryId ?? String(binding?.repositoryId ?? "")}
-              onChange={(e) => setRepositoryId(e.target.value)}
-            />
-          </label>
-          <label>
-            Branch
-            <Input
-              value={branch ?? binding?.branch ?? "main"}
-              onChange={(e) => setBranch(e.target.value)}
-            />
-          </label>
-          <label>
-            Exact commit (optional)
-            <Input
-              pattern="[a-f0-9]{40}"
-              value={commitSha ?? binding?.commitSha ?? ""}
-              onChange={(e) => setCommitSha(e.target.value)}
-            />
-          </label>
-          <label>
-            Definition directory
-            <Input
-              value={path ?? binding?.path ?? factoryId}
-              onChange={(e) => setPath(e.target.value)}
-            />
-          </label>
-        </fieldset>
-        <Button type="submit" disabled={busy || !allowed || !scopeVersionId}>
-          Save source for synchronization
-        </Button>
-      </form>
+            });
+            setBusy(false);
+            setMessage(
+              AsyncResult.isSuccess(response)
+                ? "Source saved. Sync and validation do not activate a revision."
+                : "Source change unconfirmed. Refresh before retrying.",
+            );
+            refresh();
+          }}
+        >
+          <fieldset disabled={busy || !allowed} className="grid gap-3 sm:grid-cols-2">
+            <label>
+              Repository
+              <Input
+                placeholder={binding?.repository ?? "owner/repository"}
+                value={repository ?? binding?.repository ?? ""}
+                onChange={(e) => setRepository(e.target.value)}
+              />
+            </label>
+            <label>
+              Repository ID
+              <Input
+                type="number"
+                min="1"
+                placeholder={String(binding?.repositoryId ?? "")}
+                value={repositoryId ?? String(binding?.repositoryId ?? "")}
+                onChange={(e) => setRepositoryId(e.target.value)}
+              />
+            </label>
+            <label>
+              Branch
+              <Input
+                value={branch ?? binding?.branch ?? "main"}
+                onChange={(e) => setBranch(e.target.value)}
+              />
+            </label>
+            <label>
+              Exact commit (optional)
+              <Input
+                pattern="[a-f0-9]{40}"
+                value={commitSha ?? binding?.commitSha ?? ""}
+                onChange={(e) => setCommitSha(e.target.value)}
+              />
+            </label>
+            <label>
+              Definition directory
+              <Input
+                value={path ?? binding?.path ?? factoryId}
+                onChange={(e) => setPath(e.target.value)}
+              />
+            </label>
+          </fieldset>
+          <Button type="submit" disabled={busy || !allowed || !scopeVersionId}>
+            Save source for synchronization
+          </Button>
+        </form>
+      </details>
       {message ? <p role="status">{message}</p> : null}
       {binding && scopeVersionId ? (
         <>
@@ -183,10 +188,18 @@ export function SourceFeaturePanel({
             Effective source: {binding.repository} · {binding.commitSha ?? binding.branch} ·{" "}
             {binding.path || "/"}
           </p>
-          <p>
-            Source status: {binding.status}
-            {binding.error ? ` · ${binding.error}` : ""}
-          </p>
+          <p>Source status: {binding.status}</p>
+          {binding.error ? (
+            <div role="alert" className="text-sm">
+              {binding.error === "credentials_required"
+                ? `Repository access is required for ${binding.repository}. Ask the operator to connect the GitHub App with contents access, then sync again.`
+                : "The definition could not be synchronized. Check repository access, branch and files, then sync again."}
+              <details>
+                <summary className="cursor-pointer">Technical error</summary>
+                <code>{binding.error}</code>
+              </details>
+            </div>
+          ) : null}
           <p>
             Active for new runs:{" "}
             {detail.active?.source.kind === "github"
@@ -290,14 +303,32 @@ export function SourceFeaturePanel({
                 ].map((revision) => (
                   <li key={revision.id} className="space-y-2 border-t pt-3">
                     <p className="break-all">
-                      {revision.commitSha} ·{" "}
-                      {revision.valid ? "Valid candidate" : "Invalid candidate"}
+                      {revision.commitSha.slice(0, 8)} ·{" "}
+                      {!revision.valid
+                        ? "Invalid files"
+                        : !revision.location
+                          ? "Source verification required"
+                          : "Files validated"}
+                      {detail.active?.source.kind === "github" &&
+                      detail.active.source.reference === revision.id
+                        ? " · Active for new runs"
+                        : ""}
+                      {" · "}
+                      {new Date(revision.createdAt).toLocaleString()}
                     </p>
                     <p>
                       {revision.location
                         ? `${revision.location.repository} · ${revision.location.branch} · ${revision.location.path || "/"}`
                         : "Historical source provenance unknown. Sync again before activation."}
                     </p>
+                    <details className="text-xs text-muted-foreground">
+                      <summary className="cursor-pointer">Revision record</summary>
+                      <p className="break-all">
+                        Commit: {revision.commitSha}
+                        <br />
+                        Record: {revision.id}
+                      </p>
+                    </details>
                     {revision.issues.map((issue) => (
                       <p key={[issue.file, ...issue.path, issue.message].join(":")} role="alert">
                         {issue.file}: {issue.path.join(".")} · {issue.message}
