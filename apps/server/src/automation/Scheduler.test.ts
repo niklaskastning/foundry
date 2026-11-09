@@ -775,6 +775,7 @@ it.effect(
         release: () => Effect.void,
       });
       const worker = WorkerTransport.WorkerTransport.of({
+        evaluate: Effect.fn("Fixture.evaluate")(() => Effect.die("unused")),
         sandboxProjects: () => Effect.die("unused"),
         sandboxStatus: () => Effect.die("unused"),
         retargetSandbox: () => Effect.die("unused"),

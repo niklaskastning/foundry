@@ -174,6 +174,7 @@ export class GatewayGrants extends Context.Service<
       identity: AutomationGatewayIdentity,
       socket: Socket.Socket,
       unattendedAuthorization?: Effect.Effect<void, FoundryGatewayError>,
+      purpose?: "evaluation",
     ) => Effect.Effect<void, FoundryGatewayError>;
     readonly projects: (
       request: Request,
@@ -473,12 +474,14 @@ const make = Effect.gen(function* () {
   const validateAutomation = Effect.fn("GatewayGrants.validateAutomation")(function* (
     identity: AutomationGatewayIdentity,
     unattendedAuthorization?: Effect.Effect<void, FoundryGatewayError>,
+    purpose?: "evaluation",
   ) {
+    const leaseMillis = purpose === "evaluation" ? 180_000 : 60_000;
     if (!streamsEnabled) return yield* denied();
     const credentials = yield* Effect.gen(function* () {
       if (isSandboxProbeIdentity(identity)) {
         const deadline = yield* sandboxAccess.validate(identity, true);
-        const expiresAt = Math.min(deadline, (yield* Clock.currentTimeMillis) + 60_000);
+        const expiresAt = Math.min(deadline, (yield* Clock.currentTimeMillis) + leaseMillis);
         return {
           foundry: { expiresAt },
           client: {
@@ -499,7 +502,7 @@ const make = Effect.gen(function* () {
           machine.operatorId !== identity.operatorId
         )
           return yield* denied();
-        const expiresAt = (yield* Clock.currentTimeMillis) + 60_000;
+        const expiresAt = (yield* Clock.currentTimeMillis) + leaseMillis;
         return {
           foundry: { expiresAt },
           client: {
@@ -512,7 +515,7 @@ const make = Effect.gen(function* () {
       if (isUnattendedIdentity(identity)) {
         if (!unattendedAuthorization) return yield* denied();
         yield* unattendedAuthorization;
-        const expiresAt = (yield* Clock.currentTimeMillis) + 60_000;
+        const expiresAt = (yield* Clock.currentTimeMillis) + leaseMillis;
         // This transport subject is not a user session; its authority is checked on every frame.
         return {
           foundry: { expiresAt },
@@ -602,13 +605,15 @@ const make = Effect.gen(function* () {
   const automationGrant = Effect.fn("GatewayGrants.automationGrant")(function* (
     identity: AutomationGatewayIdentity,
     { foundry, client, lease }: Effect.Success<ReturnType<typeof validateAutomation>>,
+    purpose?: "evaluation",
   ) {
     const expiresAt = Math.min(
-      (yield* Clock.currentTimeMillis) + 60_000,
+      (yield* Clock.currentTimeMillis) + (purpose === "evaluation" ? 180_000 : 60_000),
       foundry.expiresAt,
       DateTime.toEpochMillis(client.expiresAt),
     );
     return {
+      ...(purpose ? { purpose } : {}),
       deviceId: identity.deviceId,
       environmentId: identity.environmentId,
       scopes: isSandboxProbeIdentity(identity)
@@ -640,12 +645,17 @@ const make = Effect.gen(function* () {
     identity: AutomationGatewayIdentity,
     socket: Socket.Socket,
     unattendedAuthorization?: Effect.Effect<void, FoundryGatewayError>,
+    purpose?: "evaluation",
   ) {
-    const { foundry, client, lease } = yield* validateAutomation(identity, unattendedAuthorization);
-    const grant = yield* automationGrant(identity, { foundry, client, lease });
+    const { foundry, client, lease } = yield* validateAutomation(
+      identity,
+      unattendedAuthorization,
+      purpose,
+    );
+    const grant = yield* automationGrant(identity, { foundry, client, lease }, purpose);
     // clientAccess authorizes the existing transport; Automation additionally checks its own grant.
     const check = Effect.gen(function* () {
-      const current = yield* validateAutomation(identity, unattendedAuthorization);
+      const current = yield* validateAutomation(identity, unattendedAuthorization, purpose);
       if (
         current.lease.channelGeneration !== grant.channelGeneration ||
         grant.expiresAt <= (yield* Clock.currentTimeMillis)

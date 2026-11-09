@@ -8,6 +8,53 @@ This isolated Main serves the instance registry, gateway, confirmed artifacts an
 
 For this VPS, [the maintainer's standing agent instructions](../../AGENTS.md#development-vps-and-agent-autonomy) authorize deployment of tested PR heads before merge or user acceptance, task-related migrations and necessary resets of disposable Foundry test data. They override older requirements for a separate development-deployment approval in this runbook and the activation guides; production acceptance gates remain separate. User `niklas` has passwordless sudo for task-related operations; use `sudo -n`. The restricted helper below remains the preferred Main image-update path, but it is not the limit of the agent's authorized privileges on this host. Credentials, personal T3 state and unrelated services are outside the test-data reset permission.
 
+## Native operator sign-in and local development
+
+Main supports `FOUNDRY_AUTH_MODE=native` alongside the default `access` mode. Both use
+`FOUNDRY_ACCESS_ENABLED=true`, the existing instance database and operator identity.
+Migrate the instance database to schema **11** before starting this revision. A native
+account attaches to an existing operator; switching authentication modes does not
+create a second actor. Previous binaries reject schema 11, so recovery requires a
+compatible build or recreating disposable development state.
+
+For an existing instance-10/Automation-11 development deployment, use the tested
+combined artifact with `activate-access.py upgrade-platform-quality sha256:<digest>
+<commit> --development`. The updater holds its deployment lock, stops Main and
+migrates the separate instance and Automation databases to **11/12**, disabling
+each migrator login afterward. Its manifest records both previous and target schemas;
+`success` is written only after image, revision and readiness verification. Subsequent
+same-schema deployments use `update`. Recovery requires a schema-11/12-compatible
+artifact, or a verified reset of disposable application data; the previous instance-10
+binary cannot run against the upgraded instance database.
+
+Set `FOUNDRY_PUBLIC_ORIGIN` to the exact browser origin. Native mode accepts HTTPS;
+HTTP is allowed only for literal `localhost`, `127.0.0.1` or `[::1]` origins. Access mode
+continues to require HTTPS and a Cloudflare issuer/audience. Keep public Access
+policy changes and unattended machine/CI acceptance separate from local testing.
+
+Bootstrap once through the local CLI after migration, using the same isolated Main
+home and runtime database configuration:
+
+```sh
+node apps/server/src/bin.ts foundry bootstrap-native --base-dir /absolute/isolated-home --username operator --password-file /absolute/private-password-file
+```
+
+Supply a private password file containing 12–1024 characters (one trailing newline
+is removed). There are no default credentials and bootstrap refuses to replace an
+existing native account. Keep the file out of repositories and logs. Open the configured
+origin and sign in with that account. Browser entry uses its current origin; the existing
+desktop entry retains instance selection: leave the Access issuer empty for native sign-in
+in an isolated instance partition, or supply the Cloudflare issuer for the existing OAuth flow.
+Its Instance menu opens account controls or revokes and removes the selected instance.
+Native Windows runtime acceptance remains a separate check.
+
+Sessions last at most 15 minutes and active clients renew before expiry. Access renewal
+also requires a valid Access assertion and never extends beyond its expiry. Main's T3
+browser session is bound to its Foundry parent: logout, expiry and operator/instance
+generation changes invalidate HTTP, tickets and live sockets. An unavailable authority
+fails closed. Device discovery uses the existing client-access grants and does not
+grant Factory execution authority.
+
 ## Experimental device enrollment (P06)
 
 Für einen realen Device-/Gateway-Versuch zuerst den [begrenzten G2-Aktivierungsablauf](g2-activation.md)
@@ -31,7 +78,7 @@ a recovery procedure. The runtime role cannot change device keys or enrollment
 expiry. Set `FOUNDRY_DEVICE_ENROLLMENT_ENABLED=true` explicitly alongside
 `FOUNDRY_ACCESS_ENABLED=true` to expose `/api/foundry/devices/enroll` and advertise
 `foundry.device-enrollment`; the route and capability are absent by default.
-This mode does not implement native authentication.
+Device enrollment does not enable authentication by itself; configure the native or Access mode separately.
 
 The P38a artifact-store foundation is separately disabled by default. In an isolated
 Main, `FOUNDRY_ARTIFACTS_ENABLED=true` requires the complete stream-gateway profile
@@ -67,8 +114,14 @@ Disable publication on workers before `activate-access.py artifacts disable`.
 This retains confirmed metadata and blobs. The helper refuses to disable the
 gateway while artifacts remain enabled. A schema upgrade failure still requires
 the coordinated restore procedure; a profile change is not a schema downgrade.
-Development builds alone may explicitly use HTTP on loopback for the artifact
-client, matching local instance verification; deployed clients require HTTPS.
+The development Web client may use HTTP on loopback, matching local instance
+verification; deployed Web clients require HTTPS. For an isolated native-auth
+Main, run the worker connector with `--development-loopback` and set
+`FOUNDRY_WORKER_DEVELOPMENT_LOOPBACK=true` on its artifact publisher. Both options
+default off and accept only an exact HTTP origin with a literal loopback host and
+explicit port. Access machine credentials remain forbidden on HTTP; device
+signatures and application permissions still apply. Sandbox supervision and
+deployed worker profiles retain their HTTPS requirement.
 
 With schema 7, `/foundry` also lists confirmed thread archives after session
 verification. Open a thread and load further history as needed; messages, tool
@@ -677,7 +730,7 @@ Der zusätzliche Main-Schalter `FOUNDRY_STREAM_GATEWAY_ENABLED=true` setzt die P
 
 Nach einem expliziten Grant liefert POST `/api/foundry/gateway/grants/ticket` ein einmaliges Gateway-Ticket und ein vorhandenes T3-RPC-Socket-Ticket. Beide werden bei GET `/api/foundry/gateway/stream` zusammen mit der aktuellen Orchestrierungs-Protokollversion geprüft; bei schlüsselgebundener T3-Session bleibt ein frischer DPoP-Nachweis für diese öffentliche URL erforderlich. Die erlaubten Grant-Scopes sind `orchestration:read`, optional `orchestration:operate`, `terminal:read` und `terminal:operate`; sie dürfen die authentifizierte Client-Session nicht überschreiten. Der P08-Projektlistenadapter behält lokal ausschließlich Read-Rechte.
 
-Daten laufen über eigene ausgehende Worker-Sockets zu `/api/foundry/devices/stream`; der Device-Steuerkanal trägt nur die Öffnungsnachricht. Bei der späteren Access-Integration muss der separat autorisierte Machine-Zugang auch diesen Pfad erlauben; der Connector ändert keine Access-Policy. Grenzen: vier Streams pro Device, 32 insgesamt, 128 ausstehende Client-Tickets; Ticket-/Verbindungsaufbau zehn Sekunden, Grants höchstens 60 Sekunden, blockierter Schreibvorgang fünf Sekunden. Im aktivierten Main gilt für alle WebSocket-Nachrichten ein Limit von 256 KiB, auch für unabhängige direkte T3-Sockets desselben Prozesses. Die Datenstrecke begrenzt außerdem gelesene Batches und ausstehende Schreibdaten auf 256 KiB. Größere RPC-Antworten schließen die Verbindung; es gibt noch keine Fragmentierungszusage für beliebig große Snapshots.
+Daten laufen über eigene ausgehende Worker-Sockets zu `/api/foundry/devices/stream`; der Device-Steuerkanal trägt nur die Öffnungsnachricht. Bei der späteren Access-Integration muss der separat autorisierte Machine-Zugang auch diesen Pfad erlauben; der Connector ändert keine Access-Policy. Grenzen: vier Streams pro Device, 32 insgesamt, 128 ausstehende Client-Tickets; Ticket-/Verbindungsaufbau zehn Sekunden, Grants standardmäßig höchstens 60 Sekunden, blockierter Schreibvorgang fünf Sekunden. Im aktivierten Main gilt für alle WebSocket-Nachrichten ein Limit von 256 KiB, auch für unabhängige direkte T3-Sockets desselben Prozesses. Die Datenstrecke begrenzt außerdem gelesene Batches und ausstehende Schreibdaten auf 256 KiB. Größere RPC-Antworten schließen die Verbindung; es gibt noch keine Fragmentierungszusage für beliebig große Snapshots.
 
 Verlust des Steuerkanals beendet seine Datenverbindungen. Laufende Streams prüfen Grants/Sessions und Device-Generation vor jeder Weitergabe sowie spätestens beim nächsten sekündlichen Check. Abbruch, Ablauf und Überlast schließen die Strecke; transportseitig wird weder eine Mutation noch eine Terminaleingabe wiederholt. Lokale Sessions werden beim Schließen widerrufen. Ereignisgesteuerter Widerruf und Erneuerung gehören zu den folgenden Client-/P11-Arbeiten. Produktive Aktivierung und reale Windows-/Access-/Maschinenabnahme sind damit nicht freigegeben; Nachholstand siehe [Issue #13](https://github.com/niklaskastning/foundry/issues/13).
 
@@ -839,7 +892,8 @@ muss das Repository ebenfalls freigeben. Änderungen erhöhen die Konfigurations
 bestehende Quellbindungen verlangen anschließend ausdrückliche Reautorisierung.
 
 Unter Factory → Definition das Definitionsrepository, seine numerische ID, Branch
-und Verzeichnis binden. Bei bestehenden lokalen Definitionen wird die aktuelle
+(standardmäßig `main`) und Verzeichnis binden; ein optionaler exakter Commit hat
+beim Lesen Vorrang. Bei bestehenden lokalen Definitionen wird die aktuelle
 Version samt Inhaltshash als Importbasis festgehalten. Die erste Git-Aktivierung
 verlangt gleiche Inhalte und unveränderte Basis. Bei Drift die Dateien im Repository
 angleichen oder ausdrücklich die aktuelle lokale Version als neue Importbasis wählen.
@@ -850,8 +904,53 @@ Synchronisierung liest und validiert einen konkreten Commit, aktiviert ihn aber 
 Quelle und Revisionen zeigen Fehler, Dateien und Diff zur aktiven Version. Erst die
 explizite Aktivierung übernimmt die geprüfte Revision für neue Runs. Ein Rollback
 aktiviert eine frühere gültige Git-Revision mit aktuellen Rechten; bestehende Runs
-behalten ihren Snapshot. Hintergrundlesen lässt sich auch nach einem Rechtewiderruf
-pausieren. Betriebsbindungen und Trigger bleiben unabhängig in der App bedienbar.
+behalten ihren Snapshot. Die Revision muss zur aktuellen Quelle einschließlich Branch,
+Verzeichnis und optionalem Commitpin gehören; historische Revisionen ohne Quellnachweis
+verlangen erneute Synchronisierung. Hintergrundlesen lässt sich pausieren.
+Git-eigene Trigger werden mit der Definition übernommen und bleiben fachlich schreibgeschützt;
+ihre getrennte Betriebsautorisierung startet erst nach ausdrücklicher Freigabe.
+
+### Operative Evidence und Evaluationen
+
+Modellgestützte Evaluationen laufen auf dem ausdrücklich gebundenen Worker, nicht
+im Main-Container. Main und Worker benötigen denselben getesteten Stand; der Worker
+benötigt `FOUNDRY_WORKER_ENABLED=true` und eine über
+`FOUNDRY_WORKER_PROVIDER_INSTANCE_ID` gebundene, autorisierte Codex-Instanz. Bestehende dedizierte CLI-Installationen
+verwenden ihre konfigurierte Binary-/Home-Bindung; verwaltete Instanzen verwenden
+die vorhandene geschützte Laufzeitauflösung.
+Manuelle Evaluationen verwenden die aktuelle Benutzerautorisierung für das konfigurierte
+Automationziel, automatische die gepinnte Dispatchautorität. Widerruf, abgelaufene
+Sitzungen oder ein fehlender Worker ergeben `judge_unavailable`; keine Zugangsdaten
+werden nach Main kopiert. Nach unbestätigter Zustellung wird kein zweiter Modellaufruf
+angefordert. Der feste Scorer bleibt Codex GPT-6.1 Sol mit Medium-Reasoning.
+Evaluationszugänge erlauben ausschließlich den Evaluations-RPC für höchstens drei
+Minuten, begrenzt durch die Elternsession; die laufenden Widerrufsprüfungen bleiben
+aktiv. Andere Gatewayzugänge behalten ihr 60-Sekunden-Limit.
+
+Factory Overview und Run zeigen Enrollment-Zeiträume, Runs, Aufträge, veröffentlichte PRs
+und begrenzte archivierte Nutzung. Die Vergleichszeiträume verwenden Enrollment, keine
+nicht gespeicherten Abschlusszeiten. Threadkumulative Geldbelege bleiben unzugeordnet;
+fehlende Kosten oder Cycle Time bedeuten unbekannt, nicht null. Der Drilldown nennt
+Archivcursor und Teilabdeckung; Attempt-Nutzung verlangt den passenden Provider-Turn.
+
+Scorers werden im v4-Manifest über `scorers: [{id, file}]` registriert und aus
+`scorers/<id>.yaml` geladen. Kriterien enthalten `id`, `instructions` und `threshold`
+zwischen 0 und 1; `judge` verlangt Codex, `gpt-6.1-sol` und `reasoningEffort: medium`.
+`sampling` enthält `automatic` und `rate` zwischen 0 und 1. Automatische Evaluationen
+verwenden ausschließlich den aktivierten Runpin. Manuelle Neubewertungen wählen
+Scorerfactory, Definitionsversion und Scorer ausdrücklich und ersetzen keine Historie.
+Fehlende oder unvollständige Archive verhindern einen Judgeaufruf; ein verlorener Claim
+wird als Fehler dokumentiert und startet keinen zweiten bezahlten Turn.
+
+Dieser Stand verlangt Automation-Schema 12; das Instanzschema bleibt unabhängig.
+Vor Mainstart die separate Automation-Datenbank mit dem getesteten Artefakt über
+`foundry automation-migrate --database <bestätigte-datenbank> --runtime-role <automation-runtime>`
+und geschützte Migratorkonfiguration aktualisieren. Den Deployment-Lock bis zur
+Verifikation halten. Für das gemeinsame Upgrade von Instanz10/Automation11 auf11/12 den oben
+beschriebenen `upgrade-platform-quality`-Pfad verwenden; spätere Updates auf
+demselben Schemastand verwenden `update`.
+Recovery verwendet einen Schema-12-kompatiblen Build; ein Image-Downgrade ersetzt
+keine geprüfte Schemawiederherstellung.
 
 Der isolierte Nachweis verwendet ausschließlich einen temporären PostgreSQL-Cluster,
 keine vorhandenen Datenbanken oder persönlichen Provider-Zugänge:
@@ -1129,8 +1228,7 @@ bleiben pro Allocation begrenzt. Absichtliche Fehler-/TTL-Testprofile vor Überg
 aus der Imagefreigabe nehmen und eine neue, geprüfte Betriebsprofilrevision anbieten.
 
 Setup-Archive ohne Thread enthalten einen zentral bestätigten JSON-Index und
-bestätigte Teile von höchstens 8 MiB; auch Abhängigkeitsverzeichnisse werden
-aufgenommen. Große Dateien behalten Teiloffsets. Maximal 1024 Teile und 64
+bestätigte Teile von höchstens 8 MiB. Große Dateien behalten Teiloffsets. Maximal 1024 Teile und 64
 Verzeichnisebenen werden unterstützt; Hardlinks bleiben gesperrt, damit keine
 privaten Runtime-Dateien über Aliasnamen ins Archiv gelangen. Bei überschrittenen
 Grenzen oder unbestätigten Teilen bleibt die Allocation erhalten. Diese inert
@@ -1163,10 +1261,31 @@ v4-Dateirechte bleiben technisch durchgesetzt. Container teilen weiterhin den
 Hostkernel und sind keine VM-Mandantengrenze. Workspace-Volumes teilen den
 Hostspeicher; eine Dateisystem-Diskquota wird derzeit nicht zugesichert.
 
-Thread-Archive speichern vollständige Git-Bundles in bestätigten Teilen von
-höchstens 8 MiB mit einem gehashten Index (insgesamt höchstens 8 GiB). Alte
-einteilige Archive bleiben lesbar. Die Sandbox benötigt für v4 eine geprüfte
-Codex-Version ab 0.166.0; Image- oder Toolwechsel erhalten eine neue Profilrevision.
+Neue Sandbox-Archive verwenden `remoteBase.format = foundry-remote-delta-2`:
+Repository-URL und exakter Commit werden durch frischen Fetch geprüft; nur lokale
+Commits und der abschließende Arbeitsbaum kommen ins Delta. Bestätigung und Resume
+prüfen den Remote erneut. Der Remote muss den Basiscommit während der gesamten
+Aufbewahrung bereitstellen; Force-Push oder Repositoryverlust können Resume
+verhindern. Es erfolgt kein automatischer Push. `bundleSizeBytes` bezeichnet das
+Delta, nicht die Größe des Indexdokuments. Teile bleiben auf 8 MiB und insgesamt
+8 GiB begrenzt. Mehrere Threads desselben Workspace referenzieren ein Delta.
+
+Manifeste ohne `remoteBase` sind ausdrücklich Legacy-Vollbundles und bleiben
+lesbar. Zur Konvertierung zuerst in einer neuen Sandbox restaurieren, die
+Repositoryidentität prüfen und `origin` auf den zugehörigen Remote setzen, dann
+regulär erneut archivieren und das neue Receipt bestätigen. Erst nach erfolgreichem
+Resume des neuen Archivs ist das neue Delta als Ersatz nachgewiesen. Dieser Pfad
+löscht keine Altartefakte: vollständiger zentraler Threadverlauf, Anhänge und
+geteilte Referenzen bleiben erhalten. Neue Sandboxes setzen `origin` beim Setup;
+bei älteren noch laufenden Sandboxes muss es vor dem neuen Capture gesetzt werden.
+
+Setupfehler archivieren Logs und geänderte/neue Arbeitsdateien, standardmäßig ohne
+Abhängigkeiten, Builds und Caches. `capture-setup --file <relativer-Pfad>` kann
+benötigte ignorierte Dateien ausdrücklich auswählen (wiederholbar); Symlinkziele
+werden nicht verfolgt. Die Auswahl ist auf 10.000 Einträge und 128 MiB codierte
+Daten begrenzt. Reproduzierbare Ausgaben entstehen erneut durch das gepinnte Setup.
+Die Sandbox benötigt für v4 eine geprüfte Codex-Version ab 0.166.0; Image- oder
+Toolwechsel erhalten eine neue Profilrevision.
 
 ### Versionierte Factory-HTTP-API (P58a)
 

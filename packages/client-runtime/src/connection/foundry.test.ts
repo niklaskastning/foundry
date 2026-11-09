@@ -82,6 +82,17 @@ function fixture() {
 }
 
 describe("Foundry instance onboarding", () => {
+  it("renews active sessions before expiry without logging in revoked sessions", async () => {
+    const f = fixture();
+    await f.client.execute("confirm", f.binding);
+    await f.client.execute("session");
+    expect(f.calls.at(-1)).toEqual({ path: "/api/foundry/auth/refresh", csrf: "fixture-csrf" });
+    f.invalidateSession();
+    const before = f.calls.length;
+    await expect(f.client.execute("session")).rejects.toMatchObject({ code: "invalid_session" });
+    expect(f.calls.slice(before).some((call) => call.path.endsWith("/login"))).toBe(false);
+  });
+
   it("confirms before login, rechecks identity before mutations and preserves unrelated storage on removal", async () => {
     const f = fixture();
     await expect(f.client.execute("login")).rejects.toMatchObject({ code: "unconfirmed" });

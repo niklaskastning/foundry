@@ -1,3 +1,5 @@
+import * as WorkerEvaluation from "./foundry/WorkerEvaluation.ts";
+import * as MainSessionAuthority from "./foundry/MainSessionAuthority.ts";
 import * as ProviderConnectionTransport from "./foundry/ProviderConnectionTransport.ts";
 import * as WorkerHandoff from "./foundry/WorkerHandoff.ts";
 import * as WorkspaceGate from "./foundry/workspaces/WorkspaceGate.ts";
@@ -498,6 +500,7 @@ const layerProjectFaviconResolver = ProjectFaviconResolver.layer.pipe(
 const layerServerEnvironment = ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer));
 
 const layerAuth = EnvironmentAuth.layer.pipe(
+  Layer.provide(MainSessionAuthority.layer),
   Layer.provideMerge(layerPersistence),
   Layer.provide(layerServerEnvironment),
   Layer.provide(ServerSecretStore.layer),
@@ -621,6 +624,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.provide(layerExecutionStore),
   ),
   layerWorkerLaunch,
+  WorkerEvaluation.layer,
   WorkerHandoff.layerConfigured.pipe(
     Layer.provide(layerWorkerLaunch),
     Layer.provide(layerWorkspaceGate),

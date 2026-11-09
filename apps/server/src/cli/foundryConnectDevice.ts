@@ -56,6 +56,12 @@ export const connectDeviceCommand = Command.make("connect-device", {
   keyFile: Flag.String("key-file"),
   gatewayOrigin: Flag.String("gateway-origin").pipe(Flag.optional),
   streams: Flag.Boolean("streams"),
+  developmentLoopback: Flag.Boolean("development-loopback").pipe(
+    Flag.withDefault(false),
+    Flag.withDescription(
+      "Allow HTTP only on an explicit literal loopback port, without Access credentials, for isolated development.",
+    ),
+  ),
   accessFile: Flag.String("access-file").pipe(Flag.optional),
 }).pipe(
   Command.withDescription(
@@ -85,6 +91,7 @@ export const connectDeviceCommand = Command.make("connect-device", {
               clientSecret: Redacted.make(access.clientSecret),
             }
           : undefined,
+        flags.developmentLoopback,
       );
       const localEnvironmentId = fs
         .readFileString(path.join(flags.baseDir, "userdata", "environment-id"))
@@ -125,7 +132,7 @@ export const connectDeviceCommand = Command.make("connect-device", {
                 ) {
                   const local = yield* adapter.openStream(grant, generation);
                   const remote = yield* StreamSocket.connect(
-                    `${flags.origin.replace(/^https:/, "wss:")}/api/foundry/devices/stream`,
+                    `${flags.origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:")}/api/foundry/devices/stream`,
                     {
                       "x-foundry-stream-ticket": ticket,
                       ...(access

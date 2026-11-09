@@ -13,6 +13,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Git from "../vcs/GitVcsDriver.ts";
+import { makeCheckpointWorkspaceTree } from "./CheckpointWorkspace.ts";
 import * as SandboxArchive from "./SandboxArchive.ts";
 
 export class SandboxArchiveEnvironment extends Context.Service<
@@ -40,7 +41,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const archive = yield* SandboxArchive.SandboxArchive;
-    const git = yield* Git.makeVcsDriver;
+    const workspaceTree = yield* makeCheckpointWorkspaceTree();
     const driver = yield* Git.GitVcsDriver;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -65,7 +66,7 @@ export const layer = Layer.effect(
             return yield* fs.realPath(path.resolve(cwd, value));
           });
           const common = threads.length > 0 ? yield* commonDirectory(input.cwd) : undefined;
-          const workspaces = new Map<string, string>();
+          const workspaces = new Map<string, FoundrySandboxArchiveManifest>();
           const manifests = yield* Effect.forEach(threads, ({ threadId }) =>
             Effect.gen(function* () {
               const records = yield* sql<{
@@ -88,17 +89,42 @@ export const layer = Layer.effect(
               );
               const existing = workspaces.get(cwd);
               if (!existing) {
-                if (!(yield* git.checkpoints.hasCheckpointRef({ cwd, checkpointRef })))
-                  yield* git.checkpoints.captureCheckpoint({ cwd, checkpointRef });
-                workspaces.set(cwd, checkpointRef);
+                const exists = yield* driver.execute({
+                  cwd,
+                  operation: "sandbox.archive.checkpointExists",
+                  args: ["show-ref", "--verify", "--quiet", checkpointRef],
+                  allowNonZeroExit: true,
+                });
+                if (exists.exitCode !== 0) {
+                  const tree = yield* workspaceTree(cwd, "HEAD");
+                  const commit = yield* driver.execute({
+                    cwd,
+                    operation: "sandbox.archive.checkpoint",
+                    args: ["commit-tree", tree, "-p", "HEAD", "-m", "Sandbox final workspace"],
+                    env: {
+                      GIT_AUTHOR_NAME: "Foundry",
+                      GIT_AUTHOR_EMAIL: "foundry@localhost",
+                      GIT_COMMITTER_NAME: "Foundry",
+                      GIT_COMMITTER_EMAIL: "foundry@localhost",
+                    },
+                  });
+                  yield* driver.execute({
+                    cwd,
+                    operation: "sandbox.archive.checkpointRef",
+                    args: ["update-ref", checkpointRef, commit.stdout.trim(), "0".repeat(40)],
+                  });
+                }
               }
-              return yield* archive.capture({
+              const manifest = yield* archive.capture({
                 ...input,
                 cwd,
                 relativeWorkspacePath,
                 threadId,
-                checkpointRef: existing ?? checkpointRef,
+                checkpointRef,
+                ...(existing ? { sharedWorkspace: existing } : {}),
               });
+              workspaces.set(cwd, manifest);
+              return manifest;
             }),
           );
           const final = yield* sql<{

@@ -24,6 +24,7 @@ import {
 } from "@t3tools/shared/dpop";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Duration from "effect/Duration";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -1028,6 +1029,57 @@ it.effect.each([
     );
     expect(opened).toBe(2);
   }).pipe(Effect.scoped),
+);
+
+it.effect.each([
+  { purpose: undefined, parentSeconds: 600, grantSeconds: 60 },
+  { purpose: "evaluation" as const, parentSeconds: 600, grantSeconds: 180 },
+  { purpose: "evaluation" as const, parentSeconds: 90, grantSeconds: 90 },
+])(
+  "bounds Automation lease to $grantSeconds seconds for $purpose with current parent authority",
+  ({ purpose, parentSeconds, grantSeconds }) =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const client = yield* f.sessions.issue({
+        scopes: ["orchestration:read", "orchestration:operate"],
+        subject: "evaluation-owner",
+        method: "bearer-access-token",
+        ttl: Duration.seconds(parentSeconds),
+      });
+      f.setAutomation(true);
+      const identity = yield* f.grants.authorizeAutomation(f.request(client.token), f.target);
+      const now = yield* Clock.currentTimeMillis;
+      let check: Effect.Effect<void, FoundryGatewayError> = Effect.void;
+      f.setStream((grant, validate) => {
+        expect(grant.expiresAt).toBe(now + grantSeconds * 1000);
+        check = validate;
+        return validate;
+      });
+      yield* f.grants.openAutomation(
+        identity,
+        Socket.make({ reader: Effect.die("unused"), writer: Effect.die("unused") }),
+        undefined,
+        purpose,
+      );
+      yield* TestClock.adjust(Duration.seconds(grantSeconds - 1));
+      yield* check;
+      yield* TestClock.adjust("2 seconds");
+      expect((yield* check.pipe(Effect.result))._tag).toBe("Failure");
+      if (purpose === "evaluation" && parentSeconds > 180) {
+        f.setStream((_, validate) => {
+          check = validate;
+          return validate;
+        });
+        yield* f.grants.openAutomation(
+          identity,
+          Socket.make({ reader: Effect.die("unused"), writer: Effect.die("unused") }),
+          undefined,
+          purpose,
+        );
+        f.logout();
+        expect((yield* check.pipe(Effect.result))._tag).toBe("Failure");
+      }
+    }).pipe(Effect.scoped),
 );
 
 it.effect("reads Automation ownership with a read-only session while the device is offline", () =>

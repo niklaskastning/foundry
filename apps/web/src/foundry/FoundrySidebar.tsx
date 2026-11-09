@@ -1,3 +1,6 @@
+import { Menu, MenuTrigger, MenuPopup, MenuItem, MenuSeparator } from "../components/ui/menu";
+import { FoundryUI } from "./FoundryUI";
+import { useFoundrySession } from "./useFoundrySession";
 import { Link, useSearch } from "@tanstack/react-router";
 import { Boxes, Inbox, Activity, Server, MessageSquare, Settings, UserRound } from "lucide-react";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -5,7 +8,7 @@ import { useState } from "react";
 import { AsyncResult } from "effect/reactivity";
 import { Button } from "../components/ui/button";
 import { useAtomCommand } from "../state/use-atom-command";
-import { instanceCommand, initialState } from "./onboarding";
+import { instanceCommand } from "./onboarding";
 import { factoryTabs } from "./workspaceSearch";
 import { useAutomationQuery } from "../features/automation/useAutomationQuery";
 import { cn } from "../lib/utils";
@@ -24,7 +27,8 @@ export function FoundrySidebar() {
   const close = () => {
     if (isMobile) setOpenMobile(false);
   };
-  const binding = initialState().binding;
+  const [session] = useFoundrySession();
+  const binding = session.session ? session.binding : null;
   const [accountMessage, setAccountMessage] = useState("");
   const [signingOut, setSigningOut] = useState(false);
   const account = useAtomCommand(instanceCommand, { reportFailure: false });
@@ -38,11 +42,11 @@ export function FoundrySidebar() {
   }
   const current = search.view ?? "factories";
   return (
-    <div className="flex h-full flex-col px-3 pb-4 pt-14">
+    <div className="flex h-full min-w-0 flex-col border-r bg-sidebar px-3 pb-3 pt-14">
       <Link
         to="/"
         onClick={close}
-        className="mb-5 flex items-center gap-2 px-3 text-lg font-semibold tracking-tight"
+        className="mb-6 flex items-center gap-3 rounded-md px-3 text-lg font-semibold tracking-tight"
         aria-label="Foundry home"
       >
         <Boxes className="size-5" /> Foundry
@@ -87,38 +91,30 @@ export function FoundrySidebar() {
           <Settings className="size-4" />
           Settings
         </Link>
-        <details>
-          <summary className="flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2">
-            <UserRound className="size-4" />
-            Account
-          </summary>
-          <Link
-            to="/foundry"
-            search={{ view: "instance" }}
-            onClick={close}
-            className="block rounded-lg px-3 py-2 text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-          >
-            Account & session
-          </Link>
-          {binding ? (
-            <div className="space-y-2 px-3 pb-2">
-              <p className="break-all text-xs">{binding.origin}</p>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={signingOut}
-                onClick={() => void signOut()}
-              >
-                Sign out of Foundry
-              </Button>
-              {accountMessage ? (
-                <p role="alert" className="text-xs">
-                  {accountMessage}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-        </details>
+        <Menu>
+          <MenuTrigger render={<Button variant="ghost" size="multiline" />}>
+            <UserRound className="size-4" /> Account
+          </MenuTrigger>
+          <MenuPopup side="top" align="start">
+            {binding ? (
+              <p className="max-w-64 break-all px-2 py-2 text-xs text-muted-foreground">
+                {binding.origin}
+              </p>
+            ) : null}
+            <MenuItem render={<Link to="/foundry" search={{ view: "instance" }} onClick={close} />}>
+              Account & session
+            </MenuItem>
+            {binding ? (
+              <>
+                <MenuSeparator />
+                <MenuItem disabled={signingOut} onClick={() => void signOut()}>
+                  {signingOut ? "Signing out…" : "Sign out of Foundry"}
+                </MenuItem>
+              </>
+            ) : null}
+          </MenuPopup>
+        </Menu>
+        {accountMessage ? <FoundryUI.Notice>{accountMessage}</FoundryUI.Notice> : null}
       </div>
     </div>
   );
@@ -134,8 +130,10 @@ function SidebarFactories({
   const search = useSearch({ strict: false });
   const query = useAutomationQuery(environmentId, { op: "factories", limit: 50 });
   return (
-    <div className="mt-4 space-y-1 border-t pt-3">
-      <p className="px-3 py-1 text-xs text-muted-foreground">Factory workspaces</p>
+    <div className="mt-5 space-y-1 border-t pt-4">
+      <p className="px-3 pb-2 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
+        Factory workspaces
+      </p>
       {query.loading ? (
         <p role="status" className="px-3 text-xs">
           Loading factories…
@@ -149,9 +147,9 @@ function SidebarFactories({
       {query.result?.kind === "factories"
         ? query.result.items.map((factory) => (
             <details key={factory.id} open={search.factoryId === factory.id || undefined}>
-              <summary className="cursor-pointer rounded-lg px-3 py-2 text-sm font-medium hover:bg-accent">
+              <FoundryUI.Summary className="cursor-pointer truncate rounded-lg px-3 py-2 text-sm font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
                 {factory.name}
-              </summary>
+              </FoundryUI.Summary>
               <div className="ml-4 border-l pl-2">
                 {factoryTabs.map((tab) => (
                   <Link
@@ -164,7 +162,7 @@ function SidebarFactories({
                         ? "page"
                         : undefined
                     }
-                    className="block rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent aria-[current=page]:bg-primary/10 aria-[current=page]:text-primary"
+                    className="block rounded-md px-3 py-2 text-sm text-muted-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-[current=page]:bg-primary/10 aria-[current=page]:text-primary"
                   >
                     {tab === "agents"
                       ? "Agents & skills"
@@ -177,7 +175,7 @@ function SidebarFactories({
                   to="/foundry"
                   search={{ view: "inbox", factoryId: factory.id }}
                   onClick={close}
-                  className="block rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent"
+                  className="block rounded-md px-3 py-2 text-sm text-muted-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 >
                   Decisions
                 </Link>

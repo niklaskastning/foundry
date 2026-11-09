@@ -1,3 +1,4 @@
+import { FoundryUI } from "./FoundryUI";
 import { useRef, useState } from "react";
 import type { LegendListRef } from "@legendapp/list/react";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -78,9 +79,9 @@ export function ThreadArchiveLibrary({
     setBusy(false);
   }
   return (
-    <section className="space-y-3 border-t pt-4" aria-label="Foundry thread archives">
+    <FoundryUI.Panel aria-label="Foundry thread archives">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-base font-medium">Thread archives</h2>
+        <FoundryUI.Heading>Thread archives</FoundryUI.Heading>
         <Button variant="outline" disabled={busy} onClick={() => void load()}>
           Load thread archives
         </Button>
@@ -165,7 +166,7 @@ export function ThreadArchiveLibrary({
           />
         </div>
       ) : null}
-    </section>
+    </FoundryUI.Panel>
   );
 }
 

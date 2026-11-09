@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useAutomationQuery } from "./useAutomationQuery";
 import { Input } from "../../components/ui/input";
@@ -27,7 +28,7 @@ export function ListFilters<State extends string>({
   onStateChange: (value: State) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-end gap-3">
+    <div className="flex flex-wrap items-end gap-4 rounded-lg border bg-muted/20 p-3">
       {onFactoryChange ? (
         <FactoryFilter environmentId={environmentId} value={factoryId} onChange={onFactoryChange} />
       ) : null}
@@ -96,7 +97,9 @@ function FactoryFilter({
       </Select>
       {query.error || (query.result?.kind === "factories" && query.result.next) ? (
         <details className="text-xs text-muted-foreground">
-          <summary className="cursor-pointer">Filter another factory by ID</summary>
+          <FoundryUI.Summary className="cursor-pointer">
+            Filter another factory by ID
+          </FoundryUI.Summary>
           <div className="pt-2">
             <Input
               aria-label="Factory ID"

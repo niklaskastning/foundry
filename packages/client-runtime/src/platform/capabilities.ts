@@ -98,3 +98,8 @@ export class SshEnvironmentGateway extends Context.Service<
     ) => Effect.Effect<void, ConnectionAttemptError>;
   }
 >()("@t3tools/client-runtime/platform/capabilities/SshEnvironmentGateway") {}
+
+export class FoundryDevelopmentLoopback extends Context.Reference<boolean>(
+  "@t3tools/client-runtime/platform/capabilities/FoundryDevelopmentLoopback",
+  { defaultValue: () => false },
+) {}

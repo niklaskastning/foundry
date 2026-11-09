@@ -1,3 +1,4 @@
+import { EvaluationInput, EvaluationJudgment } from "./automation/evaluation.ts";
 import {
   FoundryProviderConnectionQuery,
   FoundryProviderConnectionMutation,
@@ -515,6 +516,7 @@ export const WS_METHODS = {
   foundryWorkerRead: "foundry.workerRead",
   foundryWorkerLaunch: "foundry.workerLaunch",
   foundryWorkerStatus: "foundry.workerStatus",
+  foundryWorkerEvaluate: "foundry.workerEvaluate",
   assetsReadChunk: "assets.readChunk",
   attachmentsWriteChunk: "attachments.writeChunk",
   attachmentsChunkStatus: "attachments.chunkStatus",
@@ -1572,6 +1574,11 @@ const WsFoundryWorkerLaunchRpc = Rpc.make(WS_METHODS.foundryWorkerLaunch, {
   success: FoundryWorkerLaunchReceipt,
   error: Schema.Union([FoundryWorkerLaunchError, EnvironmentAuthorizationError]),
 });
+const WsFoundryWorkerEvaluateRpc = Rpc.make(WS_METHODS.foundryWorkerEvaluate, {
+  payload: EvaluationInput,
+  success: EvaluationJudgment,
+  error: Schema.Union([FoundryWorkerError, EnvironmentAuthorizationError]),
+});
 const WsFoundryWorkerStatusRpc = Rpc.make(WS_METHODS.foundryWorkerStatus, {
   payload: Schema.Struct({ projectId: Schema.optional(ProjectId) }),
   success: FoundryWorkerStatus,
@@ -2332,6 +2339,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsFoundryWorkerReadRpc,
   WsFoundryWorkerLaunchRpc,
   WsFoundryWorkerStatusRpc,
+  WsFoundryWorkerEvaluateRpc,
   WsAssetsReadChunkRpc,
   WsAttachmentsWriteChunkRpc,
   WsAttachmentsChunkStatusRpc,

@@ -103,11 +103,16 @@ export function verifyDescriptor(
     !descriptor.capabilities.includes("foundry.access-sessions") ||
     !auth?.publicOrigin ||
     !auth.issuer ||
-    !auth.bootstrapMethods.includes("cloudflare-access-jwt") ||
+    !auth.bootstrapMethods.some(
+      (method) => method === "cloudflare-access-jwt" || method === "password",
+    ) ||
     !auth.sessionMethods.includes("foundry-session-cookie")
   )
     throw new OnboardingError("unsupported");
-  if (auth.publicOrigin !== origin || normalizeOrigin(auth.issuer) !== auth.issuer)
+  if (
+    auth.publicOrigin !== origin ||
+    normalizeOrigin(auth.issuer, auth.bootstrapMethods.includes("password")) !== auth.issuer
+  )
     throw new OnboardingError("identity");
   const binding = {
     origin,
@@ -196,6 +201,8 @@ export interface OnboardingResult {
   binding: InstanceBinding | null;
   confirmed: boolean;
   session: FoundrySession | null;
+  devicesAvailable?: boolean;
+  nativeLoginAvailable?: boolean;
   artifactsAvailable?: boolean;
   archivesAvailable?: boolean;
   automationAvailable?: boolean;
@@ -297,6 +304,8 @@ export function createInstanceClient(options: {
         binding,
         confirmed: Boolean(saved) || operation === "confirm",
         session: null,
+        nativeLoginAvailable:
+          descriptor.instanceAuth?.bootstrapMethods.includes("password") ?? false,
         message: "Descriptor verified. Confirm the instance before signing in.",
       };
     if (operation === "remove") {
@@ -327,20 +336,27 @@ export function createInstanceClient(options: {
       operation === "refresh"
         ? verifySession(await request("/api/foundry/auth/session"), binding, options.now())
         : null;
-    const session = verifySession(
+    let session = verifySession(
       await request(`/api/foundry/auth/${operation}`, current?.csrfToken),
       binding,
       options.now(),
     );
+    if (operation === "session" && session.expiresAt - options.now() <= 60_000)
+      session = verifySession(
+        await request("/api/foundry/auth/refresh", session.csrfToken),
+        binding,
+        options.now(),
+      );
     return {
       binding,
       confirmed: true,
       session,
+      nativeLoginAvailable: descriptor.instanceAuth?.bootstrapMethods.includes("password") ?? false,
+      devicesAvailable: descriptor.capabilities.includes("foundry.device-catalog"),
       artifactsAvailable: descriptor.artifactTransfer?.protocolVersion === "1",
       automationAvailable: descriptor.automation?.protocolVersion === "1",
       archivesAvailable: descriptor.threadArchive?.protocolVersion === "1",
-      message:
-        "Signed in to Foundry. This session does not grant T3 environment or gateway access.",
+      message: "Signed in to Foundry. Authorized machines are available through this instance.",
     };
   }
 

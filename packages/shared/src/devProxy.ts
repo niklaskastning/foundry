@@ -3,6 +3,7 @@ export const DEV_PROXIED_PATH_PREFIXES = ["/api", "/oauth", "/.well-known", "/ws
 
 /** Preserve origins for OAuth metadata validation and /ws cookie-session Origin/Host checks. */
 export const DEV_PROXIED_ORIGIN_PRESERVING_PREFIXES: ReadonlySet<string> = new Set([
+  "/api",
   "/oauth",
   "/.well-known",
   "/mcp",

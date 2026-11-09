@@ -8,7 +8,10 @@ import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
 import type * as CodexUsageHistory from "../../usage/CodexUsageHistory.ts";
-import { makeCodexTextGeneration } from "../../textGeneration/CodexTextGeneration.ts";
+import {
+  makeCodexTextGeneration,
+  makeCodexEvaluation,
+} from "../../textGeneration/CodexTextGeneration.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import * as ServerConfig from "../../config.ts";
@@ -266,6 +269,12 @@ export const CodexDriver: ProviderDriver<
           }),
       ),
     );
+    const generateEvaluation = yield* makeCodexEvaluation(
+      instanceId,
+      effectiveConfig,
+      processEnv,
+      snapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
+    );
     const textGeneration = yield* makeCodexTextGeneration(
       effectiveConfig,
       processEnv,
@@ -370,6 +379,7 @@ export const CodexDriver: ProviderDriver<
       consumeResetCredit,
       orchestrationAdapter,
       textGeneration,
+      generateEvaluation,
     } satisfies ProviderInstance;
   }),
 };

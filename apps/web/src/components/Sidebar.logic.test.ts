@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import {
+  filterSidebarV2VisibleThreads,
   shouldCreateNewThreadInCurrentProject,
   archiveSelectedThreadEntries,
   deleteSelectedThreadEntries,
@@ -1708,5 +1709,20 @@ describe("shouldCreateNewThreadInCurrentProject", () => {
     expect(shouldCreateNewThreadInCurrentProject(false, 1, 3)).toBe(true);
     expect(shouldCreateNewThreadInCurrentProject(false, 0, 0)).toBe(true);
     expect(shouldCreateNewThreadInCurrentProject(true, 2, 2)).toBe(true);
+  });
+});
+
+describe("Factory execution chat visibility", () => {
+  it("keeps historical execution threads out of Chats without removing handoffs or user chats", () => {
+    const threads = [
+      "foundry-launch:legacy",
+      "foundry-launch:v4:run",
+      "foundry-handoff:human",
+      "user-chat",
+    ].map((id) => makeThreadFixture({ id: ThreadId.make(id) }));
+    expect(
+      filterSidebarV2VisibleThreads(threads, null, new Set()).map((thread) => thread.id),
+    ).toEqual(["foundry-handoff:human", "user-chat"]);
+    expect(threads).toHaveLength(4);
   });
 });

@@ -1,3 +1,4 @@
+import { FoundryUI } from "../../foundry/FoundryUI";
 import { V4WorkflowConfiguration } from "./V4Configuration";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { isDefinitiveAutomationFailure } from "./failures";
@@ -128,8 +129,11 @@ export function DefinitionEditor({
   }
   if (definition.schemaVersion === 4)
     return (
-      <section className="space-y-4" aria-label="Factory definition">
-        <h2 className="text-lg font-semibold">Definition draft</h2>
+      <section
+        className="min-w-0 space-y-5 rounded-xl border bg-card p-4 shadow-xs sm:p-6"
+        aria-label="Factory definition"
+      >
+        <FoundryUI.Heading>Definition draft</FoundryUI.Heading>
         <p className="text-sm">
           Review the complete file bundle before activation. Existing runs keep their pinned
           resources.
@@ -146,7 +150,7 @@ export function DefinitionEditor({
             open={definition.workflows.length === 1}
             className="border-y py-3"
           >
-            <summary className="cursor-pointer">{workflow.id}</summary>
+            <FoundryUI.Summary className="cursor-pointer">{workflow.id}</FoundryUI.Summary>
             <V4WorkflowConfiguration definition={definition} workflow={workflow} />
           </details>
         ))}
@@ -168,9 +172,9 @@ export function DefinitionEditor({
           </Button>
         </div>
         <details className="border-t pt-3" open={filesText.length > 0}>
-          <summary className="cursor-pointer text-sm font-medium">
+          <FoundryUI.Summary className="cursor-pointer text-sm font-medium">
             Import / export definition files · advanced
-          </summary>
+          </FoundryUI.Summary>
           <p className="py-3 text-xs text-muted-foreground">
             Use a canonical file bundle to exchange a definition. Import prepares a local draft;
             activation is a separate action.
@@ -210,9 +214,12 @@ export function DefinitionEditor({
       </section>
     );
   return (
-    <section className="space-y-4" aria-label="Factory definition">
+    <section
+      className="min-w-0 space-y-5 rounded-xl border bg-card p-4 shadow-xs sm:p-6"
+      aria-label="Factory definition"
+    >
       <div>
-        <h2 className="text-lg font-semibold">Definition draft</h2>
+        <FoundryUI.Heading>Definition draft</FoundryUI.Heading>
         <p className="text-sm text-muted-foreground">
           {active
             ? "Editing a local draft of the active definition"
@@ -224,7 +231,9 @@ export function DefinitionEditor({
         Git-owned definitions are edited in their repository.
       </p>
       <details className="text-sm">
-        <summary className="cursor-pointer">Active version and repository scope</summary>
+        <FoundryUI.Summary className="cursor-pointer">
+          Active version and repository scope
+        </FoundryUI.Summary>
         <div className="space-y-2 break-all pt-2 text-muted-foreground">
           <p>Active version: {active?.id ?? "None"}</p>
           <p>Repositories: {repositories.join(", ")}</p>
@@ -245,9 +254,9 @@ export function DefinitionEditor({
           open={definition.workflows.length === 1}
           className="rounded-lg border p-4"
         >
-          <summary className="cursor-pointer font-medium">
+          <FoundryUI.Summary className="cursor-pointer font-medium">
             {workflow.id} · {workflow.steps.length} steps
-          </summary>
+          </FoundryUI.Summary>
           <fieldset className="space-y-3 pt-4">
             <legend className="sr-only">Workflow {wi + 1}</legend>
             <label className="block space-y-1">
@@ -403,7 +412,9 @@ export function DefinitionEditor({
         Prepare v4 migration for review
       </Button>
       <details>
-        <summary className="cursor-pointer text-sm">Import / export definition files</summary>
+        <FoundryUI.Summary className="cursor-pointer text-sm">
+          Import / export definition files
+        </FoundryUI.Summary>
         <div className="space-y-2 pt-2">
           <Textarea
             aria-label="Definition files JSON"

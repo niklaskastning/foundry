@@ -66,7 +66,7 @@ const make = Effect.gen(function* () {
           }>`SELECT version FROM foundry_instance.schema_version`;
           if (
             versions.length !== 1 ||
-            ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(versions[0]?.version ?? 0)
+            ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(versions[0]?.version ?? 0)
           ) {
             return yield* new InstanceDatabase.InstanceDatabaseError({
               reason: "schema_incompatible",
@@ -211,6 +211,15 @@ const make = Effect.gen(function* () {
             yield* sql`ALTER TABLE foundry_instance.machine_credentials ADD COLUMN scope text NOT NULL DEFAULT 'automation:read' CHECK (scope IN ('automation:read','automation:start','automation:control'))`;
             yield* sql`UPDATE foundry_instance.schema_version SET version=10`;
           }
+          if ((versions[0]?.version ?? 0) < 11) {
+            yield* sql`CREATE TABLE foundry_instance.native_operator (
+              singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
+              operator_id uuid NOT NULL UNIQUE REFERENCES foundry_instance.operator_binding(operator_id),
+              username text NOT NULL CHECK(length(username) BETWEEN 1 AND 100),
+              salt text NOT NULL, password_hash text NOT NULL)`;
+            yield* sql`UPDATE foundry_instance.schema_version SET version=11`;
+          }
+          yield* sql`GRANT SELECT, INSERT ON foundry_instance.native_operator TO ${sql(input.runtimeRole)}`;
           yield* InstanceDatabase.checkSchema();
           const identities = yield* sql<{
             instance_id: string;

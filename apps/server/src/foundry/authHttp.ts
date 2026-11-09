@@ -1,3 +1,4 @@
+import * as MainBrowserSession from "./MainBrowserSession.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -9,6 +10,20 @@ const cookieOptions = { httpOnly: true, secure: true, sameSite: "strict", path: 
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const sessions = yield* FoundrySessions.FoundrySessions;
+    const main = yield* MainBrowserSession.MainBrowserSession;
+    const withMain = Effect.fn("FoundryAuth.withMain")(function* (
+      response: HttpServerResponse.HttpServerResponse,
+      token: string,
+      previous?: string,
+    ) {
+      const issued = yield* main.ensure(token, previous);
+      return issued
+        ? HttpServerResponse.setCookieUnsafe(response, main.cookieName, issued.token, {
+            ...cookieOptions,
+            expires: DateTime.toDateUtc(issued.expiresAt),
+          })
+        : response;
+    });
     const route = (operation: "login" | "session" | "refresh" | "logout") =>
       HttpRouter.add(
         "POST",
@@ -18,8 +33,15 @@ export const layer = Layer.unwrap(
           yield* sessions.checkOrigin(request.headers.origin, request.headers["content-type"]);
           const token = request.cookies[FoundrySessions.FOUNDRY_SESSION_COOKIE];
           const csrf = request.headers["x-foundry-csrf"];
-          if (operation === "session")
-            return HttpServerResponse.jsonUnsafe(yield* sessions.inspect(token), { headers });
+          const previous = request.cookies[main.cookieName];
+          if (operation === "session") {
+            const session = yield* sessions.inspect(token);
+            return yield* withMain(
+              HttpServerResponse.jsonUnsafe(session, { headers }),
+              token!,
+              previous,
+            );
+          }
           if (operation === "logout") {
             yield* sessions.logout(token, csrf);
             return HttpServerResponse.expireCookieUnsafe(
@@ -29,16 +51,24 @@ export const layer = Layer.unwrap(
             );
           }
           const issued = yield* operation === "login"
-            ? sessions.login(request.headers["cf-access-jwt-assertion"], token)
+            ? sessions.login(
+                request.headers["cf-access-jwt-assertion"],
+                token,
+                yield* request.json.pipe(Effect.orElseSucceed(() => undefined)),
+              )
             : sessions.refresh(token, csrf, request.headers["cf-access-jwt-assertion"]);
-          return HttpServerResponse.setCookieUnsafe(
-            HttpServerResponse.jsonUnsafe(issued.session, { headers }),
-            FoundrySessions.FOUNDRY_SESSION_COOKIE,
+          return yield* withMain(
+            HttpServerResponse.setCookieUnsafe(
+              HttpServerResponse.jsonUnsafe(issued.session, { headers }),
+              FoundrySessions.FOUNDRY_SESSION_COOKIE,
+              issued.token,
+              {
+                ...cookieOptions,
+                expires: DateTime.toDateUtc(DateTime.makeUnsafe(issued.session.expiresAt)),
+              },
+            ),
             issued.token,
-            {
-              ...cookieOptions,
-              expires: DateTime.toDateUtc(DateTime.makeUnsafe(issued.session.expiresAt)),
-            },
+            previous,
           );
         }).pipe(
           Effect.catchTags({

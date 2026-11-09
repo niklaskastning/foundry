@@ -7,6 +7,8 @@ import { FoundrySandboxSetupLocalIndex, FOUNDRY_SETUP_PART_BYTES } from "@t3tool
 import * as Schema from "effect/Schema";
 import * as Base64 from "effect/encoding/Base64";
 import { artifactSha256 } from "@t3tools/shared/foundryArtifacts";
+import * as Git from "../vcs/GitVcsDriver.ts";
+import * as ServerConfig from "../config.ts";
 import * as Snapshot from "./SandboxSetupSnapshot.ts";
 
 const decodeIndex = Schema.decodeEffect(Schema.fromJsonString(FoundrySandboxSetupLocalIndex));
@@ -34,10 +36,12 @@ it.live(
       const service = yield* Snapshot.SandboxSetupSnapshot;
       const root = yield* fs.makeTempDirectoryScoped();
       const cwd = `${root}/repo`;
-      yield* fs.makeDirectory(`${cwd}/.git`, { recursive: true });
+      yield* fs.makeDirectory(cwd);
+      const git = yield* Git.GitVcsDriver;
+      yield* git.execute({ cwd, operation: "snapshot.test", args: ["init"] });
       yield* fs.makeDirectory(`${root}/.foundry`);
       yield* fs.writeFileString(`${cwd}/work.txt`, "work");
-      yield* fs.writeFileString(`${cwd}/.git/config`, "private git metadata");
+      yield* fs.writeFileString(`${cwd}/.git/private`, "private git metadata");
       yield* fs.writeFileString(`${root}/.foundry/private`, "fixture-secret-never-archived");
       yield* fs.writeFileString(`${root}/.foundry/setup.log`, "setup exited 1");
       yield* fs.symlink(`${root}/.foundry/private`, `${cwd}/link`);
@@ -56,7 +60,14 @@ it.live(
         (index) => fs.writeFileString(`${cwd}/node_modules/file-${index}`, `generated-${index}`),
         { concurrency: 32, discard: true },
       );
-      const result = yield* service.capture(input);
+      const minimal = yield* service.capture({ ...input, output: `${root}/minimal.json` });
+      assert.isBelow(minimal.sizeBytes, 1000);
+      const minimalPart = yield* fs.readFileString(`${root}/minimal.json.part-0`);
+      assert.notInclude(minimalPart, "node_modules");
+      const result = yield* service.capture({
+        ...input,
+        selectedPaths: ["node_modules/generated.bin"],
+      });
       assert.isAbove(result.sizeBytes, 0);
       const index = yield* decodeIndex(yield* fs.readFileString(input.output));
       assert.isAbove(index.parts.length, 1);
@@ -89,7 +100,63 @@ it.live(
       assert.isTrue(paths.has("repo/work.txt"));
       assert.equal(
         [...paths].filter((path) => path.startsWith("repo/node_modules/file-")).length,
-        10010,
+        0,
+      );
+      yield* fs.writeFileString(`${cwd}/deleted.txt`, "remove me");
+      yield* fs.writeFileString(`${cwd}/executable.sh`, "echo setup");
+      yield* git.execute({
+        cwd,
+        operation: "snapshot.test",
+        args: ["add", "work.txt", "deleted.txt", "executable.sh"],
+      });
+      yield* git.execute({
+        cwd,
+        operation: "snapshot.test",
+        args: [
+          "-c",
+          "user.name=Snapshot",
+          "-c",
+          "user.email=snapshot@example.test",
+          "commit",
+          "-m",
+          "baseline",
+        ],
+      });
+      yield* fs.writeFileString(`${cwd}/work.txt`, "staged work");
+      yield* fs.writeFileString(`${cwd}/staged.txt`, "staged new file");
+      yield* fs.remove(`${cwd}/deleted.txt`);
+      yield* fs.chmod(`${cwd}/executable.sh`, 0o755);
+      yield* git.execute({
+        cwd,
+        operation: "snapshot.test",
+        args: [
+          "-c",
+          "core.filemode=true",
+          "add",
+          "work.txt",
+          "staged.txt",
+          "deleted.txt",
+          "executable.sh",
+        ],
+      });
+      const stagedOutput = `${root}/staged.json`;
+      yield* service.capture({ ...input, output: stagedOutput });
+      const stagedPart = yield* decodePart(yield* fs.readFileString(`${stagedOutput}.part-0`));
+      assert.include(
+        stagedPart.entries.map((entry) => entry.path),
+        "repo/staged.txt",
+      );
+      assert.include(
+        stagedPart.entries.map((entry) => entry.path),
+        "repo/work.txt",
+      );
+      assert.include(
+        stagedPart.entries.map((entry) => entry.path),
+        "repo/executable.sh",
+      );
+      assert.equal(
+        stagedPart.entries.find((entry) => entry.path === "repo/deleted.txt")?.kind,
+        "missing",
       );
       yield* fs.link(`${root}/.foundry/private`, `${cwd}/hardlink`);
       assert.equal((yield* service.capture(input).pipe(Effect.flip)).code, "incomplete");
@@ -102,10 +169,16 @@ it.live(
       const absentPart = yield* decodePart(yield* fs.readFileString(`${absent.output}.part-0`));
       assert.deepEqual(
         absentPart.entries.map((entry) => entry.kind),
-        ["missing", "missing"],
+        ["missing"],
       );
     }).pipe(
-      Effect.provide(Snapshot.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+      Effect.provide(
+        Snapshot.layer.pipe(
+          Layer.provideMerge(Git.layer),
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "setup-snapshot-" })),
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
       Effect.scoped,
     ),
 );

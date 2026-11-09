@@ -102,3 +102,7 @@ export * from "./foundrySandbox.ts";
 export * from "./foundrySandboxArchive.ts";
 
 export * from "./foundryProviderConnection.ts";
+
+export * from "./automation/scorer.ts";
+export * from "./automation/operationsDashboard.ts";
+export * from "./automation/evaluation.ts";

@@ -162,6 +162,14 @@ export type OrchestrationV2AppThreadLineage = typeof OrchestrationV2AppThreadLin
 export const isListedThreadLineage = (lineage: OrchestrationV2AppThreadLineage): boolean =>
   lineage.relationshipToParent !== "subagent" && lineage.sideChat !== true;
 
+// Worker launch IDs are durable across historical and v4 execution; handoffs use separate IDs.
+const isFactoryExecutionThread = (id: string): boolean => id.startsWith("foundry-launch:");
+
+export const isListedChatThread = (thread: {
+  readonly id: string;
+  readonly lineage: OrchestrationV2AppThreadLineage;
+}): boolean => !isFactoryExecutionThread(thread.id) && isListedThreadLineage(thread.lineage);
+
 export const OrchestrationV2ContextTransferType = Schema.Literals([
   "fork",
   "provider_handoff",
@@ -2168,11 +2176,11 @@ export function isLiveSubagentShell(
  * count every such thread, so the server and clients share this one rule.
  */
 export function isOlderSettledThreadShell(
-  thread: Pick<OrchestrationV2ThreadShell, "lineage" | "settledOverride" | "settledAt">,
+  thread: Pick<OrchestrationV2ThreadShell, "id" | "lineage" | "settledOverride" | "settledAt">,
   beforeMs: number,
 ): boolean {
   return (
-    isListedThreadLineage(thread.lineage) &&
+    isListedChatThread(thread) &&
     thread.settledOverride === "settled" &&
     thread.settledAt !== null &&
     DateTime.toEpochMillis(thread.settledAt) < beforeMs

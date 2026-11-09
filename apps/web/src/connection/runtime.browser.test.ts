@@ -57,7 +57,7 @@ it.each(["factories", "runs", "inbox"])(
     );
     expect(isStandaloneFoundryPage("/foundry", "")).toBe(true);
     expect(isStandaloneFoundryPage("/foundry", "?view=unknown")).toBe(true);
-    expect(isStandaloneFoundryPage("/foundry", `?view=${view}`)).toBe(false);
+    expect(isStandaloneFoundryPage("/foundry", `?view=${view}`)).toBe(true);
     using fetch = vi.spyOn(window, "fetch").mockResolvedValue(new Response(null, { status: 403 }));
     using socket = vi.spyOn(window, "WebSocket");
     const registry = AtomRegistry.make();
@@ -65,7 +65,7 @@ it.each(["factories", "runs", "inbox"])(
     await vi.waitFor(() => {
       const result = registry.get(connectionAtomRuntime);
       expect(AsyncResult.isFailure(result) && String(Cause.squash(result.cause))).toContain(
-        "Saved Foundry identity could not be verified",
+        "Saved Foundry identity could not be verified.",
       );
     });
     expect(fetch).toHaveBeenCalled();

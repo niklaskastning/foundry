@@ -29,11 +29,23 @@ export function restoreDeviceSelection(
   raw: string | null,
   binding: InstanceBinding | null,
   origin: string,
-) {
+): ReadonlyArray<PlatformConnectionRegistration> | undefined {
   if (raw === null) return undefined;
   if (raw === "null") return [];
   try {
-    const target = decodeSelection(JSON.parse(raw));
+    const value: unknown = JSON.parse(raw);
+    if (Array.isArray(value)) {
+      const targets = value.map((entry) => decodeSelection(entry));
+      return targets
+        .flatMap((target) => restoreDeviceSelection(JSON.stringify(target), binding, origin) ?? [])
+        .filter(
+          (entry, index, entries) =>
+            entries.findIndex(
+              (other) => other.target.environmentId === entry.target.environmentId,
+            ) === index,
+        );
+    }
+    const target = decodeSelection(value);
     if (
       !binding ||
       binding.origin !== origin ||
@@ -136,7 +148,7 @@ function confirmedMainRegistration(binding: InstanceBinding | null, origin: stri
   try {
     if (
       normalizeOrigin(binding.origin, true) !== origin ||
-      normalizeOrigin(binding.issuer) !== binding.issuer
+      normalizeOrigin(binding.issuer, true) !== binding.issuer
     )
       return undefined;
     const url = new URL(binding.origin);
@@ -153,4 +165,34 @@ function confirmedMainRegistration(binding: InstanceBinding | null, origin: stri
   } catch {
     return undefined;
   }
+}
+
+export function authorizedDeviceRegistrations(
+  catalog: FoundryDeviceCatalog,
+  binding: InstanceBinding,
+) {
+  if (catalog.instanceId !== binding.instanceId) throw new OnboardingError("identity");
+  const scopes = catalog.scopes.filter((scope) => isScopes([scope]));
+  if (!scopes.includes("orchestration:read")) return [];
+  return catalog.devices
+    .filter(
+      (device) =>
+        !device.revoked &&
+        device.clientAccess.enabled &&
+        device.environmentId !== binding.mainEnvironmentId,
+    )
+    .map(
+      (device) =>
+        new FoundryConnectionRegistration({
+          target: new FoundryConnectionTarget({
+            binding,
+            ...decodeTarget({
+              deviceId: device.deviceId,
+              environmentId: device.environmentId,
+              scopes,
+            }),
+            label: `Device ${device.environmentId}`,
+          }),
+        }),
+    );
 }

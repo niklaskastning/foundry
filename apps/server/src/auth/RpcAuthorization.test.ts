@@ -101,35 +101,51 @@ describe("RPC scope middleware", () => {
   );
 
   it.effect.each([
-    { scopes: [AuthOrchestrationReadScope], missing: AuthEnvironmentMaintainScope },
+    {
+      scopes: [AuthOrchestrationReadScope],
+      missing: AuthEnvironmentMaintainScope,
+      subject: undefined,
+    },
     {
       scopes: [AuthOrchestrationReadScope, AuthEnvironmentMaintainScope],
       missing: AuthDiagnosticsReadScope,
+      subject: undefined,
     },
-  ])("rejects telemetry retry without $missing before its handler runs", ({ scopes, missing }) =>
-    Effect.gen(function* () {
-      const handled: Array<string> = [];
-      const client = yield* RpcTest.makeClient(group).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            group.toLayerHandler(WS_METHODS.serverProbe, () => Effect.succeed({})),
-            group.toLayerHandler(WS_METHODS.serverRetryResourceTelemetry, () =>
-              Effect.sync(() => handled.push("retry")).pipe(Effect.andThen(Effect.never)),
+    {
+      scopes: [AuthOrchestrationReadScope, AuthEnvironmentMaintainScope, AuthDiagnosticsReadScope],
+      missing: AuthOrchestrationOperateScope,
+      subject: JSON.stringify({ kind: "foundry-gateway-v1", purpose: "evaluation" }),
+    },
+  ])(
+    "rejects telemetry retry without $missing before its handler runs",
+    ({ scopes, missing, subject }) =>
+      Effect.gen(function* () {
+        const handled: Array<string> = [];
+        const client = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              group.toLayerHandler(WS_METHODS.serverProbe, () => Effect.succeed({})),
+              group.toLayerHandler(WS_METHODS.serverRetryResourceTelemetry, () =>
+                Effect.sync(() => handled.push("retry")).pipe(Effect.andThen(Effect.never)),
+              ),
+              RpcAuthorization.layer(scopes, undefined, subject),
             ),
-            RpcAuthorization.layer(scopes),
           ),
-        ),
-      );
+        );
 
-      expect(yield* client[WS_METHODS.serverProbe]({})).toEqual({});
-      expect(
-        yield* client[WS_METHODS.serverRetryResourceTelemetry]({}).pipe(Effect.flip),
-      ).toMatchObject({
-        _tag: "EnvironmentAuthorizationError",
-        requiredPermission: missing,
-      });
-      expect(handled).toEqual([]);
-    }).pipe(Effect.scoped),
+        if (subject) {
+          expect(yield* client[WS_METHODS.serverProbe]({}).pipe(Effect.flip)).toMatchObject({
+            _tag: "EnvironmentAuthorizationError",
+          });
+        } else expect(yield* client[WS_METHODS.serverProbe]({})).toEqual({});
+        expect(
+          yield* client[WS_METHODS.serverRetryResourceTelemetry]({}).pipe(Effect.flip),
+        ).toMatchObject({
+          _tag: "EnvironmentAuthorizationError",
+          requiredPermission: missing,
+        });
+        expect(handled).toEqual([]);
+      }).pipe(Effect.scoped),
   );
 });
 

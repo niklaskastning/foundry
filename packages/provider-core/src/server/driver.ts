@@ -1,5 +1,8 @@
 // Context tags are runtime singletons; drivers need multiple instances.
 import type {
+  EvaluationInput,
+  EvaluationJudgment,
+  TextGenerationError,
   ProviderConsumeResetCreditOutcome,
   AcpRegistryListSessionsResult,
   AcpRegistryListProvidersResult,
@@ -33,6 +36,10 @@ export type ProviderWorkspaceSnapshot = ServerProvider &
   Pick<ServerProviderWorkspaceSnapshot, "slashCommandsPending" | "optionDescriptors">;
 
 export interface ProviderInstance {
+  readonly generateEvaluation?: (input: {
+    readonly cwd: string;
+    readonly evaluation: EvaluationInput;
+  }) => Effect.Effect<EvaluationJudgment, TextGenerationError>;
   readonly instanceId: ProviderInstanceId;
   readonly driverKind: ProviderDriverKind;
   readonly continuationIdentity: ProviderContinuationIdentity;

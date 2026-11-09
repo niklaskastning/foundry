@@ -40,7 +40,7 @@ export const FoundryDescriptor = Schema.Struct({
     Schema.Struct({
       publicOrigin: Schema.optionalKey(Schema.String),
       issuer: Schema.optionalKey(Schema.String),
-      bootstrapMethods: Schema.Array(Schema.Literal("cloudflare-access-jwt")),
+      bootstrapMethods: Schema.Array(Schema.Literals(["cloudflare-access-jwt", "password"])),
       sessionMethods: Schema.Array(Schema.Literal("foundry-session-cookie")),
     }),
   ),
@@ -100,7 +100,7 @@ export class FoundryAuthError extends Schema.TaggedError<FoundryAuthError>()("Fo
   override get message(): string {
     switch (this.code) {
       case "invalid_access":
-        return "A valid Cloudflare Access application assertion is required.";
+        return "Foundry sign-in failed. Check your credentials and try again.";
       case "invalid_session":
         return "The Foundry session is missing, expired or revoked. Sign in again.";
       case "operator_unbound":
