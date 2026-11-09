@@ -25,8 +25,10 @@ const blocked = () =>
     detail:
       "Foundry gateway access was rejected. Verify Foundry sign-in and the T3 session permissions on Main.",
   });
-export const make = Effect.fn("FoundryGateway.make")(function* () {
-  const main = yield* FoundryMain.make();
+export const make = Effect.fn("FoundryGateway.make")(function* (
+  options = { allowLoopback: false },
+) {
+  const main = yield* FoundryMain.make(options);
   const prepare = Effect.fn("FoundryGateway.prepare")(function* (target: FoundryConnectionTarget) {
     const { request, origin, session, proof } = yield* main.prepare(target.binding);
     const value = yield* request("/.well-known/foundry?protocolVersion=1");
@@ -79,7 +81,7 @@ export const make = Effect.fn("FoundryGateway.make")(function* () {
         "dpop",
         yield* proof(`${origin}/api/foundry/gateway/stream`, issued.wsTicket, "GET"),
       );
-    url.protocol = "wss:";
+    url.protocol = origin.startsWith("http:") ? "ws:" : "wss:";
     const readSessionState = Effect.fn("FoundryGateway.readSessionState")(function* (
       auth: ServerAuthDescriptor,
     ) {
