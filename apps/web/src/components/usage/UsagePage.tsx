@@ -708,7 +708,7 @@ function UsageOverview({
                 <span className={figureClass(loadingPartial)}>
                   {formatCount(merged.sessions)} sessions
                 </span>
-                {metric === "cost" && " · API estimate"}
+                {metric === "cost" && " · Estimated API equivalent, not a bill"}
               </span>
               {metric === "cost" && merged.costQuality.unpricedShare > 0 && (
                 <Popover>

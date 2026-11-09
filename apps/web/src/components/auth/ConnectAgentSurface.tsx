@@ -155,8 +155,11 @@ export function ConnectAgentSurface() {
     return (
       <StandalonePage>
         <ConnectAgentHeading title="This sign-in cannot continue" description={loaded.message} />
+        <a href="/" className="mt-4 inline-block text-sm underline">
+          Return to workspace
+        </a>
         <p className="mt-4 text-sm text-muted-foreground">
-          Close this page and start the sign-in again from your agent.
+          Start the sign-in again from your agent to create a new request.
         </p>
       </StandalonePage>
     );

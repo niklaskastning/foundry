@@ -195,7 +195,8 @@ export function ArchivedThreadsPanel() {
             description={
               isLoadingArchive
                 ? "Checking connected environments."
-                : (archiveError ?? "Archived threads will appear here.")
+                : (archiveError ??
+                  "No archived threads. Archive a thread from its menu to keep it here without deleting its history.")
             }
           />
         </SettingsSection>

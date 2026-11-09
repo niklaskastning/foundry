@@ -721,7 +721,7 @@ export function LegacyFeaturesSection() {
   const updateSettings = useUpdateScopedSettings();
 
   return (
-    <SettingsSection id="legacy-features" title="Legacy">
+    <SettingsSection id="legacy-features" title="Compatibility features">
       <SettingsRow
         {...searchableSetting("legacy-plan-mode")}
         description="Restore Build/Plan, /plan, /default, and Shift+Tab. Off uses build mode."
@@ -1991,13 +1991,18 @@ export function AboutSettingsPanel() {
             />
           </>
         )}
-        <MobileAppSettingsRow />
+        <details className="px-4 py-3">
+          <summary className="cursor-pointer text-sm">
+            Upstream mobile apps (Foundry support deferred)
+          </summary>
+          <MobileAppSettingsRow />
+        </details>
       </SettingsSection>
 
       <SettingsSection id="legal" title="Legal">
         <SettingsRow
           {...searchableSetting("privacy-policy")}
-          description="How we handle your data, including the anonymous usage data T3 Code collects."
+          description="Upstream T3 Code privacy policy. Foundry is a separately operated fork; this policy describes the upstream service."
           control={
             <Button
               render={<a href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer noopener" />}
@@ -2010,7 +2015,7 @@ export function AboutSettingsPanel() {
         />
         <SettingsRow
           {...searchableSetting("open-source-licenses")}
-          description="Notices for dependencies, assets, and optional tools used by T3 Code."
+          description="Foundry is based on T3 Code. View notices for dependencies, assets, and optional tools."
           control={
             <Button
               render={<Link to="/settings/open-source-licenses" />}

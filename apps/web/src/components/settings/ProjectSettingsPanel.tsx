@@ -419,7 +419,8 @@ function ProjectDetail({
         <Alert variant="info">
           <InfoIcon aria-hidden />
           <AlertDescription>
-            Can't find a setting? Keep this project picked above and hop to any other settings page.
+            The project selected above also applies when you open Providers, Threads, Source
+            control, or Worktrees in Settings. Inherited values are marked beside each setting.
           </AlertDescription>
         </Alert>
         <SettingsSection id="project-overview" title="Project" hideTitle>

@@ -343,6 +343,7 @@ function GuestSession({ shareId }: { readonly shareId: string }) {
 function Notice({ title, detail }: { readonly title: string; readonly detail?: string }) {
   return (
     <div className="m-auto flex max-w-sm flex-col gap-1 p-6 text-center">
+      <p className="text-xs text-muted-foreground">Foundry · Shared conversation</p>
       <p className="text-sm font-medium">{title}</p>
       {detail ? <p className="text-xs text-muted-foreground">{detail}</p> : null}
     </div>

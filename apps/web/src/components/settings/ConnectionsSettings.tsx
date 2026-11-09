@@ -1480,7 +1480,7 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
       ) : null}
       <SettingsSection
         {...searchableSetting("remote-environments")}
-        title="Environments"
+        title="Independent T3 environments"
         headerAction={
           <div className="flex items-center gap-1">
             {savedServerUpdateTargets.length > 0 ? (

@@ -79,7 +79,9 @@ async function expectDefaultModeAfterReopen() {
   await userEvent.click(page.getByRole("button", { name: "Add environment" }));
   await expect.element(remoteCard()).toHaveAttribute("aria-pressed", "true");
   await expect.element(sshCard()).toHaveAttribute("aria-pressed", "false");
-  await expect.element(page.getByPlaceholder("backend.example.com")).toBeInTheDocument();
+  await expect
+    .element(page.getByRole("textbox", { name: "Pairing link or host" }))
+    .toBeInTheDocument();
 }
 
 describe("AddEnvironmentDialog", () => {
@@ -103,7 +105,10 @@ describe("AddEnvironmentDialog", () => {
 
     await openDialogOnSsh();
     await userEvent.click(remoteCard());
-    await userEvent.type(page.getByPlaceholder("backend.example.com"), "devbox.example.com");
+    await userEvent.type(
+      page.getByRole("textbox", { name: "Pairing link or host" }),
+      "devbox.example.com",
+    );
     await userEvent.type(page.getByPlaceholder("PAIRCODE"), "PAIRCODE");
     await userEvent.click(sshCard());
     await userEvent.type(page.getByPlaceholder("Search hosts or type devbox"), "devbox");
@@ -112,7 +117,9 @@ describe("AddEnvironmentDialog", () => {
     await userEvent.keyboard("{Escape}");
 
     await expectDefaultModeAfterReopen();
-    await expect.element(page.getByPlaceholder("backend.example.com")).toHaveValue("");
+    await expect
+      .element(page.getByRole("textbox", { name: "Pairing link or host" }))
+      .toHaveValue("");
     await expect.element(page.getByPlaceholder("PAIRCODE")).toHaveValue("");
     await userEvent.click(sshCard());
     await expect.element(page.getByPlaceholder("Search hosts or type devbox")).toHaveValue("");
