@@ -65,11 +65,8 @@ export function TakeOverPanel({
   const eligible =
     control !== null && ["paused", "succeeded", "failed", "cancelled"].includes(control.state);
   return (
-    <section
-      aria-label="Take over in T3"
-      className="space-y-4 rounded-xl border border-primary/20 bg-primary/5 p-4 sm:p-6"
-    >
-      <h3 className="text-lg font-semibold">Continue interactively</h3>
+    <section aria-label="Continue in chat" className="space-y-3 border-t pt-4">
+      <h3 className="text-lg font-semibold">Continue in chat</h3>
       <p className="text-sm text-muted-foreground">
         Continue from a confirmed checkpoint. Pause an active run and wait for its current work to
         finish before taking over.
@@ -81,6 +78,10 @@ export function TakeOverPanel({
         <legend className="text-sm">Choose the source attempt</legend>
         {attempts
           .filter((attempt) => attempt.threadId)
+          .toSorted(
+            (left, right) =>
+              left.ordinal - right.ordinal || left.attemptNumber - right.attemptNumber,
+          )
           .map((attempt) => (
             <label key={attempt.commandId} className="flex items-center gap-2 text-sm">
               <input
@@ -140,7 +141,7 @@ export function TakeOverPanel({
           ? "Taking over…"
           : action.pending
             ? "Retry the same takeover"
-            : "Take over in T3"}
+            : "Continue in chat"}
       </Button>
       {!action.allowed ? (
         <p className="text-sm text-muted-foreground">
@@ -176,6 +177,7 @@ export function HandoffList({
   workItemId: string;
 }) {
   const query = useAutomationQuery(environmentId, { op: "handoffs", factoryId, workItemId });
+  const work = useAutomationQuery(environmentId, { op: "workItem", factoryId, workItemId });
   return (
     <section aria-label="Interactive handoffs" className="space-y-3">
       <h3 className="text-lg font-semibold">Interactive work</h3>
@@ -188,12 +190,13 @@ export function HandoffList({
               key={handoff.id}
               environmentId={environmentId}
               handoff={handoff}
+              title={work.result?.kind === "workItem" ? work.result.item.title : "Interactive work"}
               refresh={query.refresh}
             />
           ))
         ) : (
           <p className="text-sm">
-            No interactive work yet. You can take over a paused or finished run in T3.
+            No interactive work yet. You can take over a paused or finished run in chat.
           </p>
         )
       ) : null}
@@ -204,10 +207,12 @@ export function HandoffList({
 function HandoffPanel({
   environmentId,
   handoff,
+  title,
   refresh,
 }: {
   environmentId: EnvironmentId;
   handoff: AutomationHandoff;
+  title: string;
   refresh: () => void;
 }) {
   const [tests, setTests] = useState("");
@@ -221,6 +226,17 @@ function HandoffPanel({
       : handoff.pendingCommands;
   return (
     <section aria-label="Interactive handoff" className="space-y-3 rounded-lg border p-4">
+      <h4 className="break-words font-medium">{title}</h4>
+      <a
+        className="text-sm underline"
+        href={`/foundry?view=factories&tab=work&factoryId=${encodeURIComponent(handoff.factoryId)}&workItemId=${encodeURIComponent(handoff.workItemId)}`}
+      >
+        Open source work item
+      </a>
+      <p className="text-sm text-muted-foreground">
+        Continue the run from its confirmed workspace. Conversation history is available through the
+        chat and archive links when recorded.
+      </p>
       <div className="flex flex-wrap items-center gap-2">
         <Badge
           variant={
@@ -248,7 +264,7 @@ function HandoffPanel({
               className="underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               href={`/${encodeURIComponent(handoff.environmentId)}/${encodeURIComponent(receipt.threadId)}?factoryId=${encodeURIComponent(handoff.factoryId)}&runId=${encodeURIComponent(handoff.runId)}`}
             >
-              Open interactive chat
+              Open chat
             </a>
             <a
               className="underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"

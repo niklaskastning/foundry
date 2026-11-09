@@ -70,6 +70,15 @@ export function RunDetail({
   const topology = detail ? runTopology(detail.workflow) : null;
   const execution = detail?.workflow.execution;
   const state = detail?.control?.state ?? detail?.run.state;
+  const latestReport =
+    attempts.result?.kind === "attempts"
+      ? attempts.result.items
+          .filter((attempt) => attempt.hasResult)
+          .toSorted(
+            (left, right) =>
+              right.ordinal - left.ordinal || right.attemptNumber - left.attemptNumber,
+          )[0]
+      : undefined;
   const terminal = state === "succeeded" || state === "cancelled";
   const available = {
     pause: !terminal && state !== "paused" && state !== "failed" && state !== "cancel_requested",
@@ -136,7 +145,7 @@ export function RunDetail({
             attempts.refresh();
           }}
         >
-          Refresh progress
+          Refresh run and execution history
         </Button>
       </div>
       <div className="space-y-2 border-b pb-5">
@@ -210,13 +219,13 @@ export function RunDetail({
                         ? "Execution failed. Inspect the result and exhausted budgets. A new run requires an explicit start."
                         : "Execution failed. Inspect the failed attempt before retrying."
                       : state === "paused"
-                        ? "Execution is paused. Resume when ready, or take over in T3."
+                        ? "Execution is paused. Resume allows the scheduler to continue pending work; completed steps alone do not confirm run completion. Review the workflow and decisions before resuming."
                         : state === "waiting"
                           ? "Execution is waiting. Review the current decisions and blockers."
                           : state === "cancel_requested"
                             ? "Stop requested. Waiting for writer shutdown confirmation."
                             : state === "cancelled"
-                              ? "Execution was cancelled. The work item remains separate."
+                              ? "Execution was cancelled. Review completed results below; cancellation does not close the work item or imply that every step failed."
                               : "Follow step progress below. Results appear after execution is confirmed.")}
               </p>
             </div>
@@ -278,7 +287,7 @@ export function RunDetail({
           ) : null}
           {detail.control?.state === "waiting" || detail.control?.reason ? (
             <Link className="text-sm underline" to="/foundry" search={{ view: "inbox", factoryId }}>
-              Review questions, decisions and blockers in Inbox
+              Review questions, decisions and blockers
             </Link>
           ) : null}
         </>
@@ -287,6 +296,28 @@ export function RunDetail({
         <p role="status" className="text-sm">
           {message}
         </p>
+      ) : null}
+      {detail && !selected && attempts.result?.kind === "attempts" ? (
+        <section className="space-y-3" aria-label="Recorded result">
+          <h3 className="text-lg font-semibold">Recorded result</h3>
+          <p className="text-xs text-muted-foreground">
+            Last reported workflow step on this history page. Execution success is separate from
+            work item acceptance.
+          </p>
+          {latestReport ? (
+            <AttemptResult
+              environmentId={environmentId}
+              factoryId={factoryId}
+              runId={runId}
+              commandId={latestReport.commandId}
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              No execution report on this page. Review workflow decisions and other history pages
+              below.
+            </p>
+          )}
+        </section>
       ) : null}
       {topology && execution ? (
         <section
@@ -393,7 +424,14 @@ export function RunDetail({
                     <span className="font-medium">
                       {index + 1}. {step.id}
                     </span>{" "}
-                    · {step.kind === "agent" ? (step.resolved?.role?.name ?? "Agent") : step.kind}
+                    ·{" "}
+                    {step.kind === "agent"
+                      ? (step.resolved?.role?.name ?? "Agent")
+                      : step.kind === "test"
+                        ? "Checks"
+                        : step.kind === "publish"
+                          ? "Publication"
+                          : "Human decision"}
                   </FoundryUI.Summary>
                   <div className="space-y-2 pt-2 text-sm">
                     {step.kind === "agent" || step.kind === "approval" ? (
@@ -410,7 +448,7 @@ export function RunDetail({
                         to="/foundry"
                         search={{ view: "inbox", factoryId, inboxKind: "approval" }}
                       >
-                        Review current decisions in Inbox
+                        Review current decisions
                       </Link>
                     ) : null}
                   </div>
@@ -421,9 +459,9 @@ export function RunDetail({
         </section>
       ) : null}
       {detail ? (
-        <details className="rounded-lg border p-4" open>
+        <details className="rounded-lg border p-4">
           <FoundryUI.Summary className="cursor-pointer font-medium">
-            Take over this run in Chats
+            Continue in chat
           </FoundryUI.Summary>
           <div className="pt-4">
             <TakeOverPanel
@@ -515,7 +553,7 @@ export function RunDetail({
                             className="underline"
                             href={`/${encodeURIComponent(attempt.environmentId)}/${encodeURIComponent(attempt.threadId)}?factoryId=${encodeURIComponent(factoryId)}&runId=${encodeURIComponent(runId)}`}
                           >
-                            Open T3 thread
+                            Open chat
                           </a>
                           <a
                             className="underline"
@@ -577,7 +615,9 @@ export function RunDetail({
                     ) : null}
                     {!attempt.hasResult ? (
                       <p className="text-xs text-muted-foreground">
-                        No execution report is attached to this step.
+                        {step?.kind === "approval" || node?.definition.kind === "approval"
+                          ? "Human decision step. Review its recorded decision in Decisions; no worker report is expected."
+                          : "No execution report is attached to this step."}
                       </p>
                     ) : null}
                   </li>
@@ -752,7 +792,7 @@ export function AttemptResult({
           <h5 className="text-sm font-medium">Artifacts</h5>
           {result.artifacts.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No artifacts are available for this attempt.
+              No separate files are attached. A result may still be recorded in the chat archive.
             </p>
           ) : null}
           <ul className="space-y-2">
@@ -782,6 +822,14 @@ export function AttemptResult({
                 onClose={() => setSelectedArtifact(null)}
               />
             </div>
+          ) : null}
+          {result.execution?.lifecycle?.manifest?.archive ? (
+            <a
+              className="text-sm underline"
+              href={`/foundry?archiveEnvironmentId=${encodeURIComponent(result.execution.lifecycle.manifest.archive.owner.environmentId)}&archiveThreadId=${encodeURIComponent(result.execution.lifecycle.manifest.archive.owner.threadId)}`}
+            >
+              Read recorded conversation and result
+            </a>
           ) : null}
           {result.execution?.lifecycle?.manifest?.workspacePath ? (
             <p className="break-all text-sm">
@@ -825,9 +873,15 @@ export function AttemptResult({
               Checkpoint, writer shutdown & archive completeness
             </FoundryUI.Summary>
             <div className="space-y-2 break-all pt-2">
-              <p className="text-sm">
-                Checkpoint: {result.execution?.run.checkpointId ?? "Unconfirmed"}
-              </p>
+              <div className="text-sm">
+                Checkpoint: {result.execution?.run.checkpointId ? "Recorded" : "Unconfirmed"}
+                {result.execution?.run.checkpointId ? (
+                  <details>
+                    <summary className="cursor-pointer">Internal checkpoint reference</summary>
+                    <code>{result.execution.run.checkpointId}</code>
+                  </details>
+                ) : null}
+              </div>
               <p className="text-sm">
                 Writer end: {result.execution?.lifecycle?.writerEnded ? "Confirmed" : "Unconfirmed"}
               </p>
@@ -848,7 +902,7 @@ export function AttemptResult({
               className="text-sm underline"
               href={`/${encodeURIComponent(result.execution.lifecycle.manifest.archive.owner.environmentId)}/${encodeURIComponent(result.execution.lifecycle.manifest.archive.owner.threadId)}?factoryId=${encodeURIComponent(factoryId)}&runId=${encodeURIComponent(runId)}`}
             >
-              Open T3 thread to review changes
+              Open chat to review changes
             </a>
           ) : null}
         </>

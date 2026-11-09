@@ -69,7 +69,7 @@ export function WorkItemDetail({
           ← Work items
         </Link>
         <Button variant="outline" onClick={work.refresh}>
-          Refresh work item
+          Refresh work item details
         </Button>
       </div>
       {work.loading && !work.result ? <p role="status">Loading work item…</p> : null}
@@ -127,10 +127,6 @@ export function WorkItemDetail({
               </dl>
             </details>
           </div>
-          <h3 className="text-lg font-semibold">Execution & results</h3>
-          <p className="text-sm text-muted-foreground">
-            Open a run for its changes, pull request, decisions and execution history.
-          </p>
           <RunList
             environmentId={environmentId}
             factoryId={factoryId}
@@ -472,8 +468,14 @@ function StartWorkflow({
                 onChange={(value) => setWorkers(value ?? null)}
               />
             )}
+            {!target?.projects.length ? (
+              <p role="status" className="text-sm text-muted-foreground">
+                No execution projects are available from the connected worker. Check the worker
+                connection and repository access in Resources before starting.
+              </p>
+            ) : null}
             <fieldset className="min-w-0 space-y-2">
-              <legend className="text-sm">Default worker project</legend>
+              <legend className="text-sm">Execution project</legend>
               {target?.projects.map((project) => (
                 <label
                   key={project.id}

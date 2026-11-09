@@ -37,12 +37,13 @@ export function RunList({
     ...(workItemId ? { workItemId } : {}),
     ...(after ? { after } : {}),
   });
+  const factories = useAutomationQuery(environmentId, { op: "factories", limit: 50 });
   return (
     <section className="space-y-3" aria-label="Runs">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <FoundryUI.Heading>{compact ? "Recent runs" : "Runs"}</FoundryUI.Heading>
-          {!compact ? (
+          {!compact && !workItemId ? (
             <p className="text-sm text-muted-foreground">
               Follow execution, review results and resolve blocked work.
             </p>
@@ -52,7 +53,7 @@ export function RunList({
           Refresh runs
         </Button>
       </div>
-      {!compact ? (
+      {!compact && !workItemId ? (
         <ListFilters
           environmentId={environmentId}
           factoryId={filterFactory}
@@ -96,6 +97,16 @@ export function RunList({
                     </Badge>
                   </div>
                   <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    {!factoryId ? (
+                      <span>
+                        Factory:{" "}
+                        {factories.result?.kind === "factories"
+                          ? (factories.result.items.find((factory) => factory.id === run.factoryId)
+                              ?.name ?? "Name unavailable")
+                          : "Loading name…"}
+                      </span>
+                    ) : null}
+                    <span>Run {run.id.slice(0, 8)}</span>
                     {run.workflowName ? <span>{run.workflowName}</span> : null}
                     <span>{run.repository}</span>
                     {run.enrolledAt ? (
@@ -112,6 +123,13 @@ export function RunList({
                       </time>
                     ) : null}
                   </div>
+                  {run.state === "succeeded" ||
+                  run.state === "cancelled" ||
+                  run.state === "failed" ? (
+                    <p className="text-xs text-muted-foreground">
+                      Completion time is not recorded in this list. Open the run to review results.
+                    </p>
+                  ) : null}
                 </div>
                 <Button variant="ghost" onClick={() => onOpen(run.factoryId, run.id)}>
                   Open run
