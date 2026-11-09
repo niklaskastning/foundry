@@ -20,6 +20,7 @@ import {
 import * as Result from "effect/Result";
 import { AsyncResult } from "effect/reactivity";
 import { Button } from "../../components/ui/button";
+import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import { Textarea } from "../../components/ui/textarea";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -159,13 +160,7 @@ export function DefinitionEditor({
             Validate
           </Button>
           <Button disabled={busy || !permission} onClick={() => void activate()}>
-            Activate reviewed draft
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => setFilesText(JSON.stringify(exportFactoryFiles(definition), null, 2))}
-          >
-            Export files
+            {busy ? "Activating…" : pending ? "Retry activation" : "Activate reviewed draft"}
           </Button>
           <Button variant="outline" onClick={onActivated}>
             Reload active version
@@ -179,6 +174,12 @@ export function DefinitionEditor({
             Use a canonical file bundle to exchange a definition. Import prepares a local draft;
             activation is a separate action.
           </p>
+          <Button
+            variant="outline"
+            onClick={() => setFilesText(JSON.stringify(exportFactoryFiles(definition), null, 2))}
+          >
+            Export files
+          </Button>
           <Textarea
             aria-label="Definition files JSON"
             value={filesText}
@@ -277,7 +278,14 @@ export function DefinitionEditor({
             {workflow.steps.map((step, si) => (
               <fieldset key={step.id} className="space-y-2 rounded border p-3">
                 <legend className="px-1 text-sm">
-                  Step {si + 1} · {step.kind}
+                  Step {si + 1} ·{" "}
+                  {step.kind === "approval"
+                    ? "Human decision"
+                    : step.kind === "test"
+                      ? "Check"
+                      : step.kind === "publish"
+                        ? "Publish PR"
+                        : "Agent"}
                 </legend>
                 <label className="block space-y-1">
                   <span className="text-sm">Step key</span>
@@ -286,21 +294,51 @@ export function DefinitionEditor({
                     onBlur={(event) => replaceStep(wi, si, { ...step, id: event.target.value })}
                   />
                 </label>
-                <label className="block space-y-1">
-                  <span className="text-sm">Depends on (comma separated step keys)</span>
-                  <Input
-                    value={step.dependsOn.join(", ")}
-                    onChange={(event) =>
-                      replaceStep(wi, si, {
-                        ...step,
-                        dependsOn: event.target.value
-                          .split(",")
-                          .map((id) => id.trim())
-                          .filter(Boolean),
-                      })
-                    }
-                  />
-                </label>
+                <fieldset className="space-y-2">
+                  <legend className="text-sm">Wait for</legend>
+                  <p className="text-xs text-muted-foreground">
+                    Select the steps that must finish before this step can begin.
+                  </p>
+                  {workflow.steps
+                    .filter((item) => item.id !== step.id)
+                    .map((item) => (
+                      <label key={item.id} className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={step.dependsOn.includes(item.id)}
+                          onCheckedChange={(checked) =>
+                            replaceStep(wi, si, {
+                              ...step,
+                              dependsOn: checked
+                                ? [...step.dependsOn, item.id]
+                                : step.dependsOn.filter((id) => id !== item.id),
+                            })
+                          }
+                        />
+                        {workflow.steps.indexOf(item) + 1}. {item.id}
+                      </label>
+                    ))}
+                  {workflow.steps.length === 1 ? (
+                    <p className="text-xs text-muted-foreground">
+                      No other steps. Starts with the workflow.
+                    </p>
+                  ) : null}
+                  {step.dependsOn
+                    .filter((id) => !workflow.steps.some((item) => item.id === id))
+                    .map((id) => (
+                      <label key={id} className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked
+                          onCheckedChange={() =>
+                            replaceStep(wi, si, {
+                              ...step,
+                              dependsOn: step.dependsOn.filter((value) => value !== id),
+                            })
+                          }
+                        />
+                        Missing step: {id}. Clear this reference to remove it
+                      </label>
+                    ))}
+                </fieldset>
                 {step.kind === "agent" || step.kind === "approval" ? (
                   <label className="block space-y-1">
                     <span className="text-sm">Instructions</span>
@@ -387,35 +425,36 @@ export function DefinitionEditor({
         <Button disabled={busy || !permission} onClick={() => void activate()}>
           {busy ? "Activating…" : pending ? "Retry activation" : "Activate draft"}
         </Button>
+      </div>
+      <details>
+        <summary className="cursor-pointer text-sm">
+          Advanced · import, export and format migration
+        </summary>
         <Button
           variant="outline"
-          onClick={() => setFilesText(JSON.stringify(exportFactoryFiles(definition), null, 2))}
+          onClick={() => {
+            try {
+              setFilesText(JSON.stringify(migrateFactoryDefinitionV4(definition), null, 2));
+              setMessage(
+                "Migration exported for review. Import it explicitly to prepare activation; the active definition is unchanged.",
+              );
+            } catch {
+              setMessage(
+                "This definition could not be migrated. Review its resource IDs and execution policy.",
+              );
+            }
+          }}
         >
-          Export files
+          Prepare v4 migration for review
         </Button>
-      </div>
-      <Button
-        variant="outline"
-        onClick={() => {
-          try {
-            setFilesText(JSON.stringify(migrateFactoryDefinitionV4(definition), null, 2));
-            setMessage(
-              "Migration exported for review. Import it explicitly to prepare activation; the active definition is unchanged.",
-            );
-          } catch {
-            setMessage(
-              "This definition could not be migrated. Review its resource IDs and execution policy.",
-            );
-          }
-        }}
-      >
-        Prepare v4 migration for review
-      </Button>
-      <details>
-        <FoundryUI.Summary className="cursor-pointer text-sm">
-          Import / export definition files
-        </FoundryUI.Summary>
+
         <div className="space-y-2 pt-2">
+          <Button
+            variant="outline"
+            onClick={() => setFilesText(JSON.stringify(exportFactoryFiles(definition), null, 2))}
+          >
+            Export files
+          </Button>
           <Textarea
             aria-label="Definition files JSON"
             value={filesText}

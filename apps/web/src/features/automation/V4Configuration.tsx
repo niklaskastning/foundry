@@ -243,6 +243,16 @@ export function V4WorkflowConfiguration({
   );
 }
 
+function usesAgent(nodes: readonly FactoryV4Node[], agentId: string): boolean {
+  return nodes.some((node) =>
+    node.kind === "agent"
+      ? node.agent === agentId
+      : node.kind === "swarm" || node.kind === "loop"
+        ? usesAgent(node.steps, agentId)
+        : false,
+  );
+}
+
 export function V4Catalog({ definition }: { definition: CanonicalFactoryDefinitionV4 }) {
   return (
     <div className="space-y-6">
@@ -272,6 +282,22 @@ export function V4Catalog({ definition }: { definition: CanonicalFactoryDefiniti
                 .map((id) => definition.mcp.find((item) => item.id === id)?.name ?? id)
                 .join(", ") || "None"}
             </p>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Workflow uses and effective settings</p>
+              {definition.workflows
+                .filter((workflow) => usesAgent(workflow.steps, agent.id))
+                .map((workflow) => (
+                  <details key={workflow.id}>
+                    <summary className="cursor-pointer text-sm underline underline-offset-4">
+                      {workflow.id}
+                    </summary>
+                    <V4WorkflowConfiguration definition={definition} workflow={workflow} />
+                  </details>
+                ))}
+              {!definition.workflows.some((workflow) => usesAgent(workflow.steps, agent.id)) ? (
+                <p className="text-sm text-muted-foreground">Not used by a workflow yet.</p>
+              ) : null}
+            </div>
             <details>
               <FoundryUI.Summary className="cursor-pointer text-sm">
                 Instructions and source
