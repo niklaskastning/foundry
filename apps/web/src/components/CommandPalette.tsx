@@ -1003,6 +1003,7 @@ function OpenCommandPaletteDialog(props: {
       });
     }
 
+    const unavailableSources: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
     const orderedSources: ReadonlyArray<AddProjectRemoteSource> = [
       "url",
       ...sortAddProjectProviderSources(readinessBySource),
@@ -1042,7 +1043,7 @@ function OpenCommandPaletteDialog(props: {
       );
 
       if (!readiness.ready) {
-        sourceItems.push({
+        unavailableSources.push({
           kind: "action",
           value: `action:add-project:${environmentId}:${source}:not-ready`,
           searchTerms: ["clone", "remote", "repository", "repo", "git", label, "setup required"],
@@ -1071,6 +1072,22 @@ function OpenCommandPaletteDialog(props: {
       });
     }
 
+    if (unavailableSources.length > 0)
+      sourceItems.push({
+        kind: "submenu",
+        value: `action:add-project:${environmentId}:more-sources`,
+        title: "Set up another source",
+        description: "Connect additional repository services",
+        searchTerms: ["setup", "connect", "github", "gitlab", "azure", "bitbucket"],
+        icon: <FolderGit2Icon className={ITEM_ICON_CLASS} />,
+        groups: [
+          {
+            value: `unavailable:${environmentId}`,
+            label: "Services requiring setup",
+            items: unavailableSources,
+          },
+        ],
+      });
     return [{ value: `sources:${environmentId}`, label: "Sources", items: sourceItems }];
   };
 

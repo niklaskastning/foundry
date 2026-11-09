@@ -13,7 +13,7 @@ import { cn } from "~/lib/utils";
 import { ModelPickerContent, resolveModelPickerSelectedModel } from "./ModelPickerContent";
 import { ChatGptSharingControl } from "./ChatGptSharingControl";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
-import { ModelEsque, getDisplayModelName, getTriggerDisplayModelName } from "./providerIconUtils";
+import { ModelEsque, getDisplayModelName } from "./providerIconUtils";
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
 import { ComposerControl, type ComposerControlSize } from "./ComposerControl";
 import { takeOpenTarget, useComposerMenuProps } from "./composerEventScope";
@@ -134,7 +134,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       ? undefined
       : selectedInstanceOptions[0]);
   const triggerTitle = selectedModel
-    ? getTriggerDisplayModelName(selectedModel, activeEntry?.driverKind)
+    ? getDisplayModelName(selectedModel)
     : props.model === ANTIGRAVITY_DEFAULT_MODEL
       ? "Choose model"
       : props.model || "Choose model";
@@ -202,9 +202,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     return {
       ...selection,
       entry,
-      label: model
-        ? `${getTriggerDisplayModelName(model, entry?.driverKind)}${unavailable}`
-        : selection.model,
+      label: model ? `${getDisplayModelName(model)}${unavailable}` : selection.model,
       fullLabel: model ? `${getDisplayModelName(model)}${unavailable}` : selection.model,
     };
   });

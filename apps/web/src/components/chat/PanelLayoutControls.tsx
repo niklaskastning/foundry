@@ -156,6 +156,7 @@ export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl
             size="sm"
           >
             <MorphIcon className="size-4" icon={maximized ? Minimize2 : Maximize2} />
+            {maximized ? <span className="sm:hidden">Back to chat</span> : null}
           </Toggle>
         }
       />

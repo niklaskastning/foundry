@@ -14,6 +14,7 @@ import { dismissThreadErrorBannerForSession, ThreadErrorBanner } from "./ThreadE
  */
 export function ChatBannerLane(props: {
   providerStatus: ServerProvider | null;
+  onChooseModel?: (() => void) | undefined;
   providerStatusBannerKey: string | null;
   setDismissedProviderStatusBannerKey: Dispatch<SetStateAction<string | null>>;
   onOpenProviderSetup: (instanceId: ProviderInstanceId) => void;
@@ -42,6 +43,7 @@ export function ChatBannerLane(props: {
     <div className="pointer-events-none z-30 flex shrink-0 flex-col">
       <ProviderStatusBanner
         status={providerStatus}
+        onChooseModel={props.onChooseModel}
         onDismiss={() => setDismissedProviderStatusBannerKey(providerStatusBannerKey)}
         onOpenProviderSetup={onOpenProviderSetup}
       />

@@ -3362,6 +3362,16 @@ export default function ChatView(props: ChatViewProps) {
         )}
         {embedded ? null : <FactoryRunReturn />}
         <ChatBannerLane
+          onChooseModel={
+            providerInstanceEntries.some(
+              (entry) =>
+                entry.status === "ready" &&
+                entry.isAvailable &&
+                entry.instanceId !== visibleProviderStatus?.instanceId,
+            )
+              ? () => composerRef.current?.openControl("modelPicker.toggle")
+              : undefined
+          }
           providerStatus={visibleProviderStatus}
           providerStatusBannerKey={providerStatusBannerKey}
           setDismissedProviderStatusBannerKey={setDismissedProviderStatusBannerKey}

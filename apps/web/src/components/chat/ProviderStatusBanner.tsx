@@ -88,9 +88,11 @@ export function getProviderStatusMessage(status: ServerProvider): string {
 export const ProviderStatusBanner = memo(function ProviderStatusBanner({
   onDismiss,
   onOpenProviderSetup,
+  onChooseModel,
   status,
 }: {
   onDismiss: () => void;
+  onChooseModel?: (() => void) | undefined;
   onOpenProviderSetup?: (instanceId: ProviderInstanceId) => void;
   status: ServerProvider | null;
 }) {
@@ -127,6 +129,9 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
               {message}
             </TooltipPopup>
           </Tooltip>
+          {onChooseModel ? (
+            <InlineButton onClick={onChooseModel}>Choose another model</InlineButton>
+          ) : null}
           {onOpenProviderSetup && hasProviderSetup(status) ? (
             <InlineButton onClick={() => onOpenProviderSetup(status.instanceId)}>
               Open provider setup
