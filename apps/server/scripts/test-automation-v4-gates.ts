@@ -367,6 +367,32 @@ export const v4Gates = Effect.fn("V4.postgresGates")(function* <E, E2>(
     (item) => item.runId === claim.run.id && item.stepId === "improve/exhausted-approval",
   );
   NodeAssert.ok(pending);
+  yield* Effect.gen(function* () {
+    const sql = yield* Database.AutomationDatabase;
+    yield* sql`INSERT INTO foundry_automation.inbox_entries(id,instance_id,operator_id,factory_id,work_item_id,run_id,kind,source_revision,source,active)
+      SELECT 'legacy-inbox-history',instance_id,operator_id,factory_id,work_item_id,run_id,kind,source_revision,source-'status',false
+      FROM foundry_automation.inbox_entries WHERE id=${pending.id}`;
+  }).pipe(Effect.provide(database));
+  yield* Inbox.Inbox.pipe(
+    Effect.flatMap((inbox) =>
+      Effect.gen(function* () {
+        const history = yield* inbox.query(request, { factoryId: "v4", status: "all" });
+        const legacy = history.items.find((item) => item.id === "legacy-inbox-history");
+        NodeAssert.ok(legacy);
+        NodeAssert.equal(legacy.isDone, false);
+        const marked = yield* inbox.mark(request, {
+          commandId: "legacy-inbox-read",
+          itemId: legacy.id,
+          sourceRevision: legacy.sourceRevision,
+          action: "read",
+        });
+        NodeAssert.equal(marked.isRead, true);
+        NodeAssert.equal(marked.isDone, false);
+      }),
+    ),
+    Effect.provide(inbox),
+  );
+
   yield* Control.Control.pipe(
     Effect.flatMap((control) =>
       control.execute(request, {
