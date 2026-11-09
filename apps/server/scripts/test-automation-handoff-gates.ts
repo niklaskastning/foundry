@@ -179,6 +179,7 @@ export const handoffGates = Effect.fn("Handoffs.postgresGates")(function <E, E2,
       handoffOpen: Effect.fn("Handoffs.fixtureOpen")(function* (inputIdentity, input) {
         NodeAssert.equal(inputIdentity.deviceId, expectedIdentity.deviceId);
         NodeAssert.equal(input.projectId, expectedProjectId);
+        if (input.workItemId === "p51-work") NodeAssert.equal(input.title, "P51 isolated work");
         deliveries++;
         acceptedOpens.add(input.commandId);
         if (loseOpenAck)

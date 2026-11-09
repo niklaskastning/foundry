@@ -269,6 +269,10 @@ const make = Effect.gen(function* () {
             return yield* fail("checkpoint_pending");
           const evidence = manifest.publishEvidence;
           if (input.mode === "archive" && !evidence) return yield* fail("archive_missing");
+          const [workItem] = yield* sql<{
+            title: string;
+          }>`SELECT title FROM foundry_automation.work_items WHERE factory_id=${input.factoryId} AND id=${run.run.workItemId}`;
+          if (!workItem) return yield* fail("not_found");
           const open = yield* decodeOpen({
             commandId: CommandId.make(`handoff:open:${input.id}`),
             handoffId: input.id,
@@ -278,7 +282,7 @@ const make = Effect.gen(function* () {
             source: { commandId: execution.receipt.commandId, generation: manifest.generation },
             projectId: binding.projectId,
             mode: input.mode,
-            title: `Work item ${run.run.workItemId}`.slice(0, 200),
+            title: workItem.title.slice(0, 200),
             ...(input.mode === "archive" && evidence
               ? {
                   archive: {
