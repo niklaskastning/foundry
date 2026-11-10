@@ -66,7 +66,13 @@ export function SettingsScopeSentence() {
   const scope = useOptionalSettingsScope();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { environments } = useEnvironments();
-  if (scope === null || SETTINGS_DEVICE_ONLY_PATHS.has(pathname)) return null;
+  if (SETTINGS_DEVICE_ONLY_PATHS.has(pathname))
+    return (
+      <p className="px-3 text-sm text-muted-foreground sm:px-4">
+        Applies to this device only · Other devices and server settings are unchanged.
+      </p>
+    );
+  if (scope === null) return null;
   const props: SettingsScopeMenuProps = {
     value: scope.search,
     singleEnvironment: scope.singleEnvironment,

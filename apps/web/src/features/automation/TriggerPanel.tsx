@@ -74,6 +74,8 @@ export function TriggerPanel({
     setPending(input);
     await send(input);
   }
+  const worker = useAutomationQuery(environmentId, { op: "workerBinding" });
+  const workerTarget = worker.result?.kind === "workerBinding" ? worker.result : null;
   const items = query.result?.kind === "bindings" ? query.result.items : [];
   return (
     <FoundryUI.Panel className="space-y-4" aria-label="Workflow triggers">
@@ -131,6 +133,19 @@ export function TriggerPanel({
                 Next run {new Date(binding.nextDueAt).toLocaleString()}
               </p>
             ) : null}
+            <p className="text-sm">
+              {active?.workflowVersions.find((item) => item.versionId === binding.workflowVersionId)
+                ?.id ?? "Pinned workflow"}
+              {" · "}
+              {binding.repository}
+              {" · "}
+              {workerTarget?.environmentId === binding.target.environmentId
+                ? (workerTarget.projects.find((item) => item.id === binding.target.projectId)
+                    ?.title ?? "Pinned project")
+                : "Pinned project"}
+              {" · "}
+              {binding.target.model}
+            </p>
             <details className="text-sm">
               <FoundryUI.Summary className="cursor-pointer text-muted-foreground">
                 Pinned workflow and destination
@@ -139,6 +154,10 @@ export function TriggerPanel({
                 <div>
                   <dt className="text-muted-foreground">Workflow version</dt>
                   <dd>{binding.workflowVersionId}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Worker machine</dt>
+                  <dd>{binding.target.deviceId}</dd>
                 </div>
                 <div>
                   <dt className="text-muted-foreground">Worker project</dt>
@@ -335,9 +354,15 @@ function TriggerInputs({
                   {event.reason ? ` · ${event.reason}` : ""}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {event.source} · {event.externalId} · {new Date(event.occurredAt).toISOString()} ·
-                  Revision {event.revision}
+                  {event.source === "github_issue" ? "GitHub issue" : "Scheduled input"} ·{" "}
+                  {new Date(event.occurredAt).toLocaleString()}
                 </p>
+                <details className="text-xs text-muted-foreground">
+                  <summary className="cursor-pointer">Source reference and revision</summary>
+                  <p className="break-all">
+                    {event.externalId} · Revision {event.revision}
+                  </p>
+                </details>
                 {event.runId ? (
                   <Button
                     variant="outline"
@@ -461,11 +486,11 @@ function CreateTrigger({
       <fieldset disabled={disabled || !active} className="space-y-3 rounded border p-3">
         <legend>Create inactive trigger</legend>
         {!active ? <p>Activate a definition first.</p> : null}
-        <p className="text-xs text-muted-foreground">
-          Activation grants unattended execution on this exact worker project. Existing opted-in
-          GitHub issues are recorded as baseline. Schedules start after activation; no historical
-          backlog is imported.
+        <p className="text-sm text-muted-foreground">
+          Choose the workflow and destination, then configure when work arrives. Saving does not
+          start work.
         </p>
+        <h4 className="text-sm font-medium">Workflow and repository</h4>
         <div className="flex flex-wrap gap-2">
           {active?.workflowVersions.map((item) => (
             <Button
@@ -560,8 +585,18 @@ function CreateTrigger({
               />
             </label>
             <label className="block space-y-1">
-              <span>Repository ID</span>
-              <Input value={repositoryId} onChange={(e) => setRepositoryId(e.target.value)} />
+              <span>GitHub repository ID</span>
+              <Input
+                type="number"
+                min="1"
+                step="1"
+                value={repositoryId}
+                onChange={(e) => setRepositoryId(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Repository discovery is not available here. Enter the numeric GitHub repository ID
+                for the owner/name above; it must match the authorized connection.
+              </p>
             </label>
             <label className="block space-y-1">
               <span>Opt-in label</span>
@@ -641,6 +676,25 @@ function CreateTrigger({
             </p>
           </>
         )}
+        <section className="space-y-2 border-t pt-3 text-sm" aria-label="Trigger preview">
+          <h4 className="font-medium">Review before saving</h4>
+          <p>
+            {kind === "schedule"
+              ? `${time} · ${zone}`
+              : `${githubRepository || "Choose a GitHub repository"} · ${label || "Choose an opt-in label"}`}
+          </p>
+          <p>
+            {active?.workflowVersions.find((item) => item.versionId === workflow)?.id ??
+              "Choose a workflow"}{" "}
+            · {repository || "Choose a repository"} ·{" "}
+            {target?.projects.find((item) => item.id === project)?.title ?? "Choose a project"} ·{" "}
+            {model || "Choose a model"}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Saved inactive. Activation separately authorizes unattended work on this destination.
+            Existing GitHub issues become baseline; schedules start after activation.
+          </p>
+        </section>
         <Button
           type="submit"
           disabled={!target || !workflow || !repository || !project || !model.trim()}

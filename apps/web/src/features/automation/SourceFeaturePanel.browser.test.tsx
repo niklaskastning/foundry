@@ -85,6 +85,7 @@ it("preserves untouched source pins and reviews historical revisions without tri
       onChanged={onChanged}
     />,
   );
+  await screen.getByText("Edit source configuration", { exact: true }).click();
   await expect.element(screen.getByLabelText("Branch", { exact: true })).toHaveValue("release");
   await expect.element(screen.getByLabelText("Definition directory")).toHaveValue("nested/factory");
   await expect

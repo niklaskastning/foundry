@@ -223,6 +223,7 @@ export const ScheduledTaskListInput = Schema.Struct({});
 export type ScheduledTaskListInput = typeof ScheduledTaskListInput.Type;
 
 export const ScheduledTaskListResult = Schema.Struct({
+  timeZone: Schema.optionalKey(TrimmedNonEmptyString),
   tasks: ForwardCompatibleArray(ScheduledTask),
 });
 export type ScheduledTaskListResult = typeof ScheduledTaskListResult.Type;

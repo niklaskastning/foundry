@@ -23,7 +23,7 @@ export const providerConnectionCommands = FoundryProviderConnections.makeCommand
       if (!binding || binding.mainEnvironmentId !== environmentId)
         return yield* new FoundryProviderConnectionError({ code: "forbidden" });
       const main = yield* FoundryMain.make({
-        allowLoopback: import.meta.env.DEV,
+        ...FoundryMain.nativeHttpPolicy,
         maxResponseBytes: 4 * 1024 * 1024,
       });
       const connection = yield* main.prepare(binding);

@@ -9,6 +9,8 @@ export const AutomationFactory = Schema.Struct({
   id: Key,
   name: Title,
   archived: Schema.Boolean,
+  repositories: Schema.optional(Schema.Array(Key)),
+  openWorkItems: Schema.optional(Schema.Int),
 });
 export type AutomationFactory = typeof AutomationFactory.Type;
 export const AutomationFactoryVersion = Schema.Struct({
@@ -32,6 +34,16 @@ export const AutomationWorkItem = Schema.Struct({
   title: Title,
   source: Schema.Struct({ kind: Schema.Literals(["manual", "external"]), reference: Key }),
   state: AutomationWorkItemState,
+  latestRun: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        id: Key,
+        state: Schema.String,
+        enrolledAt: Schema.String,
+        hasResult: Schema.Boolean,
+      }),
+    ),
+  ),
 });
 export type AutomationWorkItem = typeof AutomationWorkItem.Type;
 export const CreateAutomationFactory = Schema.Struct({ commandId: Key, id: Key, name: Title });

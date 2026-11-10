@@ -96,6 +96,9 @@ it.effect("preserves a due run when a save only pads the scheduled hour", () =>
       const created = yield* service.upsert(input);
       const expectedDueAt = DateTime.formatIso(DateTime.toUtc(dueAt));
       expect(created.task.nextRunAt).toBe(expectedDueAt);
+      expect((yield* service.list()).timeZone).toBe(
+        Intl.DateTimeFormat().resolvedOptions().timeZone,
+      );
 
       yield* TestClock.setTime(DateTime.toEpochMillis(dueAt) + 1_000);
       const update = yield* decodeUpsertInput({

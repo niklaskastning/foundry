@@ -12,7 +12,7 @@ import {
   useProjectGroupUpdate,
   type ProjectGroupUpdate,
 } from "../../hooks/useProjectGroupUpdate";
-import { Navigate, useLocation, useNavigate } from "@tanstack/react-router";
+import { Link, Navigate, useLocation, useNavigate } from "@tanstack/react-router";
 import { InfoIcon, Trash2Icon } from "lucide-react";
 import { lazy, Suspense, useRef, useState, type ReactNode } from "react";
 
@@ -419,7 +419,22 @@ function ProjectDetail({
         <Alert variant="info">
           <InfoIcon aria-hidden />
           <AlertDescription>
-            Can't find a setting? Keep this project picked above and hop to any other settings page.
+            The project selected above also applies when you open Providers, Threads, Source
+            control, or Worktrees in Settings. Inherited values are marked beside each setting.
+            <span className="flex flex-wrap gap-3">
+              <Link to="/settings/providers" search={(previous) => previous}>
+                Providers
+              </Link>
+              <Link to="/settings/threads" search={(previous) => previous}>
+                Threads
+              </Link>
+              <Link to="/settings/source-control" search={(previous) => previous}>
+                Source control
+              </Link>
+              <Link to="/settings/worktrees" search={(previous) => previous}>
+                Worktrees
+              </Link>
+            </span>
           </AlertDescription>
         </Alert>
         <SettingsSection id="project-overview" title="Project" hideTitle>

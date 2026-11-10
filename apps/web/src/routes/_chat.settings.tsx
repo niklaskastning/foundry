@@ -7,6 +7,10 @@ import { useSettingsRestore } from "../components/settings/SettingsPanels";
 
 import { AppRouteModal, AppRouteModalClose } from "../components/AppRouteModal";
 import { SettingsBreadcrumb } from "../components/settings/SettingsBreadcrumb";
+import {
+  SETTINGS_NAV_GROUPS,
+  SETTINGS_SECTION_LABELS,
+} from "../components/settings/settingsSearch";
 import { SettingsSidebarNav } from "../components/settings/SettingsSidebarNav";
 import {
   SettingsScopeProvider,
@@ -109,6 +113,7 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
 function SettingsContentLayout() {
   const contentArea = workspaceAreaProps("settings", 1, "Settings content");
   const location = useLocation();
+  const navigate = Route.useNavigate();
   const { search, environment } = useSettingsScope();
   const contentScopeKey =
     location.pathname === "/settings/diagnostics" || location.pathname === "/settings/providers"
@@ -122,7 +127,27 @@ function SettingsContentLayout() {
         <SettingsSidebarNav pathname={location.pathname} />
         <div {...contentArea} className="flex min-h-0 min-w-0 flex-1 flex-col">
           <header className="flex h-12 shrink-0 items-center gap-3 border-b ps-5 pe-2">
-            <SettingsBreadcrumb pathname={location.pathname} />
+            <div className="hidden md:block">
+              <SettingsBreadcrumb pathname={location.pathname} />
+            </div>
+            <select
+              aria-label="Settings section"
+              className="min-w-0 flex-1 rounded-md border bg-background px-2 py-1 text-sm md:hidden"
+              value={location.pathname}
+              onChange={(event) =>
+                void navigate({ to: event.target.value, hash: "", replace: true })
+              }
+            >
+              {SETTINGS_NAV_GROUPS.map((group) => (
+                <optgroup key={group.paths[0]} label={group.heading ?? "Settings"}>
+                  {group.paths.map((to) => (
+                    <option key={to} value={to}>
+                      {SETTINGS_SECTION_LABELS[to]}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
             <div className="ms-auto flex shrink-0 items-center gap-1">
               {location.pathname === "/settings/general" ? (
                 <RestoreDeviceDefaultsButton

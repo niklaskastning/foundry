@@ -49,11 +49,12 @@ const make = Effect.gen(function* () {
     yield* sql`SELECT pg_advisory_xact_lock(hashtextextended(jsonb_build_array(${owner.instanceId}::text,${owner.operatorId}::text,'inbox')::text,0))`;
     yield* sql`
       WITH owned AS (
-        SELECT r.id AS run_id,r.factory_id,r.work_item_id,w.title,d.state,d.reason,d.binding,
+        SELECT r.id AS run_id,r.factory_id,r.work_item_id,w.title,f.name AS factory_name,d.state,d.reason,d.binding,
           c.revision,c.result_revision,c.mode,v.steps,d.v4_state,
           (SELECT a.receipt->'receipt'->>'threadId' FROM foundry_automation.step_attempts a
             WHERE a.run_id=r.id ORDER BY a.ordinal DESC,a.attempt_number DESC LIMIT 1) AS thread_id
         FROM foundry_automation.runs r
+        JOIN foundry_automation.factories f ON f.id=r.factory_id
         JOIN foundry_automation.dispatch_runs d ON d.run_id=r.id
         JOIN foundry_automation.run_controls c ON c.run_id=r.id
         JOIN foundry_automation.work_items w ON w.id=r.work_item_id
@@ -132,7 +133,7 @@ const make = Effect.gen(function* () {
         SELECT md5(jsonb_build_array(${owner.instanceId}::text,${owner.operatorId}::text,run_id,kind,source_key)::text) AS id,
           factory_id,work_item_id,run_id,kind,active,
           md5(jsonb_build_array(revision,result_revision,fact_revision)::text) AS source_revision,
-          jsonb_build_object('factoryId',factory_id,'workItemId',work_item_id,'runId',run_id,
+          jsonb_build_object('factoryName',factory_name,'workItemTitle',title,'factoryId',factory_id,'workItemId',work_item_id,'runId',run_id,
             'kind',kind,'title',fact_title,'detail',detail,'stepId',COALESCE(step_id,CASE WHEN v4_state IS NULL THEN steps->origin.ordinal->>'id' ELSE (SELECT node->>'path' FROM jsonb_array_elements(v4_state->'nodes') node WHERE (node->>'ordinal')::int=origin.ordinal LIMIT 1) END),'requestId',request_id,
             'threadId',source_thread,'environmentId',binding->'identity'->>'environmentId',
             'expectedRevision',revision,'resultRevision',result_revision,
@@ -178,9 +179,11 @@ const make = Effect.gen(function* () {
   });
   const read = Effect.fn("Inbox.read")(function* (owner: Identity, id: string) {
     const rows = yield* sql<{ entry: unknown }>`
-      SELECT e.source || jsonb_build_object('id',e.id,'sourceRevision',e.source_revision,'active',e.active,
-        'isRead',COALESCE(m.is_read,false),'isDone',(COALESCE(m.is_done,false) OR (e.kind<>'answer' AND e.source->>'status' IN ('answered','resolved')))) AS entry
+      SELECT e.source || jsonb_strip_nulls(jsonb_build_object('factoryName',f.name,'workItemTitle',w.title)) || jsonb_build_object('id',e.id,'sourceRevision',e.source_revision,'active',e.active,
+        'isRead',COALESCE(m.is_read,false),'isDone',(COALESCE(m.is_done,false) OR (e.kind<>'answer' AND COALESCE(e.source->>'status' IN ('answered','resolved'),false)))) AS entry
       FROM foundry_automation.inbox_entries e
+      LEFT JOIN foundry_automation.factories f ON f.id=e.factory_id
+      LEFT JOIN foundry_automation.work_items w ON w.factory_id=e.factory_id AND w.id=e.work_item_id
       LEFT JOIN foundry_automation.inbox_marks m ON m.item_id=e.id AND m.operator_id=e.operator_id AND m.source_revision=e.source_revision
       WHERE e.id=${id} AND e.instance_id=${owner.instanceId} AND e.operator_id=${owner.operatorId}`;
     if (!rows[0]) return yield* new AutomationInboxError({ reason: "not_found" });
@@ -194,16 +197,18 @@ const make = Effect.gen(function* () {
         yield* reconcile(owner);
         const limit = input.limit ?? 30;
         const rows = yield* sql<{ entry: unknown }>`
-        SELECT e.source || jsonb_build_object('id',e.id,'sourceRevision',e.source_revision,'active',e.active,
-          'isRead',COALESCE(m.is_read,false),'isDone',(COALESCE(m.is_done,false) OR (e.kind<>'answer' AND e.source->>'status' IN ('answered','resolved')))) AS entry
+        SELECT e.source || jsonb_strip_nulls(jsonb_build_object('factoryName',f.name,'workItemTitle',w.title)) || jsonb_build_object('id',e.id,'sourceRevision',e.source_revision,'active',e.active,
+          'isRead',COALESCE(m.is_read,false),'isDone',(COALESCE(m.is_done,false) OR (e.kind<>'answer' AND COALESCE(e.source->>'status' IN ('answered','resolved'),false)))) AS entry
         FROM foundry_automation.inbox_entries e
+      LEFT JOIN foundry_automation.factories f ON f.id=e.factory_id
+      LEFT JOIN foundry_automation.work_items w ON w.factory_id=e.factory_id AND w.id=e.work_item_id
         LEFT JOIN foundry_automation.inbox_marks m ON m.item_id=e.id AND m.operator_id=e.operator_id AND m.source_revision=e.source_revision
         WHERE e.instance_id=${owner.instanceId} AND e.operator_id=${owner.operatorId}
           AND (${input.factoryId ?? null}::text IS NULL OR e.factory_id=${input.factoryId ?? null})
           AND (${input.kind ?? null}::text IS NULL OR e.kind=${input.kind ?? null})
           AND (${input.cursor ?? null}::text IS NULL OR e.id>${input.cursor ?? null})
-          AND (${input.status ?? "open"}='all' OR (${input.status ?? "open"}='done' AND (COALESCE(m.is_done,false) OR (e.kind<>'answer' AND e.source->>'status' IN ('answered','resolved'))))
-            OR (${input.status ?? "open"}='open' AND e.active AND NOT COALESCE(m.is_done,false) AND (e.kind='answer' OR e.source->>'status' NOT IN ('answered','resolved'))))
+          AND (${input.status ?? "open"}='all' OR (${input.status ?? "open"}='done' AND (COALESCE(m.is_done,false) OR (e.kind<>'answer' AND COALESCE(e.source->>'status' IN ('answered','resolved'),false))))
+            OR (${input.status ?? "open"}='open' AND e.active AND NOT COALESCE(m.is_done,false) AND (e.kind='answer' OR COALESCE(e.source->>'status' NOT IN ('answered','resolved'),true))))
           AND (NOT ${input.unreadOnly ?? false} OR NOT COALESCE(m.is_read,false))
         ORDER BY e.id LIMIT ${limit + 1}`;
         const entries = yield* Effect.forEach(rows.slice(0, limit), (row) =>

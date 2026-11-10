@@ -393,29 +393,36 @@ export function AddEnvironmentDialog({
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
         <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-foreground">Host</span>
+          <span className="mb-1.5 block text-xs font-medium text-foreground">
+            Pairing link or host
+          </span>
           <Input
             value={savedBackendHost}
             onChange={(event) => handleSavedBackendHostChange(event.target.value)}
-            placeholder="backend.example.com"
+            placeholder="Paste the full pairing URL"
             disabled={isAddingSavedBackend}
             spellCheck={false}
           />
         </label>
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-foreground">Pairing code</span>
-          <Input
-            value={savedBackendPairingCode}
-            onChange={(event) => setSavedBackendPairingCode(event.target.value)}
-            placeholder="PAIRCODE"
-            disabled={isAddingSavedBackend}
-            spellCheck={false}
-          />
-        </label>
+        <details open={savedBackendPairingCode.length > 0}>
+          <summary className="cursor-pointer text-xs">Enter code manually</summary>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-foreground">Pairing code</span>
+            <Input
+              value={savedBackendPairingCode}
+              onChange={(event) => setSavedBackendPairingCode(event.target.value)}
+              placeholder="PAIRCODE"
+              disabled={isAddingSavedBackend}
+              spellCheck={false}
+            />
+          </label>
+        </details>
       </div>
       <div>
         <span className="mt-1 block text-2xs text-muted-foreground">
-          Paste a full pairing URL here to fill both fields automatically.
+          Paste the full pairing URL into the first field. Host and pairing code can also be entered
+          separately. This connects an independent T3 environment; it does not register a Foundry
+          worker.
         </span>
       </div>
     </div>

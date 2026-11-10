@@ -1215,6 +1215,10 @@ export function ProviderInstanceCard({
       <SettingsSection title={displayName} icon={titleIconNode} headerAction={editorHeaderAction}>
         <SettingsRow title="Status" status={statusContent} />
         <SettingsRow
+          title="Provider runtime"
+          description={driverOption?.label ?? String(instance.driver)}
+        />
+        <SettingsRow
           title="Display name"
           control={
             <div
@@ -1287,28 +1291,37 @@ export function ProviderInstanceCard({
           </FoldedSettingsSection>
         </div>
       ) : !driverOption || deriveProviderSettingsFields(driverOption).length > 0 ? (
-        <SettingsSection
-          title="Runtime"
+        <div
           inert={readOnly}
           aria-disabled={readOnly || undefined}
           className={readOnly ? "opacity-50 select-none" : undefined}
         >
-          {runtimeFields}
-        </SettingsSection>
+          <FoldedSettingsSection
+            id={`provider-instance-${instanceId}-runtime`}
+            title="Advanced runtime setup"
+          >
+            {runtimeFields}
+          </FoldedSettingsSection>
+        </div>
       ) : null}
 
-      <SettingsSection
-        title="Environment"
-        inert={readOnly}
-        aria-disabled={readOnly || undefined}
-        className={readOnly ? "opacity-50 select-none" : undefined}
-      >
-        <ProviderEnvironmentSection
-          environment={genericEnvironment}
-          onChange={updateGenericEnvironment}
-          secretSources={secretSources}
-        />
-      </SettingsSection>
+      <details>
+        <summary className="cursor-pointer text-sm font-medium">
+          Advanced environment variables
+        </summary>
+        <SettingsSection
+          title="Environment"
+          inert={readOnly}
+          aria-disabled={readOnly || undefined}
+          className={readOnly ? "opacity-50 select-none" : undefined}
+        >
+          <ProviderEnvironmentSection
+            environment={genericEnvironment}
+            onChange={updateGenericEnvironment}
+            secretSources={secretSources}
+          />
+        </SettingsSection>
+      </details>
       {environmentId !== undefined && liveProvider?.driver === "acpRegistry" ? (
         <AcpSessionManagementSection
           environmentId={environmentId}

@@ -24,6 +24,10 @@ export function hasConfirmedAutomationView(
 
 export function isStandaloneFoundryPage(pathname: string, search: string): boolean {
   if (pathname !== "/foundry") return false;
-  const view = new URLSearchParams(search).get("view");
+  const params = new URLSearchParams(search);
+  const view =
+    params.has("archiveEnvironmentId") && params.has("archiveThreadId")
+      ? "resources"
+      : params.get("view");
   return !hasConfirmedAutomationView(view, initialState());
 }

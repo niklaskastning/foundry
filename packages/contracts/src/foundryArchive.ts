@@ -25,6 +25,7 @@ export const FoundryArchiveIngest = Schema.Struct({
 export type FoundryArchiveIngest = typeof FoundryArchiveIngest.Type;
 export const FoundryArchiveStatus = Schema.Struct({
   owner: FoundryArchiveOwner,
+  title: Schema.optional(Schema.String),
   confirmedCursor: NonNegativeInt,
   confirmedSourceSequence: NonNegativeInt,
   sourceHead: NonNegativeInt,

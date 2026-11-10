@@ -213,6 +213,35 @@ describe("Foundry instance onboarding", () => {
       },
     ])
       expect(() => verifyDescriptor(changed, f.origin, f.binding)).toThrow(/identity/);
+    try {
+      verifyDescriptor(
+        {
+          ...f.descriptor,
+          instanceAuth: { ...f.descriptor.instanceAuth, publicOrigin: "https://other.example" },
+        },
+        f.origin,
+        f.binding,
+      );
+      throw new Error("Origin mismatch accepted");
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: "identity",
+        originMismatch: { current: f.origin, configured: "https://other.example" },
+      });
+    }
+    expect(() =>
+      verifyDescriptor(
+        {
+          ...f.descriptor,
+          instanceAuth: {
+            ...f.descriptor.instanceAuth,
+            publicOrigin: "https://name:secret@other.example",
+          },
+        },
+        f.origin,
+        f.binding,
+      ),
+    ).toThrow(/HTTPS/);
     expect(() => verifyDescriptor({ ...f.descriptor, protocolVersion: "2" }, f.origin)).toThrow(
       /compatible/,
     );

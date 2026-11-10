@@ -57,6 +57,7 @@ import {
   resourceHistoryBarHeight,
   resourceHistoryCpuScaleMax,
   shouldShowResourceMonitorRetry,
+  resourceTelemetryAggregate,
   visibleResourceTelemetryProcesses,
 } from "./ResourceTelemetryDiagnostics.logic";
 import { SettingsSection } from "./settingsLayout";
@@ -835,7 +836,7 @@ function ResourceTelemetryDiagnosticsBody({
   const signalingKeysRef = useRef<ReadonlySet<string>>(new Set());
   const [isRetrying, setIsRetrying] = useState(false);
   const snapshot = telemetry.data;
-  const allT3 = snapshot?.groups.allT3;
+  const allT3 = resourceTelemetryAggregate(snapshot?.health.native.status, snapshot?.groups.allT3);
 
   const signalProcess = async (process: ResourceTelemetryProcess, signal: ServerProcessSignal) => {
     const targetEnvironmentId = environmentId;
@@ -993,6 +994,9 @@ function ResourceTelemetryDiagnosticsBody({
         }
       >
         <div className="overflow-hidden rounded-[inherit]">
+          {snapshot ? (
+            <HealthSource label="Native process monitor" health={snapshot.health.native} />
+          ) : null}
           <div className="flex flex-col gap-3 border-b border-border/60 bg-linear-to-r from-muted/45 via-muted/20 to-transparent px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
             <div>
               <div className="text-3xs font-semibold uppercase tracking-widest text-muted-foreground/70">
@@ -1005,20 +1009,22 @@ function ResourceTelemetryDiagnosticsBody({
             </div>
             <div className="flex items-center gap-2 text-3xs text-muted-foreground/65">
               <span className="size-1.5 rounded-full bg-success" />
-              Sampling every {snapshot ? formatSampleInterval(snapshot.sampleIntervalMs) : "..."}
+              {allT3 && snapshot && snapshot.sampleIntervalMs > 0
+                ? `Sampling every ${formatSampleInterval(snapshot.sampleIntervalMs)}`
+                : "Native measurements unavailable"}
             </div>
           </div>
           <div className="grid grid-cols-2 divide-x divide-y divide-border/55 md:grid-cols-3">
             <IconStat
               icon={<CpuIcon className="size-3.5" />}
               label="Current CPU"
-              value={allT3 ? `${allT3.currentCpuPercent.toFixed(1)}%` : "..."}
+              value={allT3 ? `${allT3.currentCpuPercent.toFixed(1)}%` : "Unavailable"}
               detail={allT3 ? `${formatCpuTime(allT3.cpuTimeMs)} observed CPU time` : undefined}
             />
             <IconStat
               icon={<MemoryStickIcon className="size-3.5" />}
               label="Resident memory"
-              value={allT3 ? formatBytes(allT3.currentRssBytes) : "..."}
+              value={allT3 ? formatBytes(allT3.currentRssBytes) : "Unavailable"}
               detail={
                 allT3 ? `${formatBytes(allT3.peakRssBytes)} combined process peaks` : undefined
               }
@@ -1026,7 +1032,7 @@ function ResourceTelemetryDiagnosticsBody({
             <IconStat
               icon={<ActivityIcon className="size-3.5" />}
               label="Process count"
-              value={allT3 ? String(allT3.processCount) : "..."}
+              value={allT3 ? String(allT3.processCount) : "Unavailable"}
               detail={
                 allT3 ? `${allT3.processStarts} starts · ${allT3.processExits} exits` : undefined
               }
@@ -1034,13 +1040,13 @@ function ResourceTelemetryDiagnosticsBody({
             <IconStat
               icon={<HardDriveIcon className="size-3.5" />}
               label="Read throughput"
-              value={allT3 ? formatRate(allT3.ioReadBytesPerSecond) : "..."}
+              value={allT3 ? formatRate(allT3.ioReadBytesPerSecond) : "Unavailable"}
               detail={allT3 ? `${formatBytes(allT3.ioReadBytes)} observed` : undefined}
             />
             <IconStat
               icon={<DatabaseIcon className="size-3.5" />}
               label="Write throughput"
-              value={allT3 ? formatRate(allT3.ioWriteBytesPerSecond) : "..."}
+              value={allT3 ? formatRate(allT3.ioWriteBytesPerSecond) : "Unavailable"}
               detail={allT3 ? `${formatBytes(allT3.ioWriteBytes)} observed` : undefined}
               tone={
                 allT3 && allT3.ioWriteBytesPerSecond >= 10 * 1_024 * 1_024
@@ -1163,8 +1169,8 @@ function ResourceTelemetryDiagnosticsBody({
                   Desktop host signals not connected
                 </div>
                 <p className="mt-1.5 max-w-sm text-2xs leading-relaxed text-muted-foreground/70">
-                  Power, idle, lock, and thermal state are supplied by the desktop host. Process
-                  telemetry remains fully active in this browser session.
+                  Power, idle, lock, and thermal state require the desktop host. Process monitor
+                  availability is reported separately under Collection health.
                 </p>
               </div>
             )}
@@ -1219,73 +1225,78 @@ function ResourceTelemetryDiagnosticsBody({
         </div>
       </SettingsSection>
 
-      <SettingsSection
-        title="Resource timeline"
-        icon={<HardDriveIcon className="size-4 text-muted-foreground" />}
-        headerAction={
-          <div className="flex items-center gap-2">
-            <HistoryWindowSelector selectedWindowMs={windowMs} onSelect={setWindowMs} />
-            <Button
-              size="icon-micro"
-              variant="ghost"
-              disabled={history.isPending}
-              onClick={history.refresh}
-              aria-label="Refresh resource history"
-            >
-              <RefreshIcon size="xs" refreshing={history.isPending} />
-            </Button>
-          </div>
-        }
-      >
-        <div className="overflow-hidden rounded-[inherit]">
-          {history.error ? (
-            <div className="flex items-start gap-2 border-b border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive sm:px-5">
-              <AlertTriangleIcon className="size-3.5 h-lh shrink-0" />
-              <span>{history.error}</span>
+      <details>
+        <summary className="cursor-pointer text-sm font-medium">
+          Resource history and process details
+        </summary>
+        <SettingsSection
+          title="Resource timeline"
+          icon={<HardDriveIcon className="size-4 text-muted-foreground" />}
+          headerAction={
+            <div className="flex items-center gap-2">
+              <HistoryWindowSelector selectedWindowMs={windowMs} onSelect={setWindowMs} />
+              <Button
+                size="icon-micro"
+                variant="ghost"
+                disabled={history.isPending}
+                onClick={history.refresh}
+                aria-label="Refresh resource history"
+              >
+                <RefreshIcon size="xs" refreshing={history.isPending} />
+              </Button>
             </div>
-          ) : null}
-          <ResourceHistoryChart buckets={history.data?.buckets ?? []} />
-          <HistoryProcessTable processes={history.data?.topProcesses ?? []} />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        title="Live process tree"
-        icon={<CpuIcon className="size-4 text-muted-foreground" />}
-        headerAction={
-          snapshot ? (
-            <span className="text-3xs text-muted-foreground/55">
-              Identity: <span className="font-mono">PID + start time</span>
-            </span>
-          ) : null
-        }
-      >
-        <div className="overflow-hidden rounded-[inherit]">
-          <ProcessTable
-            processes={snapshot?.processes ?? []}
-            canMaintainEnvironment={canMaintainEnvironment}
-            signalingKeys={signalingKeys}
-            onSignal={signalProcess}
-          />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        title="Instrumented application I/O"
-        icon={<DatabaseIcon className="size-4 text-muted-foreground" />}
-        headerAction={
-          <span className="text-3xs text-muted-foreground/55">Logical bytes by operation</span>
-        }
-      >
-        <div className="overflow-hidden rounded-[inherit]">
-          <div className="bg-muted/15 px-4 py-3 text-2xs leading-relaxed text-muted-foreground sm:px-5">
-            Native counters identify which process is reading or writing. These application-level
-            counters identify known T3 operations so process spikes can be correlated with specific
-            persistence and logging paths.
+          }
+        >
+          <div className="overflow-hidden rounded-[inherit]">
+            {history.error ? (
+              <div className="flex items-start gap-2 border-b border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive sm:px-5">
+                <AlertTriangleIcon className="size-3.5 h-lh shrink-0" />
+                <span>{history.error}</span>
+              </div>
+            ) : null}
+            <ResourceHistoryChart buckets={history.data?.buckets ?? []} />
+            <HistoryProcessTable processes={history.data?.topProcesses ?? []} />
           </div>
-          <AttributionTable entries={snapshot?.attribution.entries ?? []} />
-        </div>
-      </SettingsSection>
+        </SettingsSection>
+
+        <SettingsSection
+          title="Live process tree"
+          icon={<CpuIcon className="size-4 text-muted-foreground" />}
+          headerAction={
+            snapshot ? (
+              <span className="text-3xs text-muted-foreground/55">
+                Identity: <span className="font-mono">PID + start time</span>
+              </span>
+            ) : null
+          }
+        >
+          <div className="overflow-hidden rounded-[inherit]">
+            <ProcessTable
+              processes={snapshot?.processes ?? []}
+              canMaintainEnvironment={canMaintainEnvironment}
+              signalingKeys={signalingKeys}
+              onSignal={signalProcess}
+            />
+          </div>
+        </SettingsSection>
+
+        <SettingsSection
+          title="Instrumented application I/O"
+          icon={<DatabaseIcon className="size-4 text-muted-foreground" />}
+          headerAction={
+            <span className="text-3xs text-muted-foreground/55">Logical bytes by operation</span>
+          }
+        >
+          <div className="overflow-hidden rounded-[inherit]">
+            <div className="bg-muted/15 px-4 py-3 text-2xs leading-relaxed text-muted-foreground sm:px-5">
+              Native counters identify which process is reading or writing. These application-level
+              counters identify known T3 operations so process spikes can be correlated with
+              specific persistence and logging paths.
+            </div>
+            <AttributionTable entries={snapshot?.attribution.entries ?? []} />
+          </div>
+        </SettingsSection>
+      </details>
     </>
   );
 }

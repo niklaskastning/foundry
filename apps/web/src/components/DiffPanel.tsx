@@ -1121,7 +1121,7 @@ export default function DiffPanel({
               render={
                 <Button
                   type="button"
-                  size="icon-sm"
+                  size="sm"
                   variant="ghost"
                   aria-label={allDiffFilesCollapsed ? "Expand all files" : "Collapse all files"}
                   onClick={toggleDiffFileCollapse}
@@ -1132,6 +1132,7 @@ export default function DiffPanel({
                 className="size-3.5"
                 icon={allDiffFilesCollapsed ? ChevronsUpDown : ChevronsDownUp}
               />
+              <span>{allDiffFilesCollapsed ? "Expand all" : "Collapse all"}</span>
             </TooltipTrigger>
             <TooltipPopup side="top">
               {allDiffFilesCollapsed ? "Expand all files" : "Collapse all files"}

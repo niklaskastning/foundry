@@ -1,3 +1,4 @@
+import { isFoundryBuild } from "@t3tools/shared/foundryBuild";
 import { useAutomationAvailable } from "../../foundry/FactoryNavigation";
 import { ArrowLeftIcon, ArrowRightIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -164,7 +165,8 @@ function HistoryNavigationButton({
 }
 
 function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
-  const foundry = useAutomationAvailable();
+  const automationAvailable = useAutomationAvailable();
+  const foundry = automationAvailable || isFoundryBuild();
   return (
     <Link
       aria-label={foundry ? "Foundry home" : "T3 Code home"}

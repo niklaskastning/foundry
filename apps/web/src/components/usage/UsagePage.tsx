@@ -505,7 +505,7 @@ export function UsagePage() {
   );
 
   return (
-    <AppRouteModal label="Usage">
+    <AppRouteModal label="Usage" compact={showingLimits}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="@container/usage-header flex min-h-12 shrink-0 items-center gap-1 border-b ps-5 pe-2">
           {topbarContent}
@@ -513,7 +513,7 @@ export function UsagePage() {
         </header>
 
         <ScrollArea className="min-h-0 flex-1">
-          <WorkspacePageContainer width="wide">
+          <WorkspacePageContainer width={showingLimits ? "readable" : "wide"}>
             {selectedEnvironments.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 {environments.length === 0
@@ -708,7 +708,7 @@ function UsageOverview({
                 <span className={figureClass(loadingPartial)}>
                   {formatCount(merged.sessions)} sessions
                 </span>
-                {metric === "cost" && " · API estimate"}
+                {metric === "cost" && " · Estimated API equivalent, not a bill"}
               </span>
               {metric === "cost" && merged.costQuality.unpricedShare > 0 && (
                 <Popover>

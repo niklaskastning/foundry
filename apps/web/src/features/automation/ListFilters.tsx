@@ -16,6 +16,7 @@ export function ListFilters<State extends string>({
   onFactoryChange,
   state,
   states,
+  stateLabels,
   onStateChange,
 }: {
   environmentId: EnvironmentId;
@@ -23,15 +24,16 @@ export function ListFilters<State extends string>({
   onFactoryChange?: (value: string) => void;
   state: State;
   states: readonly State[];
+  stateLabels?: Partial<Record<State, string>>;
   onStateChange: (value: State) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-end gap-4 rounded-lg border bg-muted/20 p-3">
+    <div className="flex flex-wrap items-end gap-3">
       {onFactoryChange ? (
         <FactoryFilter environmentId={environmentId} value={factoryId} onChange={onFactoryChange} />
       ) : null}
       <div className="space-y-1">
-        <p className="text-xs text-muted-foreground">State</p>
+        <p className="text-xs text-muted-foreground">Status</p>
         <Select
           value={state}
           onValueChange={(value) => {
@@ -39,12 +41,12 @@ export function ListFilters<State extends string>({
           }}
         >
           <SelectTrigger aria-label="Filter by state">
-            <SelectValue>{state.replaceAll("_", " ")}</SelectValue>
+            <SelectValue>{stateLabels?.[state] ?? state.replaceAll("_", " ")}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             {states.map((value) => (
               <SelectItem key={value} value={value}>
-                {value.replaceAll("_", " ")}
+                {stateLabels?.[value] ?? value.replaceAll("_", " ")}
               </SelectItem>
             ))}
           </SelectContent>

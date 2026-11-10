@@ -1480,7 +1480,7 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
       ) : null}
       <SettingsSection
         {...searchableSetting("remote-environments")}
-        title="Environments"
+        title="Independent T3 environments"
         headerAction={
           <div className="flex items-center gap-1">
             {savedServerUpdateTargets.length > 0 ? (
@@ -1497,6 +1497,10 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
           </div>
         }
       >
+        <p className="px-4 py-3 text-xs text-muted-foreground">
+          Advanced: pair a separately running T3 server using its pairing link. Foundry sign-in and
+          worker registration do not grant access to that server.
+        </p>
         {listedEnvironments.map((environment) => (
           <SavedBackendListRow
             key={environment.environmentId}

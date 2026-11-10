@@ -206,8 +206,12 @@ const make = Effect.gen(function* () {
       if (!present && !missingArtifacts.some((item) => item.artifactId === reference.artifactId))
         missingArtifacts.push(reference);
     }
+    const titles = yield* sql<{
+      title: string;
+    }>`SELECT event->'event'->'payload'->>'title' AS title FROM foundry_instance.archive_events WHERE instance_id=${principal.instanceId} AND environment_id=${owner.environmentId} AND thread_id=${owner.threadId} AND sequence <= ${row?.confirmed_cursor ?? 0} AND event->'event'->>'type' IN ('thread.created','thread.metadata-updated') AND jsonb_typeof(event->'event'->'payload'->'title')='string' ORDER BY sequence DESC LIMIT 1`;
     return {
       owner,
+      ...(titles[0] ? { title: titles[0].title } : {}),
       confirmedCursor: row?.confirmed_cursor ?? 0,
       confirmedSourceSequence: row?.confirmed_source_sequence ?? 0,
       sourceHead: row?.source_head ?? 0,

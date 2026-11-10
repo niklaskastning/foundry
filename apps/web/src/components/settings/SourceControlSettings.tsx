@@ -157,7 +157,15 @@ function itemSummary({
   }
 
   if (item.status !== "available") {
-    return <span>Not available on this server: {item.installHint}</span>;
+    return (
+      <div>
+        Not available on this server
+        <details>
+          <summary className="cursor-pointer">Installation help</summary>
+          {item.installHint}
+        </details>
+      </div>
+    );
   }
 
   if (auth) {
@@ -178,7 +186,15 @@ function itemSummary({
     }
 
     if (!item.executable && auth.status === "unauthenticated") {
-      return <span>Available. {item.installHint}</span>;
+      return (
+        <div>
+          Available
+          <details>
+            <summary className="cursor-pointer">Connection help</summary>
+            {item.installHint}
+          </details>
+        </div>
+      );
     }
 
     if (auth.status === "unauthenticated" && auth.accounts?.some((entry) => entry.authenticated)) {
@@ -254,9 +270,9 @@ function DiscoveryItemRow({
                 </Badge>
               ) : null}
             </div>
-            <p className="flex min-w-0 flex-wrap items-center gap-x-1 text-xs leading-normal text-muted-foreground/80">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-1 text-xs leading-normal text-muted-foreground/80">
               {itemSummary({ item, auth, authAccount })}
-            </p>
+            </div>
           </div>
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
             {hasDetails ? (

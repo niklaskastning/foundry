@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { ExternalLinkIcon } from "lucide-react";
 
@@ -27,6 +28,13 @@ export function PullRequestsUnavailableState({
         <EmptyTitle>{title}</EmptyTitle>
         <EmptyDescription>{error}</EmptyDescription>
       </EmptyHeader>
+      <Button
+        size="sm"
+        variant="outline"
+        render={<Link to="/settings/source-control" search={(previous) => previous} />}
+      >
+        Source control connections
+      </Button>
       {onRetry || host ? (
         <div className="flex flex-wrap justify-center gap-2">
           {onRetry ? (

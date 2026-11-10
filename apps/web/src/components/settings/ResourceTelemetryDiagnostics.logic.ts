@@ -58,3 +58,10 @@ export function resourceHistoryCpuScaleMax(
 ): number {
   return Math.max(1, ...buckets.map((bucket) => bucket.avgCpuPercent));
 }
+
+export function resourceTelemetryAggregate<T>(
+  status: ResourceTelemetrySourceStatus | undefined,
+  aggregate: T | undefined,
+): T | undefined {
+  return status === "healthy" || status === "degraded" ? aggregate : undefined;
+}

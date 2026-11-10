@@ -32,7 +32,7 @@ export const automationCommands = makeAutomationCommands(
           "activateDefinitionRevision",
         ].includes(String(input.op));
       const main = yield* FoundryMain.make({
-        allowLoopback: import.meta.env.DEV,
+        ...FoundryMain.nativeHttpPolicy,
         maxResponseBytes: (definitionTransfer ? 64 : 3) * 1024 * 1024,
       });
       const connection = yield* main.prepare(binding);

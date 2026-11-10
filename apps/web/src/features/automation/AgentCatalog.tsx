@@ -66,8 +66,21 @@ export function AgentCatalog({ active }: { active: FactoryDefinitionVersion | nu
                         (step) => step.kind === "agent" && "role" in step && step.role === role.id,
                       ),
                     )
-                    .map((workflow) => workflow.id)
-                    .join(", ") || "Not used by a workflow yet"}
+                    .map((workflow) => (
+                      <details key={workflow.id} className="py-1">
+                        <summary className="cursor-pointer underline underline-offset-4">
+                          {workflow.id} · view effective steps
+                        </summary>
+                        <WorkflowConfiguration active={active} workflowId={workflow.id} />
+                      </details>
+                    ))}
+                  {!definition.workflows.some((workflow) =>
+                    workflow.steps.some(
+                      (step) => step.kind === "agent" && "role" in step && step.role === role.id,
+                    ),
+                  )
+                    ? "Not used by a workflow yet"
+                    : null}
                 </dd>
               </div>
             </dl>
@@ -171,7 +184,22 @@ export function WorkflowCatalog({ active }: { active: FactoryDefinitionVersion |
                 {workflow.id}{" "}
                 <span className="text-xs font-normal text-muted-foreground">
                   {" "}
-                  · {workflow.steps.length} top-level steps
+                  ·{" "}
+                  {workflow.steps
+                    .map((step) =>
+                      step.kind === "approval"
+                        ? "Human decision"
+                        : step.kind === "publish"
+                          ? "Publish PR"
+                          : step.kind === "test"
+                            ? "Check"
+                            : step.kind === "agent"
+                              ? "Agent"
+                              : step.kind === "swarm"
+                                ? "Parallel branches"
+                                : "Review rounds",
+                    )
+                    .join(" → ")}
                 </span>
               </FoundryUI.Summary>
               <WorkflowConfiguration active={active} workflowId={workflow.id} />
@@ -207,7 +235,13 @@ export function WorkflowConfiguration({
         <li key={step.id} className="space-y-1 border-l-2 pl-3">
           <p className="font-medium">
             {index + 1}. {step.id} ·{" "}
-            {step.kind === "agent" ? (step.resolved?.role?.name ?? "Agent") : step.kind}
+            {step.kind === "agent"
+              ? (step.resolved?.role?.name ?? "Agent")
+              : step.kind === "approval"
+                ? "Human decision"
+                : step.kind === "test"
+                  ? "Check"
+                  : "Publish PR"}
           </p>
           {step.kind === "agent" ? (
             <>

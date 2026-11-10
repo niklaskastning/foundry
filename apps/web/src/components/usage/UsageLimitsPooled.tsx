@@ -519,7 +519,7 @@ function PoolBar({
               color={normalizeProviderAccentColor(member.account.accentColor) ?? color}
               now={now}
               index={position + 1}
-              showAccountName={pool.columns.length > 1}
+              showAccountName
             />
           ) : null,
         )}
@@ -583,8 +583,12 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
           className="size-5"
           iconClassName="size-4 text-foreground/80"
         />
-        {label}
+        {label} · Connected accounts
       </h2>
+      <p className="text-xs text-muted-foreground">
+        Bars show remaining usage; the marker shows even spending across the time window. Open an
+        account for its source and reset details.
+      </p>
       {windows.map((window) => {
         const details = pool.driver === "cursor" ? cursorUsageWindowDetails(window.id) : undefined;
         return (

@@ -993,7 +993,7 @@ function OpenCommandPaletteDialog(props: {
         kind: "action",
         value: `action:add-project:${environmentId}:new`,
         searchTerms: ["new project", "create", "empty", "repository", "git init"],
-        title: "New project",
+        title: "Create a new project",
         description: "Start a new Git repository from a name",
         icon: <FolderGit2Icon className={ITEM_ICON_CLASS} />,
         keepOpen: true,
@@ -1003,6 +1003,7 @@ function OpenCommandPaletteDialog(props: {
       });
     }
 
+    const unavailableSources: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
     const orderedSources: ReadonlyArray<AddProjectRemoteSource> = [
       "url",
       ...sortAddProjectProviderSources(readinessBySource),
@@ -1042,7 +1043,7 @@ function OpenCommandPaletteDialog(props: {
       );
 
       if (!readiness.ready) {
-        sourceItems.push({
+        unavailableSources.push({
           kind: "action",
           value: `action:add-project:${environmentId}:${source}:not-ready`,
           searchTerms: ["clone", "remote", "repository", "repo", "git", label, "setup required"],
@@ -1071,6 +1072,23 @@ function OpenCommandPaletteDialog(props: {
       });
     }
 
+    if (unavailableSources.length > 0)
+      sourceItems.push({
+        kind: "submenu",
+        value: `action:add-project:${environmentId}:more-sources`,
+        title: "Set up another source",
+        addonIcon: <FolderGit2Icon className={ADDON_ICON_CLASS} />,
+        description: "Connect additional repository services",
+        searchTerms: ["setup", "connect", "github", "gitlab", "azure", "bitbucket"],
+        icon: <FolderGit2Icon className={ITEM_ICON_CLASS} />,
+        groups: [
+          {
+            value: `unavailable:${environmentId}`,
+            label: "Services requiring setup",
+            items: unavailableSources,
+          },
+        ],
+      });
     return [{ value: `sources:${environmentId}`, label: "Sources", items: sourceItems }];
   };
 
@@ -1479,7 +1497,7 @@ function OpenCommandPaletteDialog(props: {
       kind: "action",
       value: "action:new-project",
       searchTerms: ["new project", "create project", "empty", "repository", "repo", "git init"],
-      title: "New project",
+      title: "Create a new project",
       icon: <FolderGit2Icon className={ITEM_ICON_CLASS} />,
       keepOpen: true,
       run: async () => {
@@ -1510,7 +1528,7 @@ function OpenCommandPaletteDialog(props: {
       "url",
       "environment",
     ],
-    title: "Add project",
+    title: "Add an existing project",
     icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
     keepOpen: true,
     run: async () => {

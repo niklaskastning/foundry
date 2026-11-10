@@ -1,3 +1,4 @@
+import { FoundryMain } from "@t3tools/client-runtime/connection";
 import { FoundryArtifacts } from "@t3tools/client-runtime/connection";
 import { createRuntimeCommand } from "@t3tools/client-runtime/state/runtime";
 import {
@@ -27,7 +28,7 @@ export const sandboxSetupArchiveCommand = createRuntimeCommand(appAtomRuntime, {
   ) {
     const binding = initialState().binding;
     if (!binding) return yield* new FoundryArtifactError({ code: "forbidden" });
-    const client = yield* FoundryArtifacts.make({ allowLoopback: import.meta.env.DEV });
+    const client = yield* FoundryArtifacts.make({ ...FoundryMain.nativeHttpPolicy });
     const downloaded = yield* client.download(binding, manifest);
     const index = yield* decodeIndex(new TextDecoder().decode(downloaded.bytes)).pipe(
       Effect.mapError(() => new FoundryArtifactError({ code: "changed" })),

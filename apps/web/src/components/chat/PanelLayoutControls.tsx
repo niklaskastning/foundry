@@ -59,6 +59,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
       size="sm"
     >
       <SquareMenuIcon className="size-4" />
+      <span className="hidden lg:inline">Details</span>
     </Toggle>
   );
   const threadPanelControl = (
@@ -96,6 +97,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
               disabled={!terminalAvailable}
             >
               <PanelBottomIcon className="size-4" />
+              <span className="hidden lg:inline">Terminal</span>
             </Toggle>
           </TooltipTrigger>
           <TooltipPopup side="bottom">
@@ -119,6 +121,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
               disabled={!rightPanelAvailable}
             >
               <PanelRightIcon className="size-4" />
+              <span className="hidden lg:inline">Workspace</span>
             </Toggle>
           </TooltipTrigger>
           <TooltipPopup side="bottom">
@@ -139,7 +142,7 @@ export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl
   maximized: boolean;
   onToggle: () => void;
 }) {
-  const label = maximized ? "Restore panel size" : "Maximize panel";
+  const label = maximized ? "Back to chat" : "Maximize panel";
   return (
     <Tooltip>
       <TooltipTrigger
@@ -153,6 +156,7 @@ export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl
             size="sm"
           >
             <MorphIcon className="size-4" icon={maximized ? Minimize2 : Maximize2} />
+            {maximized ? <span className="sm:hidden">Back to chat</span> : null}
           </Toggle>
         }
       />

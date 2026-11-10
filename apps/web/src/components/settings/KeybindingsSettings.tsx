@@ -869,7 +869,7 @@ function WhenClauseControl({
         }
         aria-label={`Edit when clause for ${label}`}
       >
-        <span className="truncate font-mono">{expression || "Always"}</span>
+        <span className="truncate">{expression ? "Conditional · advanced" : "Always"}</span>
         <ChevronDownIcon className="size-3.5 shrink-0 opacity-60" />
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={6}>
@@ -1204,10 +1204,12 @@ function NewKeybindingSettingsRow(props: NewKeybindingProps) {
       className="bg-muted/15"
       title="New keybinding"
       description={
-        <span className="flex h-6 items-center gap-1.5">
-          <span className="text-xs leading-none text-muted-foreground/70">When</span>
+        <details>
+          <summary className="cursor-pointer text-xs">
+            Optional: limit when this shortcut applies
+          </summary>
           <NewKeybindingWhen draft={draft} variables={variables} />
-        </span>
+        </details>
       }
       control={
         <div className="flex flex-wrap items-center gap-2">

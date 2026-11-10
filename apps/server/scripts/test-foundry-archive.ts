@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  EventId,
   FoundryArchiveEvent,
   FoundryArchiveError,
   FoundryInstanceId,
@@ -204,7 +205,7 @@ try {
     "archive_migrator",
   );
   await query(
-    "DROP TABLE foundry_instance.archive_artifacts,foundry_instance.archive_events,foundry_instance.archive_threads",
+    "DROP TABLE foundry_instance.archive_artifacts,foundry_instance.archive_events,foundry_instance.archive_threads,foundry_instance.machine_credentials,foundry_instance.sandbox_allocations,foundry_instance.sandbox_profiles,foundry_instance.provider_connections,foundry_instance.native_operator",
     "archive_migrator",
   );
   await query("UPDATE foundry_instance.schema_version SET version=6", "archive_migrator");
@@ -215,10 +216,14 @@ try {
   );
   NodeAssert.equal(
     (await query("SELECT version FROM foundry_instance.schema_version"))[0]?.version,
-    7,
+    11,
   );
   const gap = await call((s) => s.ingest(machine, input([created, message(3, 30)])));
   NodeAssert.equal(gap.confirmedCursor, 1);
+  NodeAssert.equal(
+    (await call((s) => s.list(principal, {}))).items[0]?.title,
+    "Manual archive fixture",
+  );
   NodeAssert.equal(gap.sourceHead, 3);
   NodeAssert.equal(gap.complete, false);
   // The first response is deliberately discarded; duplicate delivery must recover its committed cursor.
@@ -352,6 +357,57 @@ try {
   );
   NodeAssert.equal(historical.confirmedCursor, 1);
   NodeAssert.equal(historical.complete, false);
+  const renamed: FoundryArchiveEvent = {
+    ...oldCreated,
+    sequence: 3,
+    sourceSequence: 30,
+    event: {
+      ...oldCreated.event,
+      id: EventId.make("event:renamed"),
+      type: "thread.metadata-updated",
+      payload: { ...oldCreated.event.payload, title: "Renamed archived work" },
+    },
+  };
+  await call((s) =>
+    s.ingest(machine, {
+      instanceId,
+      owner: oldOwner,
+      sourceHead: 3,
+      sourceComplete: false,
+      events: [renamed],
+    }),
+  );
+  NodeAssert.equal(
+    (await call((s) => s.cursor(machine, oldOwner))).title,
+    "Manual archive fixture",
+  );
+  const middle: FoundryArchiveEvent = {
+    ...oldCreated,
+    sequence: 2,
+    sourceSequence: 20,
+    event: {
+      ...oldCreated.event,
+      id: EventId.make("event:middle"),
+      type: "thread.metadata-updated",
+      payload: { ...oldCreated.event.payload, title: "Intermediate title" },
+    },
+  };
+  await call((s) =>
+    s.ingest(machine, {
+      instanceId,
+      owner: oldOwner,
+      sourceHead: 3,
+      sourceComplete: false,
+      events: [middle, renamed],
+    }),
+  );
+  NodeAssert.equal(
+    (await call((s) => s.list(principal, {}))).items.find(
+      (item) => item.owner.threadId === oldOwner.threadId,
+    )?.title,
+    "Renamed archived work",
+  );
+
   const largeOwner = { ...owner, threadId: ThreadId.make("archive-page-bytes") };
   const largeCreated = {
     ...created,

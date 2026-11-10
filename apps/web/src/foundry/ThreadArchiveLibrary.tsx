@@ -1,5 +1,5 @@
 import { FoundryUI } from "./FoundryUI";
-import { useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { LegendListRef } from "@legendapp/list/react";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { FoundryArchive } from "@t3tools/client-runtime/connection";
@@ -34,7 +34,7 @@ export function ThreadArchiveLibrary({
   const [next, setNext] = useState<string | null>(null);
   const [selected, setSelected] = useState<FoundryArchiveOwner | null>(null);
   const [pageAfter, setPageAfter] = useState<number | null>(null);
-  const [cursor, setCursor] = useState(0);
+
   const [status, setStatus] = useState<FoundryArchiveStatus | null>(null);
   const [projection, setProjection] = useState<OrchestrationV2ThreadProjection | null>(null);
   const [file, setFile] = useState<ChatFileAttachment | null>(null);
@@ -59,25 +59,54 @@ export function ThreadArchiveLibrary({
       setSelected(owner);
       setFile(null);
     }
-    const result = await read({ owner, after });
-    if (AsyncResult.isSuccess(result)) {
-      try {
+    let currentProjection = after === 0 ? null : projection;
+    let currentCursor = after;
+    let pages = 0;
+    try {
+      while (pages < 4) {
+        const result = await read({ owner, after: currentCursor });
+        if (!AsyncResult.isSuccess(result)) {
+          setMessage("This archive could not be read. Verify your current access and try again.");
+          break;
+        }
         const applied = FoundryArchive.applyArchivePage(
-          after === 0 ? null : projection,
-          after,
+          currentProjection,
+          currentCursor,
           result.value.events,
         );
-        setProjection(applied.projection);
-        setCursor(applied.cursor);
+        currentProjection = applied.projection;
+        currentCursor = applied.cursor;
+        setProjection(currentProjection);
         setStatus(result.value);
         setPageAfter(result.value.nextCursor);
         setMessage("");
-      } catch {
-        setMessage("The archive contains a sequence gap; this history is incomplete.");
+        pages += 1;
+        if (result.value.nextCursor === null) break;
+        if (result.value.nextCursor <= after || result.value.events.length === 0) {
+          setMessage("The archive cursor did not advance; this history is incomplete.");
+          break;
+        }
       }
-    } else setMessage("This archive could not be read. Verify your current access and try again.");
+    } catch {
+      setMessage("The archive contains a sequence gap; this history is incomplete.");
+    }
     setBusy(false);
   }
+  const initialEnvironmentId = initialOwner?.environmentId;
+  const initialThreadId = initialOwner?.threadId;
+  const openInitial = useEffectEvent(
+    (
+      environmentId: FoundryArchiveOwner["environmentId"] | undefined,
+      threadId: FoundryArchiveOwner["threadId"] | undefined,
+    ) => {
+      if (environmentId && threadId) void open({ environmentId, threadId });
+    },
+  );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Synchronize the linked archive with the external authenticated archive service.
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- The archive request exposes its loading state.
+    openInitial(initialEnvironmentId, initialThreadId);
+  }, [initialEnvironmentId, initialThreadId]);
   return (
     <FoundryUI.Panel aria-label="Foundry thread archives">
       <div className="flex items-center justify-between gap-3">
@@ -90,7 +119,12 @@ export function ThreadArchiveLibrary({
         Confirmed history stays available from Main when its device is offline or removed.
         Continuing work requires an available writer and workspace.
       </p>
-      {initialOwner ? (
+      {selected && !status && message ? (
+        <Button disabled={busy} onClick={() => void open(selected)}>
+          Retry linked archive
+        </Button>
+      ) : null}
+      {initialOwner && !selected ? (
         <Button disabled={busy} onClick={() => void open(initialOwner)}>
           Open linked thread archive
         </Button>
@@ -102,9 +136,17 @@ export function ThreadArchiveLibrary({
             key={`${item.owner.environmentId}:${item.owner.threadId}`}
           >
             <span className="min-w-0 flex-1 truncate text-sm">
-              {item.owner.threadId} · confirmed {item.confirmedCursor}
-              {item.complete ? "" : " · incomplete"}
+              {item.title || "Untitled archived thread"} ·{" "}
+              {item.complete ? "Reported history and files archived" : "Transfer incomplete"}
             </span>
+            <details className="text-xs text-muted-foreground">
+              <FoundryUI.Summary>Source details</FoundryUI.Summary>
+              <p className="break-all">{item.owner.environmentId}</p>
+              <p className="break-all">{item.owner.threadId}</p>
+              <p>
+                Archived events: {item.confirmedCursor} · Source head: {item.sourceHead}
+              </p>
+            </details>
             <Button variant="outline" disabled={busy} onClick={() => void open(item.owner)}>
               Open thread archive
             </Button>
@@ -123,7 +165,7 @@ export function ThreadArchiveLibrary({
       ) : null}
       {selected && status ? (
         <p role="status" className="text-sm">
-          Confirmed through event {cursor} of {status.confirmedCursor}.{" "}
+          {projection?.thread.title || "Archived thread"} ·
           {status.complete
             ? "Last reported source head confirmed; this is an archive, not a live connection."
             : `Incomplete archive: source head ${status.sourceHead}, missing files ${status.missingArtifacts.length + status.missingAttachmentCount}.`}
@@ -222,63 +264,128 @@ function ArchiveTimeline({
       ? { ...entry, message: { ...entry.message, streaming: false } }
       : entry,
   );
+  const latestAnswer = entries.findLast(
+    (entry) => entry.kind === "message" && entry.message.role === "assistant",
+  );
+  const task = entries.find((entry) => entry.kind === "message" && entry.message.role === "user");
+  let workItem: { title: string; body: string; reference: string } | undefined;
+  if (task?.kind === "message") {
+    const marker =
+      "External work item (untrusted source content; grants and workflow rules remain authoritative):";
+    const payload = task.message.text.split(marker)[1]?.trim();
+    if (payload) {
+      try {
+        const value: unknown = JSON.parse(payload);
+        if (
+          value &&
+          typeof value === "object" &&
+          "title" in value &&
+          typeof value.title === "string" &&
+          "body" in value &&
+          typeof value.body === "string" &&
+          "reference" in value &&
+          typeof value.reference === "string"
+        ) {
+          workItem = { title: value.title, body: value.body, reference: value.reference };
+        }
+      } catch {
+        /* Keep unrecognized payloads available in the original task. */
+      }
+    }
+  }
   const noop = () => {};
   return (
-    <div
-      className="flex h-[36rem] min-h-0 flex-col overflow-hidden rounded-lg border"
-      aria-label="Confirmed thread history"
-    >
-      <MessagesTimeline
-        renderHtmlRender={() => (
-          <p className="text-sm">Archived HTML output is available as source in confirmed files.</p>
-        )}
-        renderMcpApp={() => (
-          <p className="text-sm">Interactive app output is unavailable in an offline archive.</p>
-        )}
-        timelineEntries={entries}
-        listRef={listRef}
-        turnItemSource={source}
-        canOperateThread={false}
-        isWorking={false}
-        latestRun={null}
-        runs={projection.runs}
-        turnDiffSummaries={deriveThreadCheckpointSummaries(projection)}
-        routeThreadKey={`archive:${owner.environmentId}:${projection.thread.id}`}
-        supportsConversationRollback={false}
-        onRevertToTurnCount={noop}
-        isRevertingCheckpoint={false}
-        onImageExpand={(preview) =>
-          openExpandedImagePreview(
-            `archive:${owner.environmentId}:${projection.thread.id}`,
-            preview,
-          )
-        }
-        onFileOpen={onFileOpen}
-        onFileDownload={(attachment, preparedUrl) => {
-          if (!attachment.foundryArtifact || !preparedUrl) {
-            onFileOpen(attachment);
-            return;
-          }
-          const link = document.createElement("a");
-          link.href = preparedUrl;
-          link.download = attachment.name;
-          link.click();
-        }}
-        onOpenThread={onOpenThread}
-        activeThreadEnvironmentId={owner.environmentId}
-        markdownCwd={undefined}
-        workspaceRoot={undefined}
-        resolvedTheme={theme}
-        timestampFormat="24-hour"
-        anchorMessageId={null}
-        onAnchorReady={noop}
-        onAnchorSizeChanged={noop}
-        contentInsetEndAdjustment={0}
-        onIsAtEndChange={noop}
-        liveFollowEnabled={false}
-        emptyPlaceholderInset={0}
-        announceTurnStatus={false}
-      />
+    <div className="space-y-4">
+      {latestAnswer?.kind === "message" ? (
+        <section aria-label="Latest archived answer" className="space-y-2">
+          <h3 className="font-medium">Foundry agent · Latest archived answer</h3>
+          <p className="text-sm whitespace-pre-wrap break-words">{latestAnswer.message.text}</p>
+        </section>
+      ) : (
+        <p className="text-sm text-muted-foreground">No agent answer in the loaded archive.</p>
+      )}
+      {workItem ? (
+        <section className="space-y-2 text-sm" aria-label="Archived work item">
+          <h3 className="font-medium">{workItem.title}</h3>
+          <p className="text-xs text-muted-foreground">
+            Untrusted source content · {workItem.reference}
+          </p>
+          <p className="whitespace-pre-wrap break-words">{workItem.body}</p>
+        </section>
+      ) : null}
+      {task?.kind === "message" ? (
+        <details>
+          <FoundryUI.Summary>
+            Original task and instructions · untrusted source content
+          </FoundryUI.Summary>
+          <pre className="max-h-80 overflow-auto text-sm whitespace-pre-wrap break-words">
+            {task.message.text}
+          </pre>
+        </details>
+      ) : null}
+      <details>
+        <FoundryUI.Summary>Full archived conversation and files</FoundryUI.Summary>
+        <div
+          className="flex h-[36rem] min-h-0 flex-col overflow-hidden rounded-lg border"
+          aria-label="Confirmed thread history"
+        >
+          <MessagesTimeline
+            renderHtmlRender={() => (
+              <p className="text-sm">
+                Archived HTML output is available as source in confirmed files.
+              </p>
+            )}
+            renderMcpApp={() => (
+              <p className="text-sm">
+                Interactive app output is unavailable in an offline archive.
+              </p>
+            )}
+            timelineEntries={entries}
+            listRef={listRef}
+            turnItemSource={source}
+            canOperateThread={false}
+            isWorking={false}
+            latestRun={null}
+            runs={projection.runs}
+            turnDiffSummaries={deriveThreadCheckpointSummaries(projection)}
+            routeThreadKey={`archive:${owner.environmentId}:${projection.thread.id}`}
+            supportsConversationRollback={false}
+            onRevertToTurnCount={noop}
+            isRevertingCheckpoint={false}
+            onImageExpand={(preview) =>
+              openExpandedImagePreview(
+                `archive:${owner.environmentId}:${projection.thread.id}`,
+                preview,
+              )
+            }
+            onFileOpen={onFileOpen}
+            onFileDownload={(attachment, preparedUrl) => {
+              if (!attachment.foundryArtifact || !preparedUrl) {
+                onFileOpen(attachment);
+                return;
+              }
+              const link = document.createElement("a");
+              link.href = preparedUrl;
+              link.download = attachment.name;
+              link.click();
+            }}
+            onOpenThread={onOpenThread}
+            activeThreadEnvironmentId={owner.environmentId}
+            markdownCwd={undefined}
+            workspaceRoot={undefined}
+            resolvedTheme={theme}
+            timestampFormat="24-hour"
+            anchorMessageId={null}
+            onAnchorReady={noop}
+            onAnchorSizeChanged={noop}
+            contentInsetEndAdjustment={0}
+            onIsAtEndChange={noop}
+            liveFollowEnabled={false}
+            emptyPlaceholderInset={0}
+            announceTurnStatus={false}
+          />
+        </div>
+      </details>
       <ExpandedImageDialogHost
         threadKey={`archive:${owner.environmentId}:${projection.thread.id}`}
       />

@@ -70,6 +70,7 @@ export function RunDetail({
   const topology = detail ? runTopology(detail.workflow) : null;
   const execution = detail?.workflow.execution;
   const state = detail?.control?.state ?? detail?.run.state;
+  const latestReport = detail?.latestResultCommandId;
   const terminal = state === "succeeded" || state === "cancelled";
   const available = {
     pause: !terminal && state !== "paused" && state !== "failed" && state !== "cancel_requested",
@@ -136,7 +137,7 @@ export function RunDetail({
             attempts.refresh();
           }}
         >
-          Refresh progress
+          Refresh run and execution history
         </Button>
       </div>
       <div className="space-y-2 border-b pb-5">
@@ -200,8 +201,8 @@ export function RunDetail({
                   ? "A failed branch is queued for a bounded repair attempt. The join waits for successful branch results."
                   : detail.control?.reason === "repair_exhausted"
                     ? "Automatic repair rounds are exhausted. Inspect failed attempts before deciding how to continue."
-                    : detail.control?.reason
-                      ? runReasonLabel(detail.control.reason)
+                    : (detail.control?.reason ?? detail.runtimeState?.reason)
+                      ? runReasonLabel(detail.control?.reason ?? detail.runtimeState?.reason ?? "")
                       : undefined) ??
                   (state === "succeeded"
                     ? "Execution completed. Review the step results below."
@@ -210,13 +211,13 @@ export function RunDetail({
                         ? "Execution failed. Inspect the result and exhausted budgets. A new run requires an explicit start."
                         : "Execution failed. Inspect the failed attempt before retrying."
                       : state === "paused"
-                        ? "Execution is paused. Resume when ready, or take over in T3."
+                        ? "Run control has paused scheduling. Resume allows the scheduler to continue pending work; completed steps alone do not confirm run completion. Review the workflow and decisions before resuming."
                         : state === "waiting"
                           ? "Execution is waiting. Review the current decisions and blockers."
                           : state === "cancel_requested"
                             ? "Stop requested. Waiting for writer shutdown confirmation."
                             : state === "cancelled"
-                              ? "Execution was cancelled. The work item remains separate."
+                              ? "Execution was cancelled. Review completed results below; cancellation does not close the work item or imply that every step failed."
                               : "Follow step progress below. Results appear after execution is confirmed.")}
               </p>
             </div>
@@ -278,7 +279,7 @@ export function RunDetail({
           ) : null}
           {detail.control?.state === "waiting" || detail.control?.reason ? (
             <Link className="text-sm underline" to="/foundry" search={{ view: "inbox", factoryId }}>
-              Review questions, decisions and blockers in Inbox
+              Review questions, decisions and blockers
             </Link>
           ) : null}
         </>
@@ -287,6 +288,43 @@ export function RunDetail({
         <p role="status" className="text-sm">
           {message}
         </p>
+      ) : null}
+      {detail?.decisions?.length ? (
+        <section className="space-y-2" aria-label="Recorded decisions">
+          <h3 className="font-semibold">Recorded decisions</h3>
+          <p className="text-xs text-muted-foreground">
+            Latest 100 recorded decisions. Approval applies to its recorded result revision.
+          </p>
+          <ul>
+            {detail.decisions.map((decision) => (
+              <li key={decision.revision} className="text-sm">
+                {decision.stepId}: {decision.approved ? "Approved" : "Rejected"} · Decision revision{" "}
+                {decision.revision} · Result revision {decision.resultRevision}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {detail && !selected ? (
+        <section className="space-y-3" aria-label="Recorded result">
+          <h3 className="text-lg font-semibold">Recorded result</h3>
+          <p className="text-xs text-muted-foreground">
+            Last reported workflow step in this run. Execution success is separate from work item
+            acceptance.
+          </p>
+          {latestReport ? (
+            <AttemptResult
+              environmentId={environmentId}
+              factoryId={factoryId}
+              runId={runId}
+              commandId={latestReport}
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              No execution report recorded for this run. Review workflow decisions below.
+            </p>
+          )}
+        </section>
       ) : null}
       {topology && execution ? (
         <section
@@ -358,16 +396,6 @@ export function RunDetail({
           </p>
         </section>
       ) : null}
-      {detail ? (
-        <>
-          <OperationsDashboardPanel
-            environmentId={environmentId}
-            factoryId={factoryId}
-            runId={runId}
-          />
-          <EvaluationsPanel environmentId={environmentId} factoryId={factoryId} runId={runId} />
-        </>
-      ) : null}
       {detail?.runtimeWorkflow ? (
         <V4RunProgress
           state={detail.runtimeState}
@@ -393,7 +421,14 @@ export function RunDetail({
                     <span className="font-medium">
                       {index + 1}. {step.id}
                     </span>{" "}
-                    · {step.kind === "agent" ? (step.resolved?.role?.name ?? "Agent") : step.kind}
+                    ·{" "}
+                    {step.kind === "agent"
+                      ? (step.resolved?.role?.name ?? "Agent")
+                      : step.kind === "test"
+                        ? "Checks"
+                        : step.kind === "publish"
+                          ? "Publication"
+                          : "Human decision"}
                   </FoundryUI.Summary>
                   <div className="space-y-2 pt-2 text-sm">
                     {step.kind === "agent" || step.kind === "approval" ? (
@@ -410,7 +445,7 @@ export function RunDetail({
                         to="/foundry"
                         search={{ view: "inbox", factoryId, inboxKind: "approval" }}
                       >
-                        Review current decisions in Inbox
+                        Review current decisions
                       </Link>
                     ) : null}
                   </div>
@@ -421,9 +456,9 @@ export function RunDetail({
         </section>
       ) : null}
       {detail ? (
-        <details className="rounded-lg border p-4" open>
+        <details className="rounded-lg border p-4">
           <FoundryUI.Summary className="cursor-pointer font-medium">
-            Take over this run in Chats
+            Continue in chat
           </FoundryUI.Summary>
           <div className="pt-4">
             <TakeOverPanel
@@ -515,7 +550,7 @@ export function RunDetail({
                             className="underline"
                             href={`/${encodeURIComponent(attempt.environmentId)}/${encodeURIComponent(attempt.threadId)}?factoryId=${encodeURIComponent(factoryId)}&runId=${encodeURIComponent(runId)}`}
                           >
-                            Open T3 thread
+                            Open chat
                           </a>
                           <a
                             className="underline"
@@ -577,7 +612,9 @@ export function RunDetail({
                     ) : null}
                     {!attempt.hasResult ? (
                       <p className="text-xs text-muted-foreground">
-                        No execution report is attached to this step.
+                        {step?.kind === "approval" || node?.definition.kind === "approval"
+                          ? "Human decision step. Review its recorded decision in Decisions; no worker report is expected."
+                          : "No execution report is attached to this step."}
                       </p>
                     ) : null}
                   </li>
@@ -685,6 +722,17 @@ export function RunDetail({
           />
         </>
       ) : null}
+      {detail ? (
+        <details>
+          <FoundryUI.Summary>Operations and evaluations</FoundryUI.Summary>
+          <OperationsDashboardPanel
+            environmentId={environmentId}
+            factoryId={factoryId}
+            runId={runId}
+          />
+          <EvaluationsPanel environmentId={environmentId} factoryId={factoryId} runId={runId} />
+        </details>
+      ) : null}
     </section>
   );
 }
@@ -752,7 +800,7 @@ export function AttemptResult({
           <h5 className="text-sm font-medium">Artifacts</h5>
           {result.artifacts.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No artifacts are available for this attempt.
+              No separate files are attached. A result may still be recorded in the chat archive.
             </p>
           ) : null}
           <ul className="space-y-2">
@@ -782,6 +830,14 @@ export function AttemptResult({
                 onClose={() => setSelectedArtifact(null)}
               />
             </div>
+          ) : null}
+          {result.execution?.lifecycle?.manifest?.archive ? (
+            <a
+              className="text-sm underline"
+              href={`/foundry?archiveEnvironmentId=${encodeURIComponent(result.execution.lifecycle.manifest.archive.owner.environmentId)}&archiveThreadId=${encodeURIComponent(result.execution.lifecycle.manifest.archive.owner.threadId)}`}
+            >
+              Read recorded conversation and result
+            </a>
           ) : null}
           {result.execution?.lifecycle?.manifest?.workspacePath ? (
             <p className="break-all text-sm">
@@ -825,9 +881,15 @@ export function AttemptResult({
               Checkpoint, writer shutdown & archive completeness
             </FoundryUI.Summary>
             <div className="space-y-2 break-all pt-2">
-              <p className="text-sm">
-                Checkpoint: {result.execution?.run.checkpointId ?? "Unconfirmed"}
-              </p>
+              <div className="text-sm">
+                Checkpoint: {result.execution?.run.checkpointId ? "Recorded" : "Unconfirmed"}
+                {result.execution?.run.checkpointId ? (
+                  <details>
+                    <summary className="cursor-pointer">Internal checkpoint reference</summary>
+                    <code>{result.execution.run.checkpointId}</code>
+                  </details>
+                ) : null}
+              </div>
               <p className="text-sm">
                 Writer end: {result.execution?.lifecycle?.writerEnded ? "Confirmed" : "Unconfirmed"}
               </p>
@@ -848,7 +910,7 @@ export function AttemptResult({
               className="text-sm underline"
               href={`/${encodeURIComponent(result.execution.lifecycle.manifest.archive.owner.environmentId)}/${encodeURIComponent(result.execution.lifecycle.manifest.archive.owner.threadId)}?factoryId=${encodeURIComponent(factoryId)}&runId=${encodeURIComponent(runId)}`}
             >
-              Open T3 thread to review changes
+              Open chat to review changes
             </a>
           ) : null}
         </>

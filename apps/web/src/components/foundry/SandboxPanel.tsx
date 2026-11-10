@@ -17,6 +17,7 @@ import { sandboxCommands } from "../../foundry/sandboxes";
 import { deviceCommand } from "../../foundry/devices";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Badge } from "../ui/badge";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "../ui/select";
 import { SandboxAllocationDetail } from "./SandboxAllocationDetail";
@@ -42,6 +43,8 @@ function SandboxPanelContent({ environmentId, showConnection }: SandboxPanelProp
   const [profileKey, setProfileKey] = useState<string>();
   const [generation, setGeneration] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [search, setSearch] = useState("");
+  const [showHistory, setShowHistory] = useState(false);
   const [message, setMessage] = useState("");
   const pendingRequest = useRef<{ key: string; commandId: string } | null>(null);
   const command = useAtomCommand(sandboxCommands.command, { reportFailure: false });
@@ -210,32 +213,64 @@ function SandboxPanelContent({ environmentId, showConnection }: SandboxPanelProp
       {catalog?.allocations.length === 0 ? (
         <p className="text-sm">No sandbox allocations yet.</p>
       ) : null}
+      <Button
+        variant="outline"
+        onClick={() => {
+          setShowHistory(!showHistory);
+          setSelectedId(undefined);
+        }}
+      >
+        {showHistory ? "Show active sandboxes" : "Show deleted sandbox history"}
+      </Button>
+      <Input
+        aria-label="Search sandboxes"
+        placeholder="Search profile, Factory or Run"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+      />
       <div className="space-y-2">
-        {(canRead ? catalog : undefined)?.allocations.map((allocation) => (
-          <div
-            key={allocation.allocationId}
-            className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/10 p-3"
-          >
-            <Button
-              variant={selectedId === allocation.allocationId ? "secondary" : "outline"}
-              onClick={() => setSelectedId(allocation.allocationId)}
+        {(canRead ? catalog : undefined)?.allocations
+          .filter((allocation) => (allocation.state === "deleted") === showHistory)
+          .filter((allocation) =>
+            [
+              allocation.profile.label,
+              allocation.allocationId,
+              ...(allocation.request.owner.kind === "workflow"
+                ? [allocation.request.owner.factoryId, allocation.request.owner.runId]
+                : []),
+            ]
+              .join(" ")
+              .toLowerCase()
+              .includes(search.toLowerCase()),
+          )
+          .map((allocation) => (
+            <div
+              key={allocation.allocationId}
+              className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/10 p-3"
             >
-              {allocation.profile.label} · {allocation.allocationId.slice(0, 8)}
-            </Button>
-            <Badge
-              variant={
-                allocation.state === "ready"
-                  ? "success"
-                  : allocation.state === "failed"
-                    ? "error"
-                    : "secondary"
-              }
-            >
-              {allocation.state}
-            </Badge>
-            <span className="text-xs text-muted-foreground">{allocation.request.owner.kind}</span>
-          </div>
-        ))}
+              <Button
+                variant={selectedId === allocation.allocationId ? "secondary" : "outline"}
+                onClick={() => setSelectedId(allocation.allocationId)}
+              >
+                {allocation.profile.label} · {allocation.allocationId.slice(0, 8)}
+              </Button>
+              <Badge
+                variant={
+                  allocation.state === "ready"
+                    ? "success"
+                    : allocation.state === "failed"
+                      ? "error"
+                      : "secondary"
+                }
+              >
+                {allocation.state}
+              </Badge>
+              <span className="text-xs text-muted-foreground">
+                {allocation.request.owner.kind} ·{" "}
+                {new Date(allocation.createdAt).toLocaleDateString()}
+              </span>
+            </div>
+          ))}
       </div>
       {canRead && detail && detail.allocation.allocationId === selectedId ? (
         <SandboxAllocationDetail

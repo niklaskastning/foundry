@@ -9,7 +9,6 @@ import { AsyncResult } from "effect/reactivity";
 import { Button } from "../components/ui/button";
 import { useAtomCommand } from "../state/use-atom-command";
 import { instanceCommand } from "./onboarding";
-import { factoryTabs } from "./workspaceSearch";
 import { useAutomationQuery } from "../features/automation/useAutomationQuery";
 import { cn } from "../lib/utils";
 import { useSidebar } from "../components/ui/sidebar";
@@ -62,7 +61,7 @@ export function FoundrySidebar() {
             className={cn(
               "flex items-center gap-3 rounded-lg px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
               current === view
-                ? "bg-primary/10 font-semibold text-primary"
+                ? "bg-accent font-semibold text-foreground ring-1 ring-border"
                 : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
             )}
           >
@@ -145,43 +144,28 @@ function SidebarFactories({
         </p>
       ) : null}
       {query.result?.kind === "factories"
-        ? query.result.items.map((factory) => (
-            <details key={factory.id} open={search.factoryId === factory.id || undefined}>
-              <FoundryUI.Summary className="cursor-pointer truncate rounded-lg px-3 py-2 text-sm font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-                {factory.name}
-              </FoundryUI.Summary>
-              <div className="ml-4 border-l pl-2">
-                {factoryTabs.map((tab) => (
-                  <Link
-                    key={tab}
-                    to="/foundry"
-                    search={{ view: "factories", factoryId: factory.id, tab }}
-                    onClick={close}
-                    aria-current={
-                      search.factoryId === factory.id && (search.tab ?? "overview") === tab
-                        ? "page"
-                        : undefined
-                    }
-                    className="block rounded-md px-3 py-2 text-sm text-muted-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-[current=page]:bg-primary/10 aria-[current=page]:text-primary"
-                  >
-                    {tab === "agents"
-                      ? "Agents & skills"
-                      : tab === "work"
-                        ? "Work items"
-                        : tab.charAt(0).toUpperCase() + tab.slice(1)}
-                  </Link>
-                ))}
-                <Link
-                  to="/foundry"
-                  search={{ view: "inbox", factoryId: factory.id }}
-                  onClick={close}
-                  className="block rounded-md px-3 py-2 text-sm text-muted-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                >
-                  Decisions
-                </Link>
-              </div>
-            </details>
-          ))
+        ? query.result.items
+            .filter((factory) => !factory.archived || search.factoryId === factory.id)
+            .map((factory) => (
+              <Link
+                key={factory.id}
+                to="/foundry"
+                search={{ view: "factories", factoryId: factory.id }}
+                onClick={close}
+                aria-current={search.factoryId === factory.id ? "page" : undefined}
+                className={cn(
+                  "block rounded-lg border-l-2 px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                  search.factoryId === factory.id
+                    ? "border-primary bg-accent font-semibold text-foreground"
+                    : "border-transparent text-muted-foreground hover:bg-accent",
+                )}
+              >
+                <span className="block truncate">{factory.name}</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {factory.repositories?.join(", ") || "Repository scope not available"}
+                </span>
+              </Link>
+            ))
         : null}
       {query.result?.kind === "factories" && query.result.next ? (
         <Link

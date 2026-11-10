@@ -3,7 +3,10 @@ import { describe, expect, it } from "vite-plus/test";
 import type { ResourceTelemetryProcess } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { visibleResourceTelemetryProcesses } from "./ResourceTelemetryDiagnostics.logic";
+import {
+  resourceTelemetryAggregate,
+  visibleResourceTelemetryProcesses,
+} from "./ResourceTelemetryDiagnostics.logic";
 
 const process = (pid: number, ppid: number, depth: number): ResourceTelemetryProcess => ({
   identity: { pid, startTimeMs: pid * 1_000 },
@@ -45,4 +48,11 @@ describe("visibleResourceTelemetryProcesses", () => {
       processes[3],
     ]);
   });
+});
+
+it("does not present unavailable native counters as measured zero", () => {
+  const aggregate = { processCount: 0 };
+  expect(resourceTelemetryAggregate("unavailable", aggregate)).toBeUndefined();
+  expect(resourceTelemetryAggregate("stopped", aggregate)).toBeUndefined();
+  expect(resourceTelemetryAggregate("healthy", aggregate)).toBe(aggregate);
 });

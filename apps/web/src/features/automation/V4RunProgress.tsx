@@ -63,7 +63,11 @@ export function V4RunProgress({
         <>
           <div className="divide-y border-y">
             {[...groups].map(([scope, nodes]) => (
-              <section key={scope} className="min-w-0 py-3" aria-label={runScopeLabel(scope)}>
+              <section
+                key={scope}
+                className={scope ? "min-w-0 border-l-2 py-3 pl-4" : "min-w-0 py-3"}
+                aria-label={runScopeLabel(scope)}
+              >
                 <h4 className="mb-2 break-words text-xs font-medium text-muted-foreground">
                   {runScopeLabel(scope)}
                 </h4>
@@ -78,7 +82,12 @@ export function V4RunProgress({
                         <div className="min-w-0 space-y-1">
                           <div className="flex flex-wrap items-center gap-2 text-sm">
                             <span className="break-words font-medium">{node.definition.id}</span>
-                            <Badge variant={runStatusVariant(node.status)}>{node.status}</Badge>
+                            <Badge variant={runStatusVariant(node.status)}>
+                              {node.status === "succeeded" &&
+                              (node.definition.kind === "agent" || node.definition.kind === "test")
+                                ? "Execution completed"
+                                : node.status}
+                            </Badge>
                             <span className="text-xs text-muted-foreground">
                               {node.definition.kind === "loop"
                                 ? "Review / fix loop"
@@ -91,9 +100,9 @@ export function V4RunProgress({
                             <p className="text-xs text-muted-foreground">
                               Review round {node.iteration}
                               {node.until === true
-                                ? " · Stop condition met"
+                                ? " · Review stop condition met"
                                 : node.until === false
-                                  ? " · Stop condition not met"
+                                  ? " · Review stop condition not met; execution success does not imply acceptance"
                                   : ""}
                             </p>
                           ) : null}
@@ -134,7 +143,7 @@ export function V4RunProgress({
                           to="/foundry"
                           search={{ view: "inbox", factoryId, inboxKind: "approval" }}
                         >
-                          Review decision in Inbox
+                          Review decision
                         </Link>
                       ) : null}
                     </li>

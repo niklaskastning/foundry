@@ -18,7 +18,7 @@ import { Textarea } from "../../components/ui/textarea";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { automationCommands } from "./commands";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { isDefinitiveAutomationFailure } from "./failures";
+import { inboxDetailMessage, isDefinitiveAutomationFailure } from "./failures";
 import { randomUUID } from "../../lib/utils";
 
 const answerText = (value: unknown) => (typeof value === "string" ? value : "");
@@ -154,7 +154,7 @@ export function InboxDetail({
   return (
     <aside
       className="min-w-0 space-y-5 rounded-xl border bg-card p-4 shadow-xs sm:p-6"
-      aria-label="Inbox item details"
+      aria-label="Decision details"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 space-y-2">
@@ -179,11 +179,13 @@ export function InboxDetail({
           Close details
         </Button>
       </div>
-      <p className="whitespace-pre-wrap break-words text-sm">
-        {item.detail === "iterations_exhausted"
-          ? "The workflow used all available review rounds without meeting its completion condition. Inspect the last result and decide how to continue."
-          : item.detail}
-      </p>
+      <p className="whitespace-pre-wrap break-words text-sm">{inboxDetailMessage(item.detail)}</p>
+      {item.kind === "error" || item.kind === "blocker" ? (
+        <p className="text-sm text-muted-foreground">
+          Review the latest execution evidence, then open the run to inspect its current state and
+          available next actions.
+        </p>
+      ) : null}
       {item.kind === "question" ? (
         <p className="text-sm text-muted-foreground">
           {item.stepId ? `Step ${item.stepId} · ` : ""}
@@ -386,14 +388,15 @@ export function InboxDetail({
           You can review this item, but your current session cannot make run decisions.
         </p>
       ) : null}
-      {item.active && item.kind !== "answer" ? (
-        <div className="space-y-2 border-t pt-3">
+      {item.active && item.kind === "question" ? (
+        <details className="space-y-2 border-t pt-3">
+          <FoundryUI.Summary>Stop this workflow</FoundryUI.Summary>
           <p className="text-sm text-muted-foreground">
             Closing details leaves this question waiting. Cancel workflow requests a stop for the
             whole run; cancellation completes after its writers confirm they have stopped.
           </p>
           <Button
-            variant="destructive"
+            variant="outline"
             disabled={busy || !canDecide || (pendingAction !== null && pendingAction !== "cancel")}
             onClick={() => {
               if (
@@ -406,16 +409,13 @@ export function InboxDetail({
           >
             Cancel workflow
           </Button>
-        </div>
+        </details>
       ) : null}
-      <details className="border-t pt-3">
-        <FoundryUI.Summary className="cursor-pointer text-sm text-muted-foreground">
-          Personal inbox organization
-        </FoundryUI.Summary>
+      <section className="border-t pt-3" aria-label="Personal organization">
+        <h3 className="text-sm font-medium">Personal organization</h3>
         <div className="space-y-3 pt-3">
           <p className="text-sm text-muted-foreground">
-            Hiding an item only organizes your personal inbox. Pending questions and approvals
-            remain active until explicitly answered or decided.
+            These actions only organize Decisions. They do not change the run or resolve requests.
           </p>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -432,15 +432,18 @@ export function InboxDetail({
               }
               onClick={() => void changeMark(item.isDone ? "reopen" : "done")}
             >
-              {item.isDone ? "Return to my inbox" : "Hide from my inbox"}
+              {item.isDone ? "Show in Decisions" : "Hide from Decisions"}
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            {item.status ?? (item.active ? "Current request" : "Superseded")} · Run revision{" "}
+          <details className="text-xs text-muted-foreground">
+            <summary className="cursor-pointer">Technical details</summary>
+            <p>Reason: {item.detail}</p>
+            <p>Step: {item.stepId ?? "Not specified"}</p>
+            {item.status ?? (item.active ? "Active item" : "Superseded")} · Run revision{" "}
             {item.expectedRevision} · Result revision {item.resultRevision}
-          </p>
+          </details>
         </div>
-      </details>
+      </section>
       {message ? (
         <p role="status" className="text-sm">
           {message}

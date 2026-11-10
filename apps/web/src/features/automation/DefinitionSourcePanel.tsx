@@ -178,36 +178,44 @@ function FileComparison({
             : "Binary content or file mode changed. Review the pinned hashes and modes below."}
         </p>
       )}
-      <div className="grid min-w-0 gap-3 md:grid-cols-2">
-        <div className="min-w-0">
-          <h5 className="text-sm font-medium">Active · {path}</h5>
-          <pre
-            tabIndex={0}
-            aria-label="Active file contents"
-            className="max-h-96 overflow-auto rounded border p-3 text-xs"
-          >
-            {before
-              ? before.encoding === "base64"
-                ? `Binary file · SHA-256 ${before.sha256} · mode ${before.mode} · ${before.size} bytes`
-                : `${before.mode ? `Mode ${before.mode}\n` : ""}${before.content}`
-              : "File absent"}
-          </pre>
+      <details>
+        <summary className="cursor-pointer text-sm">View file contents and metadata</summary>
+        <div className="grid min-w-0 gap-3 md:grid-cols-2">
+          {before?.sha256 !== after?.sha256 ||
+          before?.content !== after?.content ||
+          before?.mode !== after?.mode ||
+          before?.encoding !== after?.encoding ? (
+            <div className="min-w-0">
+              <h5 className="text-sm font-medium">Active · {path}</h5>
+              <pre
+                tabIndex={0}
+                aria-label="Active file contents"
+                className="max-h-96 overflow-auto rounded border p-3 text-xs"
+              >
+                {before
+                  ? before.encoding === "base64"
+                    ? `Binary file · SHA-256 ${before.sha256} · mode ${before.mode} · ${before.size} bytes`
+                    : `${before.mode ? `Mode ${before.mode}\n` : ""}${before.content}`
+                  : "File absent"}
+              </pre>
+            </div>
+          ) : null}
+          <div className="min-w-0">
+            <h5 className="text-sm font-medium">Candidate · {path}</h5>
+            <pre
+              tabIndex={0}
+              aria-label="Candidate file contents"
+              className="max-h-96 overflow-auto rounded border p-3 text-xs"
+            >
+              {after
+                ? after.encoding === "base64"
+                  ? `Binary file · SHA-256 ${after.sha256} · mode ${after.mode} · ${after.size} bytes`
+                  : `${after.mode ? `Mode ${after.mode}\n` : ""}${after.content}`
+                : "File absent"}
+            </pre>
+          </div>
         </div>
-        <div className="min-w-0">
-          <h5 className="text-sm font-medium">Candidate · {path}</h5>
-          <pre
-            tabIndex={0}
-            aria-label="Candidate file contents"
-            className="max-h-96 overflow-auto rounded border p-3 text-xs"
-          >
-            {after
-              ? after.encoding === "base64"
-                ? `Binary file · SHA-256 ${after.sha256} · mode ${after.mode} · ${after.size} bytes`
-                : `${after.mode ? `Mode ${after.mode}\n` : ""}${after.content}`
-              : "File absent"}
-          </pre>
-        </div>
-      </div>
+      </details>
     </div>
   );
 }

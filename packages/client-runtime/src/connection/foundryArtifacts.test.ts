@@ -11,7 +11,7 @@ import * as Base64 from "effect/encoding/Base64";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { layerRemoteHttpClient } from "../rpc/http.ts";
-import { FoundryInstanceSession } from "./foundryMain.ts";
+import { FoundryInstanceSession, nativeHttpPolicy } from "./foundryMain.ts";
 import * as FoundryArtifacts from "./foundryArtifacts.ts";
 
 it.effect.each([
@@ -22,17 +22,21 @@ it.effect.each([
   "oversized",
   "loopback",
   "loopback-default",
+  "native-production",
   "insecure-other",
 ] as const)("reads confirmed files from Main without a worker connection (%s)", (mode) =>
   Effect.gen(function* () {
     const binding = {
       origin:
-        mode === "loopback" || mode === "loopback-default"
+        mode === "loopback" || mode === "loopback-default" || mode === "native-production"
           ? "http://localhost:17619"
           : mode === "insecure-other"
             ? "http://192.0.2.1:17619"
             : "https://main.example.test",
-      issuer: "https://team.cloudflareaccess.com",
+      issuer:
+        mode === "native-production"
+          ? "http://localhost:17619"
+          : "https://team.cloudflareaccess.com",
       instanceId: FoundryInstanceId.make("11111111-1111-4111-8111-111111111111"),
       mainEnvironmentId: EnvironmentId.make("main"),
     };
@@ -52,9 +56,13 @@ it.effect.each([
       sha256: artifactSha256(bytes),
     };
     const calls: string[] = [];
-    const client = yield* FoundryArtifacts.make({
-      allowLoopback: mode === "loopback" || mode === "insecure-other",
-    }).pipe(
+    const client = yield* FoundryArtifacts.make(
+      mode === "native-production" || mode === "insecure-other"
+        ? nativeHttpPolicy
+        : {
+            allowLoopback: mode === "loopback",
+          },
+    ).pipe(
       Effect.provide(
         Layer.merge(
           layerRemoteHttpClient((async (input, init) => {
@@ -82,7 +90,8 @@ it.effect.each([
                 instanceAuth: {
                   publicOrigin: binding.origin,
                   issuer: binding.issuer,
-                  bootstrapMethods: ["cloudflare-access-jwt"],
+                  bootstrapMethods:
+                    mode === "native-production" ? ["password"] : ["cloudflare-access-jwt"],
                   sessionMethods: ["foundry-session-cookie"],
                 },
                 auth: {
@@ -128,7 +137,7 @@ it.effect.each([
       ),
     );
     const result = yield* client.download(binding, manifest).pipe(Effect.result);
-    if (mode === "ok" || mode === "loopback") {
+    if (mode === "ok" || mode === "loopback" || mode === "native-production") {
       expect(result._tag).toBe("Success");
       if (result._tag === "Success") expect(result.success.bytes).toEqual(bytes);
       expect((yield* client.list(binding, {})).items).toEqual([manifest]);

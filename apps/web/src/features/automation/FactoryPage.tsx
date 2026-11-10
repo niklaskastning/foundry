@@ -106,6 +106,7 @@ function FactoryList({
   const [search, setSearch] = useState<string>();
   const searchValue = search ?? filter;
   const setAfter = (after?: string) => navigation.update({ after });
+  const [showArchived, setShowArchived] = useState(false);
   const [name, setName] = useState("");
   const [repository, setRepository] = useState("");
   const [pending, setPending] = useState<AutomationApplicationCommand | null>(null);
@@ -209,39 +210,71 @@ function FactoryList({
           {loading ? <p role="status">Loading factories…</p> : null}
           {result?.kind === "factories" ? (
             <>
+              <div className="flex gap-2" aria-label="Factory status">
+                <Button
+                  variant={!showArchived ? "secondary" : "ghost"}
+                  aria-pressed={!showArchived}
+                  onClick={() => setShowArchived(false)}
+                >
+                  Active on this page ({result.items.filter((factory) => !factory.archived).length})
+                </Button>
+                <Button
+                  variant={showArchived ? "secondary" : "ghost"}
+                  aria-pressed={showArchived}
+                  onClick={() => setShowArchived(true)}
+                >
+                  Archived on this page ({result.items.filter((factory) => factory.archived).length}
+                  )
+                </Button>
+              </div>
+              {result.items.length > 0 &&
+              !result.items.some((factory) => factory.archived === showArchived) ? (
+                <p className="text-sm text-muted-foreground">
+                  No {showArchived ? "archived" : "active"} factories on this page.
+                </p>
+              ) : null}
               <ul className="divide-y overflow-hidden rounded-xl border bg-card shadow-xs">
-                {result.items.map((factory) => (
-                  <li
-                    key={factory.id}
-                    className="relative flex min-w-0 flex-wrap items-center justify-between gap-4 p-5 hover:bg-accent/40"
-                  >
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <Badge variant={factory.archived ? "secondary" : "outline"}>
-                        {factory.archived ? "Archived" : "Factory"}
-                      </Badge>
-                      <FoundryUI.Heading className="break-words text-sm font-semibold">
-                        <Link
-                          to="/foundry"
-                          search={{
-                            view: "factories",
-                            factoryId: factory.id,
-                            tab: workView ? "work" : "overview",
-                          }}
-                          className="after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-ring"
-                        >
-                          {factory.name}
-                        </Link>
-                      </FoundryUI.Heading>
-                    </div>
-                    <Button
-                      variant="outline"
-                      onClick={() => onOpen(factory.id)}
-                      aria-label={`Open ${factory.name}`}
+                {result.items
+                  .filter((factory) => factory.archived === showArchived)
+                  .map((factory) => (
+                    <li
+                      key={factory.id}
+                      className="relative flex min-w-0 flex-wrap items-center justify-between gap-3 px-4 py-3 hover:bg-accent/40"
                     >
-                      {workView ? "Open work items →" : "Open workspace →"}
-                    </Button>
-                  </li>
-                ))}
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <FoundryUI.Heading className="break-words text-sm font-semibold">
+                          <Link
+                            to="/foundry"
+                            search={{
+                              view: "factories",
+                              factoryId: factory.id,
+                              tab: workView ? "work" : "overview",
+                            }}
+                            className="after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-ring"
+                          >
+                            {factory.name}
+                          </Link>
+                        </FoundryUI.Heading>
+                        <p className="break-words text-xs text-muted-foreground">
+                          {factory.repositories?.join(" · ") || "Repository context unavailable"}
+                          {factory.openWorkItems !== undefined
+                            ? ` · ${factory.openWorkItems} open work ${factory.openWorkItems === 1 ? "item" : "items"}`
+                            : ""}
+                        </p>
+                        <details className="text-xs text-muted-foreground">
+                          <summary>Factory ID</summary>
+                          {factory.id}
+                        </details>
+                      </div>
+                      <Button
+                        variant="outline"
+                        onClick={() => onOpen(factory.id)}
+                        aria-label={`Open ${factory.name}`}
+                      >
+                        {workView ? "Open work items →" : "Open workspace →"}
+                      </Button>
+                    </li>
+                  ))}
               </ul>
               {result.items.length === 0 ? (
                 <div className="rounded-xl border border-dashed p-8 text-center">
@@ -285,8 +318,9 @@ function FactoryList({
                   <Input value={name} onChange={(event) => setName(event.target.value)} />
                 </label>
                 <label className="block space-y-1">
-                  <span className="text-sm">Repository binding keys (comma separated)</span>
+                  <span className="text-sm">Repository scope (comma separated)</span>
                   <Input
+                    placeholder="owner/repository, owner/another-repository"
                     value={repository}
                     onChange={(event) => setRepository(event.target.value)}
                   />
@@ -396,11 +430,24 @@ function FactoryDetail({
     } else
       setMessage("Work item could not be saved. Unconfirmed requests retain their command ID.");
   }
+  if (!detail)
+    return (
+      <section aria-label="Factory workspace">
+        {error ? (
+          <FoundryUI.Notice>{error}</FoundryUI.Notice>
+        ) : (
+          <p role="status">Loading factory…</p>
+        )}
+        <Button variant="outline" onClick={refresh}>
+          Retry factory
+        </Button>
+      </section>
+    );
   return (
     <section className="space-y-6">
       {loading ? <p role="status">Loading factory…</p> : null}
       {error ? <FoundryUI.Notice>{error}</FoundryUI.Notice> : null}
-      <div className="space-y-4 border-b pb-6">
+      <div className="space-y-2 border-b pb-3">
         <Link
           to="/foundry"
           search={{ view: "factories" }}
@@ -410,10 +457,10 @@ function FactoryDetail({
         </Link>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 space-y-1">
-            <h1 className="break-words text-xl font-semibold tracking-tight sm:text-2xl">
+            <h1 className="line-clamp-2 text-lg font-semibold tracking-tight sm:text-2xl">
               {detail?.factory.name ?? "Factory workspace"}
             </h1>
-            <p className="break-words text-sm text-muted-foreground">
+            <p className="line-clamp-1 text-sm text-muted-foreground">
               {detail?.active?.definition.repositories.join(" · ") ??
                 "Configure a definition to begin work."}
             </p>
@@ -439,7 +486,7 @@ function FactoryDetail({
                 works.refresh();
               }}
             >
-              Refresh
+              Refresh factory & work list
             </Button>
             <Button
               disabled={!detail?.active || !allowed}
@@ -462,9 +509,51 @@ function FactoryDetail({
           Read-only session. You can inspect this factory; creating work requires operate access.
         </p>
       ) : null}
+      {!detail?.active && detail ? (
+        <section className="flex flex-wrap items-center justify-between gap-4 rounded-xl border p-5">
+          <div>
+            <FoundryUI.Heading className="font-semibold">Prepare this factory</FoundryUI.Heading>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Import or create a definition, then activate it to make workflows available.
+            </p>
+          </div>
+          <Button onClick={() => navigation.update({ tab: "definition" })}>
+            Set up definition
+          </Button>
+        </section>
+      ) : null}
+      <label className="block space-y-1 text-sm sm:hidden">
+        <span>Factory section</span>
+        <select
+          className="w-full rounded-md border bg-background p-2"
+          value={tab}
+          onChange={(event) => {
+            const value = factoryTabs.find((value) => value === event.target.value);
+            if (value)
+              navigation.update({
+                tab: value,
+                workItemId: undefined,
+                createWork: undefined,
+                after: undefined,
+              });
+            else navigation.update({ view: "inbox", factoryId });
+          }}
+        >
+          {factoryTabs.map((value) => (
+            <option key={value} value={value}>
+              {value === "work"
+                ? "Work items"
+                : value === "agents"
+                  ? "Agents & skills"
+                  : value.charAt(0).toUpperCase() + value.slice(1)}
+            </option>
+          ))}
+          <option value="decisions">Decisions</option>
+        </select>
+      </label>
       <nav
         aria-label="Selected factory"
-        className="flex gap-1 overflow-x-auto rounded-lg border bg-card p-1"
+        className="hidden gap-1 overflow-x-auto rounded-lg border bg-card p-1 sm:flex"
       >
         {factoryTabs.map((value) => (
           <Button
@@ -493,26 +582,11 @@ function FactoryDetail({
           to="/foundry"
           search={{ view: "inbox", factoryId }}
         >
-          Inbox
+          Decisions
         </Link>
       </nav>
       {tab === "overview" ? (
         <div className="space-y-6">
-          {!detail?.active && detail ? (
-            <section className="flex flex-wrap items-center justify-between gap-4 rounded-xl border p-5">
-              <div>
-                <FoundryUI.Heading className="font-semibold">
-                  Prepare this factory
-                </FoundryUI.Heading>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Import or create a definition, then activate it to make workflows available.
-                </p>
-              </div>
-              <Button onClick={() => navigation.update({ tab: "definition" })}>
-                Set up definition
-              </Button>
-            </section>
-          ) : null}
           <div className="grid items-start gap-6 xl:grid-cols-2">
             <InboxPage
               environmentId={environmentId}
@@ -558,12 +632,22 @@ function FactoryDetail({
             </section>
           </div>
           <RunList environmentId={environmentId} factoryId={factoryId} onOpen={onOpenRun} compact />
-          <OperationsDashboardPanel
-            environmentId={environmentId}
-            factoryId={factoryId}
-            onOpenRun={onOpenRun}
-          />
-          <EvaluationsPanel environmentId={environmentId} factoryId={factoryId} />
+          <details className="rounded-lg border p-4">
+            <FoundryUI.Summary>Operations · costs and activity</FoundryUI.Summary>
+            <div className="mt-4">
+              <OperationsDashboardPanel
+                environmentId={environmentId}
+                factoryId={factoryId}
+                onOpenRun={onOpenRun}
+              />
+            </div>
+          </details>
+          <details className="rounded-lg border p-4">
+            <FoundryUI.Summary>Evaluations · recorded assessments</FoundryUI.Summary>
+            <div className="mt-4">
+              <EvaluationsPanel environmentId={environmentId} factoryId={factoryId} />
+            </div>
+          </details>
         </div>
       ) : null}
       {tab === "workflows" ? <WorkflowCatalog active={detail?.active ?? null} /> : null}
@@ -665,6 +749,10 @@ function FactoryDetail({
                       onChange={(event) => setTitle(event.target.value)}
                     />
                   </label>
+                  <p className="text-xs text-muted-foreground">
+                    Include the intended result and how to verify it in this task (up to 500
+                    characters). Separate descriptions and attachments are not supported here.
+                  </p>
                   <p className="text-sm">Choose repository</p>
                   <div className="flex flex-wrap gap-2">
                     {detail?.active?.definition.repositories.map((key) => (
@@ -682,6 +770,18 @@ function FactoryDetail({
                     <p className="text-sm">Activate a definition before creating work.</p>
                   ) : null}
                 </fieldset>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy || Boolean(pending)}
+                  onClick={() => {
+                    setTitle("");
+                    setMessage("");
+                    navigation.update({ createWork: undefined });
+                  }}
+                >
+                  Cancel
+                </Button>
                 <Button disabled={busy || !allowed || !repository || !title.trim()} type="submit">
                   {pending ? "Retry create work item" : "Create work item"}
                 </Button>
@@ -781,6 +881,20 @@ function WorkItems({
               </button>
             </h3>
             <p className="break-words text-xs text-muted-foreground">{item.repository}</p>
+            {item.latestRun ? (
+              <p className="text-xs text-muted-foreground">
+                Latest run: {item.latestRun.state.replaceAll("_", " ")} ·{" "}
+                {item.latestRun.hasResult
+                  ? "Recorded evidence available"
+                  : "No execution report recorded"}{" "}
+                · Queued {new Date(item.latestRun.enrolledAt).toLocaleString()} · Execution state,
+                separate from work item acceptance
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                No recorded run in your execution scope
+              </p>
+            )}
           </div>
           <Badge
             variant={
@@ -793,7 +907,7 @@ function WorkItems({
                     : "secondary"
             }
           >
-            {item.state.replaceAll("_", " ")}
+            Work item: {item.state.replaceAll("_", " ")}
           </Badge>
           <Button
             variant="ghost"
