@@ -1378,6 +1378,9 @@ liefern Status/Ergebnisse. Keine zweite Orchestrierung und kein impliziter Forem
 Handoff-Schreibzugriff, Inbox, Triggerverwaltung und Planoperationen sind nicht
 freigegeben. T3-MCP-Tokens werden nicht zu Foundry-Credentials.
 
+Der aktuelle integrierte Stand verwendet Instanzschema 11 und Automation-Schema 12;
+Updates innerhalb dieses Stands nutzen `update` (siehe oben). Der folgende Abschnitt
+beschreibt nur das historische erste N06-Upgrade von 9/11 auf 10/11.
 Instanzmigration 10 ergänzt die Credential-Scope-Spalte mit Lesedefault für vorhandene
 Credentials. Dieses Paket hängt von PR75/Instanzschema 9 ab; dessen Sandbox-/Provider-
 Migration und Runtimekomposition bleiben erhalten. Automation bleibt Schema 11.
@@ -1394,7 +1397,10 @@ Credentials und persönliche T3-Daten bleiben davon ausgenommen.
 Ein vorgeschaltetes Access muss den nicht interaktiven API-Zugang zusätzlich erlauben.
 Der bestehende Device-Service-Zugang gilt nicht automatisch für diese API-Pfade.
 Dieses Upgrade verändert keine Access-/Domainregeln; eine Loopback-Probe belegt
-keinen öffentlichen CI-Zugang.
+keinen öffentlichen CI-Zugang. HTTP 401 `invalid_token` vom vorgeschalteten Access
+bei diesen API-Pfaden erfordert einen dort freigegebenen Access-Maschinenzugang;
+ein gültiges Foundry-Bearer-Token allein reicht dafür nicht. Bestehende Device-
+Credentials nicht als API-Freigabe voraussetzen oder den Schutz zur Probe abschalten.
 
 ### Auftrag interaktiv übernehmen und zurückgeben (P51)
 

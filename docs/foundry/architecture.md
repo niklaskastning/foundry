@@ -2,7 +2,7 @@
 
 Stand: 5. November 2026 · ursprünglicher Planabgleich mit Fork-Stand `ba1ed2f4e`, fortgeschrieben um die Nutzerentscheidung Factories-first
 
-Status: Zielarchitektur, keine pauschale Implementierungs- oder Produktionsfreigabe. Instanz-/Gateway-/Worker-Grundlagen und der sequenzielle Factory-Kern sind inzwischen integriert; der aktuelle Funktionsstand und offene Abnahmen stehen ausschließlich im [Umsetzungsplan](implementation-plan.md). Sandboxes und weitere Ausbaustufen bleiben geplant. Der [Warp-Abgleich vom 5. November](warp-comparison.md) ergänzt den ursprünglichen Referenzvergleich um Code- und Browserbefunde zu Funktionen und UI. Diese versionierten Entwurfsdokumente sind ausdrücklich angeforderte Projektdokumente.
+Status: Zielarchitektur, keine pauschale Implementierungs- oder Produktionsfreigabe. Instanz-/Gateway-/Worker-Grundlagen und der sequenzielle Factory-Kern sind inzwischen integriert; der aktuelle Funktionsstand und offene Abnahmen stehen ausschließlich im [Umsetzungsplan](implementation-plan.md). Linux/Codex-Sandboxes, zentrale Codex-Verbindungen, native Anmeldung sowie Operations- und Evaluationsgrundlagen sind integriert; weitere Ausbaustufen und Plattformabnahmen bleiben gesondert geplant. Der [Warp-Abgleich vom 5. November](warp-comparison.md) ergänzt den ursprünglichen Referenzvergleich um Code- und Browserbefunde zu Funktionen und UI. Diese versionierten Entwurfsdokumente sind ausdrücklich angeforderte Projektdokumente.
 
 ## 1. Festgelegtes Ziel
 

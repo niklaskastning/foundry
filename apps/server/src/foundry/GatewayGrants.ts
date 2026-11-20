@@ -194,12 +194,11 @@ export class GatewayGrants extends Context.Service<
 
 const make = Effect.gen(function* () {
   const sandboxAccess = yield* SandboxGatewayAccess.SandboxGatewayAccess;
-  const machineCredentials = yield* Effect.serviceOption(MachineCredentials.MachineCredentials);
+  const machineCredentials = yield* MachineCredentials.MachineCredentials;
   const machineIdentity = Effect.fn("GatewayGrants.machineIdentity")(function* (request: Request) {
     const token = MachineCredentials.machineBearerToken(request.headers.authorization);
     if (token === undefined) return undefined;
     if (
-      Option.isNone(machineCredentials) ||
       request.method !== "POST" ||
       ![
         "/api/foundry/v1/automation/command",
@@ -208,9 +207,7 @@ const make = Effect.gen(function* () {
       ].includes(request.url.split("?", 1)[0] ?? "")
     )
       return yield* denied();
-    const identity = yield* machineCredentials.value
-      .authenticate(token)
-      .pipe(Effect.mapError(denied));
+    const identity = yield* machineCredentials.authenticate(token).pipe(Effect.mapError(denied));
     if (identity.scope === "automation:read") return yield* denied();
     return identity;
   });
@@ -492,8 +489,7 @@ const make = Effect.gen(function* () {
         };
       }
       if ("authority" in identity && identity.authority === "machine") {
-        if (Option.isNone(machineCredentials)) return yield* denied();
-        const machine = yield* machineCredentials.value
+        const machine = yield* machineCredentials
           .authenticateId(identity.credentialId)
           .pipe(Effect.mapError(denied));
         if (

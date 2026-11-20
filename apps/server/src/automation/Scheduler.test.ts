@@ -655,6 +655,7 @@ it.effect(
       let startWorkflow = run.workflow;
       let admittedStarts = 0;
       let replayAccepted = false;
+      let replayFailure: DispatchStore.DispatchError | undefined;
       let providerState: "ready" | "unsupported_provider" = "ready";
       let roleExecutionVersion: 1 | undefined = 1;
       let reasoningEfforts = ["high"];
@@ -696,7 +697,8 @@ it.effect(
             return null;
           }),
         workItemTitle: () => Effect.succeed("Implement the requested feature"),
-        replayManual: () => Effect.succeed(replayAccepted ? run : null),
+        replayManual: () =>
+          replayFailure ? Effect.fail(replayFailure) : Effect.succeed(replayAccepted ? run : null),
         readWorkflow: () => Effect.succeed(startWorkflow),
         archiveCursor: () => Effect.succeed(0),
         projectQuestions: () => Effect.void,
@@ -997,6 +999,10 @@ it.effect(
         providerState = "unsupported_provider";
         yield* scheduler.start(request, start);
         assert.equal(admittedStarts, 1);
+        replayFailure = new DispatchStore.DispatchError({ reason: "conflict" });
+        assert.equal((yield* scheduler.start(request, start).pipe(Effect.flip)).reason, "conflict");
+        assert.equal(admittedStarts, 1);
+        replayFailure = undefined;
         providerState = "ready";
         assert.isTrue(yield* scheduler.tick);
         assert.equal(launches.length, 1);
