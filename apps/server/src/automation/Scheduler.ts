@@ -104,6 +104,7 @@ export class SchedulerConfig extends Context.Service<
 export class SchedulerError extends Schema.TaggedError<SchedulerError>()("SchedulerError", {
   reason: Schema.Literals([
     "invalid_binding",
+    "conflict",
     "not_allowed",
     "unavailable",
     "unsupported_provider",
@@ -129,7 +130,7 @@ const failure = (cause: unknown) =>
             : isDispatchError(cause) && cause.reason === "invalid_execution"
               ? "invalid_execution"
               : isDispatchError(cause) && cause.reason === "conflict"
-                ? "invalid_binding"
+                ? "conflict"
                 : "unavailable",
         cause,
       });

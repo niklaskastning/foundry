@@ -5,6 +5,7 @@ import { CommandId, OrchestrationV2UserInputQuestion } from "@t3tools/contracts"
 import {
   AutomationControlCommand,
   AutomationControlError,
+  AutomationMachineCredentialError,
   type AutomationControlSnapshot,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
@@ -22,6 +23,7 @@ import { DispatchBinding } from "./Scheduler.ts";
 
 const isControlError = Schema.is(AutomationControlError);
 const isWorkerError = Schema.is(WorkerTransport.WorkerTransportError);
+const isMachineCredentialError = Schema.is(AutomationMachineCredentialError);
 const decodeBinding = Schema.decodeUnknownEffect(DispatchBinding);
 const decodeCommand = Schema.decodeEffect(AutomationControlCommand, { onExcessProperty: "error" });
 const decodeAttempt = Schema.decodeUnknownEffect(DispatchStore.AttemptRequest);
@@ -33,7 +35,8 @@ const fail = (code: AutomationControlError["code"]) => new AutomationControlErro
 const mapError = (error: unknown) =>
   isControlError(error)
     ? error
-    : isWorkerError(error) && error.reason === "forbidden"
+    : (isWorkerError(error) && error.reason === "forbidden") ||
+        (isMachineCredentialError(error) && error.code === "forbidden")
       ? fail("forbidden")
       : fail("unavailable");
 export class Control extends Context.Service<
