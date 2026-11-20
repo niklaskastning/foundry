@@ -43,6 +43,7 @@ import * as ServerSecretStore from "../src/auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "../src/auth/EnvironmentAuth.ts";
 import * as SessionStore from "../src/auth/SessionStore.ts";
 import * as AccessConfig from "../src/foundry/AccessConfig.ts";
+import * as MachineCredentials from "../src/foundry/MachineCredentials.ts";
 import * as AccessVerifier from "../src/foundry/AccessVerifier.ts";
 import * as FoundrySessions from "../src/foundry/FoundrySessions.ts";
 import * as InstanceDatabase from "../src/foundry/InstanceDatabase.ts";
@@ -259,6 +260,7 @@ export async function verifyGateway(options: {
       ServerEnvironment.layerIdentity,
     );
     const mainLayer = GatewayGrants.layer.pipe(
+      Layer.provideMerge(MachineCredentials.layer),
       Layer.provideMerge(
         Layer.mergeAll(
           DeviceChannel.layer,

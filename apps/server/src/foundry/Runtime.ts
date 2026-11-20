@@ -92,8 +92,7 @@ export const layer = Layer.unwrap(
       ? Layer.merge(
           ArtifactHttp.layer,
           AutomationRuntime.layer.pipe(
-            Layer.provide(MachineCredentials.layer),
-            Layer.provide(GatewayGrants.layer.pipe(Layer.provide(MachineCredentials.layer))),
+            Layer.provide(GatewayGrants.layer),
             Layer.provide(DeviceGrants.layer),
             Layer.provide(DeviceChannel.layer),
           ),
@@ -168,6 +167,8 @@ export const layer = Layer.unwrap(
       deviceRoutes,
       artifactRoutes.pipe(Layer.provide(DeviceRegistry.layer), Layer.provide(DeviceConfig.layer)),
     ).pipe(
+      // Shared gateway layers must see machine authority before any sandbox consumer builds them.
+      Layer.provide(MachineCredentials.layer),
       Layer.provide(Layer.merge(InstanceDescriptor.layer, FoundrySessions.layer)),
       Layer.provide(NativeOperator.layer),
       Layer.provide(AccessVerifier.layer),
